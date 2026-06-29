@@ -912,12 +912,17 @@ function Faturamento() {
     let qItens = supabase.from('pedidos_itens').select('*').gte('data_neg', ini).lte('data_neg', fim);
     if (vendCod) qItens = qItens.eq('vendedor_codigo', vendCod);
 
-    const qNota = supabase.from('nota_venda_mensal').select('*').gte('ano', filtros.anoIni).lte('ano', filtros.anoFim);
+    // Nota de Venda (bruto) agora tem o MESMO tratamento: fonte por item,
+    // agregada no front exatamente como o líquido, com drill-down próprio.
+    let qNotaItens = supabase.from('nota_venda_itens').select('*').gte('data_neg', ini).lte('data_neg', fim);
+    if (vendCod) qNotaItens = qNotaItens.eq('vendedor_codigo', vendCod);
+
     const qVend = supabase.from('sankhya_vendedores').select('*').order('nome');
     const qSync = supabase.from('sankhya_sync_log').select('*').eq('tipo', 'pedidos_itens').order('finalizado_em', { ascending: false }).limit(1);
 
-    const [rItens, rNota, rVend, rSync] = await Promise.all([qItens, qNota, qVend, qSync]);
+    const [rItens, rNotaItens, rVend, rSync] = await Promise.all([qItens, qNotaItens, qVend, qSync]);
     const itens = rItens.data || [];
+    const notaItensData = rNotaItens.data || [];
 
     // Agregação no próprio front, mas sempre da MESMA lista de itens —
     // elimina o risco de Net Value e Segmento divergirem entre si.
@@ -939,10 +944,22 @@ function Faturamento() {
       return { ano, mes, valor_liquido: valor };
     });
 
+    // Mesma agregação mensal, só que para a Nota de Venda (bruto).
+    const notaMensalMap = {};
+    for (const it of notaItensData) {
+      const d = new Date(it.data_neg + 'T00:00:00');
+      const key = `${d.getFullYear()}-${d.getMonth() + 1}`;
+      notaMensalMap[key] = (notaMensalMap[key] || 0) + (Number(it.valor_bruto) || 0);
+    }
+    const notaMensalArr = Object.entries(notaMensalMap).map(([key, valor]) => {
+      const [ano, mes] = key.split('-').map(Number);
+      return { ano, mes, valor_bruto: valor };
+    });
+
     setNetMensal(netMensalArr);
     setPorKaleng(Object.entries(kalengMap).map(([nome, valor]) => ({ nome, valor })));
     setPorSegmento(Object.entries(segmentoMap).map(([nome, valor]) => ({ nome, valor })));
-    setNotaVenda((rNota.data || []).filter(d => d.mes >= filtros.mesIni && d.mes <= filtros.mesFim));
+    setNotaVenda(notaMensalArr);
     setVendedores(rVend.data || []);
     setLastSync((rSync.data || [])[0] || null);
     setLoading(false);
@@ -955,24 +972,23 @@ function Faturamento() {
     setSyncStatus(null);
     try {
       const { ini, fim } = rangeDatas();
-      const vendCod = filtros.vendedor ? Number(filtros.vendedor) : null;
 
       const [resItens, resNota] = await Promise.all([
         fetch(`${SUPABASE_URL}/functions/v1/sankhya-pedidos-itens-sync`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ dataIni: ini, dataFim: fim }),
         }).then(r => r.json()),
-        fetch(`${SUPABASE_URL}/functions/v1/sankhya-faturamento-sync`, {
+        fetch(`${SUPABASE_URL}/functions/v1/sankhya-nota-venda-itens-sync`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ anoIni: filtros.anoIni, anoFim: filtros.anoFim, mesIni: filtros.mesIni, mesFim: filtros.mesFim, vendedor: vendCod }),
+          body: JSON.stringify({ dataIni: ini, dataFim: fim }),
         }).then(r => r.json()),
       ]);
 
-      if (resItens.ok) {
-        setSyncStatus({ ok: true, message: `Sincronizado: ${resItens.itens_sincronizados} itens de pedido${resNota.ok ? `, nota de venda atualizada` : ''}.` });
+      if (resItens.ok && resNota.ok) {
+        setSyncStatus({ ok: true, message: `Sincronizado: ${resItens.itens_sincronizados} itens de pedido, ${resNota.itens_sincronizados} itens de nota de venda.` });
         await carregarDados();
       } else {
-        setSyncStatus({ ok: false, message: resItens.erro || 'Erro desconhecido na sincronização.' });
+        setSyncStatus({ ok: false, message: resItens.erro || resNota.erro || 'Erro desconhecido na sincronização.' });
       }
     } catch (err) {
       setSyncStatus({ ok: false, message: String(err) });
@@ -988,7 +1004,18 @@ function Faturamento() {
     let q = supabase.from('pedidos_itens').select('*').gte('data_neg', ini).lte('data_neg', fim).order('data_neg', { ascending: false });
     if (filtro?.coluna && filtro?.valor) q = q.eq(filtro.coluna, filtro.valor);
     const { data } = await q;
-    setDrillDown({ titulo, itens: data || [] });
+    setDrillDown({ titulo, itens: data || [], campoValor: 'valor_liquido' });
+    setDrillLoading(false);
+  }, [filtros]);
+
+  const abrirDrillDownNota = useCallback(async (titulo, filtro) => {
+    setDrillDown({ titulo, itens: [], campoValor: 'valor_bruto' });
+    setDrillLoading(true);
+    const { ini, fim } = rangeDatas();
+    let q = supabase.from('nota_venda_itens').select('*').gte('data_neg', ini).lte('data_neg', fim).order('data_neg', { ascending: false });
+    if (filtro?.coluna && filtro?.valor) q = q.eq(filtro.coluna, filtro.valor);
+    const { data } = await q;
+    setDrillDown({ titulo, itens: data || [], campoValor: 'valor_bruto' });
     setDrillLoading(false);
   }, [filtros]);
 
@@ -1008,10 +1035,23 @@ function Faturamento() {
     return out;
   }, [netMensal, filtros]);
 
+  const evolucaoMensalNota = useMemo(() => {
+    const map = {};
+    notaVenda.forEach(m => { map[`${m.ano}-${m.mes}`] = m.valor_bruto; });
+    const out = [];
+    for (let ano = filtros.anoIni; ano <= filtros.anoFim; ano++) {
+      const mIni = ano === filtros.anoIni ? filtros.mesIni : 1;
+      const mFim = ano === filtros.anoFim ? filtros.mesFim : 12;
+      for (let mes = mIni; mes <= mFim; mes++) out.push({ ano, mes, valor: map[`${ano}-${mes}`] || 0 });
+    }
+    return out;
+  }, [notaVenda, filtros]);
+
   const kalengOrdenado = useMemo(() => [...porKaleng].sort((a, b) => b.valor - a.valor).slice(0, 10), [porKaleng]);
   const segmentoOrdenado = useMemo(() => [...porSegmento].sort((a, b) => b.valor - a.valor), [porSegmento]);
 
   const maxMensal = Math.max(...evolucaoMensal.map(m => m.valor), 1);
+  const maxMensalNota = Math.max(...evolucaoMensalNota.map(m => m.valor), 1);
   const maxKaleng = Math.max(...kalengOrdenado.map(k => k.valor), 1);
   const maxSegmento = Math.max(...segmentoOrdenado.map(s => s.valor), 1);
 
@@ -1079,31 +1119,55 @@ function Faturamento() {
             />
             <KpiClicavel
               label="Nota de Venda (faturamento emitido)" valor={totalNotaVenda} icon={TrendingUp} cor={T.blue}
-              sub="Métrica separada — TIPMOV='V'"
+              onClick={() => abrirDrillDownNota('Nota de Venda — todos os itens do período', null)}
             />
           </div>
 
-          <Panel title="Evolução mensal — Net Value" subtitle={filtros.anoIni === filtros.anoFim ? `${filtros.anoIni}` : `${filtros.anoIni}–${filtros.anoFim}`}>
-            <div style={{ display: 'flex', alignItems: 'flex-end', gap: 12, height: 190, padding: '14px 6px 0', overflowX: 'auto' }}>
-              {evolucaoMensal.map((m, i) => {
-                const h = Math.max((m.valor / maxMensal) * 140, m.valor > 0 ? 4 : 2);
-                return (
-                  <button key={i} onClick={() => abrirDrillDown(`Net Value — ${MESES_FAT[m.mes - 1]}/${m.ano}`, null)}
-                    style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flex: '0 0 auto', minWidth: 58, background: 'transparent', border: 'none', cursor: 'pointer', padding: 0 }}>
-                    <div style={{ fontSize: 10.5, fontWeight: 700, marginBottom: 6, color: T.terracottaText, fontFamily: FONT_DISPLAY, whiteSpace: 'nowrap' }}>{fmtMoedaCompacta(m.valor)}</div>
-                    <div style={{
-                      width: 38, height: h, borderRadius: '5px 5px 2px 2px', transition: 'height .35s ease, filter .15s',
-                      background: `linear-gradient(180deg, ${T.terracotta} 0%, ${T.terracottaText} 100%)`,
-                    }}
-                      onMouseEnter={e => e.currentTarget.style.filter = 'brightness(1.12)'}
-                      onMouseLeave={e => e.currentTarget.style.filter = 'none'}
-                    />
-                    <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 9, fontWeight: 500 }}>{MESES_FAT[m.mes - 1]}/{String(m.ano).slice(2)}</div>
-                  </button>
-                );
-              })}
-            </div>
-          </Panel>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+            <Panel title="Evolução mensal — Net Value" subtitle={filtros.anoIni === filtros.anoFim ? `${filtros.anoIni}` : `${filtros.anoIni}–${filtros.anoFim}`}>
+              <div style={{ display: 'flex', alignItems: 'flex-end', gap: 10, height: 190, padding: '14px 4px 0', overflowX: 'auto' }}>
+                {evolucaoMensal.map((m, i) => {
+                  const h = Math.max((m.valor / maxMensal) * 140, m.valor > 0 ? 4 : 2);
+                  return (
+                    <button key={i} onClick={() => abrirDrillDown(`Net Value — ${MESES_FAT[m.mes - 1]}/${m.ano}`, null)}
+                      style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flex: '0 0 auto', minWidth: 52, background: 'transparent', border: 'none', cursor: 'pointer', padding: 0 }}>
+                      <div style={{ fontSize: 10, fontWeight: 700, marginBottom: 6, color: T.terracottaText, fontFamily: FONT_DISPLAY, whiteSpace: 'nowrap' }}>{fmtMoedaCompacta(m.valor)}</div>
+                      <div style={{
+                        width: 34, height: h, borderRadius: '5px 5px 2px 2px', transition: 'height .35s ease, filter .15s',
+                        background: `linear-gradient(180deg, ${T.terracotta} 0%, ${T.terracottaText} 100%)`,
+                      }}
+                        onMouseEnter={e => e.currentTarget.style.filter = 'brightness(1.12)'}
+                        onMouseLeave={e => e.currentTarget.style.filter = 'none'}
+                      />
+                      <div style={{ fontSize: 10, color: T.inkFaint, marginTop: 9, fontWeight: 500 }}>{MESES_FAT[m.mes - 1]}/{String(m.ano).slice(2)}</div>
+                    </button>
+                  );
+                })}
+              </div>
+            </Panel>
+
+            <Panel title="Evolução mensal — Nota de Venda" subtitle={filtros.anoIni === filtros.anoFim ? `${filtros.anoIni}` : `${filtros.anoIni}–${filtros.anoFim}`}>
+              <div style={{ display: 'flex', alignItems: 'flex-end', gap: 10, height: 190, padding: '14px 4px 0', overflowX: 'auto' }}>
+                {evolucaoMensalNota.map((m, i) => {
+                  const h = Math.max((m.valor / maxMensalNota) * 140, m.valor > 0 ? 4 : 2);
+                  return (
+                    <button key={i} onClick={() => abrirDrillDownNota(`Nota de Venda — ${MESES_FAT[m.mes - 1]}/${m.ano}`, null)}
+                      style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flex: '0 0 auto', minWidth: 52, background: 'transparent', border: 'none', cursor: 'pointer', padding: 0 }}>
+                      <div style={{ fontSize: 10, fontWeight: 700, marginBottom: 6, color: T.blueText, fontFamily: FONT_DISPLAY, whiteSpace: 'nowrap' }}>{fmtMoedaCompacta(m.valor)}</div>
+                      <div style={{
+                        width: 34, height: h, borderRadius: '5px 5px 2px 2px', transition: 'height .35s ease, filter .15s',
+                        background: `linear-gradient(180deg, ${T.blue} 0%, ${T.blueText} 100%)`,
+                      }}
+                        onMouseEnter={e => e.currentTarget.style.filter = 'brightness(1.12)'}
+                        onMouseLeave={e => e.currentTarget.style.filter = 'none'}
+                      />
+                      <div style={{ fontSize: 10, color: T.inkFaint, marginTop: 9, fontWeight: 500 }}>{MESES_FAT[m.mes - 1]}/{String(m.ano).slice(2)}</div>
+                    </button>
+                  );
+                })}
+              </div>
+            </Panel>
+          </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
             <Panel title="Por segmento Kalenborn" subtitle="AD_KALENG — classificação interna de produto · clique para detalhar">
@@ -1127,7 +1191,7 @@ function Faturamento() {
       )}
 
       {drillDown && (
-        <DrillDownPedidos titulo={drillDown.titulo} itens={drillDown.itens} loading={drillLoading} onClose={() => setDrillDown(null)} />
+        <DrillDownPedidos titulo={drillDown.titulo} itens={drillDown.itens} loading={drillLoading} onClose={() => setDrillDown(null)} campoValor={drillDown.campoValor} />
       )}
     </div>
   );
@@ -1175,8 +1239,9 @@ function BarraClicavel({ nome, valor, max, cor, onClick }) {
   );
 }
 
-function DrillDownPedidos({ titulo, itens, loading, onClose }) {
-  const total = itens.reduce((s, p) => s + Number(p.valor_liquido || 0), 0);
+function DrillDownPedidos({ titulo, itens, loading, onClose, campoValor = 'valor_liquido' }) {
+  const total = itens.reduce((s, p) => s + Number(p[campoValor] || 0), 0);
+  const labelValor = campoValor === 'valor_bruto' ? 'Valor bruto' : 'Valor líquido';
   return (
     <Overlay onClose={onClose}>
       <div className="scale-in" style={{
@@ -1199,7 +1264,7 @@ function DrillDownPedidos({ titulo, itens, loading, onClose }) {
                 <th style={thFat()}>Cliente</th>
                 <th style={thFat()}>Vendedor</th>
                 <th style={thFat()}>Produto</th>
-                <th style={thFat(0, 'right')}>Valor líquido</th>
+                <th style={thFat(0, 'right')}>{labelValor}</th>
               </tr>
             </thead>
             <tbody>
@@ -1214,7 +1279,7 @@ function DrillDownPedidos({ titulo, itens, loading, onClose }) {
                   <td style={{ padding: '9px 12px', fontWeight: 600, maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={p.cliente_nome}>{p.cliente_nome}</td>
                   <td style={{ padding: '9px 12px', color: T.inkDim, whiteSpace: 'nowrap' }}>{p.vendedor_nome || '—'}</td>
                   <td style={{ padding: '9px 12px', color: T.inkDim, maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={p.produto_descricao}>{p.produto_descricao}</td>
-                  <td style={{ padding: '9px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 600 }}>{fmtMoeda(p.valor_liquido)}</td>
+                  <td style={{ padding: '9px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 600 }}>{fmtMoeda(p[campoValor])}</td>
                 </tr>
               ))}
             </tbody>
