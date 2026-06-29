@@ -179,6 +179,29 @@ export default function PortalEngenharia() {
         .scale-in { animation: scaleIn .2s ease both; }
         .spin { animation: spin 1s linear infinite; }
         .focus-ring:focus-visible { outline: 2px solid ${T.terracotta}; outline-offset: 2px; }
+
+        /* Responsividade real: grids colapsam sozinhos via auto-fit, sem
+           depender de media query — funcionam em qualquer largura de tela. */
+        .grid-kpis-5 { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 14px; }
+        .grid-kpis-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+        .grid-2col { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+        .grid-2col-wide { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1.3fr)); gap: 16px; }
+
+        @media (max-width: 720px) {
+          main { padding: 18px 16px !important; }
+          table { font-size: 11.5px; }
+        }
+
+        /* Sidebar: largura total no desktop, colapsa para ícones-apenas
+           em tablets/celular, sem nunca quebrar o layout horizontalmente. */
+        .sidebar-responsive { width: 248px; }
+        @media (max-width: 900px) {
+          .sidebar-responsive { width: 68px; }
+          .sidebar-brand-text, .sidebar-item-label { display: none; }
+          .sidebar-header { padding: 18px 16px !important; }
+          .sidebar-item { justify-content: center !important; padding: 12px 8px !important; }
+          .topbar-user-text { display: none; }
+        }
       `}</style>
 
       <Sidebar view={view} setView={setView} pendCount={pendencias.length} papel={currentUser.papel} />
@@ -226,14 +249,14 @@ function Sidebar({ view, setView, pendCount, papel }) {
     { id: 'integracao', label: 'Integrações', icon: Workflow },
   ];
   return (
-    <div style={{ width: 248, background: T.panel, borderRight: `1px solid ${T.line}`, display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
-      <div style={{ padding: '22px 22px 20px', borderBottom: `1px solid ${T.line}` }}>
+    <div className="sidebar-responsive" style={{ background: T.panel, borderRight: `1px solid ${T.line}`, display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
+      <div className="sidebar-header" style={{ padding: '22px 22px 20px', borderBottom: `1px solid ${T.line}` }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <div style={{
             width: 34, height: 34, borderRadius: 4, background: T.terracotta, display: 'flex',
-            alignItems: 'center', justifyContent: 'center', fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 17, color: '#fff'
+            alignItems: 'center', justifyContent: 'center', fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 17, color: '#fff', flexShrink: 0,
           }}>K</div>
-          <div>
+          <div className="sidebar-brand-text">
             <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 600, fontSize: 17, letterSpacing: '0.02em', color: T.ink }}>KALENBORN</div>
             <div style={{ fontSize: 11, color: T.inkFaint, letterSpacing: '0.06em', textTransform: 'uppercase', marginTop: 1 }}>Engenharia · Orçamentos</div>
           </div>
@@ -245,7 +268,7 @@ function Sidebar({ view, setView, pendCount, papel }) {
           const active = view === it.id;
           const Icon = it.icon;
           return (
-            <button key={it.id} onClick={() => setView(it.id)} className="focus-ring"
+            <button key={it.id} onClick={() => setView(it.id)} className="focus-ring sidebar-item" title={it.label}
               style={{
                 display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10,
                 padding: '10px 12px', borderRadius: 6, border: 'none', textAlign: 'left',
@@ -258,11 +281,11 @@ function Sidebar({ view, setView, pendCount, papel }) {
               onMouseLeave={e => { if (!active) e.currentTarget.style.background = 'transparent'; }}
             >
               <span style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <Icon size={17} strokeWidth={2} />
-                <span style={{ fontSize: 13.5, fontWeight: 500 }}>{it.label}</span>
+                <Icon size={17} strokeWidth={2} style={{ flexShrink: 0 }} />
+                <span className="sidebar-item-label" style={{ fontSize: 13.5, fontWeight: 500, whiteSpace: 'nowrap' }}>{it.label}</span>
               </span>
               {!!it.badge && (
-                <span style={{ background: T.terracotta, color: '#fff', fontSize: 11, fontWeight: 700, borderRadius: 10, padding: '1px 7px', minWidth: 18, textAlign: 'center' }}>
+                <span className="sidebar-item-label" style={{ background: T.terracotta, color: '#fff', fontSize: 11, fontWeight: 700, borderRadius: 10, padding: '1px 7px', minWidth: 18, textAlign: 'center' }}>
                   {it.badge}
                 </span>
               )}
@@ -271,19 +294,19 @@ function Sidebar({ view, setView, pendCount, papel }) {
         })}
 
         {papel === 'gestor' && (
-          <button onClick={() => setView('admin')} className="focus-ring"
+          <button onClick={() => setView('admin')} className="focus-ring sidebar-item" title="Administração"
             style={{
               display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', borderRadius: 6,
               border: 'none', textAlign: 'left', background: view === 'admin' ? T.terracottaSoft : 'transparent',
               color: view === 'admin' ? T.terracottaText : T.inkDim, marginTop: 8, borderTop: `1px solid ${T.lineSoft}`, paddingTop: 18,
             }}>
-            <SlidersHorizontal size={17} />
-            <span style={{ fontSize: 13.5, fontWeight: 500 }}>Administração</span>
+            <SlidersHorizontal size={17} style={{ flexShrink: 0 }} />
+            <span className="sidebar-item-label" style={{ fontSize: 13.5, fontWeight: 500, whiteSpace: 'nowrap' }}>Administração</span>
           </button>
         )}
       </nav>
 
-      <div style={{ padding: 16, borderTop: `1px solid ${T.line}` }}>
+      <div className="sidebar-item-label" style={{ padding: 16, borderTop: `1px solid ${T.line}` }}>
         <div style={{ fontSize: 11, color: T.inkFaint, lineHeight: 1.6 }}>
           547 propostas · Jan–Jun 2026<br />Migrado da planilha de controle
         </div>
@@ -302,9 +325,9 @@ const VIEW_TITLES = {
 
 function Topbar({ view, mesFiltro, setMesFiltro, currentUser, setCurrentUser, userMenuOpen, setUserMenuOpen, onNova }) {
   return (
-    <header style={{
-      height: 64, background: T.panel, borderBottom: `1px solid ${T.line}`, display: 'flex',
-      alignItems: 'center', justifyContent: 'space-between', padding: '0 28px', flexShrink: 0,
+    <header className="topbar-responsive" style={{
+      minHeight: 64, background: T.panel, borderBottom: `1px solid ${T.line}`, display: 'flex',
+      alignItems: 'center', justifyContent: 'space-between', padding: '10px 28px', flexShrink: 0, flexWrap: 'wrap', gap: 10,
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
         <h1 style={{ fontFamily: FONT_DISPLAY, fontSize: 21, fontWeight: 600, margin: 0, letterSpacing: '0.01em', color: T.ink }}>{VIEW_TITLES[view]}</h1>
@@ -337,13 +360,13 @@ function Topbar({ view, mesFiltro, setMesFiltro, currentUser, setCurrentUser, us
             display: 'flex', alignItems: 'center', gap: 10, background: 'transparent', border: 'none',
             borderLeft: `1px solid ${T.line}`, paddingLeft: 16,
           }}>
-            <div style={{ textAlign: 'right' }}>
+            <div className="topbar-user-text" style={{ textAlign: 'right' }}>
               <div style={{ fontSize: 13, fontWeight: 600, color: T.ink }}>{currentUser.nome}</div>
               <div style={{ fontSize: 11, color: T.inkFaint, textTransform: 'capitalize' }}>{currentUser.papel.replace(/_/g, ' ')}</div>
             </div>
             <div style={{
               width: 32, height: 32, borderRadius: '50%', background: T.terracottaSoft, color: T.terracottaText,
-              display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700,
+              display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, flexShrink: 0,
             }}>{currentUser.iniciais}</div>
           </button>
 
@@ -415,7 +438,7 @@ function Dashboard({ stats, propostas, todasPropostas, mesFiltro }) {
   return (
     <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 22, maxWidth: 1320 }}>
       {/* KPI ROW */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 14 }}>
+      <div className="grid-kpis-5">
         <Kpi label="Propostas no mês" value={stats.total} icon={FileStack} />
         <Kpi label="Em andamento" value={stats.ativas} icon={Clock3} tone="amber" />
         <Kpi label="Em atraso" value={stats.atrasadas} icon={AlertTriangle} tone="rust" />
@@ -423,7 +446,7 @@ function Dashboard({ stats, propostas, todasPropostas, mesFiltro }) {
         <OrigemCard percWord={stats.percWord} wordCount={stats.wordCount} sankhyaCount={stats.sankhyaCount} />
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1.3fr 1fr', gap: 16 }}>
+      <div className="grid-2col-wide">
         <Panel title="Volume de propostas — Jan a Jun" subtitle="Total mensal, planilha histórica completa">
           <div style={{ display: 'flex', alignItems: 'flex-end', gap: 14, height: 150, padding: '8px 4px 0' }}>
             {evolucaoMensal.map(m => {
@@ -455,7 +478,7 @@ function Dashboard({ stats, propostas, todasPropostas, mesFiltro }) {
         </Panel>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+      <div className="grid-2col">
         <Panel title="Status do fluxo" subtitle="Propostas do mês selecionado, por etapa">
           <div style={{ display: 'flex', alignItems: 'flex-end', gap: 18, height: 140, padding: '8px 6px 0' }}>
             {porStatus.map(([status, count]) => {
@@ -1112,7 +1135,7 @@ function Faturamento() {
         <div style={{ textAlign: 'center', padding: 50, color: T.inkFaint, fontSize: 13 }}>Carregando dados…</div>
       ) : (
         <>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 14 }}>
+          <div className="grid-kpis-2">
             <KpiClicavel
               label="Net Value (líquido)" valor={totalNetValue} icon={DollarSign} cor={T.terracotta}
               onClick={() => abrirDrillDown('Net Value — todos os itens do período', null)}
@@ -1123,11 +1146,11 @@ function Faturamento() {
             />
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
             <Panel title="Evolução mensal — Net Value" subtitle={filtros.anoIni === filtros.anoFim ? `${filtros.anoIni}` : `${filtros.anoIni}–${filtros.anoFim}`}>
-              <div style={{ display: 'flex', alignItems: 'flex-end', gap: 10, height: 190, padding: '14px 4px 0', overflowX: 'auto' }}>
+              <div style={{ display: 'flex', alignItems: 'flex-end', gap: 10, height: 210, padding: '14px 4px 0', overflowX: 'auto' }}>
                 {evolucaoMensal.map((m, i) => {
-                  const h = Math.max((m.valor / maxMensal) * 140, m.valor > 0 ? 4 : 2);
+                  const h = Math.max((m.valor / maxMensal) * 160, m.valor > 0 ? 4 : 2);
                   return (
                     <button key={i} onClick={() => abrirDrillDown(`Net Value — ${MESES_FAT[m.mes - 1]}/${m.ano}`, null)}
                       style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flex: '0 0 auto', minWidth: 52, background: 'transparent', border: 'none', cursor: 'pointer', padding: 0 }}>
@@ -1147,9 +1170,9 @@ function Faturamento() {
             </Panel>
 
             <Panel title="Evolução mensal — Nota de Venda" subtitle={filtros.anoIni === filtros.anoFim ? `${filtros.anoIni}` : `${filtros.anoIni}–${filtros.anoFim}`}>
-              <div style={{ display: 'flex', alignItems: 'flex-end', gap: 10, height: 190, padding: '14px 4px 0', overflowX: 'auto' }}>
+              <div style={{ display: 'flex', alignItems: 'flex-end', gap: 10, height: 210, padding: '14px 4px 0', overflowX: 'auto' }}>
                 {evolucaoMensalNota.map((m, i) => {
-                  const h = Math.max((m.valor / maxMensalNota) * 140, m.valor > 0 ? 4 : 2);
+                  const h = Math.max((m.valor / maxMensalNota) * 160, m.valor > 0 ? 4 : 2);
                   return (
                     <button key={i} onClick={() => abrirDrillDownNota(`Nota de Venda — ${MESES_FAT[m.mes - 1]}/${m.ano}`, null)}
                       style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flex: '0 0 auto', minWidth: 52, background: 'transparent', border: 'none', cursor: 'pointer', padding: 0 }}>
@@ -1169,7 +1192,7 @@ function Faturamento() {
             </Panel>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+          <div className="grid-2col">
             <Panel title="Por segmento Kalenborn" subtitle="AD_KALENG — classificação interna de produto · clique para detalhar">
               <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 10 }}>
                 {kalengOrdenado.length === 0 ? <EmptyStateFat /> : kalengOrdenado.map(k => (
@@ -1391,7 +1414,7 @@ function Integracao() {
 }`}</pre>
       </Panel>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+      <div className="grid-2col">
         <Panel title="Entrada — Sankhya → Portal" subtitle="Power Automate consulta o ERP e grava na tabela de propostas">
           <FluxoMini steps={['Agendamento (hourly)', 'Consulta Sankhya', 'Upsert em `propostas`', 'Marca como pendente de validação']} />
         </Panel>
@@ -1422,7 +1445,7 @@ function FluxoMini({ steps }) {
 ============================================================================ */
 function Admin() {
   return (
-    <div className="fade-up" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, maxWidth: 1100 }}>
+    <div className="fade-up grid-2col" style={{ maxWidth: 1100 }}>
       <Panel title="Pool de aprovadores" subtitle="Qualquer um dos três decide — sem ordem fixa, sem fila">
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
           {APROVADORES_POOL.map(nome => (
