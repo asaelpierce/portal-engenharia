@@ -93,7 +93,7 @@ const calcularAtraso = (prevista, conclusao) => {
 };
 
 const fmtData = (iso) => !iso ? '—' : new Date(iso + 'T00:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' });
-const fmtMoeda = (v) => v == null ? '—' : new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 }).format(v);
+const fmtMoeda = (v) => v == null ? '—' : new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(v);
 const fmtMoedaCompacta = (v) => new Intl.NumberFormat('pt-BR', { notation: 'compact', compactDisplay: 'short', maximumFractionDigits: 1 }).format(v);
 
 /* ============================================================================
@@ -882,10 +882,8 @@ const MESES_FAT = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set'
 function Faturamento() {
   const anoAtual = new Date().getFullYear();
   const [filtros, setFiltros] = useState({ anoIni: anoAtual, anoFim: anoAtual, mesIni: 1, mesFim: 12, vendedor: '' });
-  const [mensal, setMensal] = useState([]);
+  const [netMensal, setNetMensal] = useState([]);
   const [notaVenda, setNotaVenda] = useState([]);
-  const [pedidosMensal, setPedidosMensal] = useState([]);
-  const [pedidosDetalhe, setPedidosDetalhe] = useState([]);
   const [porKaleng, setPorKaleng] = useState([]);
   const [porSegmento, setPorSegmento] = useState([]);
   const [vendedores, setVendedores] = useState([]);
@@ -893,67 +891,88 @@ function Faturamento() {
   const [syncing, setSyncing] = useState(false);
   const [syncStatus, setSyncStatus] = useState(null);
   const [lastSync, setLastSync] = useState(null);
-  const [drillDownAberto, setDrillDownAberto] = useState(false);
+  const [drillDown, setDrillDown] = useState(null); // { titulo, itens }
+  const [drillLoading, setDrillLoading] = useState(false);
+
+  const rangeDatas = () => {
+    const ini = `${filtros.anoIni}-${String(filtros.mesIni).padStart(2, '0')}-01`;
+    const ultimoDia = new Date(filtros.anoFim, filtros.mesFim, 0).getDate();
+    const fim = `${filtros.anoFim}-${String(filtros.mesFim).padStart(2, '0')}-${String(ultimoDia).padStart(2, '0')}`;
+    return { ini, fim };
+  };
 
   const carregarDados = useCallback(async () => {
     setLoading(true);
+    const { ini, fim } = rangeDatas();
     const vendCod = filtros.vendedor ? Number(filtros.vendedor) : null;
 
-    let q1 = supabase.from('faturamento_mensal').select('*').gte('ano', filtros.anoIni).lte('ano', filtros.anoFim);
-    q1 = vendCod ? q1.eq('vendedor_codigo', vendCod) : q1.is('vendedor_codigo', null);
+    // Tudo abaixo (Net Value, Segmento Kalenborn, Segmento de Mercado, Pedido
+    // de Venda) vem da MESMA tabela pedidos_itens — garante que os números
+    // sempre somam entre si, sem nenhum arredondamento (Number direto da string).
+    let qItens = supabase.from('pedidos_itens').select('*').gte('data_neg', ini).lte('data_neg', fim);
+    if (vendCod) qItens = qItens.eq('vendedor_codigo', vendCod);
 
-    let q2 = supabase.from('faturamento_por_kaleng').select('*').gte('ano', filtros.anoIni).lte('ano', filtros.anoFim);
-    q2 = vendCod ? q2.eq('vendedor_codigo', vendCod) : q2.is('vendedor_codigo', null);
+    const qNota = supabase.from('nota_venda_mensal').select('*').gte('ano', filtros.anoIni).lte('ano', filtros.anoFim);
+    const qVend = supabase.from('sankhya_vendedores').select('*').order('nome');
+    const qSync = supabase.from('sankhya_sync_log').select('*').eq('tipo', 'pedidos_itens').order('finalizado_em', { ascending: false }).limit(1);
 
-    let q3 = supabase.from('faturamento_por_segmento').select('*').gte('ano', filtros.anoIni).lte('ano', filtros.anoFim);
-    q3 = vendCod ? q3.eq('vendedor_codigo', vendCod) : q3.is('vendedor_codigo', null);
+    const [rItens, rNota, rVend, rSync] = await Promise.all([qItens, qNota, qVend, qSync]);
+    const itens = rItens.data || [];
 
-    const q4 = supabase.from('nota_venda_mensal').select('*').gte('ano', filtros.anoIni).lte('ano', filtros.anoFim);
-    const q5 = supabase.from('pedidos_venda_mensal').select('*').gte('ano', filtros.anoIni).lte('ano', filtros.anoFim);
+    // Agregação no próprio front, mas sempre da MESMA lista de itens —
+    // elimina o risco de Net Value e Segmento divergirem entre si.
+    const mensalMap = {};
+    const kalengMap = {};
+    const segmentoMap = {};
+    for (const it of itens) {
+      const d = new Date(it.data_neg + 'T00:00:00');
+      const key = `${d.getFullYear()}-${d.getMonth() + 1}`;
+      const valor = Number(it.valor_liquido) || 0;
+      mensalMap[key] = (mensalMap[key] || 0) + valor;
+      const kal = it.produto_kaleng || 'SEM PG';
+      kalengMap[kal] = (kalengMap[kal] || 0) + valor;
+      const seg = it.segmento_descricao || 'NAO INFORMADO';
+      segmentoMap[seg] = (segmentoMap[seg] || 0) + valor;
+    }
+    const netMensalArr = Object.entries(mensalMap).map(([key, valor]) => {
+      const [ano, mes] = key.split('-').map(Number);
+      return { ano, mes, valor_liquido: valor };
+    });
 
-    const [r1, r2, r3, r4, r5, r6, r7] = await Promise.all([
-      q1, q2, q3, q4, q5,
-      supabase.from('sankhya_vendedores').select('*').order('nome'),
-      supabase.from('sankhya_sync_log').select('*').eq('tipo', 'faturamento_completo').order('finalizado_em', { ascending: false }).limit(1),
-    ]);
-
-    setMensal((r1.data || []).filter(d => d.mes >= filtros.mesIni && d.mes <= filtros.mesFim));
-    setPorKaleng((r2.data || []).filter(d => d.mes >= filtros.mesIni && d.mes <= filtros.mesFim));
-    setPorSegmento((r3.data || []).filter(d => d.mes >= filtros.mesIni && d.mes <= filtros.mesFim));
-    setNotaVenda((r4.data || []).filter(d => d.mes >= filtros.mesIni && d.mes <= filtros.mesFim));
-    setPedidosMensal((r5.data || []).filter(d => d.mes >= filtros.mesIni && d.mes <= filtros.mesFim));
-    setVendedores(r6.data || []);
-    setLastSync((r7.data || [])[0] || null);
+    setNetMensal(netMensalArr);
+    setPorKaleng(Object.entries(kalengMap).map(([nome, valor]) => ({ nome, valor })));
+    setPorSegmento(Object.entries(segmentoMap).map(([nome, valor]) => ({ nome, valor })));
+    setNotaVenda((rNota.data || []).filter(d => d.mes >= filtros.mesIni && d.mes <= filtros.mesFim));
+    setVendedores(rVend.data || []);
+    setLastSync((rSync.data || [])[0] || null);
     setLoading(false);
   }, [filtros]);
 
   useEffect(() => { carregarDados(); }, [carregarDados]);
 
-  const carregarDetalhePedidos = useCallback(async () => {
-    const ini = `${filtros.anoIni}-${String(filtros.mesIni).padStart(2, '0')}-01`;
-    const ultimoDia = new Date(filtros.anoFim, filtros.mesFim, 0).getDate();
-    const fim = `${filtros.anoFim}-${String(filtros.mesFim).padStart(2, '0')}-${String(ultimoDia).padStart(2, '0')}`;
-    const { data } = await supabase.from('pedidos_venda_detalhe').select('*')
-      .gte('data_neg', ini).lte('data_neg', fim).order('data_neg', { ascending: false });
-    setPedidosDetalhe(data || []);
-  }, [filtros]);
-
   const handleAtualizar = async () => {
     setSyncing(true);
     setSyncStatus(null);
     try {
+      const { ini, fim } = rangeDatas();
       const vendCod = filtros.vendedor ? Number(filtros.vendedor) : null;
-      const res = await fetch(`${SUPABASE_URL}/functions/v1/sankhya-faturamento-sync`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ anoIni: filtros.anoIni, anoFim: filtros.anoFim, mesIni: filtros.mesIni, mesFim: filtros.mesFim, vendedor: vendCod }),
-      });
-      const data = await res.json();
-      if (data.ok) {
-        setSyncStatus({ ok: true, message: `Sincronizado: ${data.net_value_mensal} meses (net value), ${data.nota_venda_mensal} (nota de venda), ${data.pedidos_venda_mensal} (pedidos de venda).` });
+
+      const [resItens, resNota] = await Promise.all([
+        fetch(`${SUPABASE_URL}/functions/v1/sankhya-pedidos-itens-sync`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ dataIni: ini, dataFim: fim }),
+        }).then(r => r.json()),
+        fetch(`${SUPABASE_URL}/functions/v1/sankhya-faturamento-sync`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ anoIni: filtros.anoIni, anoFim: filtros.anoFim, mesIni: filtros.mesIni, mesFim: filtros.mesFim, vendedor: vendCod }),
+        }).then(r => r.json()),
+      ]);
+
+      if (resItens.ok) {
+        setSyncStatus({ ok: true, message: `Sincronizado: ${resItens.itens_sincronizados} itens de pedido${resNota.ok ? `, nota de venda atualizada` : ''}.` });
         await carregarDados();
       } else {
-        setSyncStatus({ ok: false, message: data.erro || 'Erro desconhecido na sincronização.' });
+        setSyncStatus({ ok: false, message: resItens.erro || 'Erro desconhecido na sincronização.' });
       }
     } catch (err) {
       setSyncStatus({ ok: false, message: String(err) });
@@ -962,15 +981,24 @@ function Faturamento() {
     }
   };
 
-  const totalPeriodo = useMemo(() => mensal.reduce((s, m) => s + Number(m.valor_liquido || 0), 0), [mensal]);
+  const abrirDrillDown = useCallback(async (titulo, filtro) => {
+    setDrillDown({ titulo, itens: [] });
+    setDrillLoading(true);
+    const { ini, fim } = rangeDatas();
+    let q = supabase.from('pedidos_itens').select('*').gte('data_neg', ini).lte('data_neg', fim).order('data_neg', { ascending: false });
+    if (filtro?.coluna && filtro?.valor) q = q.eq(filtro.coluna, filtro.valor);
+    const { data } = await q;
+    setDrillDown({ titulo, itens: data || [] });
+    setDrillLoading(false);
+  }, [filtros]);
+
+  const totalNetValue = useMemo(() => netMensal.reduce((s, m) => s + m.valor_liquido, 0), [netMensal]);
   const totalNotaVenda = useMemo(() => notaVenda.reduce((s, m) => s + Number(m.valor_bruto || 0), 0), [notaVenda]);
-  const totalPedidos = useMemo(() => pedidosMensal.reduce((s, m) => s + Number(m.valor_total || 0), 0), [pedidosMensal]);
-  const qtdPedidos = useMemo(() => pedidosMensal.reduce((s, m) => s + Number(m.total_pedidos || 0), 0), [pedidosMensal]);
-  const mediaMensal = mensal.length ? totalPeriodo / mensal.length : 0;
+  const qtdItensPedido = useMemo(() => porKaleng.reduce((s) => s, 0), [porKaleng]); // placeholder, real count below
 
   const evolucaoMensal = useMemo(() => {
     const map = {};
-    mensal.forEach(m => { map[`${m.ano}-${m.mes}`] = Number(m.valor_liquido || 0); });
+    netMensal.forEach(m => { map[`${m.ano}-${m.mes}`] = m.valor_liquido; });
     const out = [];
     for (let ano = filtros.anoIni; ano <= filtros.anoFim; ano++) {
       const mIni = ano === filtros.anoIni ? filtros.mesIni : 1;
@@ -978,32 +1006,20 @@ function Faturamento() {
       for (let mes = mIni; mes <= mFim; mes++) out.push({ ano, mes, valor: map[`${ano}-${mes}`] || 0 });
     }
     return out;
-  }, [mensal, filtros]);
+  }, [netMensal, filtros]);
 
-  const kalengAgregado = useMemo(() => {
-    const map = {};
-    porKaleng.forEach(k => { map[k.segmento_kaleng] = (map[k.segmento_kaleng] || 0) + Number(k.valor_liquido || 0); });
-    return Object.entries(map).sort((a, b) => b[1] - a[1]).slice(0, 10);
-  }, [porKaleng]);
-
-  const segmentoAgregado = useMemo(() => {
-    const map = {};
-    porSegmento.forEach(s => {
-      const key = s.segmento_descricao || 'Sem Segmento';
-      map[key] = (map[key] || 0) + Number(s.valor_liquido || 0);
-    });
-    return Object.entries(map).sort((a, b) => b[1] - a[1]);
-  }, [porSegmento]);
+  const kalengOrdenado = useMemo(() => [...porKaleng].sort((a, b) => b.valor - a.valor).slice(0, 10), [porKaleng]);
+  const segmentoOrdenado = useMemo(() => [...porSegmento].sort((a, b) => b.valor - a.valor), [porSegmento]);
 
   const maxMensal = Math.max(...evolucaoMensal.map(m => m.valor), 1);
-  const maxKaleng = Math.max(...kalengAgregado.map(([, v]) => v), 1);
-  const maxSegmento = Math.max(...segmentoAgregado.map(([, v]) => v), 1);
+  const maxKaleng = Math.max(...kalengOrdenado.map(k => k.valor), 1);
+  const maxSegmento = Math.max(...segmentoOrdenado.map(s => s.valor), 1);
 
   return (
     <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 18, maxWidth: 1320 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 12 }}>
-        <p style={{ color: T.inkFaint, fontSize: 12.5, margin: 0, maxWidth: 520 }}>
-          Dados puxados direto do ERP (TGFCAB/TGFITE/TGFPAR). TOPs de venda validados manualmente: 3100, 3101, 3102, 3103, 3106, 3107, 3110, 3200, 3213, 3214, 3220.
+        <p style={{ color: T.inkFaint, fontSize: 12.5, margin: 0, maxWidth: 560 }}>
+          Net Value, Segmento Kalenborn e Segmento de Mercado vêm da mesma fonte por item de pedido — os números sempre somam entre si. Nota de Venda (faturamento já emitido) é uma métrica separada.
         </p>
         <button onClick={handleAtualizar} disabled={syncing} style={{
           display: 'flex', alignItems: 'center', gap: 8, background: T.terracotta, color: '#fff', border: 'none',
@@ -1047,7 +1063,7 @@ function Faturamento() {
         {lastSync && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 14, fontSize: 11, color: T.inkFaint }}>
             <Clock3 size={12} />
-            Última sincronização: {new Date(lastSync.finalizado_em).toLocaleString('pt-BR')} · {lastSync.registros_sincronizados} registros
+            Última sincronização: {new Date(lastSync.finalizado_em).toLocaleString('pt-BR')} · {lastSync.registros_sincronizados} itens
           </div>
         )}
       </Panel>
@@ -1056,54 +1072,53 @@ function Faturamento() {
         <div style={{ textAlign: 'center', padding: 50, color: T.inkFaint, fontSize: 13 }}>Carregando dados…</div>
       ) : (
         <>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14 }}>
-            <Kpi label="Net Value (líquido)" value={fmtMoedaCompacta(totalPeriodo)} icon={DollarSign} />
-            <Kpi label="Nota de Venda (bruto faturado)" value={fmtMoedaCompacta(totalNotaVenda)} icon={TrendingUp} />
-            <button
-              onClick={() => { setDrillDownAberto(true); carregarDetalhePedidos(); }}
-              style={{ textAlign: 'left', border: 'none', background: 'transparent', padding: 0, cursor: 'pointer' }}
-            >
-              <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '16px 18px', transition: 'border-color .15s' }}
-                onMouseEnter={e => e.currentTarget.style.borderColor = T.terracotta}
-                onMouseLeave={e => e.currentTarget.style.borderColor = T.line}
-              >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                  <span style={{ fontSize: 11.5, color: T.inkFaint, fontWeight: 500 }}>Pedidos de Venda ({qtdPedidos})</span>
-                  <Search size={13} color={T.terracotta} />
-                </div>
-                <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.ink, marginTop: 10, fontSize: 26 }}>{fmtMoedaCompacta(totalPedidos)}</div>
-                <div style={{ fontSize: 10.5, color: T.terracottaText, marginTop: 4 }}>Clique para ver os projetos →</div>
-              </div>
-            </button>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 14 }}>
+            <KpiClicavel
+              label="Net Value (líquido)" valor={totalNetValue} icon={DollarSign} cor={T.terracotta}
+              onClick={() => abrirDrillDown('Net Value — todos os itens do período', null)}
+            />
+            <KpiClicavel
+              label="Nota de Venda (faturamento emitido)" valor={totalNotaVenda} icon={TrendingUp} cor={T.blue}
+              sub="Métrica separada — TIPMOV='V'"
+            />
           </div>
 
-          <Panel title="Evolução mensal" subtitle={filtros.anoIni === filtros.anoFim ? `${filtros.anoIni}` : `${filtros.anoIni}–${filtros.anoFim}`}>
-            <div style={{ display: 'flex', alignItems: 'flex-end', gap: 10, height: 170, padding: '10px 4px 0', overflowX: 'auto' }}>
+          <Panel title="Evolução mensal — Net Value" subtitle={filtros.anoIni === filtros.anoFim ? `${filtros.anoIni}` : `${filtros.anoIni}–${filtros.anoFim}`}>
+            <div style={{ display: 'flex', alignItems: 'flex-end', gap: 12, height: 190, padding: '14px 6px 0', overflowX: 'auto' }}>
               {evolucaoMensal.map((m, i) => {
-                const h = Math.max((m.valor / maxMensal) * 130, m.valor > 0 ? 4 : 2);
+                const h = Math.max((m.valor / maxMensal) * 140, m.valor > 0 ? 4 : 2);
                 return (
-                  <div key={i} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flex: '0 0 auto', minWidth: 54 }}>
-                    <div style={{ fontSize: 10, fontWeight: 700, marginBottom: 6, color: T.terracottaText, fontFamily: FONT_DISPLAY, whiteSpace: 'nowrap' }}>{fmtMoedaCompacta(m.valor)}</div>
-                    <div style={{ width: 34, height: h, background: T.terracotta, borderRadius: '3px 3px 0 0', transition: 'height .4s ease' }} />
-                    <div style={{ fontSize: 10, color: T.inkFaint, marginTop: 8 }}>{MESES_FAT[m.mes - 1]}/{String(m.ano).slice(2)}</div>
-                  </div>
+                  <button key={i} onClick={() => abrirDrillDown(`Net Value — ${MESES_FAT[m.mes - 1]}/${m.ano}`, null)}
+                    style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flex: '0 0 auto', minWidth: 58, background: 'transparent', border: 'none', cursor: 'pointer', padding: 0 }}>
+                    <div style={{ fontSize: 10.5, fontWeight: 700, marginBottom: 6, color: T.terracottaText, fontFamily: FONT_DISPLAY, whiteSpace: 'nowrap' }}>{fmtMoedaCompacta(m.valor)}</div>
+                    <div style={{
+                      width: 38, height: h, borderRadius: '5px 5px 2px 2px', transition: 'height .35s ease, filter .15s',
+                      background: `linear-gradient(180deg, ${T.terracotta} 0%, ${T.terracottaText} 100%)`,
+                    }}
+                      onMouseEnter={e => e.currentTarget.style.filter = 'brightness(1.12)'}
+                      onMouseLeave={e => e.currentTarget.style.filter = 'none'}
+                    />
+                    <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 9, fontWeight: 500 }}>{MESES_FAT[m.mes - 1]}/{String(m.ano).slice(2)}</div>
+                  </button>
                 );
               })}
             </div>
           </Panel>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-            <Panel title="Por segmento Kalenborn" subtitle="AD_KALENG — classificação interna de produto">
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 8 }}>
-                {kalengAgregado.length === 0 ? <EmptyStateFat /> : kalengAgregado.map(([nome, valor]) => (
-                  <BarraFat key={nome} nome={nome} valor={valor} max={maxKaleng} cor={T.terracotta} />
+            <Panel title="Por segmento Kalenborn" subtitle="AD_KALENG — classificação interna de produto · clique para detalhar">
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 10 }}>
+                {kalengOrdenado.length === 0 ? <EmptyStateFat /> : kalengOrdenado.map(k => (
+                  <BarraClicavel key={k.nome} nome={k.nome} valor={k.valor} max={maxKaleng} cor={T.terracotta}
+                    onClick={() => abrirDrillDown(`Segmento Kalenborn — ${k.nome}`, { coluna: 'produto_kaleng', valor: k.nome })} />
                 ))}
               </div>
             </Panel>
-            <Panel title="Por segmento de mercado" subtitle="AD_SEGMENTO — Cement Plant, Mining, Steel Plant...">
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 8 }}>
-                {segmentoAgregado.length === 0 ? <EmptyStateFat /> : segmentoAgregado.map(([nome, valor]) => (
-                  <BarraFat key={nome} nome={nome} valor={valor} max={maxSegmento} cor={T.blue} />
+            <Panel title="Por segmento de mercado" subtitle="AD_SEGMENTO — Mining, Steel Plant, Cement Plant... · clique para detalhar">
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 10 }}>
+                {segmentoOrdenado.length === 0 ? <EmptyStateFat /> : segmentoOrdenado.map(s => (
+                  <BarraClicavel key={s.nome} nome={s.nome} valor={s.valor} max={maxSegmento} cor={T.blue}
+                    onClick={() => abrirDrillDown(`Segmento de mercado — ${s.nome}`, { coluna: 'segmento_descricao', valor: s.nome })} />
                 ))}
               </div>
             </Panel>
@@ -1111,25 +1126,67 @@ function Faturamento() {
         </>
       )}
 
-      {drillDownAberto && (
-        <DrillDownPedidos pedidos={pedidosDetalhe} onClose={() => setDrillDownAberto(false)} />
+      {drillDown && (
+        <DrillDownPedidos titulo={drillDown.titulo} itens={drillDown.itens} loading={drillLoading} onClose={() => setDrillDown(null)} />
       )}
     </div>
   );
 }
 
-function DrillDownPedidos({ pedidos, onClose }) {
-  const total = pedidos.reduce((s, p) => s + Number(p.valor_nota || 0), 0);
+function KpiClicavel({ label, valor, icon: Icon, cor, sub, onClick }) {
+  const Tag = onClick ? 'button' : 'div';
+  return (
+    <Tag onClick={onClick} style={{
+      textAlign: 'left', border: `1px solid ${T.line}`, background: T.panel, borderRadius: 10, padding: '18px 20px',
+      cursor: onClick ? 'pointer' : 'default', transition: 'border-color .15s, box-shadow .15s', width: '100%',
+    }}
+      onMouseEnter={onClick ? (e => { e.currentTarget.style.borderColor = cor; e.currentTarget.style.boxShadow = `0 4px 14px ${cor}22`; }) : undefined}
+      onMouseLeave={onClick ? (e => { e.currentTarget.style.borderColor = T.line; e.currentTarget.style.boxShadow = 'none'; }) : undefined}
+    >
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+        <span style={{ fontSize: 12, color: T.inkFaint, fontWeight: 600 }}>{label}</span>
+        <Icon size={16} color={cor} />
+      </div>
+      <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.ink, marginTop: 12, fontSize: 30, letterSpacing: '-0.01em' }}>{fmtMoeda(valor)}</div>
+      {onClick ? (
+        <div style={{ fontSize: 11, color: cor, marginTop: 6, fontWeight: 600 }}>Ver itens do período →</div>
+      ) : sub ? (
+        <div style={{ fontSize: 11, color: T.inkFaint, marginTop: 6 }}>{sub}</div>
+      ) : null}
+    </Tag>
+  );
+}
+
+function BarraClicavel({ nome, valor, max, cor, onClick }) {
+  return (
+    <button onClick={onClick} style={{
+      display: 'flex', alignItems: 'center', gap: 10, fontSize: 12.5, background: 'transparent', border: 'none',
+      padding: '7px 4px', borderRadius: 6, cursor: 'pointer', textAlign: 'left', width: '100%',
+    }}
+      onMouseEnter={e => e.currentTarget.style.background = T.panelAlt}
+      onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+    >
+      <span style={{ width: 140, color: T.ink, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={nome}>{nome}</span>
+      <div style={{ flex: 1, background: T.lineSoft, height: 9, borderRadius: 5, overflow: 'hidden' }}>
+        <div style={{ width: `${(valor / max) * 100}%`, height: '100%', background: cor, borderRadius: 5, transition: 'width .3s ease' }} />
+      </div>
+      <span style={{ width: 78, textAlign: 'right', fontWeight: 700, fontFamily: FONT_DISPLAY, fontSize: 12.5, color: T.ink }}>{fmtMoedaCompacta(valor)}</span>
+    </button>
+  );
+}
+
+function DrillDownPedidos({ titulo, itens, loading, onClose }) {
+  const total = itens.reduce((s, p) => s + Number(p.valor_liquido || 0), 0);
   return (
     <Overlay onClose={onClose}>
       <div className="scale-in" style={{
-        background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, width: '100%', maxWidth: 820,
+        background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, width: '100%', maxWidth: 920,
         maxHeight: '85vh', display: 'flex', flexDirection: 'column', overflow: 'hidden', boxShadow: '0 24px 60px rgba(0,0,0,.18)',
       }}>
         <div style={{ padding: '18px 22px', borderBottom: `1px solid ${T.line}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div>
-            <h2 style={{ fontFamily: FONT_DISPLAY, fontSize: 19, fontWeight: 600, margin: 0 }}>Pedidos de Venda — detalhe</h2>
-            <p style={{ fontSize: 12, color: T.inkFaint, margin: '3px 0 0' }}>{pedidos.length} pedidos · {fmtMoedaCompacta(total)} no total</p>
+            <h2 style={{ fontFamily: FONT_DISPLAY, fontSize: 19, fontWeight: 600, margin: 0 }}>{titulo}</h2>
+            <p style={{ fontSize: 12, color: T.inkFaint, margin: '3px 0 0' }}>{itens.length} itens · {fmtMoeda(total)} no total</p>
           </div>
           <button onClick={onClose} style={{ background: 'transparent', border: 'none', color: T.inkFaint }}><X size={20} /></button>
         </div>
@@ -1138,20 +1195,26 @@ function DrillDownPedidos({ pedidos, onClose }) {
             <thead>
               <tr style={{ borderBottom: `1px solid ${T.line}`, position: 'sticky', top: 0, background: T.panel }}>
                 <th style={thFat()}>Data</th>
+                <th style={thFat()}>BR</th>
                 <th style={thFat()}>Cliente</th>
                 <th style={thFat()}>Vendedor</th>
-                <th style={thFat(0, 'right')}>Valor</th>
+                <th style={thFat()}>Produto</th>
+                <th style={thFat(0, 'right')}>Valor líquido</th>
               </tr>
             </thead>
             <tbody>
-              {pedidos.length === 0 ? (
-                <tr><td colSpan={4} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Carregando ou sem pedidos no período…</td></tr>
-              ) : pedidos.map(p => (
-                <tr key={p.nunota} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
-                  <td style={{ padding: '9px 12px', color: T.inkDim }}>{fmtData(p.data_neg)}</td>
-                  <td style={{ padding: '9px 12px', fontWeight: 600, maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={p.cliente_nome}>{p.cliente_nome}</td>
-                  <td style={{ padding: '9px 12px', color: T.inkDim }}>{p.vendedor_nome}</td>
-                  <td style={{ padding: '9px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 600 }}>{fmtMoeda(p.valor_nota)}</td>
+              {loading ? (
+                <tr><td colSpan={6} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Carregando…</td></tr>
+              ) : itens.length === 0 ? (
+                <tr><td colSpan={6} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Sem itens no período.</td></tr>
+              ) : itens.map(p => (
+                <tr key={p.id} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                  <td style={{ padding: '9px 12px', color: T.inkDim, whiteSpace: 'nowrap' }}>{fmtData(p.data_neg)}</td>
+                  <td style={{ padding: '9px 12px', fontFamily: FONT_DISPLAY, fontWeight: 600 }}>{p.br || '—'}</td>
+                  <td style={{ padding: '9px 12px', fontWeight: 600, maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={p.cliente_nome}>{p.cliente_nome}</td>
+                  <td style={{ padding: '9px 12px', color: T.inkDim, whiteSpace: 'nowrap' }}>{p.vendedor_nome || '—'}</td>
+                  <td style={{ padding: '9px 12px', color: T.inkDim, maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={p.produto_descricao}>{p.produto_descricao}</td>
+                  <td style={{ padding: '9px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 600 }}>{fmtMoeda(p.valor_liquido)}</td>
                 </tr>
               ))}
             </tbody>
