@@ -18,39 +18,49 @@ const SUPABASE_ANON_KEY = 'sb_publishable_s_xxUVnOpstaW7p8ngxfXw_OoXDfBXi'; // a
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 /* ============================================================================
-   DESIGN TOKENS — tema claro
-   Paleta ancorada no domínio: cerâmica/refratário industrial.
-   Fundo claro neutro + terracota de cerâmica queimada + âmbar-aço + verde-óxido.
+   DESIGN TOKENS — identidade Kalenborn, nível diretoria
+   Vermelho de marca (Kalenborn red) sobre grafite/branco, com camadas de
+   elevação (sombra) para profundidade e hierarquia visual mais sofisticada.
 ============================================================================ */
 const T = {
-  bg: '#F7F5F1',
+  bg: '#F6F4F0',
   panel: '#FFFFFF',
-  panelAlt: '#FBFAF8',
-  line: '#E5E1D8',
-  lineSoft: '#EFEBE3',
-  ink: '#211D17',
-  inkDim: '#6B6356',
-  inkFaint: '#9B9384',
-  terracotta: '#B6502B',
-  terracottaSoft: '#F5E4DA',
-  terracottaText: '#7A3318',
-  amber: '#A9761B',
-  amberSoft: '#F6EAD2',
-  amberText: '#6B4A0F',
-  olive: '#52713E',
-  oliveSoft: '#E6EEDD',
-  oliveText: '#34481F',
+  panelAlt: '#FBFAF9',
+  line: '#E7E2D8',
+  lineSoft: '#F0ECE3',
+  ink: '#1C1A17',
+  inkDim: '#615A4F',
+  inkFaint: '#9A917F',
+  terracotta: '#C8261C',
+  terracottaSoft: '#FBE6E3',
+  terracottaText: '#8A170F',
+  terracottaDeep: '#8F1109',
+  amber: '#B07F1A',
+  amberSoft: '#F8EDD6',
+  amberText: '#6E4B0C',
+  olive: '#3D7A4A',
+  oliveSoft: '#E2F0E4',
+  oliveText: '#1F5429',
   rust: '#A23A28',
   rustSoft: '#F5DDD6',
   rustText: '#732012',
-  blue: '#33618E',
-  blueSoft: '#E1EBF3',
-  blueText: '#1F4566',
-  slate: '#736C5E',
+  blue: '#2D5F8A',
+  blueSoft: '#E1ECF5',
+  blueText: '#173F60',
+  slate: '#6E665A',
+  gold: '#C9971E',
+  goldSoft: '#FBF1DA',
 };
 
 const FONT_DISPLAY = "'Barlow Condensed', 'Archivo Narrow', sans-serif";
 const FONT_BODY = "'Inter', system-ui, sans-serif";
+
+// Camadas de elevação — substitui bordas planas por sombra sutil em
+// pontos de destaque (cards de KPI, modais, hover de linhas clicáveis).
+const SHADOW_SM = '0 1px 2px rgba(28,26,23,.04), 0 1px 1px rgba(28,26,23,.03)';
+const SHADOW_MD = '0 2px 8px rgba(28,26,23,.06), 0 1px 3px rgba(28,26,23,.04)';
+const SHADOW_LG = '0 8px 24px rgba(28,26,23,.10), 0 2px 6px rgba(28,26,23,.05)';
+const SHADOW_XL = '0 24px 64px rgba(28,26,23,.16), 0 4px 12px rgba(28,26,23,.06)';
 
 /* ============================================================================
    POOL DE APROVADORES — qualquer um dos três aprova, sem ordem fixa
@@ -251,16 +261,17 @@ function Sidebar({ view, setView, pendCount, papel }) {
     { id: 'integracao', label: 'Integrações', icon: Workflow },
   ];
   return (
-    <div className="sidebar-responsive" style={{ background: T.panel, borderRight: `1px solid ${T.line}`, display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
-      <div className="sidebar-header" style={{ padding: '22px 22px 20px', borderBottom: `1px solid ${T.line}` }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+    <div className="sidebar-responsive" style={{ background: T.panel, borderRight: `1px solid ${T.line}`, display: 'flex', flexDirection: 'column', flexShrink: 0, boxShadow: '1px 0 0 rgba(28,26,23,.02), 2px 0 8px rgba(28,26,23,.03)' }}>
+      <div className="sidebar-header" style={{ padding: '24px 22px 22px', borderBottom: `1px solid ${T.line}` }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 11 }}>
           <div style={{
-            width: 34, height: 34, borderRadius: 4, background: T.terracotta, display: 'flex',
-            alignItems: 'center', justifyContent: 'center', fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 17, color: '#fff', flexShrink: 0,
+            width: 36, height: 36, borderRadius: 8, background: `linear-gradient(135deg, ${T.terracotta} 0%, ${T.terracottaDeep} 100%)`, display: 'flex',
+            alignItems: 'center', justifyContent: 'center', fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 18, color: '#fff', flexShrink: 0,
+            boxShadow: '0 2px 6px rgba(143,17,9,.35)',
           }}>K</div>
           <div className="sidebar-brand-text">
-            <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 600, fontSize: 17, letterSpacing: '0.02em', color: T.ink }}>KALENBORN</div>
-            <div style={{ fontSize: 11, color: T.inkFaint, letterSpacing: '0.06em', textTransform: 'uppercase', marginTop: 1 }}>Engenharia · Orçamentos</div>
+            <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 18, letterSpacing: '0.01em', color: T.ink }}>KALENBORN</div>
+            <div style={{ fontSize: 10.5, color: T.inkFaint, letterSpacing: '0.07em', textTransform: 'uppercase', marginTop: 2, fontWeight: 600 }}>Engenharia · Orçamentos</div>
           </div>
         </div>
       </div>
@@ -539,30 +550,40 @@ function Dashboard({ stats, propostas, todasPropostas, mesFiltro }) {
 function Kpi({ label, value, icon: Icon, tone }) {
   const toneColor = tone === 'amber' ? T.amberText : tone === 'rust' ? T.rustText : T.ink;
   return (
-    <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '16px 18px' }}>
+    <div style={{
+      background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, padding: '18px 20px',
+      boxShadow: SHADOW_SM, transition: 'box-shadow .2s, transform .2s',
+    }}
+      onMouseEnter={e => { e.currentTarget.style.boxShadow = SHADOW_MD; e.currentTarget.style.transform = 'translateY(-1px)'; }}
+      onMouseLeave={e => { e.currentTarget.style.boxShadow = SHADOW_SM; e.currentTarget.style.transform = 'none'; }}
+    >
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-        <span style={{ fontSize: 11.5, color: T.inkFaint, fontWeight: 500 }}>{label}</span>
-        <Icon size={15} color={toneColor} strokeWidth={2} />
+        <span style={{ fontSize: 11.5, color: T.inkFaint, fontWeight: 600, letterSpacing: '0.01em' }}>{label}</span>
+        <div style={{ width: 28, height: 28, borderRadius: 7, background: tone === 'amber' ? T.amberSoft : tone === 'rust' ? T.rustSoft : T.terracottaSoft, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+          <Icon size={14} color={toneColor} strokeWidth={2.2} />
+        </div>
       </div>
-      <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, color: toneColor, marginTop: 10, fontSize: 26, letterSpacing: '0.01em' }}>{value}</div>
+      <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, color: toneColor, marginTop: 14, fontSize: 28, letterSpacing: '-0.01em' }}>{value}</div>
     </div>
   );
 }
 
 function OrigemCard({ percWord, wordCount, sankhyaCount }) {
   return (
-    <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '16px 18px' }}>
+    <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, padding: '18px 20px', boxShadow: SHADOW_SM }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-        <span style={{ fontSize: 11.5, color: T.inkFaint, fontWeight: 500 }}>Origem dos dados</span>
-        <FileWarning size={15} color={T.terracotta} />
+        <span style={{ fontSize: 11.5, color: T.inkFaint, fontWeight: 600 }}>Origem dos dados</span>
+        <div style={{ width: 28, height: 28, borderRadius: 7, background: T.terracottaSoft, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+          <FileWarning size={14} color={T.terracotta} strokeWidth={2.2} />
+        </div>
       </div>
-      <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 26, color: T.terracotta, marginTop: 10 }}>{percWord}%</div>
+      <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 28, color: T.terracotta, marginTop: 14, letterSpacing: '-0.01em' }}>{percWord}%</div>
       <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 2 }}>fora do Sankhya (Word/e-mail)</div>
-      <div style={{ display: 'flex', height: 5, borderRadius: 3, overflow: 'hidden', marginTop: 10 }}>
+      <div style={{ display: 'flex', height: 6, borderRadius: 3, overflow: 'hidden', marginTop: 12 }}>
         <div style={{ width: `${percWord}%`, background: T.terracotta }} />
         <div style={{ width: `${100 - percWord}%`, background: T.lineSoft }} />
       </div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: T.inkFaint, marginTop: 6 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: T.inkFaint, marginTop: 7 }}>
         <span>{wordCount} manual</span><span>{sankhyaCount} ERP</span>
       </div>
     </div>
@@ -571,11 +592,11 @@ function OrigemCard({ percWord, wordCount, sankhyaCount }) {
 
 function Panel({ title, subtitle, children, right }) {
   return (
-    <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: 20 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4 }}>
+    <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, padding: 22, boxShadow: SHADOW_SM }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: title ? 16 : 0 }}>
         <div>
-          <h3 style={{ fontSize: 14, fontWeight: 600, margin: 0, color: T.ink }}>{title}</h3>
-          {subtitle && <p style={{ fontSize: 11.5, color: T.inkFaint, margin: '3px 0 0' }}>{subtitle}</p>}
+          {title && <h3 style={{ fontSize: 14.5, fontWeight: 700, margin: 0, color: T.ink, letterSpacing: '-0.005em' }}>{title}</h3>}
+          {subtitle && <p style={{ fontSize: 11.5, color: T.inkFaint, margin: '4px 0 0', lineHeight: 1.5 }}>{subtitle}</p>}
         </div>
         {right}
       </div>
@@ -1285,6 +1306,17 @@ function ComparativoItens({ moeda, converter, fmtValor }) {
   const [loading, setLoading] = useState(false);
   const [buscou, setBuscou] = useState(false);
 
+  const [topVariacoes, setTopVariacoes] = useState([]);
+  const [topLoading, setTopLoading] = useState(true);
+
+  useEffect(() => {
+    supabase.from('v_top_variacoes_item').select('*').order('variacao_pct', { ascending: false }).limit(200)
+      .then(({ data }) => { setTopVariacoes(data || []); setTopLoading(false); });
+  }, []);
+
+  const maisSubiram = topVariacoes.slice(0, 5);
+  const maisCairam = [...topVariacoes].sort((a, b) => Number(a.variacao_pct) - Number(b.variacao_pct)).slice(0, 5);
+
   const buscar = async () => {
     if (!codigoBusca.trim()) return;
     setLoading(true);
@@ -1305,6 +1337,45 @@ function ComparativoItens({ moeda, converter, fmtValor }) {
 
   return (
     <Panel title="Comparativo de itens" subtitle="Acompanhe como o valor de um mesmo Código Vale variou ao longo dos meses">
+      {!topLoading && (maisSubiram.length > 0 || maisCairam.length > 0) && (
+        <div className="grid-2col" style={{ marginBottom: 22 }}>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
+              <ArrowUpRight size={14} color={T.oliveText} />
+              <span style={{ fontSize: 11.5, fontWeight: 700, color: T.oliveText, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Mais subiram</span>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {maisSubiram.map(r => (
+                <button key={r.codigo_vale} onClick={() => { setCodigoBusca(r.codigo_vale); buscar(); }} style={{
+                  display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', textAlign: 'left',
+                  background: T.oliveSoft, border: 'none', borderRadius: 8, padding: '9px 12px', cursor: 'pointer',
+                }}>
+                  <span style={{ fontSize: 12, fontWeight: 600, color: T.ink, fontFamily: FONT_DISPLAY }}>{r.codigo_vale}</span>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: T.oliveText, fontFamily: FONT_DISPLAY }}>+{Number(r.variacao_pct).toFixed(0)}%</span>
+                </button>
+              ))}
+            </div>
+          </div>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
+              <ArrowDownRight size={14} color={T.rustText} />
+              <span style={{ fontSize: 11.5, fontWeight: 700, color: T.rustText, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Mais caíram</span>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {maisCairam.map(r => (
+                <button key={r.codigo_vale} onClick={() => { setCodigoBusca(r.codigo_vale); buscar(); }} style={{
+                  display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', textAlign: 'left',
+                  background: T.rustSoft, border: 'none', borderRadius: 8, padding: '9px 12px', cursor: 'pointer',
+                }}>
+                  <span style={{ fontSize: 12, fontWeight: 600, color: T.ink, fontFamily: FONT_DISPLAY }}>{r.codigo_vale}</span>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: T.rustText, fontFamily: FONT_DISPLAY }}>{Number(r.variacao_pct).toFixed(0)}%</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
       <div style={{ display: 'flex', gap: 10, marginTop: 8, marginBottom: 16, alignItems: 'flex-end' }}>
         <FiltroCampoFat label="Código Vale">
           <input
@@ -1884,6 +1955,10 @@ function Admin() {
 ============================================================================ */
 function ModalDetalhe({ proposta, usuario, onClose, onAction }) {
   const [comentario, setComentario] = useState('');
+  const [comentarios, setComentarios] = useState([]);
+  const [novoComentario, setNovoComentario] = useState('');
+  const [enviandoComentario, setEnviandoComentario] = useState(false);
+
   const isRascunho = proposta.status === 'rascunho' || proposta.status === 'reprovada';
   const sankhyaPendente = proposta.origem_dados === 'sankhya' && !proposta.validado_pelo_engenheiro;
 
@@ -1895,29 +1970,48 @@ function ModalDetalhe({ proposta, usuario, onClose, onAction }) {
 
   const meta = STATUS_META[proposta.status];
 
+  const carregarComentarios = useCallback(async () => {
+    const { data } = await supabase.from('proposta_comentarios').select('*')
+      .eq('proposta_id', proposta.id).order('created_at', { ascending: true });
+    setComentarios(data || []);
+  }, [proposta.id]);
+
+  useEffect(() => { carregarComentarios(); }, [carregarComentarios]);
+
+  const enviarComentario = async () => {
+    if (!novoComentario.trim()) return;
+    setEnviandoComentario(true);
+    await supabase.from('proposta_comentarios').insert({
+      proposta_id: proposta.id, autor_nome: usuario.nome, comentario: novoComentario.trim(),
+    });
+    setNovoComentario('');
+    await carregarComentarios();
+    setEnviandoComentario(false);
+  };
+
   return (
     <Overlay onClose={onClose}>
       <div className="scale-in" style={{
-        background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, width: '100%', maxWidth: 920,
-        maxHeight: '92vh', display: 'flex', flexDirection: 'column', overflow: 'hidden', boxShadow: '0 24px 60px rgba(0,0,0,.18)',
+        background: T.panel, border: `1px solid ${T.line}`, borderRadius: 16, width: '100%', maxWidth: 960,
+        maxHeight: '92vh', display: 'flex', flexDirection: 'column', overflow: 'hidden', boxShadow: SHADOW_XL,
       }}>
-        <div style={{ padding: '20px 24px', background: T.panelAlt, borderBottom: `1px solid ${T.line}`, display: 'flex', justifyContent: 'space-between' }}>
+        <div style={{ padding: '22px 26px', background: `linear-gradient(135deg, ${T.panelAlt} 0%, ${T.panel} 100%)`, borderBottom: `1px solid ${T.line}`, display: 'flex', justifyContent: 'space-between' }}>
           <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <h2 style={{ fontFamily: FONT_DISPLAY, fontSize: 22, fontWeight: 700, margin: 0, color: T.ink }}>{proposta.br}</h2>
-              <span style={{ background: meta.bg, color: meta.color, fontSize: 11, fontWeight: 700, padding: '4px 10px', borderRadius: 4, textTransform: 'uppercase', letterSpacing: '0.03em' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 11 }}>
+              <h2 style={{ fontFamily: FONT_DISPLAY, fontSize: 24, fontWeight: 700, margin: 0, color: T.ink, letterSpacing: '-0.01em' }}>{proposta.br}</h2>
+              <span style={{ background: meta.bg, color: meta.color, fontSize: 10.5, fontWeight: 700, padding: '5px 11px', borderRadius: 20, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
                 {meta.label}
               </span>
             </div>
-            <p style={{ color: T.inkFaint, fontSize: 13, margin: '4px 0 0' }}>{proposta.cliente} · {proposta.escopo}</p>
+            <p style={{ color: T.inkFaint, fontSize: 13, margin: '5px 0 0', fontWeight: 500 }}>{proposta.cliente} · {proposta.escopo}</p>
           </div>
-          <button onClick={onClose} style={{ background: 'transparent', border: 'none', color: T.inkFaint, padding: 4 }}><X size={22} /></button>
+          <button onClick={onClose} style={{ background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 8, color: T.inkFaint, padding: 7, height: 'fit-content' }}><X size={18} /></button>
         </div>
 
         <div style={{ flex: 1, overflow: 'auto', display: 'flex' }}>
-          <div style={{ flex: '2 1 0', padding: 24, borderRight: `1px solid ${T.line}` }}>
+          <div style={{ flex: '2 1 0', padding: 26, borderRight: `1px solid ${T.line}`, overflow: 'auto' }}>
             <SectionLabel>Informações da proposta</SectionLabel>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px 24px', fontSize: 13, marginTop: 12, marginBottom: 22 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '18px 26px', fontSize: 13, marginTop: 14, marginBottom: 24 }}>
               <Detail label="Origem dos dados" value={proposta.origem_dados === 'sankhya' ? 'ERP Sankhya' : 'Manual (Word/e-mail)'} />
               <Detail label="Tipo de proposta" value={proposta.tipo_proposta.replace(/_/g, ' ')} />
               <Detail label="Abertura" value={fmtData(proposta.data_abertura)} />
@@ -1943,18 +2037,45 @@ function ModalDetalhe({ proposta, usuario, onClose, onAction }) {
                 )}
               />
             )}
+
+            <div style={{ marginTop: 26 }}>
+              <SectionLabel>Comentários</SectionLabel>
+              <div style={{ marginTop: 14, display: 'flex', flexDirection: 'column', gap: 12, maxHeight: 260, overflow: 'auto', paddingRight: 4 }}>
+                {comentarios.length === 0 ? (
+                  <p style={{ fontSize: 12.5, color: T.inkFaint, margin: 0 }}>Nenhum comentário ainda. Seja o primeiro a comentar.</p>
+                ) : comentarios.map(c => (
+                  <div key={c.id} style={{ background: T.panelAlt, border: `1px solid ${T.lineSoft}`, borderRadius: 10, padding: '11px 14px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: T.ink }}>{c.autor_nome}</span>
+                      <span style={{ fontSize: 10.5, color: T.inkFaint }}>{new Date(c.created_at).toLocaleString('pt-BR', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>
+                    </div>
+                    <p style={{ fontSize: 12.5, color: T.inkDim, margin: 0, lineHeight: 1.5 }}>{c.comentario}</p>
+                  </div>
+                ))}
+              </div>
+              <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
+                <input
+                  value={novoComentario} onChange={e => setNovoComentario(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && enviarComentario()}
+                  placeholder="Escrever um comentário…" style={{ ...inputStyle(), flex: 1, fontSize: 12.5 }}
+                />
+                <button onClick={enviarComentario} disabled={enviandoComentario || !novoComentario.trim()} style={{ ...solidBtn(T.terracotta, true), opacity: enviandoComentario || !novoComentario.trim() ? 0.5 : 1 }}>
+                  Enviar
+                </button>
+              </div>
+            </div>
           </div>
 
-          <div style={{ flex: '1 1 0', padding: 24, background: T.panelAlt, display: 'flex', flexDirection: 'column' }}>
+          <div style={{ flex: '1 1 0', padding: 26, background: T.panelAlt, display: 'flex', flexDirection: 'column' }}>
             <SectionLabel>Fluxo & aprovação</SectionLabel>
-            <div style={{ flex: 1, marginTop: 14 }}>
+            <div style={{ flex: 1, marginTop: 16 }}>
               <Timeline label="Cadastro" done={proposta.status !== 'rascunho'} active date={proposta.data_abertura} />
               <Timeline label="Revisão técnica" active={proposta.status === 'em_revisao_tecnica'} done={['aguardando_aprovacao', 'aprovada', 'concluida'].includes(proposta.status)} rejected={proposta.status === 'reprovada' && !proposta.aprovador_pool} />
               <PoolTimeline status={proposta.status} aprovador={proposta.aprovador_pool} />
               <Timeline label="Concluída" active={proposta.status === 'concluida'} done={proposta.status === 'concluida'} date={proposta.data_conclusao} last />
             </div>
 
-            <div style={{ borderTop: `1px solid ${T.line}`, paddingTop: 16, marginTop: 8 }}>
+            <div style={{ borderTop: `1px solid ${T.line}`, paddingTop: 18, marginTop: 10 }}>
               {(canReview || canApprove) && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                   <span style={{ fontSize: 11, fontWeight: 700, color: T.inkFaint, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
