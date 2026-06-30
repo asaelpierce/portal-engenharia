@@ -270,9 +270,11 @@ function PortalConteudo({ currentUser, session }) {
         /* Responsividade real: grids colapsam sozinhos via auto-fit, sem
            depender de media query — funcionam em qualquer largura de tela. */
         .grid-kpis-5 { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 14px; }
+        .grid-kpis-7 { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
         .grid-kpis-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
         .grid-2col { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
         .grid-2col-wide { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1.3fr)); gap: 16px; }
+        .grid-3col { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
 
         @media (max-width: 720px) {
           main { padding: 18px 16px !important; }
@@ -303,7 +305,7 @@ function PortalConteudo({ currentUser, session }) {
         />
 
         <main style={{ flex: 1, overflow: 'auto', padding: '28px 32px' }}>
-          {view === 'dashboard' && <Dashboard stats={stats} propostas={propostasMes} todasPropostas={propostas} mesFiltro={mesFiltro} />}
+          {view === 'dashboard' && <Dashboard stats={stats} propostas={propostasMes} todasPropostas={propostas} mesFiltro={mesFiltro} onNovaProposta={() => setModal('nova')} onNavigate={setView} />}
           {view === 'propostas' && (
             <PropostasTable propostas={propostas} titulo="Todas as propostas" onRowClick={p => { setSelected(p); setModal('detalhe'); }} />
           )}
@@ -505,9 +507,10 @@ function Topbar({ view, mesFiltro, setMesFiltro, currentUser, userMenuOpen, setU
 }
 
 /* ============================================================================
-   DASHBOARD
+   DASHBOARD — v2 · produtividade + pedidos Sankhya + registro manual
 ============================================================================ */
-function Dashboard({ stats, propostas, todasPropostas, mesFiltro }) {
+function Dashboard({ stats, propostas, todasPropostas, mesFiltro, onNovaProposta, onNavigate }) {
+  /* ── dados derivados das propostas ── */
   const porEscopo = useMemo(() => {
     const map = {};
     propostas.forEach(p => { map[p.escopo] = (map[p.escopo] || 0) + 1; });
@@ -534,20 +537,85 @@ function Dashboard({ stats, propostas, todasPropostas, mesFiltro }) {
     return Object.entries(map);
   }, [propostas]);
 
+  const manuaisAbertas = useMemo(() => propostas.filter(p => p.origem_dados === 'manual_word' && p.status !== 'concluida'), [propostas]);
+
+  /* ── dados de produtividade do Sankhya ── */
+  const [prodPedidos, setProdPedidos] = useState([]);
+  const [prodOrc, setProdOrc] = useState([]);
+  const [prodLoading, setProdLoading] = useState(true);
+
+  useEffect(() => {
+    const mesIdx = MESES_ORDEM.indexOf(mesFiltro);
+    const mes = mesIdx + 1;
+    const dataIni = `2026-${String(mes).padStart(2, '0')}-01`;
+    const ultimoDia = new Date(2026, mes, 0).getDate();
+    const dataFim = `2026-${String(mes).padStart(2, '0')}-${ultimoDia}`;
+    setProdLoading(true);
+    Promise.all([
+      supabase.from('produtividade_pedidos').select('*').gte('data_ini', dataIni).lte('data_fim', dataFim).order('total_pedidos', { ascending: false }),
+      supabase.from('produtividade_orcamentos').select('*').gte('data_ini', dataIni).lte('data_fim', dataFim).order('total_geral', { ascending: false }),
+    ]).then(([r1, r2]) => {
+      setProdPedidos(r1.data || []);
+      setProdOrc(r2.data || []);
+      setProdLoading(false);
+    });
+  }, [mesFiltro]);
+
+  const totalPedidosSankhya = prodPedidos.reduce((s, p) => s + (p.total_pedidos || 0), 0);
+  const valorPedidosSankhya = prodPedidos.reduce((s, p) => s + (Number(p.valor_total) || 0), 0);
+  const totalOrcSankhya = prodOrc.reduce((s, o) => s + (o.total_geral || 0), 0);
+
   const maxEscopo = Math.max(...porEscopo.map(([, v]) => v), 1);
   const maxMensal = Math.max(...evolucaoMensal.map(m => m.count), 1);
+  const maxProd = Math.max(...prodOrc.map(o => o.total_geral || 0), ...prodPedidos.map(p => p.total_pedidos || 0), 1);
 
   return (
-    <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 22, maxWidth: 1320 }}>
-      {/* KPI ROW */}
-      <div className="grid-kpis-5">
+    <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 22, maxWidth: 1400 }}>
+
+      {/* ── BANNER: propostas manuais sem registro formal ── */}
+      {manuaisAbertas.length > 0 && (
+        <div style={{
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10,
+          background: T.amberSoft, border: `1px solid ${T.amber}44`, borderRadius: 10, padding: '13px 18px',
+        }}>
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+            <FileWarning size={17} color={T.amberText} style={{ flexShrink: 0 }} />
+            <span style={{ fontSize: 13, color: T.ink }}>
+              <strong style={{ color: T.amberText }}>{manuaisAbertas.length} proposta{manuaisAbertas.length > 1 ? 's' : ''} manual{manuaisAbertas.length > 1 ? 'is' : ''}</strong>{' '}
+              (Word/e-mail) em aberto — registre no portal para manter o controle atualizado.
+            </span>
+          </div>
+          <button onClick={onNovaProposta} style={{
+            display: 'inline-flex', alignItems: 'center', gap: 6, background: T.amberText, color: '#fff',
+            border: 'none', borderRadius: 6, padding: '8px 15px', fontSize: 13, fontWeight: 700, whiteSpace: 'nowrap',
+          }}>
+            <Plus size={14} /> Registrar proposta
+          </button>
+        </div>
+      )}
+
+      {/* ── KPI ROW (7 cards) ── */}
+      <div className="grid-kpis-7">
         <Kpi label="Propostas no mês" value={stats.total} icon={FileStack} />
         <Kpi label="Em andamento" value={stats.ativas} icon={Clock3} tone="amber" />
         <Kpi label="Em atraso" value={stats.atrasadas} icon={AlertTriangle} tone="rust" />
-        <Kpi label="Valor em fluxo" value={fmtMoedaCompacta(stats.valorMes)} icon={ShieldCheck} />
+        <Kpi label="Valor em fluxo" value={fmtMoedaCompacta(stats.valorMes)} icon={DollarSign} />
+        <Kpi
+          label="Pedidos confirmados"
+          value={prodLoading ? '…' : totalPedidosSankhya}
+          icon={CheckCircle2} tone="olive"
+          sub={prodLoading || totalPedidosSankhya === 0 ? null : fmtMoedaCompacta(valorPedidosSankhya)}
+        />
+        <Kpi
+          label="Orçamentos gerados"
+          value={prodLoading ? '…' : totalOrcSankhya}
+          icon={TrendingUp} tone="blue"
+          sub={prodLoading ? null : 'via Sankhya'}
+        />
         <OrigemCard percWord={stats.percWord} wordCount={stats.wordCount} sankhyaCount={stats.sankhyaCount} />
       </div>
 
+      {/* ── ROW 2: Volume mensal + Produtividade da equipe ── */}
       <div className="grid-2col-wide">
         <Panel title="Volume de propostas — Jan a Jun" subtitle="Total mensal, planilha histórica completa">
           <div style={{ display: 'flex', alignItems: 'flex-end', gap: 14, height: 150, padding: '8px 4px 0' }}>
@@ -565,24 +633,73 @@ function Dashboard({ stats, propostas, todasPropostas, mesFiltro }) {
           </div>
         </Panel>
 
-        <Panel title="Volume por escopo" subtitle="Itens cadastrados no mês selecionado">
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 11, marginTop: 4 }}>
-            {porEscopo.map(([escopo, count]) => (
-              <div key={escopo} style={{ display: 'flex', alignItems: 'center', fontSize: 12, gap: 10 }}>
-                <span style={{ width: 130, color: T.inkDim, flexShrink: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={escopo}>{escopo}</span>
-                <div style={{ flex: 1, background: T.lineSoft, height: 7, borderRadius: 4, overflow: 'hidden' }}>
-                  <div style={{ width: `${(count / maxEscopo) * 100}%`, height: '100%', background: T.terracotta, borderRadius: 4 }} />
+        <Panel
+          title="Produtividade da equipe"
+          subtitle={`Orçamentistas e vendedores — ${MESES_LABEL[mesFiltro]}`}
+          right={
+            <button onClick={() => onNavigate('produtividade')} style={{
+              display: 'flex', alignItems: 'center', gap: 3, fontSize: 11.5, fontWeight: 600,
+              color: T.blueText, background: T.blueSoft, border: 'none', borderRadius: 5, padding: '4px 9px',
+            }}>
+              Ver tudo <ArrowUpRight size={12} />
+            </button>
+          }
+        >
+          {prodLoading ? (
+            <div style={{ textAlign: 'center', padding: '20px 0', color: T.inkFaint, fontSize: 12.5 }}>Carregando…</div>
+          ) : prodOrc.length === 0 && prodPedidos.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: '20px 0', color: T.inkFaint, fontSize: 12.5 }}>
+              Sem dados — sincronize na aba <strong>Produtividade</strong>.
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 18, marginTop: 6 }}>
+              {prodOrc.length > 0 && (
+                <div>
+                  <div style={{ fontSize: 10.5, fontWeight: 700, color: T.blueText, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 10 }}>
+                    Orçamentistas — propostas
+                  </div>
+                  {prodOrc.slice(0, 4).map(o => (
+                    <div key={o.orcamentista_nome} style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+                      <div style={{ width: 26, height: 26, borderRadius: '50%', background: T.blueSoft, color: T.blueText, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, fontWeight: 700, flexShrink: 0 }}>
+                        {(o.orcamentista_nome || '?').split(' ').map(n => n[0]).join('').slice(0, 2)}
+                      </div>
+                      <span style={{ fontSize: 12.5, width: 100, color: T.ink, fontWeight: 500, flexShrink: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{o.orcamentista_nome}</span>
+                      <div style={{ flex: 1, background: T.lineSoft, height: 6, borderRadius: 3, overflow: 'hidden' }}>
+                        <div style={{ width: `${((o.total_geral || 0) / maxProd) * 100}%`, height: '100%', background: T.blue, borderRadius: 3 }} />
+                      </div>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: T.blueText, fontFamily: FONT_DISPLAY, width: 22, textAlign: 'right' }}>{o.total_geral}</span>
+                    </div>
+                  ))}
                 </div>
-                <span style={{ width: 20, textAlign: 'right', fontWeight: 600, color: T.ink, fontFamily: FONT_DISPLAY }}>{count}</span>
-              </div>
-            ))}
-          </div>
+              )}
+              {prodPedidos.length > 0 && (
+                <div>
+                  <div style={{ fontSize: 10.5, fontWeight: 700, color: T.oliveText, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 10 }}>
+                    Vendedores — pedidos confirmados
+                  </div>
+                  {prodPedidos.slice(0, 4).map(p => (
+                    <div key={p.vendedor_nome} style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+                      <div style={{ width: 26, height: 26, borderRadius: '50%', background: T.oliveSoft, color: T.oliveText, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, fontWeight: 700, flexShrink: 0 }}>
+                        {(p.vendedor_nome || '?').split(' ').map(n => n[0]).join('').slice(0, 2)}
+                      </div>
+                      <span style={{ fontSize: 12.5, width: 100, color: T.ink, fontWeight: 500, flexShrink: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.vendedor_nome}</span>
+                      <div style={{ flex: 1, background: T.lineSoft, height: 6, borderRadius: 3, overflow: 'hidden' }}>
+                        <div style={{ width: `${((p.total_pedidos || 0) / maxProd) * 100}%`, height: '100%', background: T.olive, borderRadius: 3 }} />
+                      </div>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: T.oliveText, fontFamily: FONT_DISPLAY, width: 22, textAlign: 'right' }}>{p.total_pedidos}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </Panel>
       </div>
 
-      <div className="grid-2col">
+      {/* ── ROW 3: Status fluxo + Escopo + Aprovadores ── */}
+      <div className="grid-3col">
         <Panel title="Status do fluxo" subtitle="Propostas do mês selecionado, por etapa">
-          <div style={{ display: 'flex', alignItems: 'flex-end', gap: 18, height: 140, padding: '8px 6px 0' }}>
+          <div style={{ display: 'flex', alignItems: 'flex-end', gap: 14, height: 140, padding: '8px 4px 0' }}>
             {porStatus.map(([status, count]) => {
               const meta = STATUS_META[status];
               const max = Math.max(...porStatus.map(([, v]) => v), 1);
@@ -591,29 +708,43 @@ function Dashboard({ stats, propostas, todasPropostas, mesFiltro }) {
                 <div key={status} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flex: 1 }}>
                   <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6, color: meta.bg === T.ink ? T.ink : meta.color, fontFamily: FONT_DISPLAY }}>{count}</div>
                   <div style={{ width: '100%', maxWidth: 36, height: h, background: meta.bg === T.ink ? T.ink : meta.color, borderRadius: '3px 3px 0 0', transition: 'height .4s ease' }} />
-                  <div style={{ fontSize: 10, color: T.inkFaint, marginTop: 8, textAlign: 'center', lineHeight: 1.3 }}>{meta.label}</div>
+                  <div style={{ fontSize: 9.5, color: T.inkFaint, marginTop: 8, textAlign: 'center', lineHeight: 1.3 }}>{meta.label}</div>
                 </div>
               );
             })}
           </div>
         </Panel>
 
-        <Panel title="Aprovações por pessoa" subtitle="Pool fixo — qualquer um dos três decide" right={
-          <span style={{ fontSize: 10.5, color: T.inkFaint, display: 'flex', alignItems: 'center', gap: 4 }}><Users size={12} /> {APROVADORES_POOL.length} aprovadores</span>
+        <Panel title="Volume por escopo" subtitle="Itens cadastrados no mês selecionado">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 4 }}>
+            {porEscopo.map(([escopo, count]) => (
+              <div key={escopo} style={{ display: 'flex', alignItems: 'center', fontSize: 12, gap: 10 }}>
+                <span style={{ width: 120, color: T.inkDim, flexShrink: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontSize: 11.5 }} title={escopo}>{escopo}</span>
+                <div style={{ flex: 1, background: T.lineSoft, height: 6, borderRadius: 3, overflow: 'hidden' }}>
+                  <div style={{ width: `${(count / maxEscopo) * 100}%`, height: '100%', background: T.terracotta, borderRadius: 3 }} />
+                </div>
+                <span style={{ width: 20, textAlign: 'right', fontWeight: 700, color: T.ink, fontFamily: FONT_DISPLAY, fontSize: 13 }}>{count}</span>
+              </div>
+            ))}
+          </div>
+        </Panel>
+
+        <Panel title="Aprovações por pessoa" subtitle="Pool fixo — qualquer um decide" right={
+          <span style={{ fontSize: 10.5, color: T.inkFaint, display: 'flex', alignItems: 'center', gap: 4 }}><Users size={12} /> {APROVADORES_POOL.length}</span>
         }>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 8 }}>
             {porAprovador.map(([nome, count]) => {
               const maxA = Math.max(...porAprovador.map(([, v]) => v), 1);
               return (
-                <div key={nome} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                  <div style={{ width: 30, height: 30, borderRadius: '50%', background: T.terracottaSoft, color: T.terracottaText, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, flexShrink: 0 }}>
+                <div key={nome} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <div style={{ width: 28, height: 28, borderRadius: '50%', background: T.terracottaSoft, color: T.terracottaText, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, fontWeight: 700, flexShrink: 0 }}>
                     {nome.split(' ').map(n => n[0]).join('').slice(0, 2)}
                   </div>
-                  <span style={{ fontSize: 13, width: 90, color: T.ink, fontWeight: 500 }}>{nome}</span>
-                  <div style={{ flex: 1, background: T.lineSoft, height: 7, borderRadius: 4, overflow: 'hidden' }}>
-                    <div style={{ width: `${(count / maxA) * 100}%`, height: '100%', background: T.terracotta, borderRadius: 4 }} />
+                  <span style={{ fontSize: 12.5, width: 80, color: T.ink, fontWeight: 500 }}>{nome}</span>
+                  <div style={{ flex: 1, background: T.lineSoft, height: 6, borderRadius: 3, overflow: 'hidden' }}>
+                    <div style={{ width: `${(count / maxA) * 100}%`, height: '100%', background: T.terracotta, borderRadius: 3 }} />
                   </div>
-                  <span style={{ width: 18, textAlign: 'right', fontWeight: 600, fontFamily: FONT_DISPLAY }}>{count}</span>
+                  <span style={{ width: 18, textAlign: 'right', fontWeight: 700, fontFamily: FONT_DISPLAY }}>{count}</span>
                 </div>
               );
             })}
@@ -621,6 +752,67 @@ function Dashboard({ stats, propostas, todasPropostas, mesFiltro }) {
         </Panel>
       </div>
 
+      {/* ── ROW 4: Origem detalhada + CTA registro manual ── */}
+      <div className="grid-2col">
+        <Panel title="Propostas: Manual vs ERP" subtitle="Origem dos dados cadastrados no mês">
+          <div style={{ display: 'flex', gap: 20, marginTop: 10, alignItems: 'flex-start' }}>
+            <div style={{ flex: 1 }}>
+              {[
+                { label: 'ERP Sankhya', count: stats.sankhyaCount, color: T.blue, bg: T.blueSoft, pct: 100 - stats.percWord },
+                { label: 'Word / E-mail', count: stats.wordCount, color: T.amberText, bg: T.amberSoft, pct: stats.percWord },
+              ].map(row => (
+                <div key={row.label} style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14 }}>
+                  <div style={{ width: 36, height: 36, borderRadius: 8, background: row.bg, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                    <span style={{ fontFamily: FONT_DISPLAY, fontSize: 15, fontWeight: 700, color: row.color }}>{row.count}</span>
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 12.5, fontWeight: 600, color: T.ink, marginBottom: 4 }}>{row.label}</div>
+                    <div style={{ background: T.lineSoft, height: 6, borderRadius: 3, overflow: 'hidden' }}>
+                      <div style={{ width: `${row.pct}%`, height: '100%', background: row.color, borderRadius: 3, transition: 'width .5s ease' }} />
+                    </div>
+                  </div>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: row.color, fontFamily: FONT_DISPLAY }}>{row.pct}%</span>
+                </div>
+              ))}
+            </div>
+          </div>
+          {stats.wordCount > 0 && (
+            <div style={{ borderTop: `1px solid ${T.lineSoft}`, paddingTop: 12, marginTop: 4 }}>
+              <p style={{ fontSize: 11.5, color: T.inkFaint, margin: 0 }}>
+                {stats.wordCount} proposta{stats.wordCount > 1 ? 's' : ''} fora do ERP — registre no portal para rastreamento completo.
+              </p>
+            </div>
+          )}
+        </Panel>
+
+        <Panel title="Registrar proposta manual" subtitle="Propostas feitas por Word ou e-mail que ainda não estão no ERP">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14, marginTop: 10 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+              {[
+                { label: 'Abertas', value: manuaisAbertas.length, color: T.amberText, bg: T.amberSoft },
+                { label: 'Concluídas', value: stats.wordCount - manuaisAbertas.length, color: T.oliveText, bg: T.oliveSoft },
+              ].map(card => (
+                <div key={card.label} style={{ background: card.bg, borderRadius: 8, padding: '12px 14px', textAlign: 'center' }}>
+                  <div style={{ fontFamily: FONT_DISPLAY, fontSize: 26, fontWeight: 700, color: card.color }}>{Math.max(card.value, 0)}</div>
+                  <div style={{ fontSize: 11, color: card.color, fontWeight: 600, marginTop: 2 }}>{card.label}</div>
+                </div>
+              ))}
+            </div>
+            <p style={{ fontSize: 12, color: T.inkFaint, margin: 0, lineHeight: 1.6 }}>
+              Cada proposta registrada aqui entra no fluxo de revisão técnica → aprovação → conclusão, garantindo rastreabilidade mesmo fora do Sankhya.
+            </p>
+            <button onClick={onNovaProposta} style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
+              background: T.terracotta, color: '#fff', border: 'none', borderRadius: 7,
+              padding: '11px 18px', fontSize: 13.5, fontWeight: 700, width: '100%',
+            }}>
+              <Plus size={15} /> Nova proposta manual
+            </button>
+          </div>
+        </Panel>
+      </div>
+
+      {/* ── Alerta de atraso ── */}
       {stats.atrasadas > 0 && (
         <div style={{
           display: 'flex', alignItems: 'center', gap: 12, background: T.rustSoft, border: `1px solid ${T.rust}33`,
@@ -636,8 +828,9 @@ function Dashboard({ stats, propostas, todasPropostas, mesFiltro }) {
   );
 }
 
-function Kpi({ label, value, icon: Icon, tone }) {
-  const toneColor = tone === 'amber' ? T.amberText : tone === 'rust' ? T.rustText : T.ink;
+function Kpi({ label, value, icon: Icon, tone, sub }) {
+  const toneColor = tone === 'amber' ? T.amberText : tone === 'rust' ? T.rustText : tone === 'olive' ? T.oliveText : tone === 'blue' ? T.blueText : T.ink;
+  const toneSoft = tone === 'amber' ? T.amberSoft : tone === 'rust' ? T.rustSoft : tone === 'olive' ? T.oliveSoft : tone === 'blue' ? T.blueSoft : T.terracottaSoft;
   return (
     <div style={{
       background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, padding: '18px 20px',
@@ -648,11 +841,12 @@ function Kpi({ label, value, icon: Icon, tone }) {
     >
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
         <span style={{ fontSize: 11.5, color: T.inkFaint, fontWeight: 600, letterSpacing: '0.01em' }}>{label}</span>
-        <div style={{ width: 28, height: 28, borderRadius: 7, background: tone === 'amber' ? T.amberSoft : tone === 'rust' ? T.rustSoft : T.terracottaSoft, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+        <div style={{ width: 28, height: 28, borderRadius: 7, background: toneSoft, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
           <Icon size={14} color={toneColor} strokeWidth={2.2} />
         </div>
       </div>
       <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, color: toneColor, marginTop: 14, fontSize: 28, letterSpacing: '-0.01em' }}>{value}</div>
+      {sub && <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 3 }}>{sub}</div>}
     </div>
   );
 }
