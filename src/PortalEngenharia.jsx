@@ -918,6 +918,34 @@ function Faturamento() {
   const [lastSync, setLastSync] = useState(null);
   const [drillDown, setDrillDown] = useState(null); // { titulo, itens }
   const [drillLoading, setDrillLoading] = useState(false);
+  const [moeda, setMoeda] = useState('BRL');
+  const [cotacoes, setCotacoes] = useState({});
+
+  useEffect(() => {
+    supabase.from('cotacoes_moeda').select('*').order('data', { ascending: false }).limit(4)
+      .then(({ data }) => {
+        const map = {};
+        (data || []).forEach(c => { if (!map[c.moeda]) map[c.moeda] = c; });
+        setCotacoes(map);
+      });
+  }, []);
+
+  const converter = useCallback((valorBRL) => {
+    if (moeda === 'BRL' || !cotacoes[moeda]) return valorBRL;
+    return valorBRL / Number(cotacoes[moeda].valor_venda);
+  }, [moeda, cotacoes]);
+
+  const fmtValor = useCallback((v) => {
+    const convertido = converter(v);
+    if (moeda === 'BRL') return fmtMoeda(convertido);
+    return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: moeda, minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(convertido);
+  }, [converter, moeda]);
+
+  const fmtValorCompacto = useCallback((v) => {
+    const convertido = converter(v);
+    const prefixo = moeda === 'BRL' ? '' : moeda === 'USD' ? 'US$ ' : '€ ';
+    return prefixo + new Intl.NumberFormat('pt-BR', { notation: 'compact', compactDisplay: 'short', maximumFractionDigits: 1 }).format(convertido);
+  }, [converter, moeda]);
 
   const rangeDatas = () => {
     const ini = `${filtros.anoIni}-${String(filtros.mesIni).padStart(2, '0')}-01`;
@@ -1086,15 +1114,38 @@ function Faturamento() {
         <p style={{ color: T.inkFaint, fontSize: 12.5, margin: 0, maxWidth: 560 }}>
           Net Value, Segmento Kalenborn e Segmento de Mercado vêm da mesma fonte por item de pedido — os números sempre somam entre si. Nota de Venda (faturamento já emitido) é uma métrica separada.
         </p>
-        <button onClick={handleAtualizar} disabled={syncing} style={{
-          display: 'flex', alignItems: 'center', gap: 8, background: T.terracotta, color: '#fff', border: 'none',
-          borderRadius: 8, padding: '10px 18px', fontSize: 13, fontWeight: 700, opacity: syncing ? 0.7 : 1, flexShrink: 0,
-        }}>
-          <RefreshCw size={15} className={syncing ? 'spin' : ''} />
-          {syncing ? 'Atualizando do Sankhya…' : 'Atualizar do Sankhya'}
-        </button>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexShrink: 0 }}>
+          <div style={{ display: 'flex', background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 7, padding: 3 }}>
+            {['BRL', 'USD', 'EUR'].map(m => (
+              <button key={m} onClick={() => setMoeda(m)} style={{
+                padding: '6px 12px', fontSize: 12, fontWeight: 700, borderRadius: 5, border: 'none',
+                background: moeda === m ? T.terracotta : 'transparent', color: moeda === m ? '#fff' : T.inkDim,
+                transition: 'background .15s',
+              }}>{m}</button>
+            ))}
+          </div>
+          <button onClick={handleAtualizar} disabled={syncing} style={{
+            display: 'flex', alignItems: 'center', gap: 8, background: T.terracotta, color: '#fff', border: 'none',
+            borderRadius: 8, padding: '10px 18px', fontSize: 13, fontWeight: 700, opacity: syncing ? 0.7 : 1,
+          }}>
+            <RefreshCw size={15} className={syncing ? 'spin' : ''} />
+            {syncing ? 'Atualizando do Sankhya…' : 'Atualizar do Sankhya'}
+          </button>
+        </div>
       </div>
 
+      {moeda !== 'BRL' && cotacoes[moeda] && (
+        <div style={{ fontSize: 11, color: T.inkFaint, marginTop: -8 }}>
+          Cotação {moeda}: {fmtMoeda(Number(cotacoes[moeda].valor_venda))} · {cotacoes[moeda].data} ({cotacoes[moeda].fonte})
+        </div>
+      )}
+
+      <button onClick={() => setFiltros(f => ({ ...f, anoIni: 2020, anoFim: anoAtual, mesIni: 1, mesFim: 12 }))} style={{
+        alignSelf: 'flex-start', background: 'transparent', border: 'none', color: T.terracottaText, fontSize: 12, fontWeight: 600,
+        textDecoration: 'underline', padding: 0, marginTop: -10,
+      }}>
+        Expandir todo o histórico disponível →
+      </button>
       {syncStatus && (
         <div style={{
           display: 'flex', alignItems: 'center', gap: 10, padding: '11px 16px', borderRadius: 8,
@@ -1139,11 +1190,11 @@ function Faturamento() {
         <>
           <div className="grid-kpis-2">
             <KpiClicavel
-              label="Net Value (líquido)" valor={totalNetValue} icon={DollarSign} cor={T.terracotta}
+              label="Net Value (líquido)" valor={totalNetValue} icon={DollarSign} cor={T.terracotta} formatador={fmtValor}
               onClick={() => abrirDrillDown('Net Value — todos os itens do período', null)}
             />
             <KpiClicavel
-              label="Nota de Venda (faturamento emitido)" valor={totalNotaVenda} icon={TrendingUp} cor={T.blue}
+              label="Nota de Venda (faturamento emitido)" valor={totalNotaVenda} icon={TrendingUp} cor={T.blue} formatador={fmtValor}
               onClick={() => abrirDrillDownNota('Nota de Venda — todos os itens do período', null)}
             />
           </div>
@@ -1156,7 +1207,7 @@ function Faturamento() {
                   return (
                     <button key={i} onClick={() => abrirDrillDown(`Net Value — ${MESES_FAT[m.mes - 1]}/${m.ano}`, null)}
                       style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flex: '0 0 auto', minWidth: 52, background: 'transparent', border: 'none', cursor: 'pointer', padding: 0 }}>
-                      <div style={{ fontSize: 10, fontWeight: 700, marginBottom: 6, color: T.terracottaText, fontFamily: FONT_DISPLAY, whiteSpace: 'nowrap' }}>{fmtMoedaCompacta(m.valor)}</div>
+                      <div style={{ fontSize: 10, fontWeight: 700, marginBottom: 6, color: T.terracottaText, fontFamily: FONT_DISPLAY, whiteSpace: 'nowrap' }}>{fmtValorCompacto(m.valor)}</div>
                       <div style={{
                         width: 34, height: h, borderRadius: '5px 5px 2px 2px', transition: 'height .35s ease, filter .15s',
                         background: `linear-gradient(180deg, ${T.terracotta} 0%, ${T.terracottaText} 100%)`,
@@ -1178,7 +1229,7 @@ function Faturamento() {
                   return (
                     <button key={i} onClick={() => abrirDrillDownNota(`Nota de Venda — ${MESES_FAT[m.mes - 1]}/${m.ano}`, null)}
                       style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flex: '0 0 auto', minWidth: 52, background: 'transparent', border: 'none', cursor: 'pointer', padding: 0 }}>
-                      <div style={{ fontSize: 10, fontWeight: 700, marginBottom: 6, color: T.blueText, fontFamily: FONT_DISPLAY, whiteSpace: 'nowrap' }}>{fmtMoedaCompacta(m.valor)}</div>
+                      <div style={{ fontSize: 10, fontWeight: 700, marginBottom: 6, color: T.blueText, fontFamily: FONT_DISPLAY, whiteSpace: 'nowrap' }}>{fmtValorCompacto(m.valor)}</div>
                       <div style={{
                         width: 34, height: h, borderRadius: '5px 5px 2px 2px', transition: 'height .35s ease, filter .15s',
                         background: `linear-gradient(180deg, ${T.blue} 0%, ${T.blueText} 100%)`,
@@ -1212,6 +1263,8 @@ function Faturamento() {
               </div>
             </Panel>
           </div>
+
+          <ComparativoItens moeda={moeda} converter={converter} fmtValor={fmtValor} />
         </>
       )}
 
@@ -1222,8 +1275,88 @@ function Faturamento() {
   );
 }
 
-function KpiClicavel({ label, valor, icon: Icon, cor, sub, onClick }) {
+/* ============================================================================
+   COMPARATIVO DE ITENS — variação de valor de um mesmo Código Vale
+   ao longo do ano, para acompanhar a evolução de preço por peça.
+============================================================================ */
+function ComparativoItens({ moeda, converter, fmtValor }) {
+  const [codigoBusca, setCodigoBusca] = useState('');
+  const [resultado, setResultado] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [buscou, setBuscou] = useState(false);
+
+  const buscar = async () => {
+    if (!codigoBusca.trim()) return;
+    setLoading(true);
+    setBuscou(true);
+    const { data } = await supabase.from('v_variacao_preco_item').select('*')
+      .eq('codigo_vale', codigoBusca.trim())
+      .order('ano').order('mes');
+    setResultado(data || []);
+    setLoading(false);
+  };
+
+  const maxValor = Math.max(...resultado.map(r => Number(r.valor_medio) || 0), 1);
+  const primeiro = resultado[0];
+  const ultimo = resultado[resultado.length - 1];
+  const variacaoPct = primeiro && ultimo && Number(primeiro.valor_medio) > 0
+    ? ((Number(ultimo.valor_medio) - Number(primeiro.valor_medio)) / Number(primeiro.valor_medio)) * 100
+    : null;
+
+  return (
+    <Panel title="Comparativo de itens" subtitle="Acompanhe como o valor de um mesmo Código Vale variou ao longo dos meses">
+      <div style={{ display: 'flex', gap: 10, marginTop: 8, marginBottom: 16, alignItems: 'flex-end' }}>
+        <FiltroCampoFat label="Código Vale">
+          <input
+            value={codigoBusca} onChange={e => setCodigoBusca(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && buscar()}
+            placeholder="Ex: 15515316" style={{ ...selectStyleFat(180), appearance: 'auto' }}
+          />
+        </FiltroCampoFat>
+        <button onClick={buscar} style={solidBtn(T.terracotta, true)}>Buscar variação</button>
+      </div>
+
+      {loading ? (
+        <div style={{ textAlign: 'center', padding: 30, color: T.inkFaint, fontSize: 13 }}>Carregando…</div>
+      ) : !buscou ? (
+        <p style={{ fontSize: 12.5, color: T.inkFaint, margin: 0 }}>Digite um Código Vale para ver como o valor desse item variou mês a mês.</p>
+      ) : resultado.length === 0 ? (
+        <p style={{ fontSize: 12.5, color: T.inkFaint, margin: 0 }}>Nenhum pedido encontrado para esse código no período sincronizado.</p>
+      ) : (
+        <>
+          {variacaoPct !== null && (
+            <div style={{
+              display: 'inline-flex', alignItems: 'center', gap: 6, marginBottom: 14, padding: '7px 12px', borderRadius: 7,
+              background: variacaoPct >= 0 ? T.oliveSoft : T.rustSoft, color: variacaoPct >= 0 ? T.oliveText : T.rustText,
+              fontSize: 12.5, fontWeight: 700,
+            }}>
+              {variacaoPct >= 0 ? '↑' : '↓'} {Math.abs(variacaoPct).toFixed(1)}% de {MESES_FAT[primeiro.mes - 1]}/{primeiro.ano} até {MESES_FAT[ultimo.mes - 1]}/{ultimo.ano}
+            </div>
+          )}
+          <div style={{ display: 'flex', alignItems: 'flex-end', gap: 14, height: 180, padding: '10px 4px 0', overflowX: 'auto' }}>
+            {resultado.map((r, i) => {
+              const valorMedio = converter(Number(r.valor_medio));
+              const h = Math.max((Number(r.valor_medio) / maxValor) * 130, 4);
+              return (
+                <div key={i} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flex: '0 0 auto', minWidth: 64 }}>
+                  <div style={{ fontSize: 10, fontWeight: 700, marginBottom: 6, color: T.terracottaText, fontFamily: FONT_DISPLAY, whiteSpace: 'nowrap' }}>{fmtValor(Number(r.valor_medio))}</div>
+                  <div style={{ width: 36, height: h, borderRadius: '5px 5px 2px 2px', background: `linear-gradient(180deg, ${T.terracotta} 0%, ${T.terracottaText} 100%)` }} />
+                  <div style={{ fontSize: 10, color: T.inkFaint, marginTop: 8 }}>{MESES_FAT[r.mes - 1]}/{String(r.ano).slice(2)}</div>
+                  <div style={{ fontSize: 9.5, color: T.inkFaint, marginTop: 1 }}>{r.qtd_pedidos} pedido{r.qtd_pedidos > 1 ? 's' : ''}</div>
+                </div>
+              );
+            })}
+          </div>
+          <p style={{ fontSize: 11, color: T.inkFaint, marginTop: 14, marginBottom: 0 }}>{resultado[0]?.produto_descricao}</p>
+        </>
+      )}
+    </Panel>
+  );
+}
+
+function KpiClicavel({ label, valor, icon: Icon, cor, sub, onClick, formatador }) {
   const Tag = onClick ? 'button' : 'div';
+  const fmt = formatador || fmtMoeda;
   return (
     <Tag onClick={onClick} style={{
       textAlign: 'left', border: `1px solid ${T.line}`, background: T.panel, borderRadius: 10, padding: '18px 20px',
@@ -1236,7 +1369,7 @@ function KpiClicavel({ label, valor, icon: Icon, cor, sub, onClick }) {
         <span style={{ fontSize: 12, color: T.inkFaint, fontWeight: 600 }}>{label}</span>
         <Icon size={16} color={cor} />
       </div>
-      <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.ink, marginTop: 12, fontSize: 30, letterSpacing: '-0.01em' }}>{fmtMoeda(valor)}</div>
+      <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.ink, marginTop: 12, fontSize: 30, letterSpacing: '-0.01em' }}>{fmt(valor)}</div>
       {onClick ? (
         <div style={{ fontSize: 11, color: cor, marginTop: 6, fontWeight: 600 }}>Ver itens do período →</div>
       ) : sub ? (
