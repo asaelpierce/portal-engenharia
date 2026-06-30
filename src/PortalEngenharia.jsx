@@ -2338,6 +2338,8 @@ function SortTh({ label, col, sortBy, sortDir, onClick }) {
     </th>
   );
 }
+
+function BarraFat({ nome, valor, max, cor }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 12 }}>
       <span style={{ width: 130, color: T.inkDim, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={nome}>{nome}</span>
