@@ -539,27 +539,58 @@ function Dashboard({ stats, propostas, todasPropostas, mesFiltro, onNovaProposta
 
   const manuaisAbertas = useMemo(() => propostas.filter(p => p.origem_dados === 'manual_word' && p.status !== 'concluida'), [propostas]);
 
-  /* ── dados de produtividade do Sankhya ── */
+  /* ── dados de produtividade do Sankhya — sempre o sync mais recente ── */
   const [prodPedidos, setProdPedidos] = useState([]);
   const [prodOrc, setProdOrc] = useState([]);
+  const [prodPeriodo, setProdPeriodo] = useState(null); // { data_ini, data_fim }
   const [prodLoading, setProdLoading] = useState(true);
 
   useEffect(() => {
-    const mesIdx = MESES_ORDEM.indexOf(mesFiltro);
-    const mes = mesIdx + 1;
-    const dataIni = `2026-${String(mes).padStart(2, '0')}-01`;
-    const ultimoDia = new Date(2026, mes, 0).getDate();
-    const dataFim = `2026-${String(mes).padStart(2, '0')}-${ultimoDia}`;
+    // Passo 1: descobre qual foi o último período sincronizado consultando a
+    // própria tabela (data_fim mais recente). Assim evita somar syncs distintos.
     setProdLoading(true);
-    Promise.all([
-      supabase.from('produtividade_pedidos').select('*').gte('data_ini', dataIni).lte('data_fim', dataFim).order('total_pedidos', { ascending: false }),
-      supabase.from('produtividade_orcamentos').select('*').gte('data_ini', dataIni).lte('data_fim', dataFim).order('total_geral', { ascending: false }),
-    ]).then(([r1, r2]) => {
-      setProdPedidos(r1.data || []);
-      setProdOrc(r2.data || []);
-      setProdLoading(false);
-    });
-  }, [mesFiltro]);
+    supabase
+      .from('produtividade_orcamentos')
+      .select('data_ini, data_fim')
+      .order('data_fim', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+      .then(({ data: latest }) => {
+        if (!latest) {
+          // Tenta fallback na tabela de pedidos
+          return supabase
+            .from('produtividade_pedidos')
+            .select('data_ini, data_fim')
+            .order('data_fim', { ascending: false })
+            .limit(1)
+            .maybeSingle()
+            .then(({ data }) => data);
+        }
+        return latest;
+      })
+      .then(async (periodo) => {
+        if (!periodo) {
+          setProdPedidos([]);
+          setProdOrc([]);
+          setProdPeriodo(null);
+          setProdLoading(false);
+          return;
+        }
+        // Passo 2: usa eq exato no período encontrado — evita somar syncs diferentes
+        const [r1, r2] = await Promise.all([
+          supabase.from('produtividade_pedidos').select('*')
+            .eq('data_ini', periodo.data_ini).eq('data_fim', periodo.data_fim)
+            .order('total_pedidos', { ascending: false }),
+          supabase.from('produtividade_orcamentos').select('*')
+            .eq('data_ini', periodo.data_ini).eq('data_fim', periodo.data_fim)
+            .order('total_geral', { ascending: false }),
+        ]);
+        setProdPedidos(r1.data || []);
+        setProdOrc(r2.data || []);
+        setProdPeriodo(periodo);
+        setProdLoading(false);
+      });
+  }, []); // roda uma vez — produtividade é independente do mesFiltro de propostas
 
   const totalPedidosSankhya = prodPedidos.reduce((s, p) => s + (p.total_pedidos || 0), 0);
   const valorPedidosSankhya = prodPedidos.reduce((s, p) => s + (Number(p.valor_total) || 0), 0);
@@ -635,7 +666,11 @@ function Dashboard({ stats, propostas, todasPropostas, mesFiltro, onNovaProposta
 
         <Panel
           title="Produtividade da equipe"
-          subtitle={`Orçamentistas e vendedores — ${MESES_LABEL[mesFiltro]}`}
+          subtitle={
+            prodLoading ? 'Carregando…'
+            : prodPeriodo ? `Último sync: ${fmtData(prodPeriodo.data_ini)} → ${fmtData(prodPeriodo.data_fim)}`
+            : 'Sem dados sincronizados'
+          }
           right={
             <button onClick={() => onNavigate('produtividade')} style={{
               display: 'flex', alignItems: 'center', gap: 3, fontSize: 11.5, fontWeight: 600,
@@ -1215,6 +1250,11 @@ function Faturamento() {
   const [notaVenda, setNotaVenda] = useState([]);
   const [porKaleng, setPorKaleng] = useState([]);
   const [porSegmento, setPorSegmento] = useState([]);
+  const [topClientes, setTopClientes] = useState([]);
+  const [consumoMaterial, setConsumoMaterial] = useState([]);
+  const [pedidosNaoFat, setPedidosNaoFat] = useState([]);
+  const [qtdPedidos, setQtdPedidos] = useState(0);
+  const [viewFatTab, setViewFatTab] = useState('faturados'); // 'faturados' | 'nao_faturados'
   const [vendedores, setVendedores] = useState([]);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
@@ -1319,6 +1359,60 @@ function Faturamento() {
     setNotaVenda(notaMensalArr);
     setVendedores(rVend.data || []);
     setLastSync((rSync.data || [])[0] || null);
+
+    // ── Top clientes (por valor pedido) ──────────────────────────────────────
+    const cliMap = {};
+    const cliBrsMap = {};
+    for (const it of itens) {
+      const cli = it.cliente_nome || 'SEM CLIENTE';
+      cliMap[cli] = (cliMap[cli] || 0) + (Number(it.valor_liquido) || 0);
+      if (!cliBrsMap[cli]) cliBrsMap[cli] = new Set();
+      if (it.br) cliBrsMap[cli].add(it.br);
+    }
+    const topCli = Object.entries(cliMap)
+      .map(([nome, valor]) => ({ nome, valor, qtd_pedidos: cliBrsMap[nome]?.size || 0 }))
+      .sort((a, b) => b.valor - a.valor)
+      .slice(0, 10);
+    setTopClientes(topCli);
+
+    // ── Pedidos únicos (BRs distintos) ───────────────────────────────────────
+    const brsUnicos = new Set(itens.map(it => it.br).filter(Boolean));
+    setQtdPedidos(brsUnicos.size || itens.length);
+
+    // ── Consumo de matéria-prima (Placa Retangular, KLC, Kalocer) ────────────
+    const MAT_KEYS = {
+      'Placa Retangular': ['PLACA RET', 'PLACAS RET', 'PLACA RETANG'],
+      'KLC': [' KLC', '-KLC', '/KLC', 'KLC '],
+      'Kalocer': ['KALOCER'],
+    };
+    const matAgg = {};
+    for (const it of itens) {
+      const desc = (it.produto_descricao || '').toUpperCase();
+      const kal  = (it.produto_kaleng   || '').toUpperCase();
+      for (const [tipo, kws] of Object.entries(MAT_KEYS)) {
+        if (kws.some(kw => desc.includes(kw) || kal.includes(kw))) {
+          if (!matAgg[tipo]) matAgg[tipo] = { valor: 0, qtd: 0 };
+          matAgg[tipo].valor += Number(it.valor_liquido) || 0;
+          matAgg[tipo].qtd   += 1;
+        }
+      }
+    }
+    setConsumoMaterial(Object.entries(matAgg).map(([tipo, d]) => ({ tipo, ...d })));
+
+    // ── Pedidos não faturados: clientes com pedido mas sem (ou menor) nota ───
+    // Agrega nota_venda_itens por cliente_nome (se a coluna existir)
+    const notaCliMap = {};
+    for (const it of notaItensData) {
+      const cli = it.cliente_nome || null;
+      if (cli) notaCliMap[cli] = (notaCliMap[cli] || 0) + (Number(it.valor_bruto) || 0);
+    }
+    const naoFat = topCli.map(c => ({
+      ...c,
+      faturado:     notaCliMap[c.nome] || 0,
+      nao_faturado: Math.max(c.valor - (notaCliMap[c.nome] || 0), 0),
+    })).filter(c => c.nao_faturado > 100); // filtra ruídos de centavos
+    setPedidosNaoFat(naoFat);
+
     setLoading(false);
   }, [filtros]);
 
@@ -1378,7 +1472,7 @@ function Faturamento() {
 
   const totalNetValue = useMemo(() => netMensal.reduce((s, m) => s + m.valor_liquido, 0), [netMensal]);
   const totalNotaVenda = useMemo(() => notaVenda.reduce((s, m) => s + Number(m.valor_bruto || 0), 0), [notaVenda]);
-  const qtdItensPedido = useMemo(() => porKaleng.reduce((s) => s, 0), [porKaleng]); // placeholder, real count below
+  const itensCount = useMemo(() => porKaleng.reduce((s, k) => s, 0) || 0, [porKaleng]); // will use raw below
 
   const evolucaoMensal = useMemo(() => {
     const map = {};
@@ -1492,7 +1586,7 @@ function Faturamento() {
         <div style={{ textAlign: 'center', padding: 50, color: T.inkFaint, fontSize: 13 }}>Carregando dados…</div>
       ) : (
         <>
-          <div className="grid-kpis-2">
+          <div className="grid-kpis-2" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))' }}>
             <KpiClicavel
               label="Net Value (líquido)" valor={totalNetValue} icon={DollarSign} cor={T.terracotta} formatador={fmtValor}
               onClick={() => abrirDrillDown('Net Value — todos os itens do período', null)}
@@ -1500,6 +1594,16 @@ function Faturamento() {
             <KpiClicavel
               label="Nota de Venda (faturamento emitido)" valor={totalNotaVenda} icon={TrendingUp} cor={T.blue} formatador={fmtValor}
               onClick={() => abrirDrillDownNota('Nota de Venda — todos os itens do período', null)}
+            />
+            <KpiClicavel
+              label="Pedidos de venda (qtd)" valor={qtdPedidos} icon={CheckCircle2} cor={T.olive}
+              formatador={v => `${v} pedido${v !== 1 ? 's' : ''}`}
+              sub={`${itensCount} itens no período`}
+            />
+            <KpiClicavel
+              label="Não faturado (estimado)" valor={pedidosNaoFat.reduce((s, c) => s + c.nao_faturado, 0)} icon={AlertTriangle} cor={T.amber}
+              formatador={fmtValor}
+              sub={`${pedidosNaoFat.length} cliente${pedidosNaoFat.length !== 1 ? 's' : ''} com saldo em aberto`}
             />
           </div>
 
@@ -1569,6 +1673,134 @@ function Faturamento() {
           </div>
 
           <ComparativoItens moeda={moeda} converter={converter} fmtValor={fmtValor} />
+
+          {/* ── TOP CLIENTES ─────────────────────────────────────────────────── */}
+          <Panel
+            title="Top clientes — por valor de pedido"
+            subtitle="Clientes que mais compraram no período · clique para detalhar"
+            right={
+              <span style={{ fontSize: 11, color: T.inkFaint }}>{topClientes.length} clientes</span>
+            }
+          >
+            {topClientes.length === 0 ? <EmptyStateFat /> : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 10 }}>
+                {topClientes.map((c, i) => {
+                  const maxV = topClientes[0]?.valor || 1;
+                  return (
+                    <button key={c.nome} onClick={() => abrirDrillDown(`Pedidos — ${c.nome}`, { coluna: 'cliente_nome', valor: c.nome })}
+                      style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'transparent', border: 'none', padding: '8px 4px', borderRadius: 6, cursor: 'pointer', textAlign: 'left', width: '100%' }}
+                      onMouseEnter={e => e.currentTarget.style.background = T.panelAlt}
+                      onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                    >
+                      <span style={{ width: 18, fontSize: 11, fontWeight: 700, color: T.inkFaint, fontFamily: FONT_DISPLAY, textAlign: 'right' }}>#{i + 1}</span>
+                      <span style={{ width: 190, fontSize: 12.5, fontWeight: 600, color: T.ink, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={c.nome}>{c.nome}</span>
+                      <div style={{ flex: 1, background: T.lineSoft, height: 8, borderRadius: 4, overflow: 'hidden' }}>
+                        <div style={{ width: `${(c.valor / maxV) * 100}%`, height: '100%', background: T.terracotta, borderRadius: 4, transition: 'width .3s' }} />
+                      </div>
+                      <span style={{ width: 58, textAlign: 'right', fontSize: 11.5, color: T.inkFaint }}>{c.qtd_pedidos}p</span>
+                      <span style={{ width: 90, textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 13, color: T.ink }}>{fmtValorCompacto(c.valor)}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </Panel>
+
+          {/* ── PEDIDOS FATURADOS vs NÃO FATURADOS ──────────────────────────── */}
+          <Panel
+            title="Pedidos faturados vs não faturados"
+            subtitle="Comparativo por cliente — pedido de venda confirmado × nota fiscal emitida"
+            right={
+              <div style={{ display: 'flex', background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 6, padding: 2 }}>
+                {[['faturados', 'Faturados'], ['nao_faturados', 'Não faturados']].map(([key, label]) => (
+                  <button key={key} onClick={() => setViewFatTab(key)} style={{
+                    padding: '5px 12px', fontSize: 11.5, fontWeight: 700, borderRadius: 4, border: 'none',
+                    background: viewFatTab === key ? T.ink : 'transparent',
+                    color: viewFatTab === key ? '#fff' : T.inkDim,
+                    transition: 'background .15s',
+                  }}>{label}</button>
+                ))}
+              </div>
+            }
+          >
+            {topClientes.length === 0 ? <EmptyStateFat /> : (
+              <div style={{ overflowX: 'auto', marginTop: 10 }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+                  <thead>
+                    <tr style={{ borderBottom: `1px solid ${T.line}` }}>
+                      <th style={thFat()}>Cliente</th>
+                      <th style={thFat(0, 'right')}>Pedidos</th>
+                      <th style={thFat(0, 'right')}>Valor pedido</th>
+                      {viewFatTab === 'faturados'
+                        ? <th style={thFat(0, 'right')}>Nota emitida</th>
+                        : <th style={thFat(0, 'right')}>Não faturado</th>}
+                      <th style={thFat(120)}>Cobertura</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(viewFatTab === 'nao_faturados' ? pedidosNaoFat : topClientes.map(c => ({
+                      ...c,
+                      faturado: c.faturado || 0,
+                      nao_faturado: Math.max(c.valor - (c.faturado || 0), 0),
+                    }))).map(c => {
+                      const cobertura = c.valor > 0 ? Math.min((c.faturado / c.valor) * 100, 100) : 0;
+                      const cor = cobertura >= 80 ? T.oliveText : cobertura >= 40 ? T.amberText : T.rustText;
+                      return (
+                        <tr key={c.nome} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                          <td style={{ padding: '10px 12px', fontWeight: 600, maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={c.nome}>{c.nome}</td>
+                          <td style={tdFat()}>{c.qtd_pedidos}</td>
+                          <td style={{ ...tdFat(), color: T.ink, fontWeight: 600 }}>{fmtValorCompacto(c.valor)}</td>
+                          {viewFatTab === 'faturados'
+                            ? <td style={{ ...tdFat(), color: T.blueText, fontWeight: 600 }}>{fmtValorCompacto(c.faturado)}</td>
+                            : <td style={{ ...tdFat(), color: T.rustText, fontWeight: 700 }}>{fmtValorCompacto(c.nao_faturado)}</td>}
+                          <td style={{ padding: '10px 12px' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                              <div style={{ flex: 1, background: T.lineSoft, height: 6, borderRadius: 3, overflow: 'hidden' }}>
+                                <div style={{ width: `${cobertura}%`, height: '100%', background: cor, borderRadius: 3, transition: 'width .3s' }} />
+                              </div>
+                              <span style={{ fontSize: 11, fontWeight: 700, color: cor, width: 34, textAlign: 'right' }}>{cobertura.toFixed(0)}%</span>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+                {viewFatTab === 'nao_faturados' && pedidosNaoFat.length === 0 && (
+                  <p style={{ textAlign: 'center', padding: '20px 0', color: T.oliveText, fontSize: 13, fontWeight: 600 }}>
+                    ✓ Todos os pedidos do período já foram faturados.
+                  </p>
+                )}
+              </div>
+            )}
+          </Panel>
+
+          {/* ── CONSUMO DE MATÉRIA-PRIMA ─────────────────────────────────────── */}
+          {consumoMaterial.length > 0 && (
+            <Panel
+              title="Consumo de matéria-prima — Placa Retangular · KLC · Kalocer"
+              subtitle="Filtrado de pedidos_itens por palavra-chave em produto_descricao e produto_kaleng"
+            >
+              <div className="grid-3col" style={{ marginTop: 12 }}>
+                {consumoMaterial.map(m => (
+                  <div key={m.tipo} style={{
+                    background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 10, padding: '16px 18px',
+                  }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: T.inkFaint, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 10 }}>{m.tipo}</div>
+                    <div style={{ fontFamily: FONT_DISPLAY, fontSize: 26, fontWeight: 700, color: T.ink }}>{fmtValorCompacto(m.valor)}</div>
+                    <div style={{ fontSize: 11.5, color: T.inkFaint, marginTop: 4 }}>{m.qtd} item{m.qtd !== 1 ? 's' : ''} de pedido</div>
+                    <button onClick={() => abrirDrillDown(`Matéria-prima — ${m.tipo}`, null)} style={{
+                      marginTop: 10, display: 'inline-flex', alignItems: 'center', gap: 4,
+                      fontSize: 11.5, fontWeight: 600, color: T.terracottaText, background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+                    }}>Ver itens <ArrowUpRight size={12} /></button>
+                  </div>
+                ))}
+              </div>
+              <p style={{ fontSize: 11, color: T.inkFaint, marginTop: 12, marginBottom: 0 }}>
+                Nota: a detecção é por palavra-chave — valide se os nomes de produto no Sankhya batem com os padrões usados (PLACA RET, KLC, KALOCER).
+              </p>
+            </Panel>
+          )}
         </>
       )}
 
@@ -2382,12 +2614,20 @@ function ModalTrocarSenha({ onClose }) {
 function ModalNovaProposta({ currentUser, onClose, onCreated }) {
   const [form, setForm] = useState({
     br: '', cliente: '', uf: '', escopo: ESCOPOS_TOP[0], descricao_servico: '',
-    classificacao: 'B', data_entrega_prevista: '', valor_liquido: '', arquivo_nome: '',
+    classificacao: 'B', data_entrega_prevista: '', valor_liquido: '',
   });
+  const [arquivos, setArquivos] = useState([]); // Array de File objects
   const [salvando, setSalvando] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState('');
   const [erro, setErro] = useState(null);
 
-  const arquivoObrigatorioFaltando = !form.arquivo_nome;
+  const adicionarArquivo = (e) => {
+    const files = Array.from(e.target.files || []);
+    setArquivos(prev => [...prev, ...files]);
+    e.target.value = '';
+  };
+
+  const removerArquivo = (idx) => setArquivos(prev => prev.filter((_, i) => i !== idx));
 
   const salvar = async () => {
     setErro(null);
@@ -2395,12 +2635,30 @@ function ModalNovaProposta({ currentUser, onClose, onCreated }) {
       setErro('Preencha pelo menos BR e Cliente.');
       return;
     }
-    if (arquivoObrigatorioFaltando) {
-      setErro('Anexe o arquivo Word da proposta — é obrigatório.');
+    if (arquivos.length === 0) {
+      setErro('Anexe pelo menos o arquivo Word da proposta (obrigatório).');
       return;
     }
     setSalvando(true);
 
+    // Upload de todos os arquivos para Supabase Storage
+    const urlsUploadadas = [];
+    for (let i = 0; i < arquivos.length; i++) {
+      const file = arquivos[i];
+      setUploadProgress(`Enviando arquivo ${i + 1}/${arquivos.length}: ${file.name}…`);
+      const path = `${form.br.replace(/\//g, '-')}/${Date.now()}_${file.name}`;
+      const { error: upErr } = await supabase.storage.from('propostas-arquivos').upload(path, file, { upsert: true });
+      if (upErr) {
+        setSalvando(false);
+        setUploadProgress('');
+        setErro(`Erro ao enviar "${file.name}": ${upErr.message}. Verifique se o bucket "propostas-arquivos" existe no Supabase Storage.`);
+        return;
+      }
+      const { data: urlData } = supabase.storage.from('propostas-arquivos').getPublicUrl(path);
+      urlsUploadadas.push({ nome: file.name, url: urlData.publicUrl });
+    }
+
+    setUploadProgress('Salvando proposta…');
     const { data: colab } = await supabase.from('colaboradores').select('id').eq('nome', currentUser.nome).maybeSingle();
 
     const payload = {
@@ -2415,17 +2673,16 @@ function ModalNovaProposta({ currentUser, onClose, onCreated }) {
       responsavel_id: colab?.id || null,
       data_entrega_prevista: form.data_entrega_prevista || null,
       valor_liquido: form.valor_liquido ? Number(form.valor_liquido) : 0,
-      arquivo_word_url: form.arquivo_nome,
+      arquivo_word_url: urlsUploadadas[0]?.url || null,
+      arquivos_json: JSON.stringify(urlsUploadadas), // todos os arquivos
       status: 'rascunho',
       mes: MES_ATUAL_LABEL(),
     };
 
     const { error } = await supabase.from('propostas').insert(payload);
     setSalvando(false);
-    if (error) {
-      setErro(error.message);
-      return;
-    }
+    setUploadProgress('');
+    if (error) { setErro(error.message); return; }
     onCreated();
   };
 
@@ -2442,7 +2699,7 @@ function ModalNovaProposta({ currentUser, onClose, onCreated }) {
 
         <div style={{ padding: 24, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: 14 }}>
           <p style={{ fontSize: 12, color: T.inkFaint, margin: 0, lineHeight: 1.5 }}>
-            Propostas criadas manualmente são tratadas como Word/e-mail — dados e arquivo são obrigatórios juntos, exatamente como hoje funciona fora do Sankhya.
+            Propostas manuais (Word/e-mail) — os arquivos são enviados para o Supabase Storage e ficam acessíveis para o aprovador diretamente no portal.
           </p>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
@@ -2484,11 +2741,38 @@ function ModalNovaProposta({ currentUser, onClose, onCreated }) {
             <textarea rows={3} value={form.descricao_servico} onChange={e => setForm(f => ({ ...f, descricao_servico: e.target.value }))} style={{ ...inputStyle(), resize: 'vertical' }} />
           </FiltroCampoFat>
 
-          <FiltroCampoFat label="Arquivo Word *">
-            <input type="file" accept=".doc,.docx" onChange={e => setForm(f => ({ ...f, arquivo_nome: e.target.files?.[0]?.name || '' }))} style={{ fontSize: 12.5 }} />
-            {form.arquivo_nome && <div style={{ fontSize: 11.5, color: T.oliveText, marginTop: 6, fontWeight: 600 }}>✓ {form.arquivo_nome}</div>}
-          </FiltroCampoFat>
+          {/* Upload de arquivos — Word e PDF */}
+          <div>
+            <label style={{ display: 'block', fontSize: 11, fontWeight: 600, color: T.inkFaint, marginBottom: 6 }}>
+              Arquivos da proposta * <span style={{ fontWeight: 400 }}>(Word e/ou PDF — obrigatório ao menos 1)</span>
+            </label>
+            <label style={{
+              display: 'flex', alignItems: 'center', gap: 9, padding: '10px 14px', borderRadius: 8, cursor: 'pointer',
+              background: T.panelAlt, border: `1.5px dashed ${T.line}`, fontSize: 13, color: T.inkDim, fontWeight: 500,
+            }}>
+              <UploadCloud size={16} color={T.terracotta} />
+              Adicionar arquivo (.doc, .docx, .pdf)
+              <input type="file" accept=".doc,.docx,.pdf" multiple onChange={adicionarArquivo} style={{ display: 'none' }} />
+            </label>
+            {arquivos.length > 0 && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 8 }}>
+                {arquivos.map((f, i) => (
+                  <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, background: T.oliveSoft, borderRadius: 6, padding: '7px 11px' }}>
+                    <CheckCircle2 size={13} color={T.oliveText} />
+                    <span style={{ flex: 1, fontSize: 12.5, color: T.oliveText, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.name}</span>
+                    <span style={{ fontSize: 11, color: T.inkFaint }}>{(f.size / 1024).toFixed(0)} KB</span>
+                    <button onClick={() => removerArquivo(i)} style={{ background: 'none', border: 'none', color: T.inkFaint, padding: 2, cursor: 'pointer' }}><X size={13} /></button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
 
+          {uploadProgress && (
+            <div style={{ background: T.blueSoft, color: T.blueText, borderRadius: 8, padding: '9px 12px', fontSize: 12.5, fontWeight: 600 }}>
+              {uploadProgress}
+            </div>
+          )}
           {erro && (
             <div style={{ background: T.rustSoft, color: T.rustText, borderRadius: 8, padding: '9px 12px', fontSize: 12.5, fontWeight: 600 }}>{erro}</div>
           )}
@@ -2497,7 +2781,7 @@ function ModalNovaProposta({ currentUser, onClose, onCreated }) {
         <div style={{ padding: '16px 24px', borderTop: `1px solid ${T.line}`, display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
           <button onClick={onClose} style={ghostBtn(T.inkDim)}>Cancelar</button>
           <button onClick={salvar} disabled={salvando} style={{ ...solidBtn(T.terracotta, true), opacity: salvando ? 0.6 : 1 }}>
-            {salvando ? 'Salvando…' : 'Criar proposta'}
+            {salvando ? 'Enviando…' : 'Criar proposta'}
           </button>
         </div>
       </div>
@@ -2580,8 +2864,7 @@ function ModalDetalhe({ proposta, usuario, onClose, onAction }) {
             </div>
 
             {proposta.origem_dados === 'manual_word' && (
-              <EvidenceBox icon={Stamp} tone="amber" title="Arquivo original anexado" sub={proposta.arquivo_word_url}
-                action={<button style={ghostBtn(T.amberText)}><DownloadCloud size={14} /> Baixar .docx</button>} />
+              <ArquivosPropostaSection proposta={proposta} />
             )}
             {proposta.origem_dados === 'sankhya' && (
               <EvidenceBox
@@ -2656,6 +2939,91 @@ function ModalDetalhe({ proposta, usuario, onClose, onAction }) {
         </div>
       </div>
     </Overlay>
+  );
+}
+
+/* ============================================================================
+   ARQUIVOS DA PROPOSTA — visualizar e adicionar arquivos no ModalDetalhe
+============================================================================ */
+function ArquivosPropostaSection({ proposta }) {
+  const [enviando, setEnviando] = useState(false);
+  const [arquivosExtras, setArquivosExtras] = useState([]);
+  const [erro, setErro] = useState(null);
+
+  // Parseia todos os arquivos existentes (lista JSON ou só a URL legacy)
+  const arquivosExistentes = useMemo(() => {
+    try {
+      const parsed = JSON.parse(proposta.arquivos_json || '[]');
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    } catch (_) {}
+    if (proposta.arquivo_word_url) return [{ nome: 'Proposta', url: proposta.arquivo_word_url }];
+    return [];
+  }, [proposta.arquivos_json, proposta.arquivo_word_url]);
+
+  const todosArquivos = [...arquivosExistentes, ...arquivosExtras];
+
+  const handleUpload = async (e) => {
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
+    setEnviando(true);
+    setErro(null);
+    const novos = [];
+    for (const file of files) {
+      const path = `${proposta.br.replace(/\//g, '-')}/${Date.now()}_${file.name}`;
+      const { error: upErr } = await supabase.storage.from('propostas-arquivos').upload(path, file, { upsert: true });
+      if (upErr) { setErro(`Erro ao enviar "${file.name}": ${upErr.message}`); setEnviando(false); return; }
+      const { data: urlData } = supabase.storage.from('propostas-arquivos').getPublicUrl(path);
+      novos.push({ nome: file.name, url: urlData.publicUrl });
+    }
+    // Atualiza arquivos_json na tabela
+    const listaAtualizada = [...arquivosExistentes, ...novos];
+    await supabase.from('propostas').update({ arquivos_json: JSON.stringify(listaAtualizada) }).eq('id', proposta.id);
+    setArquivosExtras(prev => [...prev, ...novos]);
+    setEnviando(false);
+    e.target.value = '';
+  };
+
+  const getExt = (nome) => (nome || '').split('.').pop().toLowerCase();
+  const extIcon = (nome) => ['pdf'].includes(getExt(nome)) ? '📄' : ['doc', 'docx'].includes(getExt(nome)) ? '📝' : '📎';
+
+  return (
+    <div style={{ background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 10, padding: '14px 16px', marginBottom: 18 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+        <span style={{ fontSize: 12, fontWeight: 700, color: T.inkDim, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+          Arquivos anexados ({todosArquivos.length})
+        </span>
+        <label style={{
+          display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 600,
+          color: T.terracottaText, cursor: 'pointer', background: T.terracottaSoft,
+          border: `1px solid ${T.terracotta}33`, borderRadius: 5, padding: '5px 10px',
+        }}>
+          <UploadCloud size={13} /> {enviando ? 'Enviando…' : 'Adicionar'}
+          <input type="file" accept=".doc,.docx,.pdf" multiple onChange={handleUpload} style={{ display: 'none' }} disabled={enviando} />
+        </label>
+      </div>
+
+      {todosArquivos.length === 0 ? (
+        <p style={{ fontSize: 12, color: T.inkFaint, margin: 0 }}>Nenhum arquivo anexado ainda.</p>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {todosArquivos.map((arq, i) => (
+            <a key={i} href={arq.url} target="_blank" rel="noreferrer" style={{
+              display: 'flex', alignItems: 'center', gap: 9, padding: '8px 11px',
+              background: T.panel, border: `1px solid ${T.lineSoft}`, borderRadius: 7,
+              textDecoration: 'none', color: T.ink,
+            }}
+              onMouseEnter={e => e.currentTarget.style.borderColor = T.terracotta}
+              onMouseLeave={e => e.currentTarget.style.borderColor = T.lineSoft}
+            >
+              <span style={{ fontSize: 16 }}>{extIcon(arq.nome)}</span>
+              <span style={{ flex: 1, fontSize: 12.5, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{arq.nome}</span>
+              <DownloadCloud size={13} color={T.inkFaint} />
+            </a>
+          ))}
+        </div>
+      )}
+      {erro && <p style={{ fontSize: 11.5, color: T.rustText, marginTop: 8, margin: 0 }}>{erro}</p>}
+    </div>
   );
 }
 
