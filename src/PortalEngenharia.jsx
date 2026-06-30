@@ -117,7 +117,50 @@ export default function PortalEngenharia() {
     return () => document.head.removeChild(link);
   }, []);
 
-  const [currentUser, setCurrentUser] = useState(USUARIOS[0]);
+  const [session, setSession] = useState(undefined); // undefined = carregando, null = sem sessão
+  const [currentUser, setCurrentUser] = useState(null);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => setSession(data.session ?? null));
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, sess) => setSession(sess));
+    return () => listener?.subscription?.unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (!session?.user?.email) { setCurrentUser(null); return; }
+    supabase.from('colaboradores').select('*').eq('email', session.user.email).maybeSingle()
+      .then(({ data }) => {
+        if (data) {
+          setCurrentUser({
+            id: data.id, nome: data.nome, papel: data.papel,
+            iniciais: data.nome.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase(),
+          });
+        }
+      });
+  }, [session]);
+
+  if (session === undefined) {
+    return <TelaCarregando />;
+  }
+  if (!session) {
+    return <TelaLogin />;
+  }
+  if (!currentUser) {
+    return <TelaCarregando texto="Carregando seu perfil…" />;
+  }
+
+  return <PortalConteudo currentUser={currentUser} session={session} />;
+}
+
+function TelaCarregando({ texto = 'Carregando…' }) {
+  return (
+    <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: T.bg, fontFamily: FONT_BODY, color: T.inkFaint, fontSize: 13 }}>
+      {texto}
+    </div>
+  );
+}
+
+function PortalConteudo({ currentUser, session }) {
   const [view, setView] = useState('dashboard');
   const [propostas, setPropostas] = useState([]);
   const [propostasLoading, setPropostasLoading] = useState(true);
@@ -253,9 +296,10 @@ export default function PortalEngenharia() {
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
         <Topbar
           view={view} mesFiltro={mesFiltro} setMesFiltro={setMesFiltro}
-          currentUser={currentUser} setCurrentUser={setCurrentUser}
+          currentUser={currentUser}
           userMenuOpen={userMenuOpen} setUserMenuOpen={setUserMenuOpen}
           onNova={() => setModal('nova')}
+          onTrocarSenha={() => setModal('trocarSenha')}
         />
 
         <main style={{ flex: 1, overflow: 'auto', padding: '28px 32px' }}>
@@ -279,6 +323,9 @@ export default function PortalEngenharia() {
       )}
       {modal === 'nova' && (
         <ModalNovaProposta currentUser={currentUser} onClose={() => setModal(null)} onCreated={async () => { setModal(null); await carregarPropostas(); }} />
+      )}
+      {modal === 'trocarSenha' && (
+        <ModalTrocarSenha onClose={() => setModal(null)} />
       )}
     </div>
   );
@@ -373,7 +420,9 @@ const VIEW_TITLES = {
   produtividade: 'Produtividade da equipe', faturamento: 'Faturamento (Sankhya)', pedidosvale: 'Pedidos Vale', integracao: 'Integrações', admin: 'Administração',
 };
 
-function Topbar({ view, mesFiltro, setMesFiltro, currentUser, setCurrentUser, userMenuOpen, setUserMenuOpen, onNova }) {
+function Topbar({ view, mesFiltro, setMesFiltro, currentUser, userMenuOpen, setUserMenuOpen, onNova, onTrocarSenha }) {
+  const fazerLogout = async () => { await supabase.auth.signOut(); };
+
   return (
     <header className="topbar-responsive" style={{
       minHeight: 64, background: T.panel, borderBottom: `1px solid ${T.line}`, display: 'flex',
@@ -423,27 +472,30 @@ function Topbar({ view, mesFiltro, setMesFiltro, currentUser, setCurrentUser, us
           {userMenuOpen && (
             <div className="scale-in" style={{
               position: 'absolute', right: 0, top: 48, background: T.panel, border: `1px solid ${T.line}`,
-              borderRadius: 8, width: 250, boxShadow: '0 12px 28px rgba(0,0,0,.12)', zIndex: 30, overflow: 'hidden',
+              borderRadius: 10, width: 230, boxShadow: SHADOW_LG, zIndex: 30, overflow: 'hidden',
             }}>
-              <div style={{ padding: '10px 14px', fontSize: 11, color: T.inkFaint, textTransform: 'uppercase', letterSpacing: '0.06em', borderBottom: `1px solid ${T.line}` }}>
-                Simular perfil de acesso
+              <div style={{ padding: '12px 14px', borderBottom: `1px solid ${T.line}` }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: T.ink }}>{currentUser.nome}</div>
+                <div style={{ fontSize: 11, color: T.inkFaint, textTransform: 'capitalize', marginTop: 1 }}>{currentUser.papel.replace(/_/g, ' ')}</div>
               </div>
-              {USUARIOS.map(u => (
-                <button key={u.id} onClick={() => { setCurrentUser(u); setUserMenuOpen(false); }}
-                  style={{
-                    width: '100%', textAlign: 'left', display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px',
-                    background: u.id === currentUser.id ? T.terracottaSoft : 'transparent', border: 'none', color: T.ink,
-                  }}
-                  onMouseEnter={e => { if (u.id !== currentUser.id) e.currentTarget.style.background = T.panelAlt; }}
-                  onMouseLeave={e => { if (u.id !== currentUser.id) e.currentTarget.style.background = 'transparent'; }}
-                >
-                  <div style={{ width: 26, height: 26, borderRadius: '50%', background: T.lineSoft, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10.5, fontWeight: 700, flexShrink: 0 }}>{u.iniciais}</div>
-                  <div>
-                    <div style={{ fontSize: 13, fontWeight: 500 }}>{u.nome}</div>
-                    <div style={{ fontSize: 11, color: T.inkFaint, textTransform: 'capitalize' }}>{u.papel.replace(/_/g, ' ')}</div>
-                  </div>
-                </button>
-              ))}
+              <button onClick={() => { onTrocarSenha(); setUserMenuOpen(false); }} style={{
+                width: '100%', textAlign: 'left', display: 'flex', alignItems: 'center', gap: 9, padding: '11px 14px',
+                background: 'transparent', border: 'none', color: T.ink, fontSize: 13, fontWeight: 500,
+              }}
+                onMouseEnter={e => e.currentTarget.style.background = T.panelAlt}
+                onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+              >
+                <SlidersHorizontal size={14} color={T.inkFaint} /> Alterar senha
+              </button>
+              <button onClick={fazerLogout} style={{
+                width: '100%', textAlign: 'left', display: 'flex', alignItems: 'center', gap: 9, padding: '11px 14px',
+                background: 'transparent', border: 'none', color: T.rustText, fontSize: 13, fontWeight: 500, borderTop: `1px solid ${T.lineSoft}`,
+              }}
+                onMouseEnter={e => e.currentTarget.style.background = T.rustSoft}
+                onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+              >
+                <LogOut size={14} /> Sair
+              </button>
             </div>
           )}
         </div>
@@ -1993,6 +2045,146 @@ function Admin() {
 /* ============================================================================
    MODAL: NOVA PROPOSTA — grava de verdade na tabela propostas do Supabase
 ============================================================================ */
+/* ============================================================================
+   TELA DE LOGIN — Supabase Auth real, e-mail/senha
+============================================================================ */
+function TelaLogin() {
+  const [email, setEmail] = useState('');
+  const [senha, setSenha] = useState('');
+  const [erro, setErro] = useState(null);
+  const [entrando, setEntrando] = useState(false);
+
+  useEffect(() => {
+    const link = document.createElement('link');
+    link.href = 'https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap';
+    link.rel = 'stylesheet';
+    document.head.appendChild(link);
+    return () => document.head.removeChild(link);
+  }, []);
+
+  const entrar = async (e) => {
+    e.preventDefault();
+    setErro(null);
+    if (!email.trim() || !senha) { setErro('Preencha e-mail e senha.'); return; }
+    setEntrando(true);
+    const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password: senha });
+    setEntrando(false);
+    if (error) {
+      setErro(error.message.includes('Invalid') ? 'E-mail ou senha incorretos.' : error.message);
+    }
+  };
+
+  return (
+    <div style={{
+      minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
+      background: `radial-gradient(ellipse at top, ${T.terracottaSoft} 0%, ${T.bg} 55%)`, fontFamily: FONT_BODY, padding: 20,
+    }}>
+      <div className="fade-up" style={{
+        background: T.panel, border: `1px solid ${T.line}`, borderRadius: 18, width: '100%', maxWidth: 400,
+        padding: '38px 36px', boxShadow: SHADOW_XL,
+      }}>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', marginBottom: 28 }}>
+          <div style={{
+            width: 56, height: 56, borderRadius: 14, background: `linear-gradient(135deg, ${T.terracotta} 0%, ${T.terracottaDeep} 100%)`,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: FONT_DISPLAY, fontWeight: 700,
+            fontSize: 28, color: '#fff', boxShadow: '0 4px 12px rgba(143,17,9,.3)', marginBottom: 16,
+          }}>K</div>
+          <h1 style={{ fontFamily: FONT_DISPLAY, fontSize: 24, fontWeight: 700, margin: 0, color: T.ink, letterSpacing: '-0.01em' }}>KALENBORN</h1>
+          <p style={{ fontSize: 12, color: T.inkFaint, margin: '3px 0 0', fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase' }}>Portal de Engenharia</p>
+        </div>
+
+        <form onSubmit={entrar} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <div>
+            <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: T.inkDim, marginBottom: 6 }}>E-mail</label>
+            <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="seu.nome@kalenborn.com.br"
+              style={inputStyle()} autoFocus />
+          </div>
+          <div>
+            <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: T.inkDim, marginBottom: 6 }}>Senha</label>
+            <input type="password" value={senha} onChange={e => setSenha(e.target.value)} placeholder="••••••••"
+              style={inputStyle()} />
+          </div>
+
+          {erro && (
+            <div style={{ background: T.rustSoft, color: T.rustText, borderRadius: 8, padding: '9px 12px', fontSize: 12.5, fontWeight: 600 }}>{erro}</div>
+          )}
+
+          <button type="submit" disabled={entrando} style={{
+            ...solidBtn(T.terracotta, true), width: '100%', justifyContent: 'center', padding: '11px 16px',
+            fontSize: 13.5, marginTop: 6, opacity: entrando ? 0.7 : 1,
+          }}>
+            {entrando ? 'Entrando…' : 'Entrar'}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================================
+   MODAL: TROCAR SENHA
+============================================================================ */
+function ModalTrocarSenha({ onClose }) {
+  const [novaSenha, setNovaSenha] = useState('');
+  const [confirmarSenha, setConfirmarSenha] = useState('');
+  const [erro, setErro] = useState(null);
+  const [sucesso, setSucesso] = useState(false);
+  const [salvando, setSalvando] = useState(false);
+
+  const salvar = async (e) => {
+    e.preventDefault();
+    setErro(null);
+    if (novaSenha.length < 6) { setErro('A senha precisa ter pelo menos 6 caracteres.'); return; }
+    if (novaSenha !== confirmarSenha) { setErro('As senhas não coincidem.'); return; }
+    setSalvando(true);
+    const { error } = await supabase.auth.updateUser({ password: novaSenha });
+    setSalvando(false);
+    if (error) { setErro(error.message); return; }
+    setSucesso(true);
+  };
+
+  return (
+    <Overlay onClose={onClose}>
+      <div className="scale-in" style={{
+        background: T.panel, border: `1px solid ${T.line}`, borderRadius: 16, width: '100%', maxWidth: 420,
+        overflow: 'hidden', boxShadow: SHADOW_XL,
+      }}>
+        <div style={{ padding: '20px 24px', borderBottom: `1px solid ${T.line}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <h2 style={{ fontFamily: FONT_DISPLAY, fontSize: 19, fontWeight: 700, margin: 0, color: T.ink }}>Alterar senha</h2>
+          <button onClick={onClose} style={{ background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 8, color: T.inkFaint, padding: 7 }}><X size={18} /></button>
+        </div>
+
+        {sucesso ? (
+          <div style={{ padding: 28, textAlign: 'center' }}>
+            <div style={{ width: 48, height: 48, borderRadius: '50%', background: T.oliveSoft, display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 14px' }}>
+              <Check size={24} color={T.oliveText} strokeWidth={2.5} />
+            </div>
+            <p style={{ fontSize: 13.5, color: T.ink, fontWeight: 600, margin: 0 }}>Senha alterada com sucesso.</p>
+            <button onClick={onClose} style={{ ...solidBtn(T.terracotta, true), marginTop: 18 }}>Fechar</button>
+          </div>
+        ) : (
+          <form onSubmit={salvar} style={{ padding: 24, display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <div>
+              <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: T.inkDim, marginBottom: 6 }}>Nova senha</label>
+              <input type="password" value={novaSenha} onChange={e => setNovaSenha(e.target.value)} placeholder="Mínimo 6 caracteres" style={inputStyle()} autoFocus />
+            </div>
+            <div>
+              <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: T.inkDim, marginBottom: 6 }}>Confirmar nova senha</label>
+              <input type="password" value={confirmarSenha} onChange={e => setConfirmarSenha(e.target.value)} placeholder="Repita a senha" style={inputStyle()} />
+            </div>
+            {erro && (
+              <div style={{ background: T.rustSoft, color: T.rustText, borderRadius: 8, padding: '9px 12px', fontSize: 12.5, fontWeight: 600 }}>{erro}</div>
+            )}
+            <button type="submit" disabled={salvando} style={{ ...solidBtn(T.terracotta, true), width: '100%', justifyContent: 'center', opacity: salvando ? 0.7 : 1 }}>
+              {salvando ? 'Salvando…' : 'Salvar nova senha'}
+            </button>
+          </form>
+        )}
+      </div>
+    </Overlay>
+  );
+}
+
 function ModalNovaProposta({ currentUser, onClose, onCreated }) {
   const [form, setForm] = useState({
     br: '', cliente: '', uf: '', escopo: ESCOPOS_TOP[0], descricao_servico: '',
