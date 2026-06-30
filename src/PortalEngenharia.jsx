@@ -323,6 +323,7 @@ function PortalConteudo({ currentUser, session }) {
           {view === 'produtividade' && <Produtividade propostas={propostas} mesFiltro={mesFiltro} />}
           {view === 'faturamento' && <Faturamento />}
           {view === 'consumo_mp' && <ConsumoMP />}
+          {view === 'almoxarifado' && <Almoxarifado />}
           {view === 'pedidosvale' && <PedidosVale />}
           {view === 'integracao' && <Integracao />}
           {view === 'admin' && <Admin />}
@@ -353,6 +354,7 @@ function Sidebar({ view, setView, pendCount, papel }) {
     { id: 'produtividade', label: 'Produtividade', icon: Gauge },
     { id: 'faturamento', label: 'Faturamento (Sankhya)', icon: DollarSign },
     { id: 'consumo_mp', label: 'Consumo de MP', icon: Layers },
+    { id: 'almoxarifado', label: 'Almoxarifado', icon: Package },
     { id: 'pedidosvale', label: 'Pedidos Vale', icon: FileWarning },
     { id: 'integracao', label: 'Integrações', icon: Workflow },
   ];
@@ -431,6 +433,7 @@ const VIEW_TITLES = {
   dashboard: 'Visão geral', propostas: 'Todas as propostas', pendencias: 'Minhas pendências',
   produtividade: 'Produtividade da equipe', faturamento: 'Faturamento (Sankhya)',
   consumo_mp: 'Consumo de Matéria-Prima — SGQ',
+  almoxarifado: 'Almoxarifado — Estoque & Movimentação',
   pedidosvale: 'Pedidos Vale', integracao: 'Integrações', admin: 'Administração',
 };
 
@@ -2327,13 +2330,327 @@ function ConsumoMP() {
   );
 }
 
-function SortTh({ label, col, sortBy, sortDir, onClick }) {
+/* ============================================================================
+   ALMOXARIFADO — estoque consolidado por produto + movimentação acumulada
+   Fonte: v_almoxarifado_consolidado (SGQ — sync horária do Sankhya)
+============================================================================ */
+const GRUPOS_DESTAQUE = ['PLACA KLC', 'KALOCER', 'ABRESIST', 'KALIMPACT', 'ELEMENTOS DE FIXAÇÃO', 'CHAPA', 'COLA', 'BORRACHA'];
+
+function Almoxarifado() {
+  const [dados, setDados] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [busca, setBusca] = useState('');
+  const [grupoFiltro, setGrupoFiltro] = useState('Todos');
+  const [statusFiltro, setStatusFiltro] = useState('Todos'); // Todos | Zerado | Crítico | OK
+  const [sortBy, setSortBy] = useState('total_saidas');
+  const [sortDir, setSortDir] = useState('desc');
+  const [detalhe, setDetalhe] = useState(null); // produto selecionado para drill-down por local
+  const [locaisDetalhe, setLocaisDetalhe] = useState([]);
+
+  useEffect(() => {
+    setLoading(true);
+    supabaseSGQ.from('v_almoxarifado_consolidado').select('*')
+      .then(({ data, error }) => {
+        if (error) console.error('Almoxarifado:', error.message);
+        setDados(data || []);
+        setLoading(false);
+      });
+  }, []);
+
+  const grupos = useMemo(() => {
+    const set = new Set(dados.map(d => d.descrgrupoprod).filter(Boolean));
+    const destaque = GRUPOS_DESTAQUE.filter(g => set.has(g));
+    const resto = [...set].filter(g => !GRUPOS_DESTAQUE.includes(g)).sort();
+    return ['Todos', ...destaque, ...resto];
+  }, [dados]);
+
+  const statusItem = (row) => {
+    const total = Number(row.estoque_total) || 0;
+    const reserv = Number(row.qtd_reservado) || 0;
+    if (total <= 0) return 'Zerado';
+    if (reserv >= total) return 'Crítico';
+    if (reserv > total * 0.7) return 'Atenção';
+    return 'OK';
+  };
+
+  const filtrados = useMemo(() => {
+    return dados.filter(r => {
+      const matchBusca = !busca ||
+        String(r.codprod).includes(busca) ||
+        (r.descrprod || '').toLowerCase().includes(busca.toLowerCase()) ||
+        (r.referencia || '').toLowerCase().includes(busca.toLowerCase());
+      const matchGrupo = grupoFiltro === 'Todos' || r.descrgrupoprod === grupoFiltro;
+      const st = statusItem(r);
+      const matchStatus = statusFiltro === 'Todos' || st === statusFiltro;
+      return matchBusca && matchGrupo && matchStatus;
+    }).sort((a, b) => {
+      const va = Number(a[sortBy]) || 0;
+      const vb = Number(b[sortBy]) || 0;
+      return sortDir === 'desc' ? vb - va : va - vb;
+    });
+  }, [dados, busca, grupoFiltro, statusFiltro, sortBy, sortDir]);
+
+  const totais = useMemo(() => ({
+    skus:        filtrados.length,
+    zerados:     filtrados.filter(r => Number(r.estoque_total) <= 0).length,
+    criticos:    filtrados.filter(r => { const s = statusItem(r); return s === 'Crítico' || s === 'Atenção'; }).length,
+    totalSaidas: filtrados.reduce((s, r) => s + (Number(r.total_saidas) || 0), 0),
+    ultimaSync:  dados.length ? dados.reduce((latest, r) => {
+      const d = new Date(r.ultima_sync);
+      return d > latest ? d : latest;
+    }, new Date(0)) : null,
+  }), [filtrados, dados]);
+
+  const handleSort = (col) => {
+    if (sortBy === col) setSortDir(d => d === 'desc' ? 'asc' : 'desc');
+    else { setSortBy(col); setSortDir('desc'); }
+  };
+
+  const abrirDetalhe = async (row) => {
+    setDetalhe(row);
+    const { data } = await supabaseSGQ.from('almoxarifado_estoque')
+      .select('descrlocal, estoque_calculado, qtd_reservado, qtd_entrada, qtd_saida, sincronizado_em')
+      .eq('codprod', row.codprod)
+      .neq('descrlocal', '<SEM LOCAL DE ESTOQUE>');
+    setLocaisDetalhe(data || []);
+  };
+
+  const statusColor = (st) => ({
+    Zerado:  [T.rustText,  T.rustSoft],
+    Crítico: [T.rustText,  T.rustSoft],
+    Atenção: [T.amberText, T.amberSoft],
+    OK:      [T.oliveText, T.oliveSoft],
+  }[st] || [T.inkFaint, T.lineSoft]);
+
+  const fmtQtd = (v) => Number(v || 0).toLocaleString('pt-BR', { maximumFractionDigits: 0 });
+
+  return (
+    <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 18, maxWidth: 1400 }}>
+
+      {/* Sync info */}
+      {totais.ultimaSync && totais.ultimaSync.getTime() > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11.5, color: T.inkFaint }}>
+          <RefreshCw size={12} />
+          Sincronizado com Sankhya em {totais.ultimaSync.toLocaleString('pt-BR', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })} · atualização automática a cada hora
+        </div>
+      )}
+
+      {/* KPIs */}
+      <div className="grid-kpis-5" style={{ gridTemplateColumns: 'repeat(auto-fit,minmax(155px,1fr))' }}>
+        {[
+          { label: 'Total de SKUs',      value: fmtQtd(totais.skus),        color: T.ink,      icon: Package },
+          { label: 'Zerados',            value: fmtQtd(totais.zerados),     color: totais.zerados > 0 ? T.rustText : T.oliveText, icon: AlertTriangle },
+          { label: 'Críticos / Atenção', value: fmtQtd(totais.criticos),    color: totais.criticos > 0 ? T.amberText : T.oliveText, icon: AlertTriangle },
+          { label: 'Total de saídas',    value: fmtQtd(totais.totalSaidas), color: T.ink,      icon: ArrowDownRight },
+          { label: 'Grupos de produto',  value: grupos.length - 1,           color: T.blueText, icon: Layers },
+        ].map(k => (
+          <div key={k.label} style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '14px 16px', boxShadow: SHADOW_SM }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+              <span style={{ fontSize: 11, color: T.inkFaint, fontWeight: 600 }}>{k.label}</span>
+              <k.icon size={13} color={k.color} />
+            </div>
+            <div style={{ fontFamily: FONT_DISPLAY, fontSize: 24, fontWeight: 700, color: k.color, marginTop: 8 }}>{k.value}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Filtros */}
+      <Panel>
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+          <FiltroCampoFat label="Buscar código, descrição ou ref.">
+            <div style={{ position: 'relative' }}>
+              <Search size={13} style={{ position: 'absolute', left: 9, top: 9, color: T.inkFaint }} />
+              <input value={busca} onChange={e => setBusca(e.target.value)}
+                placeholder="Ex: 10988, PLACA, KLC, SM-…"
+                style={{ ...selectStyleFat(240), paddingLeft: 28 }} />
+            </div>
+          </FiltroCampoFat>
+          <FiltroCampoFat label="Grupo de produto">
+            <div style={{ position: 'relative' }}>
+              <select value={grupoFiltro} onChange={e => setGrupoFiltro(e.target.value)} style={selectStyleFat(200)}>
+                {grupos.map(g => <option key={g} value={g}>{g}</option>)}
+              </select>
+              <ChevronDown size={13} style={chevronStyleFat} />
+            </div>
+          </FiltroCampoFat>
+          <FiltroCampoFat label="Status">
+            <div style={{ position: 'relative' }}>
+              <select value={statusFiltro} onChange={e => setStatusFiltro(e.target.value)} style={selectStyleFat(150)}>
+                {['Todos', 'Zerado', 'Crítico', 'Atenção', 'OK'].map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
+              <ChevronDown size={13} style={chevronStyleFat} />
+            </div>
+          </FiltroCampoFat>
+          <FiltroCampoFat label="Ordenar por">
+            <div style={{ position: 'relative' }}>
+              <select value={sortBy} onChange={e => { setSortBy(e.target.value); setSortDir('desc'); }} style={selectStyleFat(180)}>
+                <option value="total_saidas">Total saídas</option>
+                <option value="total_entradas">Total entradas</option>
+                <option value="estoque_total">Estoque total</option>
+                <option value="qtd_reservado">Qtd reservado</option>
+                <option value="estoque_mp">Estoque MP</option>
+                <option value="estoque_processamento">Em processamento</option>
+              </select>
+              <ChevronDown size={13} style={chevronStyleFat} />
+            </div>
+          </FiltroCampoFat>
+        </div>
+      </Panel>
+
+      {/* Tabela */}
+      <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+            <thead>
+              <tr style={{ borderBottom: `1px solid ${T.line}`, background: T.panelAlt }}>
+                <th style={{ ...thFat(), width: 74 }}>Código</th>
+                <th style={thFat()}>Descrição</th>
+                <th style={{ ...thFat(100) }}>Grupo</th>
+                <th style={{ ...thFat(42), textAlign: 'center' }}>Un.</th>
+                <AlmoxSortTh label="Estoque total"   col="estoque_total"         sortBy={sortBy} sortDir={sortDir} onClick={handleSort} />
+                <AlmoxSortTh label="Matéria-prima"   col="estoque_mp"            sortBy={sortBy} sortDir={sortDir} onClick={handleSort} />
+                <AlmoxSortTh label="Em process."     col="estoque_processamento" sortBy={sortBy} sortDir={sortDir} onClick={handleSort} />
+                <AlmoxSortTh label="Reservado"       col="qtd_reservado"         sortBy={sortBy} sortDir={sortDir} onClick={handleSort} />
+                <AlmoxSortTh label="↑ Entradas"      col="total_entradas"        sortBy={sortBy} sortDir={sortDir} onClick={handleSort} />
+                <AlmoxSortTh label="↓ Saídas"        col="total_saidas"          sortBy={sortBy} sortDir={sortDir} onClick={handleSort} />
+                <th style={{ ...thFat(70), textAlign: 'center' }}>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {loading ? (
+                <tr><td colSpan={11} style={{ padding: 40, textAlign: 'center', color: T.inkFaint }}>Carregando estoque do SGQ…</td></tr>
+              ) : filtrados.length === 0 ? (
+                <tr><td colSpan={11} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Nenhum item encontrado.</td></tr>
+              ) : filtrados.map(r => {
+                const st = statusItem(r);
+                const [stColor, stBg] = statusColor(st);
+                const isZerado = st === 'Zerado';
+                return (
+                  <tr key={r.codprod} onClick={() => abrirDetalhe(r)}
+                    style={{ borderBottom: `1px solid ${T.lineSoft}`, cursor: 'pointer', background: isZerado ? `${T.rustSoft}44` : 'transparent' }}
+                    onMouseEnter={e => e.currentTarget.style.background = isZerado ? T.rustSoft : T.panelAlt}
+                    onMouseLeave={e => e.currentTarget.style.background = isZerado ? `${T.rustSoft}44` : 'transparent'}
+                  >
+                    <td style={{ padding: '9px 12px', fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 12.5, color: T.terracotta }}>{r.codprod}</td>
+                    <td style={{ padding: '9px 12px', maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 11.5 }} title={r.descrprod}>{r.descrprod}</td>
+                    <td style={{ padding: '9px 12px' }}>
+                      <span style={{ fontSize: 10.5, fontWeight: 600, color: T.blueText, background: T.blueSoft, padding: '2px 7px', borderRadius: 4, whiteSpace: 'nowrap' }}>{r.descrgrupoprod || '—'}</span>
+                    </td>
+                    <td style={{ padding: '9px 12px', textAlign: 'center', fontSize: 11, color: T.inkFaint, fontWeight: 600 }}>{r.codvol || '—'}</td>
+                    <td style={{ padding: '9px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 13, color: isZerado ? T.rustText : T.ink }}>{fmtQtd(r.estoque_total)}</td>
+                    <td style={{ padding: '9px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontSize: 12, color: T.inkDim }}>{fmtQtd(r.estoque_mp)}</td>
+                    <td style={{ padding: '9px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontSize: 12, color: T.inkDim }}>{fmtQtd(r.estoque_processamento)}</td>
+                    <td style={{ padding: '9px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontSize: 12, color: Number(r.qtd_reservado) > 0 ? T.amberText : T.inkFaint, fontWeight: Number(r.qtd_reservado) > 0 ? 600 : 400 }}>{fmtQtd(r.qtd_reservado)}</td>
+                    <td style={{ padding: '9px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontSize: 12, color: T.oliveText }}>{fmtQtd(r.total_entradas)}</td>
+                    <td style={{ padding: '9px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontSize: 12, color: T.rustText }}>{fmtQtd(r.total_saidas)}</td>
+                    <td style={{ padding: '9px 12px', textAlign: 'center' }}>
+                      <span style={{ fontSize: 10, fontWeight: 700, padding: '3px 7px', borderRadius: 4, background: stBg, color: stColor, whiteSpace: 'nowrap' }}>{st}</span>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        <div style={{ padding: '10px 16px', borderTop: `1px solid ${T.line}`, fontSize: 11, color: T.inkFaint }}>
+          {filtrados.length} SKU{filtrados.length !== 1 ? 's' : ''} · Clique em um item para ver movimentação por local de estoque ·
+          <span style={{ color: T.rustText, fontWeight: 600 }}> Zerado</span> = sem estoque ·
+          <span style={{ color: T.amberText, fontWeight: 600 }}> Crítico</span> = reservado ≥ estoque ·
+          <span style={{ color: T.oliveText, fontWeight: 600 }}> OK</span> = disponível
+        </div>
+      </div>
+
+      {/* Modal de detalhe por local */}
+      {detalhe && (
+        <Overlay onClose={() => { setDetalhe(null); setLocaisDetalhe([]); }}>
+          <div className="scale-in" style={{
+            background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, width: '100%', maxWidth: 720,
+            maxHeight: '85vh', display: 'flex', flexDirection: 'column', overflow: 'hidden', boxShadow: SHADOW_XL,
+          }}>
+            <div style={{ padding: '18px 22px', borderBottom: `1px solid ${T.line}`, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <span style={{ fontFamily: FONT_DISPLAY, fontSize: 20, fontWeight: 700, color: T.terracotta }}>{detalhe.codprod}</span>
+                  <span style={{ fontSize: 10.5, fontWeight: 700, padding: '3px 8px', borderRadius: 4, background: T.blueSoft, color: T.blueText }}>{detalhe.descrgrupoprod}</span>
+                  <span style={{ fontSize: 11, color: T.inkFaint }}>{detalhe.codvol}</span>
+                </div>
+                <p style={{ fontSize: 12, color: T.inkDim, margin: '5px 0 0', maxWidth: 520 }}>{detalhe.descrprod}</p>
+              </div>
+              <button onClick={() => { setDetalhe(null); setLocaisDetalhe([]); }} style={{ background: 'transparent', border: 'none', color: T.inkFaint }}><X size={20} /></button>
+            </div>
+
+            {/* Totais do produto */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, padding: '16px 22px', borderBottom: `1px solid ${T.line}` }}>
+              {[
+                { label: 'Estoque total',   value: fmtQtd(detalhe.estoque_total),   color: T.ink },
+                { label: 'Reservado',       value: fmtQtd(detalhe.qtd_reservado),   color: T.amberText },
+                { label: 'Total entradas',  value: fmtQtd(detalhe.total_entradas),  color: T.oliveText },
+                { label: 'Total saídas',    value: fmtQtd(detalhe.total_saidas),    color: T.rustText },
+              ].map(k => (
+                <div key={k.label} style={{ textAlign: 'center', background: T.panelAlt, borderRadius: 8, padding: '10px 8px' }}>
+                  <div style={{ fontSize: 10, color: T.inkFaint, fontWeight: 600, marginBottom: 4 }}>{k.label}</div>
+                  <div style={{ fontFamily: FONT_DISPLAY, fontSize: 20, fontWeight: 700, color: k.color }}>{k.value}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* Movimentação por local */}
+            <div style={{ overflow: 'auto', flex: 1, padding: '6px 0' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+                <thead>
+                  <tr style={{ borderBottom: `1px solid ${T.line}`, position: 'sticky', top: 0, background: T.panel }}>
+                    <th style={thFat()}>Local de estoque</th>
+                    <th style={thFat(0, 'right')}>Calculado</th>
+                    <th style={thFat(0, 'right')}>Reservado</th>
+                    <th style={thFat(0, 'right')}>↑ Entradas</th>
+                    <th style={thFat(0, 'right')}>↓ Saídas</th>
+                    <th style={thFat(0, 'right')}>Giro</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {locaisDetalhe.length === 0 ? (
+                    <tr><td colSpan={6} style={{ padding: 24, textAlign: 'center', color: T.inkFaint }}>Carregando…</td></tr>
+                  ) : locaisDetalhe.map(l => {
+                    const ent = Number(l.qtd_entrada) || 0;
+                    const sai = Math.abs(Number(l.qtd_saida) || 0);
+                    const giro = ent > 0 ? Math.min(Math.round((sai / ent) * 100), 100) : 0;
+                    return (
+                      <tr key={l.descrlocal} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                        <td style={{ padding: '11px 12px', fontWeight: 600 }}>{l.descrlocal}</td>
+                        <td style={{ padding: '11px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 700 }}>{fmtQtd(l.estoque_calculado)}</td>
+                        <td style={{ padding: '11px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, color: T.amberText }}>{fmtQtd(l.qtd_reservado)}</td>
+                        <td style={{ padding: '11px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, color: T.oliveText }}>{fmtQtd(ent)}</td>
+                        <td style={{ padding: '11px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, color: T.rustText }}>{fmtQtd(sai)}</td>
+                        <td style={{ padding: '11px 12px' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <div style={{ flex: 1, background: T.lineSoft, height: 5, borderRadius: 3, overflow: 'hidden' }}>
+                              <div style={{ width: `${giro}%`, height: '100%', background: giro > 80 ? T.terracotta : T.olive, borderRadius: 3 }} />
+                            </div>
+                            <span style={{ fontSize: 10.5, fontWeight: 700, color: T.inkDim, width: 32, textAlign: 'right' }}>{giro}%</span>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <div style={{ padding: '10px 22px', borderTop: `1px solid ${T.line}`, fontSize: 11, color: T.inkFaint }}>
+              Giro = saídas ÷ entradas acumuladas · Sync: {new Date(detalhe.ultima_sync).toLocaleString('pt-BR')}
+            </div>
+          </div>
+        </Overlay>
+      )}
+    </div>
+  );
+}
+
+function AlmoxSortTh({ label, col, sortBy, sortDir, onClick }) {
   const active = sortBy === col;
   return (
-    <th style={{ ...thFat(0, 'right'), cursor: 'pointer', userSelect: 'none' }} onClick={() => onClick(col)}>
-      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: active ? T.terracotta : T.inkFaint }}>
-        {label}
-        {active ? (sortDir === 'desc' ? ' ↓' : ' ↑') : ' ↕'}
+    <th style={{ ...thFat(0, 'right'), cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} onClick={() => onClick(col)}>
+      <span style={{ color: active ? T.terracotta : T.inkFaint }}>
+        {label}{active ? (sortDir === 'desc' ? ' ↓' : ' ↑') : ''}
       </span>
     </th>
   );
