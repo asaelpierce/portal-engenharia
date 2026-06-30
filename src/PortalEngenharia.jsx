@@ -6,15 +6,23 @@ import {
   ChevronRight, ChevronDown, Building2, CalendarDays, Link2, DownloadCloud,
   Filter, FileWarning, Stamp, ArrowUpRight, ArrowDownRight, Minus, Zap,
   CircleDot, ShieldCheck, MessageSquareWarning, ListFilter, Webhook, Users,
-  RefreshCw, TrendingUp, DollarSign, CheckCircle2,
+  RefreshCw, TrendingUp, DollarSign, CheckCircle2, Package, Layers,
 } from 'lucide-react';
 
 /* ============================================================================
    SUPABASE CLIENT — projeto portal-engenharia
 ============================================================================ */
 const SUPABASE_URL = 'https://sieztnpchjjmrwrmrhoa.supabase.co';
-const SUPABASE_ANON_KEY = 'sb_publishable_s_xxUVnOpstaW7p8ngxfXw_OoXDfBXi'; // anon/public key
+const SUPABASE_ANON_KEY = 'sb_publishable_s_xxUVnOpstaW7p8ngxfXw_OoXDfBXi';
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+/* ============================================================================
+   SUPABASE CLIENT — SGQ / Sistema de Industrialização (projeto separado)
+   Lê v_consumo_mp, estoque_mp, remessas e produtos
+============================================================================ */
+const SUPABASE_SGQ_URL = 'https://mdsxiijlkruqnhbyxbhe.supabase.co';
+const SUPABASE_SGQ_KEY = 'sb_publishable_6vD-Jyf4pIJdOpvzXKDCOw_YUcX3TcG';
+const supabaseSGQ = createClient(SUPABASE_SGQ_URL, SUPABASE_SGQ_KEY);
 
 /* ============================================================================
    DESIGN TOKENS — identidade Kalenborn, nível diretoria
@@ -314,6 +322,7 @@ function PortalConteudo({ currentUser, session }) {
           )}
           {view === 'produtividade' && <Produtividade propostas={propostas} mesFiltro={mesFiltro} />}
           {view === 'faturamento' && <Faturamento />}
+          {view === 'consumo_mp' && <ConsumoMP />}
           {view === 'pedidosvale' && <PedidosVale />}
           {view === 'integracao' && <Integracao />}
           {view === 'admin' && <Admin />}
@@ -343,6 +352,7 @@ function Sidebar({ view, setView, pendCount, papel }) {
     { id: 'propostas', label: 'Todas as propostas', icon: FileStack },
     { id: 'produtividade', label: 'Produtividade', icon: Gauge },
     { id: 'faturamento', label: 'Faturamento (Sankhya)', icon: DollarSign },
+    { id: 'consumo_mp', label: 'Consumo de MP', icon: Layers },
     { id: 'pedidosvale', label: 'Pedidos Vale', icon: FileWarning },
     { id: 'integracao', label: 'Integrações', icon: Workflow },
   ];
@@ -419,7 +429,9 @@ function Sidebar({ view, setView, pendCount, papel }) {
 ============================================================================ */
 const VIEW_TITLES = {
   dashboard: 'Visão geral', propostas: 'Todas as propostas', pendencias: 'Minhas pendências',
-  produtividade: 'Produtividade da equipe', faturamento: 'Faturamento (Sankhya)', pedidosvale: 'Pedidos Vale', integracao: 'Integrações', admin: 'Administração',
+  produtividade: 'Produtividade da equipe', faturamento: 'Faturamento (Sankhya)',
+  consumo_mp: 'Consumo de Matéria-Prima — SGQ',
+  pedidosvale: 'Pedidos Vale', integracao: 'Integrações', admin: 'Administração',
 };
 
 function Topbar({ view, mesFiltro, setMesFiltro, currentUser, userMenuOpen, setUserMenuOpen, onNova, onTrocarSenha }) {
@@ -1604,6 +1616,7 @@ function Faturamento() {
               label="Não faturado (estimado)" valor={pedidosNaoFat.reduce((s, c) => s + c.nao_faturado, 0)} icon={AlertTriangle} cor={T.amber}
               formatador={fmtValor}
               sub={`${pedidosNaoFat.length} cliente${pedidosNaoFat.length !== 1 ? 's' : ''} com saldo em aberto`}
+              onClick={pedidosNaoFat.length > 0 ? () => setDrillDown({ titulo: 'Pedidos não faturados — por cliente', itens: pedidosNaoFat, tipo: 'nao_fat' }) : undefined}
             />
           </div>
 
@@ -1804,9 +1817,16 @@ function Faturamento() {
         </>
       )}
 
-      {drillDown && (
+      {drillDown && drillDown.tipo === 'nao_fat' ? (
+        <DrillDownNaoFaturados
+          titulo={drillDown.titulo}
+          clientes={drillDown.itens}
+          fmtValor={fmtValor}
+          onClose={() => setDrillDown(null)}
+        />
+      ) : drillDown ? (
         <DrillDownPedidos titulo={drillDown.titulo} itens={drillDown.itens} loading={drillLoading} onClose={() => setDrillDown(null)} campoValor={drillDown.campoValor} />
-      )}
+      ) : null}
     </div>
   );
 }
@@ -2034,7 +2054,290 @@ function DrillDownPedidos({ titulo, itens, loading, onClose, campoValor = 'valor
   );
 }
 
-function BarraFat({ nome, valor, max, cor }) {
+/* ============================================================================
+   DRILL-DOWN NÃO FATURADOS — lista de clientes com saldo em aberto
+============================================================================ */
+function DrillDownNaoFaturados({ titulo, clientes, fmtValor, onClose }) {
+  const totalNaoFat = clientes.reduce((s, c) => s + c.nao_faturado, 0);
+  const totalPedido = clientes.reduce((s, c) => s + c.valor, 0);
+  return (
+    <Overlay onClose={onClose}>
+      <div className="scale-in" style={{
+        background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, width: '100%', maxWidth: 780,
+        maxHeight: '85vh', display: 'flex', flexDirection: 'column', overflow: 'hidden', boxShadow: '0 24px 60px rgba(0,0,0,.18)',
+      }}>
+        <div style={{ padding: '18px 22px', borderBottom: `1px solid ${T.line}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            <h2 style={{ fontFamily: FONT_DISPLAY, fontSize: 19, fontWeight: 600, margin: 0 }}>{titulo}</h2>
+            <p style={{ fontSize: 12, color: T.inkFaint, margin: '3px 0 0' }}>
+              {clientes.length} cliente{clientes.length !== 1 ? 's' : ''} · {fmtValor(totalNaoFat)} em aberto de {fmtValor(totalPedido)} em pedidos
+            </p>
+          </div>
+          <button onClick={onClose} style={{ background: 'transparent', border: 'none', color: T.inkFaint }}><X size={20} /></button>
+        </div>
+        <div style={{ overflow: 'auto', flex: 1 }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+            <thead>
+              <tr style={{ borderBottom: `1px solid ${T.line}`, position: 'sticky', top: 0, background: T.panel }}>
+                <th style={thFat()}>#</th>
+                <th style={thFat()}>Cliente</th>
+                <th style={thFat(0, 'right')}>Pedidos</th>
+                <th style={thFat(0, 'right')}>Valor pedido</th>
+                <th style={thFat(0, 'right')}>Nota emitida</th>
+                <th style={thFat(0, 'right')}>Não faturado</th>
+                <th style={thFat(120)}>Cobertura</th>
+              </tr>
+            </thead>
+            <tbody>
+              {clientes.length === 0 ? (
+                <tr><td colSpan={7} style={{ padding: 30, textAlign: 'center', color: T.oliveText, fontWeight: 600 }}>✓ Tudo faturado no período.</td></tr>
+              ) : clientes.map((c, i) => {
+                const cob = c.valor > 0 ? Math.min((c.faturado / c.valor) * 100, 100) : 0;
+                const cor = cob >= 80 ? T.oliveText : cob >= 40 ? T.amberText : T.rustText;
+                return (
+                  <tr key={c.nome} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                    <td style={{ padding: '10px 12px', color: T.inkFaint, fontFamily: FONT_DISPLAY, fontSize: 11 }}>#{i + 1}</td>
+                    <td style={{ padding: '10px 12px', fontWeight: 600, maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={c.nome}>{c.nome}</td>
+                    <td style={tdFat()}>{c.qtd_pedidos}</td>
+                    <td style={{ ...tdFat(), color: T.ink, fontWeight: 600 }}>{fmtValor(c.valor)}</td>
+                    <td style={{ ...tdFat(), color: T.blueText }}>{fmtValor(c.faturado)}</td>
+                    <td style={{ ...tdFat(), color: T.rustText, fontWeight: 700 }}>{fmtValor(c.nao_faturado)}</td>
+                    <td style={{ padding: '10px 12px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <div style={{ flex: 1, background: T.lineSoft, height: 6, borderRadius: 3, overflow: 'hidden' }}>
+                          <div style={{ width: `${cob}%`, height: '100%', background: cor, borderRadius: 3 }} />
+                        </div>
+                        <span style={{ fontSize: 11, fontWeight: 700, color: cor, width: 34, textAlign: 'right' }}>{cob.toFixed(0)}%</span>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </Overlay>
+  );
+}
+
+/* ============================================================================
+   CONSUMO DE MATÉRIA-PRIMA — lê v_consumo_mp do SGQ (projeto separado)
+   Mostra código, descrição, unidade, qtd consumida, saldo e cobertura
+============================================================================ */
+const CATEGORIA_MP = {
+  'KLC / Cerâmica':    (d) => /SM-PLACA|KLC|KALOCER|CERÂMICA|CERAMICA/i.test(d),
+  'Borracha':          (d) => /BORRACHA|CHEMITAC|COLA/i.test(d),
+  'Fixadores':         (d) => /PARAFUSO|PORCA|ARRUELA|STUD|PM -|PM-/i.test(d),
+  'Chapas metálicas':  (d) => /CHAPA|PM - CHAPA|\[PI\]/i.test(d),
+  'Outros':            ()   => true,
+};
+
+function categoriaMP(descricao) {
+  for (const [cat, fn] of Object.entries(CATEGORIA_MP)) {
+    if (fn(descricao || '')) return cat;
+  }
+  return 'Outros';
+}
+
+function ConsumoMP() {
+  const [dados, setDados] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [busca, setBusca] = useState('');
+  const [catFiltro, setCatFiltro] = useState('Todos');
+  const [sortBy, setSortBy] = useState('qtd_consumida'); // qtd_consumida | saldo | cobertura_pct
+  const [sortDir, setSortDir] = useState('desc');
+
+  useEffect(() => {
+    setLoading(true);
+    supabaseSGQ
+      .from('v_consumo_mp')
+      .select('*')
+      .then(({ data, error }) => {
+        if (error) console.error('ConsumoMP:', error.message);
+        setDados((data || []).map(r => ({ ...r, categoria: categoriaMP(r.descricao) })));
+        setLoading(false);
+      });
+  }, []);
+
+  const categorias = useMemo(() => ['Todos', ...Object.keys(CATEGORIA_MP)], []);
+
+  const filtrados = useMemo(() => {
+    return dados
+      .filter(r => {
+        const matchBusca = !busca || r.codigo_mp?.includes(busca) || (r.descricao || '').toLowerCase().includes(busca.toLowerCase());
+        const matchCat = catFiltro === 'Todos' || r.categoria === catFiltro;
+        return matchBusca && matchCat;
+      })
+      .sort((a, b) => {
+        const va = Number(a[sortBy]) || 0;
+        const vb = Number(b[sortBy]) || 0;
+        return sortDir === 'desc' ? vb - va : va - vb;
+      });
+  }, [dados, busca, catFiltro, sortBy, sortDir]);
+
+  const totais = useMemo(() => ({
+    itens: filtrados.length,
+    qtdConsumida: filtrados.reduce((s, r) => s + Number(r.qtd_consumida || 0), 0),
+    saldoTotal: filtrados.reduce((s, r) => s + Number(r.saldo_disponivel || 0), 0),
+    criticos: filtrados.filter(r => Number(r.cobertura_pct) < 30).length,
+    atencao: filtrados.filter(r => Number(r.cobertura_pct) >= 30 && Number(r.cobertura_pct) < 80).length,
+  }), [filtrados]);
+
+  const handleSort = (col) => {
+    if (sortBy === col) setSortDir(d => d === 'desc' ? 'asc' : 'desc');
+    else { setSortBy(col); setSortDir('desc'); }
+  };
+
+  const cobColor = (pct) => {
+    const v = Number(pct);
+    if (!v && v !== 0) return T.inkFaint;
+    if (v < 30) return T.rustText;
+    if (v < 80) return T.amberText;
+    return T.oliveText;
+  };
+  const cobBg = (pct) => {
+    const v = Number(pct);
+    if (!v && v !== 0) return T.lineSoft;
+    if (v < 30) return T.rustSoft;
+    if (v < 80) return T.amberSoft;
+    return T.oliveSoft;
+  };
+
+  return (
+    <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 18, maxWidth: 1320 }}>
+      <p style={{ fontSize: 12, color: T.inkFaint, margin: 0 }}>
+        Dados do SGQ — consumo calculado pela composição de cada produto acabado × quantidade das remessas de industrialização. Saldo = estoque disponível atual no almoxarifado.
+      </p>
+
+      {/* KPIs */}
+      <div className="grid-kpis-5" style={{ gridTemplateColumns: 'repeat(auto-fit,minmax(160px,1fr))' }}>
+        {[
+          { label: 'Itens de MP', value: totais.itens, color: T.ink },
+          { label: 'Qtd total consumida', value: totais.qtdConsumida.toLocaleString('pt-BR', { maximumFractionDigits: 0 }), color: T.ink },
+          { label: 'Saldo total (mix unid.)', value: totais.saldoTotal.toLocaleString('pt-BR', { maximumFractionDigits: 0 }), color: T.ink },
+          { label: 'Itens críticos (<30%)', value: totais.criticos, color: T.rustText },
+          { label: 'Atenção (30–80%)', value: totais.atencao, color: T.amberText },
+        ].map(k => (
+          <div key={k.label} style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '14px 16px', boxShadow: SHADOW_SM }}>
+            <div style={{ fontSize: 11, color: T.inkFaint, fontWeight: 600 }}>{k.label}</div>
+            <div style={{ fontFamily: FONT_DISPLAY, fontSize: 26, fontWeight: 700, color: k.color, marginTop: 8 }}>{k.value}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Filtros */}
+      <Panel>
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+          <FiltroCampoFat label="Buscar código ou descrição">
+            <div style={{ position: 'relative' }}>
+              <Search size={13} style={{ position: 'absolute', left: 9, top: 9, color: T.inkFaint }} />
+              <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Ex: 10988, PLACA, KLC…"
+                style={{ ...selectStyleFat(220), paddingLeft: 28 }} />
+            </div>
+          </FiltroCampoFat>
+          <FiltroCampoFat label="Categoria">
+            <div style={{ position: 'relative' }}>
+              <select value={catFiltro} onChange={e => setCatFiltro(e.target.value)} style={selectStyleFat(170)}>
+                {categorias.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+              <ChevronDown size={13} style={chevronStyleFat} />
+            </div>
+          </FiltroCampoFat>
+          <FiltroCampoFat label="Ordenar por">
+            <div style={{ position: 'relative' }}>
+              <select value={sortBy} onChange={e => { setSortBy(e.target.value); setSortDir('desc'); }} style={selectStyleFat(170)}>
+                <option value="qtd_consumida">Qtd consumida</option>
+                <option value="saldo_disponivel">Saldo disponível</option>
+                <option value="cobertura_pct">Cobertura %</option>
+                <option value="qtd_remessas">Nº remessas</option>
+              </select>
+              <ChevronDown size={13} style={chevronStyleFat} />
+            </div>
+          </FiltroCampoFat>
+        </div>
+      </Panel>
+
+      {/* Tabela principal */}
+      <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+            <thead>
+              <tr style={{ borderBottom: `1px solid ${T.line}`, background: T.panelAlt }}>
+                <th style={{ ...thFat(), width: 90 }}>Código MP</th>
+                <th style={thFat()}>Descrição</th>
+                <th style={{ ...thFat(70), textAlign: 'center' }}>Unid.</th>
+                <SortTh label="Qtd consumida" col="qtd_consumida" sortBy={sortBy} sortDir={sortDir} onClick={handleSort} />
+                <SortTh label="Saldo estoque" col="saldo_disponivel" sortBy={sortBy} sortDir={sortDir} onClick={handleSort} />
+                <SortTh label="Cobertura" col="cobertura_pct" sortBy={sortBy} sortDir={sortDir} onClick={handleSort} />
+                <th style={{ ...thFat(0, 'right') }}>Remessas</th>
+                <th style={thFat(110)}>Categoria</th>
+              </tr>
+            </thead>
+            <tbody>
+              {loading ? (
+                <tr><td colSpan={8} style={{ padding: 40, textAlign: 'center', color: T.inkFaint }}>Carregando dados do SGQ…</td></tr>
+              ) : filtrados.length === 0 ? (
+                <tr><td colSpan={8} style={{ padding: 40, textAlign: 'center', color: T.inkFaint }}>Nenhum item encontrado.</td></tr>
+              ) : filtrados.map(r => {
+                const pct = Number(r.cobertura_pct);
+                const isCrit = pct < 30 && r.cobertura_pct !== null;
+                return (
+                  <tr key={r.codigo_mp} style={{ borderBottom: `1px solid ${T.lineSoft}`, background: isCrit ? `${T.rustSoft}55` : 'transparent' }}>
+                    <td style={{ padding: '10px 12px', fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 13, color: T.terracotta }}>{r.codigo_mp}</td>
+                    <td style={{ padding: '10px 12px', maxWidth: 340, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 12 }} title={r.descricao}>{r.descricao || '—'}</td>
+                    <td style={{ padding: '10px 12px', textAlign: 'center', color: T.inkFaint, fontSize: 11, fontWeight: 600 }}>{r.unidade || '—'}</td>
+                    <td style={{ padding: '10px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.ink, fontSize: 13 }}>
+                      {Number(r.qtd_consumida).toLocaleString('pt-BR', { maximumFractionDigits: 2 })}
+                    </td>
+                    <td style={{ padding: '10px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontSize: 13, color: Number(r.saldo_disponivel) === 0 ? T.rustText : T.ink, fontWeight: Number(r.saldo_disponivel) === 0 ? 700 : 400 }}>
+                      {Number(r.saldo_disponivel).toLocaleString('pt-BR', { maximumFractionDigits: 2 })}
+                      {Number(r.saldo_disponivel) === 0 && <span style={{ marginLeft: 5, fontSize: 10, background: T.rustSoft, color: T.rustText, borderRadius: 3, padding: '1px 5px', fontWeight: 700 }}>ZERADO</span>}
+                    </td>
+                    <td style={{ padding: '10px 12px' }}>
+                      {r.cobertura_pct === null ? (
+                        <span style={{ fontSize: 11, color: T.inkFaint }}>—</span>
+                      ) : (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <div style={{ flex: 1, minWidth: 60, background: T.lineSoft, height: 6, borderRadius: 3, overflow: 'hidden' }}>
+                            <div style={{ width: `${Math.min(pct, 100)}%`, height: '100%', background: cobColor(r.cobertura_pct), borderRadius: 3 }} />
+                          </div>
+                          <span style={{ fontSize: 11.5, fontWeight: 700, color: cobColor(r.cobertura_pct), width: 40, textAlign: 'right' }}>{pct.toFixed(1)}%</span>
+                        </div>
+                      )}
+                    </td>
+                    <td style={{ padding: '10px 12px', textAlign: 'right', color: T.inkDim, fontFamily: FONT_DISPLAY }}>{r.qtd_remessas}</td>
+                    <td style={{ padding: '10px 12px' }}>
+                      <span style={{
+                        fontSize: 10.5, fontWeight: 600, padding: '3px 7px', borderRadius: 4,
+                        background: cobBg(r.cobertura_pct), color: cobColor(r.cobertura_pct),
+                      }}>{r.categoria}</span>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        <div style={{ padding: '10px 16px', borderTop: `1px solid ${T.line}`, fontSize: 11, color: T.inkFaint }}>
+          {filtrados.length} item{filtrados.length !== 1 ? 's' : ''} · <span style={{ color: T.rustText, fontWeight: 600 }}>Vermelho &lt; 30%</span> cobertura · <span style={{ color: T.amberText, fontWeight: 600 }}>Âmbar 30–80%</span> · <span style={{ color: T.oliveText, fontWeight: 600 }}>Verde &gt; 80%</span> · Saldo e consumo em unidades mistas (PC, KG, LT…)
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SortTh({ label, col, sortBy, sortDir, onClick }) {
+  const active = sortBy === col;
+  return (
+    <th style={{ ...thFat(0, 'right'), cursor: 'pointer', userSelect: 'none' }} onClick={() => onClick(col)}>
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: active ? T.terracotta : T.inkFaint }}>
+        {label}
+        {active ? (sortDir === 'desc' ? ' ↓' : ' ↑') : ' ↕'}
+      </span>
+    </th>
+  );
+}
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 12 }}>
       <span style={{ width: 130, color: T.inkDim, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={nome}>{nome}</span>
