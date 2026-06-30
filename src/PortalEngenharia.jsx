@@ -224,6 +224,7 @@ export default function PortalEngenharia() {
           )}
           {view === 'produtividade' && <Produtividade propostas={propostas} mesFiltro={mesFiltro} />}
           {view === 'faturamento' && <Faturamento />}
+          {view === 'pedidosvale' && <PedidosVale />}
           {view === 'integracao' && <Integracao />}
           {view === 'admin' && <Admin />}
         </main>
@@ -246,6 +247,7 @@ function Sidebar({ view, setView, pendCount, papel }) {
     { id: 'propostas', label: 'Todas as propostas', icon: FileStack },
     { id: 'produtividade', label: 'Produtividade', icon: Gauge },
     { id: 'faturamento', label: 'Faturamento (Sankhya)', icon: DollarSign },
+    { id: 'pedidosvale', label: 'Pedidos Vale', icon: FileWarning },
     { id: 'integracao', label: 'Integrações', icon: Workflow },
   ];
   return (
@@ -320,7 +322,7 @@ function Sidebar({ view, setView, pendCount, papel }) {
 ============================================================================ */
 const VIEW_TITLES = {
   dashboard: 'Visão geral', propostas: 'Todas as propostas', pendencias: 'Minhas pendências',
-  produtividade: 'Produtividade da equipe', faturamento: 'Faturamento (Sankhya)', integracao: 'Integrações', admin: 'Administração',
+  produtividade: 'Produtividade da equipe', faturamento: 'Faturamento (Sankhya)', pedidosvale: 'Pedidos Vale', integracao: 'Integrações', admin: 'Administração',
 };
 
 function Topbar({ view, mesFiltro, setMesFiltro, currentUser, setCurrentUser, userMenuOpen, setUserMenuOpen, onNova }) {
@@ -1366,6 +1368,174 @@ function selectStyleFat(width) {
   return { appearance: 'none', background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 6, color: T.ink, fontSize: 12.5, padding: '7px 26px 7px 10px', fontWeight: 500, width };
 }
 const chevronStyleFat = { position: 'absolute', right: 8, top: 10, color: T.inkFaint, pointerEvents: 'none' };
+
+/* ============================================================================
+   PEDIDOS VALE — aba dedicada para exportar pedidos da Vale com colunas
+   técnicas de cerâmica preenchidas automaticamente via regras_ceramica_vale,
+   substituindo o PROCV manual que dava #N/A no Excel do usuário.
+============================================================================ */
+function PedidosVale() {
+  const [linhas, setLinhas] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [syncing, setSyncing] = useState(false);
+  const [syncStatus, setSyncStatus] = useState(null);
+  const [periodo, setPeriodo] = useState({ dataIni: '2026-01-01', dataFim: '2026-06-26' });
+
+  const carregar = useCallback(async () => {
+    setLoading(true);
+    const { data } = await supabase.from('v_pedidos_vale').select('*')
+      .gte('data_neg', periodo.dataIni).lte('data_neg', periodo.dataFim)
+      .order('data_neg', { ascending: false });
+    setLinhas(data || []);
+    setLoading(false);
+  }, [periodo]);
+
+  useEffect(() => { carregar(); }, [carregar]);
+
+  const handleAtualizar = async () => {
+    setSyncing(true);
+    setSyncStatus(null);
+    try {
+      const res = await fetch(`${SUPABASE_URL}/functions/v1/sankhya-pedidos-itens-sync`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dataIni: periodo.dataIni, dataFim: periodo.dataFim }),
+      }).then(r => r.json());
+      if (res.ok) {
+        setSyncStatus({ ok: true, message: `Sincronizado: ${res.itens_sincronizados} itens do Sankhya.` });
+        await carregar();
+      } else {
+        setSyncStatus({ ok: false, message: res.erro || 'Erro desconhecido.' });
+      }
+    } catch (err) {
+      setSyncStatus({ ok: false, message: String(err) });
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  const exportarCsv = () => {
+    const headers = ['Nº', 'Month', 'Year', 'Client', 'UF', 'BR', 'Cod. Vale', 'Margem atual %', 'Qts peças', 'Area da Placa (m2)', 'Qtd. Ceramica 1 (PC)', 'Qtd. Total Ceramica 1 (PC)', 'Ceramica 1 Código', 'Ceramica 1 Descrição', 'Qtd. Ceramica 2 (PC)', 'Qtd. Total de Ceramica 2 (PC)', 'Ceramica 2 Código', 'Ceramica 2 Descrição', 'Qtd. Ceramica 3 (PC)', 'Qtd. Total de Ceramica 3 (PC)', 'Ceramica 3 Código', 'Ceramica 3 Descrição', 'Qtd. Ceramica 4 (PC)', 'Qtd. Total de Ceramica 4 (PC)', 'Ceramica 4 Código', 'Ceramica 4 Descrição', 'Espessura de Ceramica (mm)', 'Layout da Placa (mm)', 'MGT?', 'AUTOIMPACTO'];
+    const linhasCsv = linhas.map(l => [
+      l.numero, l.month_nome, l.ano, l.client, l.uf, l.br, l.cod_vale, l.margem_atual_pct ?? '',
+      l.qtd_pecas, l.area_placa_m2 ?? '#N/A', l.qtd_ceramica_1 ?? '#N/A', l.qtd_total_ceramica_1 ?? '#N/A',
+      l.ceramica_1_codigo ?? '#N/A', l.ceramica_1_descricao ?? '#N/A', l.qtd_ceramica_2 ?? '#N/A',
+      l.qtd_total_ceramica_2 ?? '#N/A', l.ceramica_2_codigo ?? '#N/A', l.ceramica_2_descricao ?? '#N/A',
+      l.qtd_ceramica_3 ?? '#N/A', l.qtd_total_ceramica_3 ?? '#N/A', l.ceramica_3_codigo ?? '#N/A',
+      l.ceramica_3_descricao ?? '#N/A', l.qtd_ceramica_4 ?? '#N/A', l.qtd_total_ceramica_4 ?? '#N/A',
+      l.ceramica_4_codigo ?? '#N/A', l.ceramica_4_descricao ?? '#N/A', l.espessura_ceramica_mm ?? '#N/A',
+      l.layout_placa_mm ?? '#N/A', l.mgt, l.autoimpacto,
+    ]);
+    const csv = [headers, ...linhasCsv].map(row => row.map(v => `"${String(v).replace(/"/g, '""')}"`).join(';')).join('\n');
+    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `pedidos_vale_${periodo.dataIni}_${periodo.dataFim}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const comRegra = linhas.filter(l => l.area_placa_m2 !== null).length;
+  const semRegra = linhas.length - comRegra;
+
+  return (
+    <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 18, maxWidth: 1400 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', flexWrap: 'wrap', gap: 12 }}>
+        <p style={{ color: T.inkFaint, fontSize: 12.5, margin: 0, maxWidth: 560 }}>
+          Pedidos de venda de clientes Vale, com colunas de cerâmica preenchidas automaticamente via Código Vale (substitui o PROCV manual que dava #N/A).
+        </p>
+        <div style={{ display: 'flex', gap: 16, alignItems: 'flex-end' }}>
+          <FiltroCampoFat label="Data início">
+            <input type="date" value={periodo.dataIni} onChange={e => setPeriodo(p => ({ ...p, dataIni: e.target.value }))} style={{ ...selectStyleFat(140), appearance: 'auto' }} />
+          </FiltroCampoFat>
+          <FiltroCampoFat label="Data fim">
+            <input type="date" value={periodo.dataFim} onChange={e => setPeriodo(p => ({ ...p, dataFim: e.target.value }))} style={{ ...selectStyleFat(140), appearance: 'auto' }} />
+          </FiltroCampoFat>
+          <button onClick={exportarCsv} disabled={!linhas.length} style={{ ...ghostBtn(T.terracottaText), opacity: linhas.length ? 1 : 0.5 }}>
+            <DownloadCloud size={14} /> Exportar CSV
+          </button>
+          <button onClick={handleAtualizar} disabled={syncing} style={{
+            display: 'flex', alignItems: 'center', gap: 8, background: T.terracotta, color: '#fff', border: 'none',
+            borderRadius: 8, padding: '10px 18px', fontSize: 13, fontWeight: 700, opacity: syncing ? 0.7 : 1,
+          }}>
+            <RefreshCw size={15} className={syncing ? 'spin' : ''} />
+            {syncing ? 'Atualizando…' : 'Atualizar do Sankhya'}
+          </button>
+        </div>
+      </div>
+
+      {syncStatus && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 10, padding: '11px 16px', borderRadius: 8,
+          background: syncStatus.ok ? T.oliveSoft : T.rustSoft, border: `1px solid ${syncStatus.ok ? T.olive : T.rust}33`,
+        }}>
+          {syncStatus.ok ? <CheckCircle2 size={16} color={T.oliveText} /> : <AlertTriangle size={16} color={T.rustText} />}
+          <span style={{ fontSize: 13, color: syncStatus.ok ? T.oliveText : T.rustText }}>{syncStatus.message}</span>
+        </div>
+      )}
+
+      {!loading && linhas.length > 0 && (
+        <div className="grid-kpis-2">
+          <div style={{ background: T.oliveSoft, border: `1px solid ${T.olive}33`, borderRadius: 10, padding: '14px 18px' }}>
+            <div style={{ fontSize: 11.5, color: T.oliveText, fontWeight: 600 }}>Com regra de cerâmica completa</div>
+            <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 24, color: T.oliveText, marginTop: 4 }}>{comRegra} <span style={{ fontSize: 13, fontWeight: 500 }}>de {linhas.length}</span></div>
+          </div>
+          <div style={{ background: T.amberSoft, border: `1px solid ${T.amber}33`, borderRadius: 10, padding: '14px 18px' }}>
+            <div style={{ fontSize: 11.5, color: T.amberText, fontWeight: 600 }}>Sem regra cadastrada</div>
+            <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 24, color: T.amberText, marginTop: 4 }}>{semRegra} itens</div>
+          </div>
+        </div>
+      )}
+
+      <Panel title="Pedidos Vale" subtitle="Clique em Exportar CSV para colar direto no modelo de planilha">
+        {loading ? (
+          <div style={{ textAlign: 'center', padding: 40, color: T.inkFaint, fontSize: 13 }}>Carregando…</div>
+        ) : (
+          <div style={{ overflowX: 'auto', marginTop: 10 }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+              <thead>
+                <tr style={{ borderBottom: `1px solid ${T.line}` }}>
+                  <th style={thFat()}>Mês/Ano</th>
+                  <th style={thFat()}>Cliente</th>
+                  <th style={thFat()}>UF</th>
+                  <th style={thFat()}>BR</th>
+                  <th style={thFat()}>Cod. Vale</th>
+                  <th style={thFat(0, 'right')}>Qtd peças</th>
+                  <th style={thFat()}>Cerâmica 1</th>
+                  <th style={thFat()}>Espessura</th>
+                  <th style={thFat()}>Layout</th>
+                  <th style={thFat()}>MGT</th>
+                  <th style={thFat()}>Autoimpacto</th>
+                </tr>
+              </thead>
+              <tbody>
+                {linhas.length === 0 ? (
+                  <tr><td colSpan={11} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Nenhum pedido Vale no período. Clique em "Atualizar do Sankhya".</td></tr>
+                ) : linhas.map(l => {
+                  const semRegraLinha = l.area_placa_m2 === null;
+                  return (
+                    <tr key={l.pedido_item_id} style={{ borderBottom: `1px solid ${T.lineSoft}`, background: semRegraLinha ? T.amberSoft : 'transparent' }}>
+                      <td style={{ padding: '9px 12px', color: T.inkDim, whiteSpace: 'nowrap' }}>{l.month_nome?.trim()}/{l.ano}</td>
+                      <td style={{ padding: '9px 12px', fontWeight: 600, maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={l.client}>{l.client}</td>
+                      <td style={{ padding: '9px 12px', color: T.inkDim }}>{l.uf || '—'}</td>
+                      <td style={{ padding: '9px 12px', fontFamily: FONT_DISPLAY, fontWeight: 600 }}>{l.br || '—'}</td>
+                      <td style={{ padding: '9px 12px', color: T.inkDim, fontFamily: FONT_DISPLAY }}>{l.cod_vale || '—'}</td>
+                      <td style={{ padding: '9px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY }}>{l.qtd_pecas}</td>
+                      <td style={{ padding: '9px 12px', color: semRegraLinha ? T.amberText : T.inkDim }}>{l.ceramica_1_descricao || (semRegraLinha ? 'Sem regra' : '—')}</td>
+                      <td style={{ padding: '9px 12px', color: T.inkDim }}>{l.espessura_ceramica_mm ? `${l.espessura_ceramica_mm}mm` : '—'}</td>
+                      <td style={{ padding: '9px 12px', color: T.inkDim, whiteSpace: 'nowrap' }}>{l.layout_placa_mm || '—'}</td>
+                      <td style={{ padding: '9px 12px' }}>{l.mgt === 'SIM' ? <span style={{ color: T.oliveText, fontWeight: 600 }}>SIM</span> : <span style={{ color: T.inkFaint }}>—</span>}</td>
+                      <td style={{ padding: '9px 12px' }}>{l.autoimpacto === 'SIM' ? <span style={{ color: T.oliveText, fontWeight: 600 }}>SIM</span> : <span style={{ color: T.inkFaint }}>—</span>}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Panel>
+    </div>
+  );
+}
 
 /* ============================================================================
    INTEGRAÇÕES — ponte com Power Automate
