@@ -8,7 +8,6 @@ import {
   CircleDot, ShieldCheck, MessageSquareWarning, ListFilter, Webhook, Users,
   RefreshCw, TrendingUp, DollarSign, CheckCircle2,
 } from 'lucide-react';
-import { PROPOSTAS_REAIS } from './propostas_data.js';
 
 /* ============================================================================
    SUPABASE CLIENT — projeto portal-engenharia
@@ -120,11 +119,32 @@ export default function PortalEngenharia() {
 
   const [currentUser, setCurrentUser] = useState(USUARIOS[0]);
   const [view, setView] = useState('dashboard');
-  const [propostas, setPropostas] = useState(PROPOSTAS_REAIS);
+  const [propostas, setPropostas] = useState([]);
+  const [propostasLoading, setPropostasLoading] = useState(true);
   const [modal, setModal] = useState(null);
   const [selected, setSelected] = useState(null);
   const [mesFiltro, setMesFiltro] = useState('JUNHO');
   const [userMenuOpen, setUserMenuOpen] = useState(false);
+
+  const carregarPropostas = useCallback(async () => {
+    setPropostasLoading(true);
+    const { data, error } = await supabase.from('v_propostas_completo').select('*').order('created_at', { ascending: false });
+    if (error) {
+      console.error('Erro ao carregar propostas:', error.message);
+      setPropostas([]);
+    } else {
+      // Normaliza nomes de campo para o formato que o resto da tela espera
+      // (responsavel/aprovador_pool como string, não UUID).
+      setPropostas((data || []).map(p => ({
+        ...p,
+        responsavel: p.responsavel_nome,
+        aprovador_pool: p.aprovador_pool_nome,
+      })));
+    }
+    setPropostasLoading(false);
+  }, []);
+
+  useEffect(() => { carregarPropostas(); }, [carregarPropostas]);
 
   const propostasMes = useMemo(() => propostas.filter(p => p.mes === mesFiltro), [propostas, mesFiltro]);
 
@@ -151,25 +171,39 @@ export default function PortalEngenharia() {
     };
   }, [propostasMes]);
 
-  const handleAcaoFluxo = (propostaId, acao, comentario = '') => {
-    const agora = '2026-06-26';
-    setPropostas(prev => prev.map(p => {
-      if (p.id !== propostaId) return p;
-      let next = { ...p };
-      switch (acao) {
-        case 'enviar_revisao': next.status = 'em_revisao_tecnica'; break;
-        case 'aprovar_revisao': next.status = 'aguardando_aprovacao'; break;
-        case 'reprovar_revisao': next.status = 'reprovada'; next.comentario_reprovacao = comentario; break;
-        case 'aprovar_final':
-          next.status = 'aprovada'; next.aprovador_pool = currentUser.nome; next.data_aprovacao = agora; break;
-        case 'reprovar_final': next.status = 'reprovada'; next.comentario_reprovacao = comentario; break;
-        case 'concluir': next.status = 'concluida'; next.data_conclusao = agora; break;
-        case 'validar_sankhya': next.validado_pelo_engenheiro = true; break;
-        default: break;
+  const handleAcaoFluxo = async (propostaId, acao, comentario = '') => {
+    const agora = new Date().toISOString().slice(0, 10);
+    const update = {};
+
+    switch (acao) {
+      case 'enviar_revisao': update.status = 'em_revisao_tecnica'; break;
+      case 'aprovar_revisao': update.status = 'aguardando_aprovacao'; break;
+      case 'reprovar_revisao': update.status = 'reprovada'; update.comentario_decisao = comentario; break;
+      case 'aprovar_final': {
+        const aprovador = USUARIOS.find(u => u.nome === currentUser.nome);
+        update.status = 'aprovada';
+        update.data_decisao_final = agora;
+        update.comentario_decisao = comentario;
+        // Resolve o UUID do aprovador a partir da tabela colaboradores real.
+        const { data: colab } = await supabase.from('colaboradores').select('id').eq('nome', currentUser.nome).maybeSingle();
+        if (colab) update.aprovador_pool_id = colab.id;
+        break;
       }
-      setSelected(next);
-      return next;
-    }));
+      case 'reprovar_final': update.status = 'reprovada'; update.comentario_decisao = comentario; break;
+      case 'concluir': update.status = 'concluida'; update.data_conclusao = agora; break;
+      case 'validar_sankhya': update.validado_pelo_engenheiro = true; break;
+      default: return;
+    }
+
+    const { error } = await supabase.from('propostas').update(update).eq('id', propostaId);
+    if (error) {
+      console.error('Erro ao atualizar proposta:', error.message);
+      return;
+    }
+    await carregarPropostas();
+    // Atualiza o "selected" (modal aberto) com os dados recém-recarregados.
+    const { data: atualizado } = await supabase.from('v_propostas_completo').select('*').eq('id', propostaId).maybeSingle();
+    if (atualizado) setSelected({ ...atualizado, responsavel: atualizado.responsavel_nome, aprovador_pool: atualizado.aprovador_pool_nome });
   };
 
   return (
@@ -242,6 +276,9 @@ export default function PortalEngenharia() {
 
       {modal === 'detalhe' && selected && (
         <ModalDetalhe proposta={selected} usuario={currentUser} onClose={() => { setModal(null); setSelected(null); }} onAction={handleAcaoFluxo} />
+      )}
+      {modal === 'nova' && (
+        <ModalNovaProposta currentUser={currentUser} onClose={() => setModal(null)} onCreated={async () => { setModal(null); await carregarPropostas(); }} />
       )}
     </div>
   );
@@ -1953,6 +1990,140 @@ function Admin() {
 /* ============================================================================
    MODAL: DETALHE
 ============================================================================ */
+/* ============================================================================
+   MODAL: NOVA PROPOSTA — grava de verdade na tabela propostas do Supabase
+============================================================================ */
+function ModalNovaProposta({ currentUser, onClose, onCreated }) {
+  const [form, setForm] = useState({
+    br: '', cliente: '', uf: '', escopo: ESCOPOS_TOP[0], descricao_servico: '',
+    classificacao: 'B', data_entrega_prevista: '', valor_liquido: '', arquivo_nome: '',
+  });
+  const [salvando, setSalvando] = useState(false);
+  const [erro, setErro] = useState(null);
+
+  const arquivoObrigatorioFaltando = !form.arquivo_nome;
+
+  const salvar = async () => {
+    setErro(null);
+    if (!form.br.trim() || !form.cliente.trim()) {
+      setErro('Preencha pelo menos BR e Cliente.');
+      return;
+    }
+    if (arquivoObrigatorioFaltando) {
+      setErro('Anexe o arquivo Word da proposta — é obrigatório.');
+      return;
+    }
+    setSalvando(true);
+
+    const { data: colab } = await supabase.from('colaboradores').select('id').eq('nome', currentUser.nome).maybeSingle();
+
+    const payload = {
+      br: form.br.trim(),
+      cliente: form.cliente.trim(),
+      uf: form.uf.trim() || null,
+      tipo_proposta: 'venda_spot_email',
+      origem_dados: 'manual_word',
+      escopo: form.escopo,
+      descricao_servico: form.descricao_servico.trim() || null,
+      classificacao: form.classificacao,
+      responsavel_id: colab?.id || null,
+      data_entrega_prevista: form.data_entrega_prevista || null,
+      valor_liquido: form.valor_liquido ? Number(form.valor_liquido) : 0,
+      arquivo_word_url: form.arquivo_nome,
+      status: 'rascunho',
+      mes: MES_ATUAL_LABEL(),
+    };
+
+    const { error } = await supabase.from('propostas').insert(payload);
+    setSalvando(false);
+    if (error) {
+      setErro(error.message);
+      return;
+    }
+    onCreated();
+  };
+
+  return (
+    <Overlay onClose={onClose}>
+      <div className="scale-in" style={{
+        background: T.panel, border: `1px solid ${T.line}`, borderRadius: 16, width: '100%', maxWidth: 560,
+        maxHeight: '90vh', display: 'flex', flexDirection: 'column', overflow: 'hidden', boxShadow: SHADOW_XL,
+      }}>
+        <div style={{ padding: '20px 24px', borderBottom: `1px solid ${T.line}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <h2 style={{ fontFamily: FONT_DISPLAY, fontSize: 20, fontWeight: 700, margin: 0, color: T.ink }}>Nova proposta</h2>
+          <button onClick={onClose} style={{ background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 8, color: T.inkFaint, padding: 7 }}><X size={18} /></button>
+        </div>
+
+        <div style={{ padding: 24, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <p style={{ fontSize: 12, color: T.inkFaint, margin: 0, lineHeight: 1.5 }}>
+            Propostas criadas manualmente são tratadas como Word/e-mail — dados e arquivo são obrigatórios juntos, exatamente como hoje funciona fora do Sankhya.
+          </p>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <FiltroCampoFat label="BR *">
+              <input value={form.br} onChange={e => setForm(f => ({ ...f, br: e.target.value }))} placeholder="BR14999/26" style={{ ...selectStyleFat('100%'), appearance: 'auto' }} />
+            </FiltroCampoFat>
+            <FiltroCampoFat label="UF">
+              <input value={form.uf} onChange={e => setForm(f => ({ ...f, uf: e.target.value.toUpperCase().slice(0, 2) }))} placeholder="MG" style={{ ...selectStyleFat('100%'), appearance: 'auto' }} />
+            </FiltroCampoFat>
+          </div>
+
+          <FiltroCampoFat label="Cliente *">
+            <input value={form.cliente} onChange={e => setForm(f => ({ ...f, cliente: e.target.value }))} placeholder="Nome do cliente" style={{ ...selectStyleFat('100%'), appearance: 'auto' }} />
+          </FiltroCampoFat>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <FiltroCampoFat label="Escopo">
+              <select value={form.escopo} onChange={e => setForm(f => ({ ...f, escopo: e.target.value }))} style={selectStyleFat('100%')}>
+                {ESCOPOS_TOP.map(e => <option key={e} value={e}>{e}</option>)}
+              </select>
+            </FiltroCampoFat>
+            <FiltroCampoFat label="Classificação">
+              <select value={form.classificacao} onChange={e => setForm(f => ({ ...f, classificacao: e.target.value }))} style={selectStyleFat('100%')}>
+                <option value="A">A</option><option value="B">B</option><option value="C">C</option>
+              </select>
+            </FiltroCampoFat>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <FiltroCampoFat label="Entrega prevista">
+              <input type="date" value={form.data_entrega_prevista} onChange={e => setForm(f => ({ ...f, data_entrega_prevista: e.target.value }))} style={{ ...selectStyleFat('100%'), appearance: 'auto' }} />
+            </FiltroCampoFat>
+            <FiltroCampoFat label="Valor líquido (R$)">
+              <input type="number" value={form.valor_liquido} onChange={e => setForm(f => ({ ...f, valor_liquido: e.target.value }))} placeholder="0,00" style={{ ...selectStyleFat('100%'), appearance: 'auto' }} />
+            </FiltroCampoFat>
+          </div>
+
+          <FiltroCampoFat label="Descrição do serviço">
+            <textarea rows={3} value={form.descricao_servico} onChange={e => setForm(f => ({ ...f, descricao_servico: e.target.value }))} style={{ ...inputStyle(), resize: 'vertical' }} />
+          </FiltroCampoFat>
+
+          <FiltroCampoFat label="Arquivo Word *">
+            <input type="file" accept=".doc,.docx" onChange={e => setForm(f => ({ ...f, arquivo_nome: e.target.files?.[0]?.name || '' }))} style={{ fontSize: 12.5 }} />
+            {form.arquivo_nome && <div style={{ fontSize: 11.5, color: T.oliveText, marginTop: 6, fontWeight: 600 }}>✓ {form.arquivo_nome}</div>}
+          </FiltroCampoFat>
+
+          {erro && (
+            <div style={{ background: T.rustSoft, color: T.rustText, borderRadius: 8, padding: '9px 12px', fontSize: 12.5, fontWeight: 600 }}>{erro}</div>
+          )}
+        </div>
+
+        <div style={{ padding: '16px 24px', borderTop: `1px solid ${T.line}`, display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+          <button onClick={onClose} style={ghostBtn(T.inkDim)}>Cancelar</button>
+          <button onClick={salvar} disabled={salvando} style={{ ...solidBtn(T.terracotta, true), opacity: salvando ? 0.6 : 1 }}>
+            {salvando ? 'Salvando…' : 'Criar proposta'}
+          </button>
+        </div>
+      </div>
+    </Overlay>
+  );
+}
+
+function MES_ATUAL_LABEL() {
+  const m = new Date().getMonth();
+  return MESES_ORDEM[m] || MESES_ORDEM[5];
+}
+
 function ModalDetalhe({ proposta, usuario, onClose, onAction }) {
   const [comentario, setComentario] = useState('');
   const [comentarios, setComentarios] = useState([]);
