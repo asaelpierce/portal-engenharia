@@ -2171,6 +2171,29 @@ function DrillDownNaoFaturados({ titulo, clientes, fmtValor, onClose }) {
    CONSUMO DE MATÉRIA-PRIMA — lê v_consumo_mp do SGQ (projeto separado)
    Mostra código, descrição, unidade, qtd consumida, saldo e cobertura
 ============================================================================ */
+/* helpers de cabeçalho ordenável — definidos antes de ConsumoMP e Almoxarifado */
+function SortTh({ label, col, sortBy, sortDir, onClick }) {
+  const active = sortBy === col;
+  return (
+    <th style={{ ...thFat(0, 'right'), cursor: 'pointer', userSelect: 'none' }} onClick={() => onClick(col)}>
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: active ? T.terracotta : T.inkFaint }}>
+        {label}{active ? (sortDir === 'desc' ? ' ↓' : ' ↑') : ' ↕'}
+      </span>
+    </th>
+  );
+}
+
+function AlmoxSortTh({ label, col, sortBy, sortDir, onClick }) {
+  const active = sortBy === col;
+  return (
+    <th style={{ ...thFat(0, 'right'), cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} onClick={() => onClick(col)}>
+      <span style={{ color: active ? T.terracotta : T.inkFaint }}>
+        {label}{active ? (sortDir === 'desc' ? ' ↓' : ' ↑') : ''}
+      </span>
+    </th>
+  );
+}
+
 const CATEGORIA_MP = {
   'KLC / Cerâmica':    (d) => /SM-PLACA|KLC|KALOCER|CERÂMICA|CERAMICA/i.test(d),
   'Borracha':          (d) => /BORRACHA|CHEMITAC|COLA/i.test(d),
@@ -2714,17 +2737,6 @@ function Almoxarifado() {
         </Overlay>
       )}
     </div>
-  );
-}
-
-function AlmoxSortTh({ label, col, sortBy, sortDir, onClick }) {
-  const active = sortBy === col;
-  return (
-    <th style={{ ...thFat(0, 'right'), cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} onClick={() => onClick(col)}>
-      <span style={{ color: active ? T.terracotta : T.inkFaint }}>
-        {label}{active ? (sortDir === 'desc' ? ' ↓' : ' ↑') : ''}
-      </span>
-    </th>
   );
 }
 
