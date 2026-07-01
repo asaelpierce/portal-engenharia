@@ -322,8 +322,8 @@ function PortalConteudo({ currentUser, session }) {
           )}
           {view === 'produtividade' && <Produtividade propostas={propostas} mesFiltro={mesFiltro} />}
           {view === 'faturamento' && <Faturamento />}
-          {view === 'consumo_mp' && <ConsumoMP />}
-          {view === 'almoxarifado' && <Almoxarifado />}
+          {view === 'consumo_mp' && <TabErrorBoundary tab="Consumo de MP"><ConsumoMP /></TabErrorBoundary>}
+          {view === 'almoxarifado' && <TabErrorBoundary tab="Almoxarifado"><Almoxarifado /></TabErrorBoundary>}
           {view === 'pedidosvale' && <PedidosVale />}
           {view === 'integracao' && <Integracao />}
           {view === 'admin' && <Admin />}
@@ -1058,6 +1058,49 @@ function OrigemBadge({ origem }) {
       {isSankhya ? 'ERP Sankhya' : 'Word / e-mail'}
     </span>
   );
+}
+
+/* ============================================================================
+   TAB ERROR BOUNDARY — captura erros de render nas abas SGQ e exibe
+   a mensagem em vez de deixar a tela toda branca.
+   Error boundaries precisam ser class components em React.
+============================================================================ */
+class TabErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+  static getDerivedStateFromError(error) {
+    return { hasError: true, error };
+  }
+  render() {
+    if (this.state.hasError) {
+      const msg = this.state.error?.message || String(this.state.error);
+      return (
+        <div style={{ padding: 32, maxWidth: 680, fontFamily: FONT_BODY }}>
+          <div style={{ background: '#FBE6E3', border: '1px solid #C8261C44', borderRadius: 10, padding: '20px 24px' }}>
+            <div style={{ fontSize: 15, fontWeight: 700, color: '#8A170F', marginBottom: 8 }}>
+              Erro ao renderizar aba "{this.props.tab}"
+            </div>
+            <div style={{ fontSize: 12.5, color: '#615A4F', marginBottom: 14, lineHeight: 1.6 }}>
+              Copie a mensagem abaixo e envie para o Asael para diagnóstico:
+            </div>
+            <pre style={{
+              background: '#1C1A17', color: '#E8E4DA', padding: '12px 16px', borderRadius: 8,
+              fontSize: 12, overflowX: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-all', margin: 0,
+            }}>{msg}</pre>
+            <button
+              onClick={() => this.setState({ hasError: false, error: null })}
+              style={{ marginTop: 14, background: '#C8261C', color: '#fff', border: 'none', borderRadius: 6, padding: '8px 16px', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}
+            >
+              Tentar novamente
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
 }
 
 /* ============================================================================
