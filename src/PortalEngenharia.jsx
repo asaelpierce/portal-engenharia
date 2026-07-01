@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
+import ReactDOM from 'react-dom';
 import { createClient } from '@supabase/supabase-js';
 import {
   LayoutGrid, FileStack, ClipboardCheck, Gauge, SlidersHorizontal, Workflow,
@@ -6,7 +7,7 @@ import {
   ChevronRight, ChevronDown, Building2, CalendarDays, Link2, DownloadCloud,
   Filter, FileWarning, Stamp, ArrowUpRight, ArrowDownRight, Minus, Zap,
   CircleDot, ShieldCheck, MessageSquareWarning, ListFilter, Webhook, Users,
-  RefreshCw, TrendingUp, DollarSign, CheckCircle2, Package, Layers,
+  RefreshCw, TrendingUp, DollarSign, CheckCircle2, Package, Layers, Bell, BarChart2, Download,
 } from 'lucide-react';
 
 /* ============================================================================
@@ -113,6 +114,34 @@ const fmtData = (iso) => !iso ? '—' : new Date(iso + 'T00:00:00').toLocaleDate
 const fmtMoeda = (v) => v == null ? '—' : new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(v);
 const fmtMoedaCompacta = (v) => new Intl.NumberFormat('pt-BR', { notation: 'compact', compactDisplay: 'short', maximumFractionDigits: 1 }).format(v);
 
+/* ── Exportação CSV ─────────────────────────────────────────────────────────── */
+function exportCSV(rows, filename, colunas) {
+  if (!rows?.length) return;
+  const cols = colunas || Object.keys(rows[0]);
+  const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+  const csv = [cols.join(';'), ...rows.map(r => cols.map(c => esc(r[c])).join(';'))].join('\n');
+  const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' }); // BOM para Excel BR
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = url; a.download = filename; a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function BotaoExportar({ onClick, small }) {
+  return (
+    <button onClick={onClick} title="Exportar CSV" style={{
+      display: 'inline-flex', alignItems: 'center', gap: 5,
+      background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 6,
+      padding: small ? '5px 10px' : '7px 13px', fontSize: 12, fontWeight: 600,
+      color: T.inkDim, cursor: 'pointer',
+    }}
+      onMouseEnter={e => e.currentTarget.style.background = T.lineSoft}
+      onMouseLeave={e => e.currentTarget.style.background = T.panelAlt}
+    >
+      <Download size={13} /> CSV
+    </button>
+  );
+}
+
 /* ============================================================================
    APP ROOT
 ============================================================================ */
@@ -141,6 +170,7 @@ export default function PortalEngenharia() {
         if (data) {
           setCurrentUser({
             id: data.id, nome: data.nome, papel: data.papel,
+            email: session.user.email,
             iniciais: data.nome.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase(),
           });
         }
@@ -258,7 +288,7 @@ function PortalConteudo({ currentUser, session }) {
   };
 
   return (
-    <div style={{ fontFamily: FONT_BODY, background: T.bg, color: T.ink, minHeight: '100vh', display: 'flex' }}>
+    <div style={{ fontFamily: FONT_BODY, background: T.bg, color: T.ink, height: '100vh', display: 'flex', overflow: 'hidden' }}>
       <style>{`
         * { box-sizing: border-box; }
         ::selection { background: ${T.terracotta}33; }
@@ -275,27 +305,31 @@ function PortalConteudo({ currentUser, session }) {
         .spin { animation: spin 1s linear infinite; }
         .focus-ring:focus-visible { outline: 2px solid ${T.terracotta}; outline-offset: 2px; }
 
-        /* Responsividade real: grids colapsam sozinhos via auto-fit, sem
-           depender de media query — funcionam em qualquer largura de tela. */
-        .grid-kpis-5 { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 14px; }
-        .grid-kpis-7 { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
-        .grid-kpis-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
-        .grid-2col { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
-        .grid-2col-wide { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1.3fr)); gap: 16px; }
-        .grid-3col { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+        /* Responsividade: grids colapsam via auto-fit */
+        .grid-kpis-5 { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
+        .grid-kpis-7 { display: grid; grid-template-columns: repeat(auto-fit, minmax(145px, 1fr)); gap: 10px; }
+        .grid-kpis-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }
+        .grid-2col   { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+        .grid-2col-wide { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }
+        .grid-3col   { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; }
 
-        @media (max-width: 720px) {
-          main { padding: 18px 16px !important; }
-          table { font-size: 11.5px; }
+        /* Todas as tabelas têm scroll horizontal automático */
+        .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+        @media (max-width: 768px) {
+          main { padding: 14px 12px !important; }
+          .grid-kpis-5, .grid-kpis-7 { grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; }
+          .grid-2col-wide { grid-template-columns: 1fr; }
+          table { font-size: 11px; }
+          .hide-mobile { display: none !important; }
         }
 
-        /* Sidebar: largura total no desktop, colapsa para ícones-apenas
-           em tablets/celular, sem nunca quebrar o layout horizontalmente. */
-        .sidebar-responsive { width: 248px; }
+        /* Sidebar: desktop expandida, mobile ícones */
+        .sidebar-responsive { width: 248px; flex-shrink: 0; }
         @media (max-width: 900px) {
-          .sidebar-responsive { width: 68px; }
+          .sidebar-responsive { width: 60px; }
           .sidebar-brand-text, .sidebar-item-label { display: none; }
-          .sidebar-header { padding: 18px 16px !important; }
+          .sidebar-header { padding: 16px 10px !important; justify-content: center; }
           .sidebar-item { justify-content: center !important; padding: 12px 8px !important; }
           .topbar-user-text { display: none; }
         }
@@ -303,11 +337,12 @@ function PortalConteudo({ currentUser, session }) {
 
       <Sidebar view={view} setView={setView} pendCount={pendencias.length} papel={currentUser.papel} />
 
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, overflow: 'hidden' }}>
         <Topbar
           view={view} mesFiltro={mesFiltro} setMesFiltro={setMesFiltro}
           currentUser={currentUser}
           userMenuOpen={userMenuOpen} setUserMenuOpen={setUserMenuOpen}
+          userEmail={currentUser.email}
           onNova={() => setModal('nova')}
           onTrocarSenha={() => setModal('trocarSenha')}
         />
@@ -320,6 +355,7 @@ function PortalConteudo({ currentUser, session }) {
           {view === 'pendencias' && (
             <PropostasTable propostas={pendencias} titulo="Aguardando sua ação" empty="Nenhuma pendência — tudo em dia." onRowClick={p => { setSelected(p); setModal('detalhe'); }} />
           )}
+          {view === 'metricas' && <Metricas propostas={propostas} />}
           {view === 'produtividade' && <Produtividade propostas={propostas} mesFiltro={mesFiltro} />}
           {view === 'faturamento' && <Faturamento />}
           {view === 'consumo_mp' && <TabErrorBoundary tab="Consumo de MP"><ConsumoMP /></TabErrorBoundary>}
@@ -348,15 +384,16 @@ function PortalConteudo({ currentUser, session }) {
 ============================================================================ */
 function Sidebar({ view, setView, pendCount, papel }) {
   const items = [
-    { id: 'dashboard', label: 'Visão geral', icon: LayoutGrid },
-    { id: 'pendencias', label: 'Minhas pendências', icon: ClipboardCheck, badge: pendCount },
-    { id: 'propostas', label: 'Todas as propostas', icon: FileStack },
-    { id: 'produtividade', label: 'Produtividade', icon: Gauge },
-    { id: 'faturamento', label: 'Faturamento (Sankhya)', icon: DollarSign },
-    { id: 'consumo_mp', label: 'Consumo de MP', icon: Layers },
-    { id: 'almoxarifado', label: 'Almoxarifado', icon: Package },
-    { id: 'pedidosvale', label: 'Pedidos Vale', icon: FileWarning },
-    { id: 'integracao', label: 'Integrações', icon: Workflow },
+    { id: 'dashboard',    label: 'Visão geral',           icon: LayoutGrid },
+    { id: 'pendencias',   label: 'Minhas pendências',      icon: ClipboardCheck, badge: pendCount },
+    { id: 'propostas',    label: 'Todas as propostas',     icon: FileStack },
+    { id: 'metricas',     label: 'Métricas',               icon: BarChart2 },
+    { id: 'produtividade',label: 'Produtividade',          icon: Gauge },
+    { id: 'faturamento',  label: 'Faturamento (Sankhya)',  icon: DollarSign },
+    { id: 'consumo_mp',   label: 'Consumo de MP',          icon: Layers },
+    { id: 'almoxarifado', label: 'Almoxarifado',           icon: Package },
+    { id: 'pedidosvale',  label: 'Pedidos Vale',           icon: FileWarning },
+    { id: 'integracao',   label: 'Integrações',            icon: Workflow },
   ];
   return (
     <div className="sidebar-responsive" style={{ background: T.panel, borderRight: `1px solid ${T.line}`, display: 'flex', flexDirection: 'column', flexShrink: 0, boxShadow: '1px 0 0 rgba(28,26,23,.02), 2px 0 8px rgba(28,26,23,.03)' }}>
@@ -431,13 +468,14 @@ function Sidebar({ view, setView, pendCount, papel }) {
 ============================================================================ */
 const VIEW_TITLES = {
   dashboard: 'Visão geral', propostas: 'Todas as propostas', pendencias: 'Minhas pendências',
+  metricas: 'Métricas da equipe',
   produtividade: 'Produtividade da equipe', faturamento: 'Faturamento (Sankhya)',
   consumo_mp: 'Consumo de Matéria-Prima — SGQ',
   almoxarifado: 'Almoxarifado — Estoque & Movimentação',
   pedidosvale: 'Pedidos Vale', integracao: 'Integrações', admin: 'Administração',
 };
 
-function Topbar({ view, mesFiltro, setMesFiltro, currentUser, userMenuOpen, setUserMenuOpen, onNova, onTrocarSenha }) {
+function Topbar({ view, mesFiltro, setMesFiltro, currentUser, userEmail, userMenuOpen, setUserMenuOpen, onNova, onTrocarSenha }) {
   const fazerLogout = async () => { await supabase.auth.signOut(); };
 
   return (
@@ -461,7 +499,7 @@ function Topbar({ view, mesFiltro, setMesFiltro, currentUser, userMenuOpen, setU
         )}
       </div>
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
         {currentUser.papel === 'engenheiro' && (
           <button onClick={onNova} className="focus-ring" style={{
             display: 'flex', alignItems: 'center', gap: 7, background: T.terracotta, color: '#fff', border: 'none',
@@ -470,6 +508,7 @@ function Topbar({ view, mesFiltro, setMesFiltro, currentUser, userMenuOpen, setU
             <Plus size={15} /> Nova proposta
           </button>
         )}
+        <NotificacoesButton userEmail={userEmail} />
 
         <div style={{ position: 'relative' }}>
           <button onClick={() => setUserMenuOpen(!userMenuOpen)} className="focus-ring" style={{
@@ -966,6 +1005,7 @@ function PropostasTable({ propostas, titulo, onRowClick, empty = 'Nenhuma propos
       <div style={{ padding: '15px 18px', borderBottom: `1px solid ${T.line}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
         <h3 style={{ fontSize: 14, fontWeight: 600, margin: 0, color: T.ink }}>{titulo} <span style={{ color: T.inkFaint, fontWeight: 400 }}>({filtradas.length})</span></h3>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <BotaoExportar small onClick={() => exportCSV(filtradas, `${titulo.toLowerCase().replace(/ /g,'_')}.csv`, ['br','cliente','escopo','origem_dados','data_entrega_prevista','valor_liquido','status','mes','responsavel'])} />
           <div style={{ position: 'relative' }}>
             <Search size={14} style={{ position: 'absolute', left: 10, top: 9, color: T.inkFaint }} />
             <input value={busca} onChange={e => { setBusca(e.target.value); setPage(1); }} placeholder="Buscar BR ou cliente…" className="focus-ring"
@@ -1057,6 +1097,296 @@ function OrigemBadge({ origem }) {
       {isSankhya ? <Link2 size={11} /> : <FileWarning size={11} />}
       {isSankhya ? 'ERP Sankhya' : 'Word / e-mail'}
     </span>
+  );
+}
+
+/* ============================================================================
+   NOTIFICAÇÕES IN-APP
+============================================================================ */
+function NotificacoesButton({ userEmail }) {
+  const [aberto, setAberto] = useState(false);
+  const [notifs, setNotifs] = useState([]);
+  const [loading, setLoading] = useState(false);
+
+  const carregar = useCallback(async () => {
+    if (!userEmail) return;
+    setLoading(true);
+    const { data } = await supabase.from('notificacoes')
+      .select('*').eq('email', userEmail)
+      .order('created_at', { ascending: false }).limit(20);
+    setNotifs(data || []);
+    setLoading(false);
+  }, [userEmail]);
+
+  useEffect(() => { carregar(); }, [carregar]);
+  // polling a cada 45s
+  useEffect(() => {
+    const t = setInterval(carregar, 45000);
+    return () => clearInterval(t);
+  }, [carregar]);
+
+  const naoLidas = notifs.filter(n => !n.lida).length;
+
+  const marcarLida = async (id) => {
+    await supabase.from('notificacoes').update({ lida: true }).eq('id', id);
+    setNotifs(prev => prev.map(n => n.id === id ? { ...n, lida: true } : n));
+  };
+
+  const marcarTodasLidas = async () => {
+    await supabase.from('notificacoes').update({ lida: true }).eq('email', userEmail).eq('lida', false);
+    setNotifs(prev => prev.map(n => ({ ...n, lida: true })));
+  };
+
+  const tipoIcon = (tipo) => {
+    const map = { aprovada: ['✓', T.oliveText, T.oliveSoft], reprovada: ['✗', T.rustText, T.rustSoft], revisao: ['⟳', T.amberText, T.amberSoft], aprovacao: ['⏳', T.blueText, T.blueSoft], concluida: ['★', T.ink, T.lineSoft] };
+    return map[tipo] || ['•', T.inkFaint, T.lineSoft];
+  };
+
+  const fmtTempo = (iso) => {
+    const diff = Math.round((Date.now() - new Date(iso)) / 60000);
+    if (diff < 1) return 'agora';
+    if (diff < 60) return `${diff}min`;
+    if (diff < 1440) return `${Math.round(diff / 60)}h`;
+    return `${Math.round(diff / 1440)}d`;
+  };
+
+  return (
+    <div style={{ position: 'relative' }}>
+      <button onClick={() => { setAberto(a => !a); if (!aberto) carregar(); }}
+        style={{ position: 'relative', background: 'transparent', border: 'none', padding: 6, cursor: 'pointer', color: T.inkDim, display: 'flex', alignItems: 'center' }}
+      >
+        <Bell size={20} color={naoLidas > 0 ? T.terracotta : T.inkFaint} />
+        {naoLidas > 0 && (
+          <span style={{ position: 'absolute', top: 2, right: 2, width: 16, height: 16, background: T.terracotta, color: '#fff', borderRadius: '50%', fontSize: 9, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            {naoLidas > 9 ? '9+' : naoLidas}
+          </span>
+        )}
+      </button>
+
+      {aberto && (
+        <div className="scale-in" style={{
+          position: 'absolute', right: 0, top: 42, width: 340, background: T.panel,
+          border: `1px solid ${T.line}`, borderRadius: 12, boxShadow: SHADOW_LG, zIndex: 9998, overflow: 'hidden',
+        }}>
+          <div style={{ padding: '12px 16px', borderBottom: `1px solid ${T.line}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={{ fontSize: 13, fontWeight: 700, color: T.ink }}>Notificações</span>
+            {naoLidas > 0 && (
+              <button onClick={marcarTodasLidas} style={{ fontSize: 11, color: T.blueText, background: 'none', border: 'none', cursor: 'pointer', fontWeight: 600 }}>Marcar todas como lidas</button>
+            )}
+          </div>
+          <div style={{ maxHeight: 380, overflowY: 'auto' }}>
+            {loading ? (
+              <div style={{ padding: 24, textAlign: 'center', color: T.inkFaint, fontSize: 13 }}>Carregando…</div>
+            ) : notifs.length === 0 ? (
+              <div style={{ padding: 28, textAlign: 'center', color: T.inkFaint, fontSize: 13 }}>Nenhuma notificação ainda.</div>
+            ) : notifs.map(n => {
+              const [ic, cor, bg] = tipoIcon(n.tipo);
+              return (
+                <div key={n.id} onClick={() => marcarLida(n.id)} style={{
+                  display: 'flex', gap: 12, padding: '12px 16px', cursor: 'pointer',
+                  background: n.lida ? 'transparent' : `${bg}88`,
+                  borderBottom: `1px solid ${T.lineSoft}`,
+                }}
+                  onMouseEnter={e => e.currentTarget.style.background = T.panelAlt}
+                  onMouseLeave={e => e.currentTarget.style.background = n.lida ? 'transparent' : `${bg}88`}
+                >
+                  <div style={{ width: 28, height: 28, borderRadius: '50%', background: bg, color: cor, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 700, flexShrink: 0 }}>{ic}</div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 12.5, fontWeight: n.lida ? 500 : 700, color: T.ink, marginBottom: 2 }}>{n.titulo}</div>
+                    {n.mensagem && <div style={{ fontSize: 11.5, color: T.inkDim, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{n.mensagem}</div>}
+                  </div>
+                  <span style={{ fontSize: 10.5, color: T.inkFaint, whiteSpace: 'nowrap', flexShrink: 0 }}>{fmtTempo(n.created_at)}</span>
+                </div>
+              );
+            })}
+          </div>
+          <div style={{ padding: '10px 16px', borderTop: `1px solid ${T.line}`, textAlign: 'right' }}>
+            <button onClick={() => setAberto(false)} style={{ fontSize: 12, color: T.inkFaint, background: 'none', border: 'none', cursor: 'pointer' }}>Fechar</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ============================================================================
+   MÉTRICAS — funil, ciclo, taxa de conclusão, ranking responsáveis
+============================================================================ */
+function Metricas({ propostas }) {
+  const [periodo, setPeriodo] = useState('90'); // dias
+
+  const base = useMemo(() => {
+    const corte = new Date();
+    corte.setDate(corte.getDate() - Number(periodo));
+    return periodo === 'tudo' ? propostas : propostas.filter(p => new Date(p.data_abertura) >= corte);
+  }, [propostas, periodo]);
+
+  const funil = useMemo(() => {
+    const total = base.length;
+    const revisadas  = base.filter(p => ['em_revisao_tecnica','aguardando_aprovacao','aprovada','concluida','reprovada'].includes(p.status)).length;
+    const aprovadas  = base.filter(p => ['aprovada','concluida'].includes(p.status)).length;
+    const concluidas = base.filter(p => p.status === 'concluida').length;
+    const reprovadas = base.filter(p => p.status === 'reprovada').length;
+    return [
+      { label: 'Cadastradas',   n: total,      pct: 100 },
+      { label: 'Em revisão +',  n: revisadas,  pct: total ? Math.round(revisadas  / total * 100) : 0 },
+      { label: 'Aprovadas +',   n: aprovadas,  pct: total ? Math.round(aprovadas  / total * 100) : 0 },
+      { label: 'Concluídas',    n: concluidas, pct: total ? Math.round(concluidas / total * 100) : 0 },
+      { label: 'Reprovadas',    n: reprovadas, pct: total ? Math.round(reprovadas / total * 100) : 0, cor: T.rustText },
+    ];
+  }, [base]);
+
+  const ciclo = useMemo(() => {
+    const concl = base.filter(p => p.status === 'concluida' && p.data_abertura && p.data_conclusao);
+    if (!concl.length) return null;
+    const dias = concl.map(p => Math.round((new Date(p.data_conclusao) - new Date(p.data_abertura)) / 86400000));
+    const avg = Math.round(dias.reduce((s, d) => s + d, 0) / dias.length);
+    return { avg, min: Math.min(...dias), max: Math.max(...dias), total: concl.length };
+  }, [base]);
+
+  const ranking = useMemo(() => {
+    const map = {};
+    base.forEach(p => {
+      const r = p.responsavel || p.responsavel_nome || '—';
+      if (!map[r]) map[r] = { nome: r, total: 0, concluidas: 0, reprovadas: 0 };
+      map[r].total++;
+      if (p.status === 'concluida') map[r].concluidas++;
+      if (p.status === 'reprovada') map[r].reprovadas++;
+    });
+    return Object.values(map).sort((a, b) => b.concluidas - a.concluidas).slice(0, 8);
+  }, [base]);
+
+  const mensal = useMemo(() => {
+    return MESES_ORDEM.map(mes => ({
+      mes,
+      total: propostas.filter(p => p.mes === mes).length,
+      concluidas: propostas.filter(p => p.mes === mes && p.status === 'concluida').length,
+    }));
+  }, [propostas]);
+
+  const maxMensal = Math.max(...mensal.map(m => m.total), 1);
+  const maxRanking = Math.max(...ranking.map(r => r.total), 1);
+
+  return (
+    <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 22, maxWidth: 1200 }}>
+
+      {/* Filtro período */}
+      <div style={{ display: 'flex', gap: 6 }}>
+        {[['30','30 dias'],['90','90 dias'],['180','6 meses'],['tudo','Tudo']].map(([v, l]) => (
+          <button key={v} onClick={() => setPeriodo(v)} style={{
+            padding: '6px 14px', fontSize: 12.5, fontWeight: 600, borderRadius: 6, border: 'none', cursor: 'pointer',
+            background: periodo === v ? T.terracotta : T.panelAlt,
+            color: periodo === v ? '#fff' : T.inkDim,
+          }}>{l}</button>
+        ))}
+        <span style={{ fontSize: 12, color: T.inkFaint, alignSelf: 'center', marginLeft: 4 }}>{base.length} propostas no período</span>
+      </div>
+
+      <div className="grid-2col">
+        {/* Funil */}
+        <Panel title="Funil de propostas" subtitle="Quantas passam por cada etapa">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 10 }}>
+            {funil.map((f, i) => (
+              <div key={f.label} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <span style={{ width: 100, fontSize: 12, color: T.inkDim, fontWeight: 500 }}>{f.label}</span>
+                <div style={{ flex: 1, background: T.lineSoft, height: 22, borderRadius: 4, overflow: 'hidden', position: 'relative' }}>
+                  <div style={{ width: `${f.pct}%`, height: '100%', background: f.cor || (i === 0 ? T.terracotta : i < 4 ? T.olive : T.rust), borderRadius: 4, transition: 'width .5s ease' }} />
+                  <span style={{ position: 'absolute', left: 8, top: 4, fontSize: 11, fontWeight: 700, color: f.pct > 20 ? '#fff' : (f.cor || T.ink) }}>
+                    {f.n} · {f.pct}%
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </Panel>
+
+        {/* Ciclo + KPIs */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          {ciclo ? (
+            <Panel title="Tempo de ciclo" subtitle="Do cadastro à conclusão — propostas concluídas">
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginTop: 10 }}>
+                {[
+                  { label: 'Média', value: `${ciclo.avg}d`, color: T.ink },
+                  { label: 'Mais rápida', value: `${ciclo.min}d`, color: T.oliveText },
+                  { label: 'Mais lenta', value: `${ciclo.max}d`, color: T.rustText },
+                ].map(k => (
+                  <div key={k.label} style={{ background: T.panelAlt, borderRadius: 8, padding: '12px 10px', textAlign: 'center' }}>
+                    <div style={{ fontSize: 10.5, color: T.inkFaint, fontWeight: 600, marginBottom: 4 }}>{k.label}</div>
+                    <div style={{ fontFamily: FONT_DISPLAY, fontSize: 22, fontWeight: 700, color: k.color }}>{k.value}</div>
+                  </div>
+                ))}
+              </div>
+              <div style={{ fontSize: 11.5, color: T.inkFaint, marginTop: 12 }}>Base: {ciclo.total} propostas concluídas no período</div>
+            </Panel>
+          ) : (
+            <Panel title="Tempo de ciclo"><p style={{ fontSize: 13, color: T.inkFaint, margin: '10px 0 0' }}>Sem propostas concluídas no período.</p></Panel>
+          )}
+
+          <Panel title="Taxa de conversão" subtitle="No período selecionado">
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 10 }}>
+              {[
+                { label: 'Conclusão', pct: base.length ? Math.round(base.filter(p=>p.status==='concluida').length/base.length*100) : 0, cor: T.oliveText, bg: T.oliveSoft },
+                { label: 'Reprovação', pct: base.length ? Math.round(base.filter(p=>p.status==='reprovada').length/base.length*100) : 0, cor: T.rustText, bg: T.rustSoft },
+              ].map(k => (
+                <div key={k.label} style={{ background: k.bg, borderRadius: 8, padding: '12px', textAlign: 'center' }}>
+                  <div style={{ fontFamily: FONT_DISPLAY, fontSize: 26, fontWeight: 700, color: k.cor }}>{k.pct}%</div>
+                  <div style={{ fontSize: 11.5, color: k.cor, fontWeight: 600, marginTop: 2 }}>{k.label}</div>
+                </div>
+              ))}
+            </div>
+          </Panel>
+        </div>
+      </div>
+
+      {/* Evolução mensal */}
+      <Panel title="Evolução mensal — Jan a Jun" subtitle="Cadastradas vs Concluídas">
+        <div style={{ display: 'flex', alignItems: 'flex-end', gap: 18, height: 140, padding: '10px 4px 0', overflowX: 'auto' }}>
+          {mensal.map(m => {
+            const hT = Math.max((m.total / maxMensal) * 100, m.total > 0 ? 4 : 2);
+            const hC = Math.max((m.concluidas / maxMensal) * 100, m.concluidas > 0 ? 4 : 2);
+            return (
+              <div key={m.mes} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flex: 1, minWidth: 60 }}>
+                <div style={{ fontSize: 10, color: T.inkFaint, marginBottom: 4 }}>{m.concluidas}/{m.total}</div>
+                <div style={{ display: 'flex', gap: 3, alignItems: 'flex-end' }}>
+                  <div style={{ width: 16, height: hT, background: T.line, borderRadius: '2px 2px 0 0' }} />
+                  <div style={{ width: 16, height: hC, background: T.terracotta, borderRadius: '2px 2px 0 0' }} />
+                </div>
+                <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 6 }}>{MESES_LABEL[m.mes]}</div>
+              </div>
+            );
+          })}
+        </div>
+        <div style={{ display: 'flex', gap: 16, marginTop: 10, fontSize: 11, color: T.inkFaint }}>
+          <span><span style={{ display: 'inline-block', width: 10, height: 10, background: T.line, borderRadius: 2, marginRight: 4 }} />Cadastradas</span>
+          <span><span style={{ display: 'inline-block', width: 10, height: 10, background: T.terracotta, borderRadius: 2, marginRight: 4 }} />Concluídas</span>
+        </div>
+      </Panel>
+
+      {/* Ranking responsáveis */}
+      <Panel title="Ranking por responsável" subtitle="Total de propostas · concluídas · reprovadas no período"
+        right={<BotaoExportar onClick={() => exportCSV(ranking, 'ranking_responsaveis.csv', ['nome','total','concluidas','reprovadas'])} small />}
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 10 }}>
+          {ranking.map((r, i) => (
+            <div key={r.nome} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <span style={{ width: 18, textAlign: 'right', fontSize: 11, color: T.inkFaint, fontFamily: FONT_DISPLAY }}>#{i + 1}</span>
+              <div style={{ width: 30, height: 30, borderRadius: '50%', background: T.terracottaSoft, color: T.terracottaText, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, flexShrink: 0 }}>
+                {r.nome.split(' ').map(n => n[0]).join('').slice(0, 2)}
+              </div>
+              <span style={{ width: 110, fontSize: 13, color: T.ink, fontWeight: 500 }}>{r.nome}</span>
+              <div style={{ flex: 1, background: T.lineSoft, height: 8, borderRadius: 4, overflow: 'hidden' }}>
+                <div style={{ width: `${(r.total / maxRanking) * 100}%`, height: '100%', background: T.terracotta, borderRadius: 4 }} />
+              </div>
+              <div style={{ display: 'flex', gap: 8, fontSize: 12, fontFamily: FONT_DISPLAY }}>
+                <span style={{ color: T.ink, fontWeight: 700 }}>{r.total}</span>
+                <span style={{ color: T.oliveText }}>✓{r.concluidas}</span>
+                <span style={{ color: T.rustText }}>✗{r.reprovadas}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      </Panel>
+    </div>
   );
 }
 
@@ -2171,6 +2501,35 @@ function DrillDownNaoFaturados({ titulo, clientes, fmtValor, onClose }) {
    CONSUMO DE MATÉRIA-PRIMA — lê v_consumo_mp do SGQ (projeto separado)
    Mostra código, descrição, unidade, qtd consumida, saldo e cobertura
 ============================================================================ */
+/* ── Estoque mínimo editável inline ─────────────────────────────────────────── */
+function MinEstoqueInput({ codigoMp, valorAtual }) {
+  const [val, setVal] = useState(valorAtual || 0);
+  const [salvando, setSalvando] = useState(false);
+  const [salvo, setSalvo] = useState(false);
+
+  const salvar = async () => {
+    if (Number(val) === Number(valorAtual)) return;
+    setSalvando(true);
+    await supabaseSGQ.from('estoque_mp')
+      .update({ estoque_minimo: Number(val) })
+      .eq('codigo_mp', codigoMp);
+    setSalvando(false);
+    setSalvo(true);
+    setTimeout(() => setSalvo(false), 1500);
+  };
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+      <input
+        type="number" value={val} onChange={e => setVal(e.target.value)}
+        onBlur={salvar} onKeyDown={e => e.key === 'Enter' && salvar()}
+        style={{ width: 64, textAlign: 'right', padding: '4px 6px', fontSize: 11.5, fontFamily: FONT_DISPLAY, border: `1px solid ${T.line}`, borderRadius: 4, background: T.panelAlt, color: T.ink }}
+      />
+      {salvo && <CheckCircle2 size={12} color={T.oliveText} />}
+    </div>
+  );
+}
+
 /* helpers de cabeçalho ordenável — definidos antes de ConsumoMP e Almoxarifado */
 function SortTh({ label, col, sortBy, sortDir, onClick }) {
   const active = sortBy === col;
@@ -2349,6 +2708,7 @@ function ConsumoMP() {
                 <th style={{ ...thFat(70), textAlign: 'center' }}>Unid.</th>
                 <SortTh label="Qtd consumida" col="qtd_consumida" sortBy={sortBy} sortDir={sortDir} onClick={handleSort} />
                 <SortTh label="Saldo estoque" col="saldo_disponivel" sortBy={sortBy} sortDir={sortDir} onClick={handleSort} />
+                <th style={{ ...thFat(90), textAlign: 'right' }}>Mín. estoque</th>
                 <SortTh label="Cobertura" col="cobertura_pct" sortBy={sortBy} sortDir={sortDir} onClick={handleSort} />
                 <th style={{ ...thFat(0, 'right') }}>Remessas</th>
                 <th style={thFat(110)}>Categoria</th>
@@ -2373,6 +2733,10 @@ function ConsumoMP() {
                     <td style={{ padding: '10px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontSize: 13, color: Number(r.saldo_disponivel) === 0 ? T.rustText : T.ink, fontWeight: Number(r.saldo_disponivel) === 0 ? 700 : 400 }}>
                       {Number(r.saldo_disponivel).toLocaleString('pt-BR', { maximumFractionDigits: 2 })}
                       {Number(r.saldo_disponivel) === 0 && <span style={{ marginLeft: 5, fontSize: 10, background: T.rustSoft, color: T.rustText, borderRadius: 3, padding: '1px 5px', fontWeight: 700 }}>ZERADO</span>}
+                      {r.abaixo_minimo && Number(r.saldo_disponivel) > 0 && <span style={{ marginLeft: 5, fontSize: 10, background: T.amberSoft, color: T.amberText, borderRadius: 3, padding: '1px 5px', fontWeight: 700 }}>↓MÍN</span>}
+                    </td>
+                    <td style={{ padding: '6px 12px', textAlign: 'right' }}>
+                      <MinEstoqueInput codigoMp={r.codigo_mp} valorAtual={r.estoque_minimo} />
                     </td>
                     <td style={{ padding: '10px 12px' }}>
                       {r.cobertura_pct === null ? (
@@ -2399,8 +2763,14 @@ function ConsumoMP() {
             </tbody>
           </table>
         </div>
-        <div style={{ padding: '10px 16px', borderTop: `1px solid ${T.line}`, fontSize: 11, color: T.inkFaint }}>
-          {filtrados.length} item{filtrados.length !== 1 ? 's' : ''} · <span style={{ color: T.rustText, fontWeight: 600 }}>Vermelho &lt; 30%</span> cobertura · <span style={{ color: T.amberText, fontWeight: 600 }}>Âmbar 30–80%</span> · <span style={{ color: T.oliveText, fontWeight: 600 }}>Verde &gt; 80%</span> · Saldo e consumo em unidades mistas (PC, KG, LT…)
+        <div style={{ padding: '10px 16px', borderTop: `1px solid ${T.line}`, fontSize: 11, color: T.inkFaint, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span>
+            {filtrados.length} item{filtrados.length !== 1 ? 's' : ''} ·
+            <span style={{ color: T.rustText, fontWeight: 600 }}> Vermelho &lt;30%</span> ·
+            <span style={{ color: T.amberText, fontWeight: 600 }}> Âmbar 30–80%</span> ·
+            <span style={{ color: T.oliveText, fontWeight: 600 }}> Verde &gt;80%</span>
+          </span>
+          <BotaoExportar small onClick={() => exportCSV(filtrados, 'consumo_mp.csv', ['codigo_mp','descricao','unidade','qtd_consumida','saldo_disponivel','estoque_minimo','cobertura_pct','qtd_remessas','categoria'])} />
         </div>
       </div>
     </div>
@@ -2647,11 +3017,14 @@ function Almoxarifado() {
             </tbody>
           </table>
         </div>
-        <div style={{ padding: '10px 16px', borderTop: `1px solid ${T.line}`, fontSize: 11, color: T.inkFaint }}>
-          {filtrados.length} SKU{filtrados.length !== 1 ? 's' : ''} · Clique em um item para ver movimentação por local de estoque ·
-          <span style={{ color: T.rustText, fontWeight: 600 }}> Zerado</span> = sem estoque ·
-          <span style={{ color: T.amberText, fontWeight: 600 }}> Crítico</span> = reservado ≥ estoque ·
-          <span style={{ color: T.oliveText, fontWeight: 600 }}> OK</span> = disponível
+        <div style={{ padding: '10px 16px', borderTop: `1px solid ${T.line}`, fontSize: 11, color: T.inkFaint, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span>
+            {filtrados.length} SKU{filtrados.length !== 1 ? 's' : ''} · Clique em um item para ver movimentação ·
+            <span style={{ color: T.rustText, fontWeight: 600 }}> Zerado</span> ·
+            <span style={{ color: T.amberText, fontWeight: 600 }}> Crítico</span> ·
+            <span style={{ color: T.oliveText, fontWeight: 600 }}> OK</span>
+          </span>
+          <BotaoExportar small onClick={() => exportCSV(filtrados, 'almoxarifado_estoque.csv', ['codprod','descrprod','descrgrupoprod','codvol','estoque_total','estoque_mp','estoque_processamento','qtd_reservado','total_entradas','total_saidas'])} />
         </div>
       </div>
 
@@ -3797,11 +4170,19 @@ function EvidenceBox({ icon: Icon, tone, title, sub, action }) {
    PRIMITIVES
 ============================================================================ */
 function Overlay({ onClose, children }) {
-  return (
-    <div onClick={(e) => { if (e.target === e.currentTarget) onClose(); }} style={{
-      position: 'fixed', inset: 0, background: 'rgba(33,29,23,.45)', backdropFilter: 'blur(3px)',
-      display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50, padding: 20,
-    }}>{children}</div>
+  return ReactDOM.createPortal(
+    <div
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      style={{
+        position: 'fixed', inset: 0,
+        background: 'rgba(33,29,23,.45)', backdropFilter: 'blur(3px)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        zIndex: 9999, padding: 20,
+      }}
+    >
+      {children}
+    </div>,
+    document.body
   );
 }
 
