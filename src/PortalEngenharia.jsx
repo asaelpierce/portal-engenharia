@@ -2146,6 +2146,7 @@ function categoriaMP(descricao) {
 function ConsumoMP() {
   const [dados, setDados] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [erro, setErro] = useState(null);
   const [busca, setBusca] = useState('');
   const [catFiltro, setCatFiltro] = useState('Todos');
   const [sortBy, setSortBy] = useState('qtd_consumida'); // qtd_consumida | saldo | cobertura_pct
@@ -2153,14 +2154,16 @@ function ConsumoMP() {
 
   useEffect(() => {
     setLoading(true);
+    setErro(null);
     supabaseSGQ
       .from('v_consumo_mp')
       .select('*')
       .then(({ data, error }) => {
-        if (error) console.error('ConsumoMP:', error.message);
+        if (error) { setErro(`Erro SGQ: ${error.message}`); setLoading(false); return; }
         setDados((data || []).map(r => ({ ...r, categoria: categoriaMP(r.descricao) })));
         setLoading(false);
-      });
+      })
+      .catch(err => { setErro(`Falha de rede: ${err?.message || String(err)}`); setLoading(false); });
   }, []);
 
   const categorias = useMemo(() => ['Todos', ...Object.keys(CATEGORIA_MP)], []);
@@ -2213,7 +2216,15 @@ function ConsumoMP() {
         Dados do SGQ — consumo calculado pela composição de cada produto acabado × quantidade das remessas de industrialização. Saldo = estoque disponível atual no almoxarifado.
       </p>
 
-      {/* KPIs */}
+      {erro && (
+        <div style={{ background: T.rustSoft, border: `1px solid ${T.rust}33`, borderRadius: 8, padding: '12px 16px', display: 'flex', gap: 10, alignItems: 'center' }}>
+          <AlertTriangle size={16} color={T.rustText} />
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 600, color: T.rustText }}>Erro ao carregar dados do SGQ</div>
+            <div style={{ fontSize: 12, color: T.inkDim, marginTop: 2 }}>{erro}</div>
+          </div>
+        </div>
+      )}
       <div className="grid-kpis-5" style={{ gridTemplateColumns: 'repeat(auto-fit,minmax(160px,1fr))' }}>
         {[
           { label: 'Itens de MP', value: totais.itens, color: T.ink },
@@ -2339,6 +2350,7 @@ const GRUPOS_DESTAQUE = ['PLACA KLC', 'KALOCER', 'ABRESIST', 'KALIMPACT', 'ELEME
 function Almoxarifado() {
   const [dados, setDados] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [erro, setErro] = useState(null);
   const [busca, setBusca] = useState('');
   const [grupoFiltro, setGrupoFiltro] = useState('Todos');
   const [statusFiltro, setStatusFiltro] = useState('Todos'); // Todos | Zerado | Crítico | OK
@@ -2349,12 +2361,14 @@ function Almoxarifado() {
 
   useEffect(() => {
     setLoading(true);
+    setErro(null);
     supabaseSGQ.from('v_almoxarifado_consolidado').select('*')
       .then(({ data, error }) => {
-        if (error) console.error('Almoxarifado:', error.message);
+        if (error) { setErro(`Erro SGQ: ${error.message}`); setLoading(false); return; }
         setDados(data || []);
         setLoading(false);
-      });
+      })
+      .catch(err => { setErro(`Falha de rede: ${err?.message || String(err)}`); setLoading(false); });
   }, []);
 
   const grupos = useMemo(() => {
@@ -2408,11 +2422,16 @@ function Almoxarifado() {
 
   const abrirDetalhe = async (row) => {
     setDetalhe(row);
-    const { data } = await supabaseSGQ.from('almoxarifado_estoque')
-      .select('descrlocal, estoque_calculado, qtd_reservado, qtd_entrada, qtd_saida, sincronizado_em')
-      .eq('codprod', row.codprod)
-      .neq('descrlocal', '<SEM LOCAL DE ESTOQUE>');
-    setLocaisDetalhe(data || []);
+    setLocaisDetalhe([]);
+    try {
+      const { data, error } = await supabaseSGQ.from('almoxarifado_estoque')
+        .select('descrlocal, estoque_calculado, qtd_reservado, qtd_entrada, qtd_saida, sincronizado_em')
+        .eq('codprod', row.codprod)
+        .neq('descrlocal', '<SEM LOCAL DE ESTOQUE>');
+      setLocaisDetalhe(error ? [] : (data || []));
+    } catch (_) {
+      setLocaisDetalhe([]);
+    }
   };
 
   const statusColor = (st) => ({
@@ -2426,6 +2445,16 @@ function Almoxarifado() {
 
   return (
     <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 18, maxWidth: 1400 }}>
+
+      {erro && (
+        <div style={{ background: T.rustSoft, border: `1px solid ${T.rust}33`, borderRadius: 8, padding: '12px 16px', display: 'flex', gap: 10, alignItems: 'center' }}>
+          <AlertTriangle size={16} color={T.rustText} />
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 600, color: T.rustText }}>Erro ao carregar dados do SGQ</div>
+            <div style={{ fontSize: 12, color: T.inkDim, marginTop: 2 }}>{erro}</div>
+          </div>
+        </div>
+      )}
 
       {/* Sync info */}
       {totais.ultimaSync && totais.ultimaSync.getTime() > 0 && (
