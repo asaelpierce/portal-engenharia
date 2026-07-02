@@ -1471,13 +1471,18 @@ function EquipamentosTerceiros() {
       if (numPedidos.length > 0) {
         const { data: notas } = await supabase
           .from('nota_venda_itens')
-          .select('numero_pedido, nunota, data_faturamento, valor_bruto')
+          .select('numero_pedido, nunota, nro_interno_sankhya, data_faturamento, valor_bruto')
           .in('numero_pedido', numPedidos);
         // Agrupa por numero_pedido: pega a primeira NF e soma o valor
         const map = {};
         (notas || []).forEach(n => {
           if (!map[n.numero_pedido]) {
-            map[n.numero_pedido] = { nunota: n.nunota, data_faturamento: n.data_faturamento, valor_bruto: 0 };
+            map[n.numero_pedido] = {
+              nunota: n.nunota,
+              nf_numero: n.nro_interno_sankhya, // número real da NF (NUMNOTA no Sankhya)
+              data_faturamento: n.data_faturamento,
+              valor_bruto: 0,
+            };
           }
           map[n.numero_pedido].valor_bruto += Number(n.valor_bruto) || 0;
         });
@@ -1880,7 +1885,7 @@ function EquipamentosTerceiros() {
                         {nfInfo ? (
                           <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                             <span style={{ fontSize: 10.5, fontWeight: 700, background: T.oliveSoft, color: T.oliveText, padding: '2px 7px', borderRadius: 4 }}>
-                              ✓ NF {nfInfo.nunota}
+                              ✓ NF {nfInfo.nf_numero}
                             </span>
                             <span style={{ fontSize: 10, color: T.inkFaint }}>{fmtData(nfInfo.data_faturamento)} · {fmtMoedaCompacta(nfInfo.valor_bruto)}</span>
                           </div>
