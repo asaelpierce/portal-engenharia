@@ -1401,6 +1401,7 @@ function Metricas({ propostas }) {
 function EquipamentosTerceiros() {
   const [dados, setDados] = useState([]);
   const [pedidosVenda, setPedidosVenda] = useState([]);
+  const [notaVendaMap, setNotaVendaMap] = useState({}); // numero_pedido → {nunota, data_faturamento, valor_bruto}
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState(null);
@@ -1464,6 +1465,24 @@ function EquipamentosTerceiros() {
         .in('br', brs)
         .order('data_neg', { ascending: false });
       setPedidosVenda(pedidos || []);
+
+      // Verifica quais pedidos têm nota fiscal emitida
+      const numPedidos = [...new Set((pedidos || []).map(p => p.numero_pedido).filter(Boolean))];
+      if (numPedidos.length > 0) {
+        const { data: notas } = await supabase
+          .from('nota_venda_itens')
+          .select('numero_pedido, nunota, data_faturamento, valor_bruto')
+          .in('numero_pedido', numPedidos);
+        // Agrupa por numero_pedido: pega a primeira NF e soma o valor
+        const map = {};
+        (notas || []).forEach(n => {
+          if (!map[n.numero_pedido]) {
+            map[n.numero_pedido] = { nunota: n.nunota, data_faturamento: n.data_faturamento, valor_bruto: 0 };
+          }
+          map[n.numero_pedido].valor_bruto += Number(n.valor_bruto) || 0;
+        });
+        setNotaVendaMap(map);
+      }
     }
     setLoading(false);
   }, []);
@@ -1825,10 +1844,11 @@ function EquipamentosTerceiros() {
                     ['Kaleng',    'produto_kaleng',    80],
                     ['Qtd',       'quantidade',        55],
                     ['Un.',       'unidade',           40],
-                    ['Valor',     'valor_liquido',     90],
-                    ['Data',      'data_neg',          90],
+                    ['Valor Ped.','valor_liquido',     90],
+                    ['Data Ped.', 'data_neg',          90],
                     ['Vendedor',  'vendedor_nome',     120],
                     ['UF',        'uf',                40],
+                    ['NF emitida?','nf',              130],
                   ].map(([label, , w]) => (
                     <th key={label} style={{ ...thFat(w, 'left'), whiteSpace: 'nowrap' }}>{label}</th>
                   ))}
@@ -1837,6 +1857,7 @@ function EquipamentosTerceiros() {
               <tbody>
                 {pedidosFiltrados.map((p, i) => {
                   const isSelecionado = brFiltro !== 'Todos' && p.br === brFiltro;
+                  const nfInfo = notaVendaMap[p.numero_pedido];
                   return (
                     <tr key={i} style={{ borderBottom: `1px solid ${T.lineSoft}`, background: isSelecionado ? `${T.terracottaSoft}66` : 'transparent' }}>
                       <td style={{ padding: '8px 10px', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.terracotta, whiteSpace: 'nowrap' }}>
@@ -1855,6 +1876,20 @@ function EquipamentosTerceiros() {
                       <td style={{ padding: '8px 10px', whiteSpace: 'nowrap', fontSize: 11.5, color: T.inkDim }}>{fmtData(p.data_neg)}</td>
                       <td style={{ padding: '8px 10px', maxWidth: 130, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 11.5 }}>{p.vendedor_nome}</td>
                       <td style={{ padding: '8px 10px', textAlign: 'center', fontSize: 11, fontWeight: 600, color: T.inkDim }}>{p.uf}</td>
+                      <td style={{ padding: '8px 10px', whiteSpace: 'nowrap' }}>
+                        {nfInfo ? (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                            <span style={{ fontSize: 10.5, fontWeight: 700, background: T.oliveSoft, color: T.oliveText, padding: '2px 7px', borderRadius: 4 }}>
+                              ✓ NF {nfInfo.nunota}
+                            </span>
+                            <span style={{ fontSize: 10, color: T.inkFaint }}>{fmtData(nfInfo.data_faturamento)} · {fmtMoedaCompacta(nfInfo.valor_bruto)}</span>
+                          </div>
+                        ) : (
+                          <span style={{ fontSize: 10.5, fontWeight: 700, background: T.amberSoft, color: T.amberText, padding: '2px 7px', borderRadius: 4 }}>
+                            ✗ Sem NF
+                          </span>
+                        )}
+                      </td>
                     </tr>
                   );
                 })}
