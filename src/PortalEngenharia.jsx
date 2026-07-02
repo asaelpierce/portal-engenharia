@@ -1412,6 +1412,31 @@ function EquipamentosTerceiros() {
   const [sortCol, setSortCol] = useState('data_entrada');
   const [sortDir, setSortDir] = useState('asc');
   const [detalhe, setDetalhe] = useState(null);
+  const [pedidosRel, setPedidosRel] = useState([]);
+  const [propostasRel, setPropostasRel] = useState([]);
+  const [loadingRel, setLoadingRel] = useState(false);
+
+  const abrirDetalhe = useCallback(async (row) => {
+    setDetalhe(row);
+    setPedidosRel([]);
+    setPropostasRel([]);
+    const brs = [...new Set([row.projeto_br, row.projeto_br_retorno, row.br_referencia].filter(Boolean))];
+    if (!brs.length) return;
+    setLoadingRel(true);
+    try {
+      const [rPed, rProp] = await Promise.all([
+        supabase.from('pedidos_itens')
+          .select('br,numnota,cliente_nome,produto_descricao,valor_liquido,data_neg,vendedor_nome')
+          .in('br', brs).order('data_neg', { ascending: false }).limit(50),
+        supabase.from('propostas')
+          .select('br,cliente,escopo,status,valor_liquido,data_abertura,responsavel')
+          .in('br', brs).order('data_abertura', { ascending: false }),
+      ]);
+      setPedidosRel(rPed.data || []);
+      setPropostasRel(rProp.data || []);
+    } catch (_) {}
+    setLoadingRel(false);
+  }, []);
 
   const carregar = useCallback(async () => {
     setErro(null);
@@ -1629,8 +1654,9 @@ function EquipamentosTerceiros() {
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
             <thead>
               <tr style={{ background: T.panelAlt, borderBottom: `1px solid ${T.line}` }}>
-                <SortTh2 label="Nº Nota"        col="numnota_origem"  width={80} />
-                <SortTh2 label="BR / Projeto"   col="br_referencia"   />
+                <SortTh2 label="Nº Nota"        col="numnota_origem"     width={80} />
+                <SortTh2 label="BR Origem"      col="projeto_br"         width={100} />
+                <SortTh2 label="BR Retorno"     col="projeto_br_retorno" width={100} />
                 <SortTh2 label="Cod. Produto"   col="cod_produto"     width={90} />
                 <th style={thFat()}>Descrição</th>
                 <SortTh2 label="Qtd"            col="quantidade"      width={55} />
@@ -1644,9 +1670,9 @@ function EquipamentosTerceiros() {
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={11} style={{ padding: 40, textAlign: 'center', color: T.inkFaint }}>Carregando…</td></tr>
+                <tr><td colSpan={12} style={{ padding: 40, textAlign: 'center', color: T.inkFaint }}>Carregando…</td></tr>
               ) : filtrados.length === 0 ? (
-                <tr><td colSpan={11} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>
+                <tr><td colSpan={12} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>
                   {dados.length === 0 ? 'Nenhum dado — clique em "Sincronizar Sankhya" para importar.' : 'Nenhum item encontrado com os filtros aplicados.'}
                 </td></tr>
               ) : filtrados.map(r => {
@@ -1657,7 +1683,7 @@ function EquipamentosTerceiros() {
                 const brRef = r.br_referencia || r.projeto_br || r.projeto_br_retorno;
                 const bg = rowBg(r);
                 return (
-                  <tr key={r.id} onClick={() => setDetalhe(r)} style={{
+                  <tr key={r.id} onClick={() => abrirDetalhe(r)} style={{
                     borderBottom: `1px solid ${T.lineSoft}`, cursor: 'pointer', background: bg,
                   }}
                     onMouseEnter={e => e.currentTarget.style.background = T.panelAlt}
@@ -1665,14 +1691,14 @@ function EquipamentosTerceiros() {
                   >
                     <td style={{ padding: '9px 12px', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.terracotta }}>{r.numnota_origem || '—'}</td>
                     <td style={{ padding: '9px 12px', fontSize: 11.5 }}>
-                      {brRef ? (
-                        <span style={{ fontWeight: 700, color: T.blueText }}>
-                          {brRef}
-                          {r.projeto_br_retorno && !r.projeto_br && (
-                            <span style={{ fontSize: 9, background: T.blueSoft, color: T.blueText, borderRadius: 3, padding: '1px 4px', marginLeft: 4, fontWeight: 600 }}>ret</span>
-                          )}
-                        </span>
-                      ) : <span style={{ color: T.inkFaint }}>—</span>}
+                      {r.projeto_br
+                        ? <span style={{ fontWeight: 700, color: T.blueText }}>{r.projeto_br}</span>
+                        : <span style={{ color: T.inkFaint }}>—</span>}
+                    </td>
+                    <td style={{ padding: '9px 12px', fontSize: 11.5 }}>
+                      {r.projeto_br_retorno
+                        ? <span style={{ fontWeight: 700, color: r.projeto_br_retorno !== r.projeto_br ? T.oliveText : T.blueText }}>{r.projeto_br_retorno}</span>
+                        : <span style={{ color: T.inkFaint }}>—</span>}
                     </td>
                     <td style={{ padding: '9px 12px', fontFamily: FONT_DISPLAY, fontSize: 12, color: T.inkDim }}>{r.cod_produto}</td>
                     <td style={{ padding: '9px 12px', maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 11.5 }} title={r.descr_produto}>{r.descr_produto}</td>
@@ -1713,69 +1739,148 @@ function EquipamentosTerceiros() {
 
       {/* Modal de detalhe */}
       {detalhe && (
-        <Overlay onClose={() => setDetalhe(null)}>
+        <Overlay onClose={() => { setDetalhe(null); setPedidosRel([]); setPropostasRel([]); }}>
           <div className="scale-in" style={{
             background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12,
-            width: '100%', maxWidth: 560, boxShadow: SHADOW_XL, overflow: 'hidden',
+            width: '100%', maxWidth: 760, maxHeight: '90vh',
+            display: 'flex', flexDirection: 'column', overflow: 'hidden', boxShadow: SHADOW_XL,
           }}>
-            <div style={{ padding: '18px 22px', borderBottom: `1px solid ${T.line}`, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+            {/* Header */}
+            <div style={{ padding: '16px 22px', borderBottom: `1px solid ${T.line}`, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexShrink: 0 }}>
               <div>
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                  <span style={{ fontFamily: FONT_DISPLAY, fontSize: 20, fontWeight: 700, color: T.terracotta }}>Nota {detalhe.numnota_origem}</span>
-                  {detalhe.projeto_br && <span style={{ fontSize: 12, fontWeight: 700, color: T.blueText, background: T.blueSoft, padding: '2px 8px', borderRadius: 4 }}>{detalhe.projeto_br}</span>}
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                  <span style={{ fontFamily: FONT_DISPLAY, fontSize: 19, fontWeight: 700, color: T.terracotta }}>Nota {detalhe.numnota_origem}</span>
+                  {(() => { const { cor, bg, icone } = statusMeta(statusRow(detalhe)); return <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 4, background: bg, color: cor }}>{icone} {statusRow(detalhe)}</span>; })()}
                 </div>
-                <p style={{ margin: '4px 0 0', fontSize: 12, color: T.inkDim }}>{detalhe.fornecedor}</p>
+                <p style={{ margin: '3px 0 0', fontSize: 12, color: T.inkDim }}>{detalhe.fornecedor}</p>
               </div>
-              <button onClick={() => setDetalhe(null)} style={{ background: 'transparent', border: 'none', color: T.inkFaint }}><X size={20} /></button>
+              <button onClick={() => { setDetalhe(null); setPedidosRel([]); setPropostasRel([]); }} style={{ background: 'transparent', border: 'none', color: T.inkFaint, cursor: 'pointer' }}><X size={20} /></button>
             </div>
-            <div style={{ padding: '18px 22px', display: 'flex', flexDirection: 'column', gap: 14 }}>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+
+            {/* Body scrollável */}
+            <div style={{ overflow: 'auto', flex: 1, padding: '16px 22px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+
+              {/* Grid info base */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 8 }}>
                 {[
-                  { label: 'Nº Único Origem',   value: detalhe.nunota_origem },
-                  { label: 'TOP Origem',         value: detalhe.top_origem },
-                  { label: 'Data Entrada',       value: fmtData(detalhe.data_entrada) },
-                  { label: 'Dias em aberto',     value: statusRow(detalhe) === 'Pendente' && diasAberto(detalhe) !== null ? `${diasAberto(detalhe)} dias` : '—' },
-                  { label: 'Status Sankhya',     value: `PENDENTE = ${detalhe.pendente_sankhya || '?'}` },
-                  { label: 'Status real',        value: statusRow(detalhe) },
+                  { label: 'Nº Único',       value: detalhe.nunota_origem },
+                  { label: 'TOP',            value: detalhe.top_origem },
+                  { label: 'Data Entrada',   value: fmtData(detalhe.data_entrada) },
+                  { label: 'Flag Sankhya',   value: `PENDENTE = ${detalhe.pendente_sankhya || '?'}` },
+                  { label: 'Status real',    value: statusRow(detalhe) },
+                  { label: 'Dias em aberto', value: statusRow(detalhe) === 'Pendente' && diasAberto(detalhe) !== null ? `${diasAberto(detalhe)}d` : '—' },
                 ].map(f => (
-                  <div key={f.label} style={{ background: T.panelAlt, borderRadius: 7, padding: '10px 12px' }}>
-                    <div style={{ fontSize: 10.5, color: T.inkFaint, fontWeight: 600, marginBottom: 3 }}>{f.label}</div>
+                  <div key={f.label} style={{ background: T.panelAlt, borderRadius: 7, padding: '9px 12px' }}>
+                    <div style={{ fontSize: 10, color: T.inkFaint, fontWeight: 600, marginBottom: 2 }}>{f.label}</div>
                     <div style={{ fontSize: 13, fontWeight: 700, color: T.ink, fontFamily: FONT_DISPLAY }}>{f.value}</div>
                   </div>
                 ))}
               </div>
 
-              {/* BR de referência */}
+              {/* BRs lado a lado */}
               {(detalhe.projeto_br || detalhe.projeto_br_retorno) && (
-                <div style={{ background: T.blueSoft, borderRadius: 8, padding: '10px 14px' }}>
-                  <div style={{ fontSize: 10.5, color: T.blueText, fontWeight: 700, marginBottom: 4 }}>BR / PROJETO</div>
-                  <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
-                    {detalhe.projeto_br && <div style={{ fontSize: 13 }}><span style={{ fontSize: 10, color: T.blueText }}>Origem:</span> <strong>{detalhe.projeto_br}</strong></div>}
-                    {detalhe.projeto_br_retorno && <div style={{ fontSize: 13 }}><span style={{ fontSize: 10, color: T.blueText }}>Retorno:</span> <strong>{detalhe.projeto_br_retorno}</strong></div>}
-                    {!detalhe.projeto_br && detalhe.projeto_br_retorno && (
-                      <div style={{ fontSize: 11, color: T.blueText }}>⚠ Sem BR na nota de origem — usando BR do retorno como referência</div>
-                    )}
-                  </div>
+                <div style={{ display: 'flex', gap: 10 }}>
+                  {[
+                    { label: 'BR Origem',  value: detalhe.projeto_br,          cor: T.blueText,  bg: T.blueSoft  },
+                    { label: 'BR Retorno', value: detalhe.projeto_br_retorno,  cor: T.oliveText, bg: T.oliveSoft },
+                  ].filter(b => b.value).map(b => (
+                    <div key={b.label} style={{ flex: 1, background: b.bg, borderRadius: 8, padding: '10px 14px' }}>
+                      <div style={{ fontSize: 10, color: b.cor, fontWeight: 700, marginBottom: 3 }}>{b.label}</div>
+                      <div style={{ fontSize: 17, fontWeight: 700, color: b.cor, fontFamily: FONT_DISPLAY }}>{b.value}</div>
+                    </div>
+                  ))}
+                  {!detalhe.projeto_br && detalhe.projeto_br_retorno && (
+                    <div style={{ fontSize: 11, color: T.amberText, alignSelf: 'center', padding: '0 4px' }}>⚠ Origem sem BR — referência vem do retorno</div>
+                  )}
                 </div>
               )}
 
-              <div style={{ background: T.panelAlt, borderRadius: 8, padding: '12px 14px' }}>
-                <div style={{ fontSize: 10.5, color: T.inkFaint, fontWeight: 600, marginBottom: 4 }}>Produto</div>
+              {/* Produto */}
+              <div style={{ background: T.panelAlt, borderRadius: 8, padding: '11px 14px' }}>
+                <div style={{ fontSize: 10, color: T.inkFaint, fontWeight: 600, marginBottom: 3 }}>Produto</div>
                 <div style={{ fontSize: 13, fontWeight: 700, color: T.ink }}>[{detalhe.cod_produto}] {detalhe.descr_produto}</div>
-                <div style={{ fontSize: 12, color: T.inkDim, marginTop: 4 }}>Quantidade: <strong>{Number(detalhe.quantidade).toLocaleString('pt-BR')}</strong></div>
+                <div style={{ fontSize: 12, color: T.inkDim, marginTop: 3 }}>Qtd: <strong>{Number(detalhe.quantidade).toLocaleString('pt-BR')}</strong></div>
               </div>
+
+              {/* Nota de retorno */}
               {detalhe.nunota_retorno ? (
-                <div style={{ background: T.oliveSoft, border: `1px solid ${T.olive}33`, borderRadius: 8, padding: '12px 14px' }}>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: T.oliveText, marginBottom: 6 }}>RETORNO REGISTRADO</div>
-                  <div style={{ fontSize: 12.5, color: T.ink }}>Nota retorno: <strong>{detalhe.numnota_retorno}</strong> · TOP {detalhe.top_retorno}</div>
-                  <div style={{ fontSize: 12, color: T.inkDim, marginTop: 3 }}>Data: {new Date(detalhe.data_retorno).toLocaleDateString('pt-BR')}</div>
+                <div style={{ background: T.oliveSoft, border: `1px solid ${T.olive}33`, borderRadius: 8, padding: '10px 14px' }}>
+                  <div style={{ fontSize: 10, fontWeight: 700, color: T.oliveText, marginBottom: 4 }}>NOTA DE RETORNO</div>
+                  <div style={{ fontSize: 13, color: T.ink }}>Nota <strong>{detalhe.numnota_retorno}</strong> · TOP {detalhe.top_retorno} · {fmtData(detalhe.data_retorno)}</div>
                 </div>
               ) : (
-                <div style={{ background: T.amberSoft, border: `1px solid ${T.amber}33`, borderRadius: 8, padding: '12px 14px' }}>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: T.amberText, marginBottom: 4 }}>AGUARDANDO DEVOLUÇÃO</div>
-                  <div style={{ fontSize: 12, color: T.inkDim }}>Nenhuma nota de retorno (TOPs 2409/2410) vinculada ainda.</div>
+                <div style={{ background: T.amberSoft, border: `1px solid ${T.amber}33`, borderRadius: 8, padding: '10px 14px' }}>
+                  <div style={{ fontSize: 10, fontWeight: 700, color: T.amberText, marginBottom: 3 }}>AGUARDANDO DEVOLUÇÃO</div>
+                  <div style={{ fontSize: 12, color: T.inkDim }}>Nenhuma nota de retorno (TOPs 2409/2410) vinculada.</div>
                 </div>
               )}
+
+              {/* ── DADOS DO PORTAL DE VENDAS ── */}
+              <div style={{ borderTop: `2px solid ${T.line}`, paddingTop: 14 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: T.ink, marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <TrendingUp size={14} color={T.terracotta} />
+                  Portal de Vendas — relacionados ao BR
+                  {loadingRel && <span style={{ fontSize: 11, color: T.inkFaint, fontWeight: 400 }}>carregando…</span>}
+                </div>
+
+                {!loadingRel && pedidosRel.length === 0 && propostasRel.length === 0 && (
+                  <p style={{ fontSize: 12, color: T.inkFaint, margin: 0 }}>
+                    Nenhum pedido ou proposta encontrado para {[detalhe.projeto_br, detalhe.projeto_br_retorno].filter(Boolean).join(' / ')} no portal de vendas.
+                  </p>
+                )}
+
+                {propostasRel.length > 0 && (
+                  <div style={{ marginBottom: 14 }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: T.inkFaint, textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 8 }}>
+                      Propostas ({propostasRel.length})
+                    </div>
+                    {propostasRel.map((p, i) => (
+                      <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', background: T.panelAlt, borderRadius: 6, marginBottom: 5 }}>
+                        <span style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText, fontSize: 12, flexShrink: 0, width: 110 }}>{p.br}</span>
+                        <span style={{ fontSize: 12, color: T.ink, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.cliente}</span>
+                        <span style={{ fontSize: 11, color: T.inkDim, flexShrink: 0, maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.escopo}</span>
+                        <span style={{
+                          fontSize: 10.5, fontWeight: 700, padding: '2px 7px', borderRadius: 4, flexShrink: 0,
+                          background: p.status === 'concluida' ? T.oliveSoft : p.status === 'reprovada' ? T.rustSoft : T.amberSoft,
+                          color:      p.status === 'concluida' ? T.oliveText : p.status === 'reprovada' ? T.rustText  : T.amberText,
+                        }}>{p.status}</span>
+                        {Number(p.valor_liquido) > 0 && <span style={{ fontFamily: FONT_DISPLAY, fontSize: 12, fontWeight: 700, flexShrink: 0 }}>{fmtMoedaCompacta(Number(p.valor_liquido))}</span>}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {pedidosRel.length > 0 && (
+                  <div>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: T.inkFaint, textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 8 }}>
+                      Pedidos de venda Sankhya ({pedidosRel.length})
+                    </div>
+                    <div style={{ overflowX: 'auto' }}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11.5 }}>
+                        <thead>
+                          <tr style={{ borderBottom: `1px solid ${T.line}`, background: T.panelAlt }}>
+                            {['BR','Nota','Cliente','Produto','Data','Valor'].map(h => (
+                              <th key={h} style={{ ...thFat(h === 'Valor' ? 80 : 0, h === 'Valor' ? 'right' : 'left'), fontSize: 10.5 }}>{h}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {pedidosRel.map((p, i) => (
+                            <tr key={i} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                              <td style={{ padding: '7px 10px', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText, fontSize: 11, whiteSpace: 'nowrap' }}>{p.br}</td>
+                              <td style={{ padding: '7px 10px', fontFamily: FONT_DISPLAY, fontSize: 11 }}>{p.numnota}</td>
+                              <td style={{ padding: '7px 10px', maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={p.cliente_nome}>{p.cliente_nome}</td>
+                              <td style={{ padding: '7px 10px', maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: T.inkDim }} title={p.produto_descricao}>{p.produto_descricao}</td>
+                              <td style={{ padding: '7px 10px', whiteSpace: 'nowrap', color: T.inkDim }}>{fmtData(p.data_neg)}</td>
+                              <td style={{ padding: '7px 10px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 600 }}>{fmtMoedaCompacta(Number(p.valor_liquido) || 0)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </Overlay>
