@@ -1400,6 +1400,7 @@ function Metricas({ propostas }) {
 ============================================================================ */
 function EquipamentosTerceiros() {
   const [dados, setDados] = useState([]);
+  const [pedidosVenda, setPedidosVenda] = useState([]);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState(null);
@@ -1408,7 +1409,8 @@ function EquipamentosTerceiros() {
 
   const [busca, setBusca] = useState('');
   const [fornFiltro, setFornFiltro] = useState('Todos');
-  const [statusFiltro, setStatusFiltro] = useState('Todos'); // Todos | Pendente | Em devolução
+  const [statusFiltro, setStatusFiltro] = useState('Todos');
+  const [brFiltro, setBrFiltro] = useState('Todos'); // filtra AMBAS as tabelas pelo BR
   const [sortCol, setSortCol] = useState('data_entrada');
   const [sortDir, setSortDir] = useState('asc');
   const [detalhe, setDetalhe] = useState(null);
@@ -1420,13 +1422,16 @@ function EquipamentosTerceiros() {
     setDetalhe(row);
     setPedidosRel([]);
     setPropostasRel([]);
+    // Ao clicar, aplica o filtro de BR automaticamente
+    const brRef = row.br_referencia || row.projeto_br || row.projeto_br_retorno;
+    if (brRef && brRef !== '<SEM PROJETO>') setBrFiltro(brRef);
     const brs = [...new Set([row.projeto_br, row.projeto_br_retorno, row.br_referencia].filter(Boolean))];
     if (!brs.length) return;
     setLoadingRel(true);
     try {
       const [rPed, rProp] = await Promise.all([
         supabase.from('pedidos_itens')
-          .select('br,numnota,cliente_nome,produto_descricao,valor_liquido,data_neg,vendedor_nome')
+          .select('br,nunota,numero_pedido,cliente_nome,produto_descricao,produto_kaleng,valor_liquido,quantidade,unidade,data_neg,vendedor_nome,uf')
           .in('br', brs).order('data_neg', { ascending: false }).limit(50),
         supabase.from('propostas')
           .select('br,cliente,escopo,status,valor_liquido,data_abertura,responsavel')
@@ -1447,6 +1452,19 @@ function EquipamentosTerceiros() {
     if (error) { setErro(error.message); setLoading(false); return; }
     setDados(data || []);
     if (data?.length) setLastSync(data[0].sincronizado_em);
+
+    // Carrega pedidos de venda para todos os BRs dos equipamentos
+    const brs = [...new Set(
+      (data || []).map(d => d.br_referencia).filter(b => b && b !== '<SEM PROJETO>')
+    )];
+    if (brs.length > 0) {
+      const { data: pedidos } = await supabase
+        .from('pedidos_itens')
+        .select('br,nunota,numero_pedido,cliente_nome,produto_descricao,produto_kaleng,valor_liquido,quantidade,unidade,data_neg,vendedor_nome,uf')
+        .in('br', brs)
+        .order('data_neg', { ascending: false });
+      setPedidosVenda(pedidos || []);
+    }
     setLoading(false);
   }, []);
 
@@ -1475,6 +1493,21 @@ function EquipamentosTerceiros() {
     return ['Todos', ...[...s].sort()];
   }, [dados]);
 
+  const brsDisponiveis = useMemo(() => {
+    const s = new Set(dados.map(d => d.br_referencia).filter(b => b && b !== '<SEM PROJETO>'));
+    return ['Todos', ...[...s].sort()];
+  }, [dados]);
+
+  // Pedidos filtrados pelo brFiltro (mesma seleção de BR das equip)
+  const pedidosFiltrados = useMemo(() => {
+    if (brFiltro === 'Todos') return pedidosVenda;
+    return pedidosVenda.filter(p => p.br === brFiltro);
+  }, [pedidosVenda, brFiltro]);
+
+  const totalPedidosValor = useMemo(() =>
+    pedidosFiltrados.reduce((s, p) => s + (Number(p.valor_liquido) || 0), 0),
+  [pedidosFiltrados]);
+
   const diasAberto = (row) => {
     if (!row.data_entrada || row.data_retorno) return null;
     return Math.round((Date.now() - new Date(row.data_entrada)) / 86400000);
@@ -1500,7 +1533,11 @@ function EquipamentosTerceiros() {
         (r.fornecedor || '').toLowerCase().includes(busca.toLowerCase());
       const matchForn = fornFiltro === 'Todos' || r.fornecedor === fornFiltro;
       const matchSt = statusFiltro === 'Todos' || st === statusFiltro;
-      return matchBusca && matchForn && matchSt;
+      const matchBr = brFiltro === 'Todos' ||
+        r.br_referencia === brFiltro ||
+        r.projeto_br === brFiltro ||
+        r.projeto_br_retorno === brFiltro;
+      return matchBusca && matchForn && matchSt && matchBr;
     }).sort((a, b) => {
       let va = a[sortCol] ?? '';
       let vb = b[sortCol] ?? '';
@@ -1512,7 +1549,7 @@ function EquipamentosTerceiros() {
       if (va > vb) return sortDir === 'asc' ? 1 : -1;
       return 0;
     });
-  }, [dados, busca, fornFiltro, statusFiltro, sortCol, sortDir]);
+  }, [dados, busca, fornFiltro, statusFiltro, brFiltro, sortCol, sortDir]);
 
   const totais = useMemo(() => ({
     pendentes:    filtrados.filter(r => statusRow(r) === 'Pendente').length,
@@ -1629,6 +1666,14 @@ function EquipamentosTerceiros() {
                 style={{ ...selectStyleFat(280), paddingLeft: 28 }} />
             </div>
           </FiltroCampoFat>
+          <FiltroCampoFat label="Filtrar por BR">
+            <div style={{ position: 'relative' }}>
+              <select value={brFiltro} onChange={e => setBrFiltro(e.target.value)} style={selectStyleFat(160)}>
+                {brsDisponiveis.map(b => <option key={b} value={b}>{b}</option>)}
+              </select>
+              <ChevronDown size={13} style={chevronStyleFat} />
+            </div>
+          </FiltroCampoFat>
           <FiltroCampoFat label="Fornecedor">
             <div style={{ position: 'relative' }}>
               <select value={fornFiltro} onChange={e => setFornFiltro(e.target.value)} style={selectStyleFat(200)}>
@@ -1736,6 +1781,91 @@ function EquipamentosTerceiros() {
             ['numnota_origem','projeto_br','cod_produto','descr_produto','quantidade','fornecedor','data_entrada','data_retorno','numnota_retorno'])} />
         </div>
       </div>
+
+      {/* ── PEDIDOS DE VENDA RELACIONADOS ─────────────────────────────── */}
+      <Panel
+        title="Pedidos de venda — Sankhya"
+        subtitle={
+          brFiltro !== 'Todos'
+            ? `Filtrado por BR: ${brFiltro} · ${pedidosFiltrados.length} pedido${pedidosFiltrados.length !== 1 ? 's' : ''}`
+            : `Todos os BRs com pedido · ${pedidosFiltrados.length} pedido${pedidosFiltrados.length !== 1 ? 's' : ''}`
+        }
+        right={
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            {brFiltro !== 'Todos' && (
+              <button onClick={() => setBrFiltro('Todos')} style={{
+                fontSize: 11, color: T.inkFaint, background: T.panelAlt, border: `1px solid ${T.line}`,
+                borderRadius: 5, padding: '4px 9px', cursor: 'pointer',
+              }}>✕ Limpar filtro BR</button>
+            )}
+            <span style={{ fontFamily: FONT_DISPLAY, fontSize: 14, fontWeight: 700, color: T.terracotta }}>
+              {fmtMoedaCompacta(totalPedidosValor)}
+            </span>
+            <BotaoExportar small onClick={() => exportCSV(pedidosFiltrados, 'pedidos_venda_equip.csv',
+              ['br','numero_pedido','cliente_nome','produto_descricao','produto_kaleng','quantidade','unidade','valor_liquido','data_neg','vendedor_nome','uf'])} />
+          </div>
+        }
+      >
+        {loading ? (
+          <p style={{ color: T.inkFaint, fontSize: 13, margin: '10px 0 0' }}>Carregando…</p>
+        ) : pedidosVenda.length === 0 ? (
+          <p style={{ color: T.inkFaint, fontSize: 13, margin: '10px 0 0' }}>
+            {dados.length === 0 ? 'Sincronize os equipamentos primeiro.' : 'Nenhum pedido de venda encontrado para os BRs dos equipamentos.'}
+          </p>
+        ) : (
+          <div style={{ overflowX: 'auto', marginTop: 10 }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+              <thead>
+                <tr style={{ borderBottom: `1px solid ${T.line}`, background: T.panelAlt }}>
+                  {[
+                    ['BR',        'br',               80],
+                    ['Nº Pedido', 'numero_pedido',    90],
+                    ['Cliente',   'cliente_nome',       0],
+                    ['Produto',   'produto_descricao',  0],
+                    ['Kaleng',    'produto_kaleng',    80],
+                    ['Qtd',       'quantidade',        55],
+                    ['Un.',       'unidade',           40],
+                    ['Valor',     'valor_liquido',     90],
+                    ['Data',      'data_neg',          90],
+                    ['Vendedor',  'vendedor_nome',     120],
+                    ['UF',        'uf',                40],
+                  ].map(([label, , w]) => (
+                    <th key={label} style={{ ...thFat(w, 'left'), whiteSpace: 'nowrap' }}>{label}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {pedidosFiltrados.map((p, i) => {
+                  const isSelecionado = brFiltro !== 'Todos' && p.br === brFiltro;
+                  return (
+                    <tr key={i} style={{ borderBottom: `1px solid ${T.lineSoft}`, background: isSelecionado ? `${T.terracottaSoft}66` : 'transparent' }}>
+                      <td style={{ padding: '8px 10px', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.terracotta, whiteSpace: 'nowrap' }}>
+                        <button onClick={() => setBrFiltro(p.br === brFiltro ? 'Todos' : p.br)} style={{
+                          background: 'none', border: 'none', color: T.terracotta, fontFamily: FONT_DISPLAY,
+                          fontWeight: 700, fontSize: 12, cursor: 'pointer', padding: 0,
+                        }}>{p.br}</button>
+                      </td>
+                      <td style={{ padding: '8px 10px', fontFamily: FONT_DISPLAY, fontSize: 11.5, color: T.inkDim }}>{p.numero_pedido || p.nunota || '—'}</td>
+                      <td style={{ padding: '8px 10px', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={p.cliente_nome}>{p.cliente_nome}</td>
+                      <td style={{ padding: '8px 10px', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 11.5, color: T.inkDim }} title={p.produto_descricao}>{p.produto_descricao}</td>
+                      <td style={{ padding: '8px 10px', fontSize: 11, color: T.blueText, whiteSpace: 'nowrap' }}>{p.produto_kaleng}</td>
+                      <td style={{ padding: '8px 10px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontSize: 12 }}>{Number(p.quantidade || 0).toLocaleString('pt-BR')}</td>
+                      <td style={{ padding: '8px 10px', fontSize: 11, color: T.inkFaint, textAlign: 'center' }}>{p.unidade}</td>
+                      <td style={{ padding: '8px 10px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 600, fontSize: 12, whiteSpace: 'nowrap' }}>{fmtMoedaCompacta(Number(p.valor_liquido) || 0)}</td>
+                      <td style={{ padding: '8px 10px', whiteSpace: 'nowrap', fontSize: 11.5, color: T.inkDim }}>{fmtData(p.data_neg)}</td>
+                      <td style={{ padding: '8px 10px', maxWidth: 130, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 11.5 }}>{p.vendedor_nome}</td>
+                      <td style={{ padding: '8px 10px', textAlign: 'center', fontSize: 11, fontWeight: 600, color: T.inkDim }}>{p.uf}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            <div style={{ padding: '8px 10px', borderTop: `1px solid ${T.line}`, fontSize: 11, color: T.inkFaint }}>
+              Clique em um BR para filtrar as duas tabelas · dados de <code style={{ fontSize: 10 }}>pedidos_itens</code> (sync Faturamento)
+            </div>
+          </div>
+        )}
+      </Panel>
 
       {/* Modal de detalhe */}
       {detalhe && (
