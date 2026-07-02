@@ -1522,11 +1522,43 @@ function EquipamentosTerceiros() {
     return ['Todos', ...[...s].sort()];
   }, [dados]);
 
-  // Pedidos filtrados pelo brFiltro (mesma seleção de BR das equip)
+  // BRs que têm ao menos um pedido de venda sincronizado
+  const brsComPedido = useMemo(() =>
+    new Set(pedidosVenda.map(p => p.br).filter(Boolean)),
+  [pedidosVenda]);
+
+  // BRs sem nenhum pedido de venda
+  const brsSemPedido = useMemo(() =>
+    dados
+      .map(d => d.br_referencia)
+      .filter(b => b && b !== '<SEM PROJETO>' && !brsComPedido.has(b))
+      .filter((b, i, arr) => arr.indexOf(b) === i)
+      .sort(),
+  [dados, brsComPedido]);
+
+  // Filtros por coluna na tabela de pedidos
+  const [colFilters, setColFilters] = useState({
+    br: '', cliente_nome: '', produto_descricao: '',
+    produto_kaleng: '', vendedor_nome: '', uf: '', nf_status: 'Todos',
+  });
+  const setColFilter = (col, val) => setColFilters(f => ({ ...f, [col]: val }));
+
   const pedidosFiltrados = useMemo(() => {
-    if (brFiltro === 'Todos') return pedidosVenda;
-    return pedidosVenda.filter(p => p.br === brFiltro);
-  }, [pedidosVenda, brFiltro]);
+    return pedidosVenda.filter(p => {
+      const matchBr     = (brFiltro === 'Todos' || p.br === brFiltro) &&
+                          (!colFilters.br || (p.br || '').toLowerCase().includes(colFilters.br.toLowerCase()));
+      const matchCli    = !colFilters.cliente_nome    || (p.cliente_nome    || '').toLowerCase().includes(colFilters.cliente_nome.toLowerCase());
+      const matchProd   = !colFilters.produto_descricao || (p.produto_descricao || '').toLowerCase().includes(colFilters.produto_descricao.toLowerCase());
+      const matchKaleng = !colFilters.produto_kaleng  || (p.produto_kaleng  || '').toLowerCase().includes(colFilters.produto_kaleng.toLowerCase());
+      const matchVend   = !colFilters.vendedor_nome   || (p.vendedor_nome   || '').toLowerCase().includes(colFilters.vendedor_nome.toLowerCase());
+      const matchUf     = !colFilters.uf              || (p.uf              || '').toLowerCase().includes(colFilters.uf.toLowerCase());
+      const hasNf = !!notaVendaMap[p.numero_pedido];
+      const matchNfSt   = colFilters.nf_status === 'Todos' ||
+                          (colFilters.nf_status === 'Faturado' && hasNf) ||
+                          (colFilters.nf_status === 'Sem NF' && !hasNf);
+      return matchBr && matchCli && matchProd && matchKaleng && matchVend && matchUf && matchNfSt;
+    });
+  }, [pedidosVenda, brFiltro, colFilters, notaVendaMap]);
 
   const totalPedidosValor = useMemo(() =>
     pedidosFiltrados.reduce((s, p) => s + (Number(p.valor_liquido) || 0), 0),
@@ -1811,25 +1843,45 @@ function EquipamentosTerceiros() {
         title="Pedidos de venda — Sankhya"
         subtitle={
           brFiltro !== 'Todos'
-            ? `Filtrado por BR: ${brFiltro} · ${pedidosFiltrados.length} pedido${pedidosFiltrados.length !== 1 ? 's' : ''}`
-            : `Todos os BRs com pedido · ${pedidosFiltrados.length} pedido${pedidosFiltrados.length !== 1 ? 's' : ''}`
+            ? `Filtrado por BR: ${brFiltro} · ${pedidosFiltrados.length} item${pedidosFiltrados.length !== 1 ? 's' : ''}`
+            : `${pedidosFiltrados.length} item${pedidosFiltrados.length !== 1 ? 's' : ''} · ${brsComPedido.size} BR${brsComPedido.size !== 1 ? 's' : ''} com pedido`
         }
         right={
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             {brFiltro !== 'Todos' && (
-              <button onClick={() => setBrFiltro('Todos')} style={{
-                fontSize: 11, color: T.inkFaint, background: T.panelAlt, border: `1px solid ${T.line}`,
-                borderRadius: 5, padding: '4px 9px', cursor: 'pointer',
-              }}>✕ Limpar filtro BR</button>
+              <button onClick={() => { setBrFiltro('Todos'); }} style={{ fontSize: 11, color: T.inkFaint, background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 5, padding: '4px 9px', cursor: 'pointer' }}>✕ Limpar BR</button>
             )}
-            <span style={{ fontFamily: FONT_DISPLAY, fontSize: 14, fontWeight: 700, color: T.terracotta }}>
-              {fmtMoedaCompacta(totalPedidosValor)}
-            </span>
+            {Object.values(colFilters).some(v => v && v !== 'Todos') && (
+              <button onClick={() => setColFilters({ br: '', cliente_nome: '', produto_descricao: '', produto_kaleng: '', vendedor_nome: '', uf: '', nf_status: 'Todos' })}
+                style={{ fontSize: 11, color: T.amberText, background: T.amberSoft, border: `1px solid ${T.amber}33`, borderRadius: 5, padding: '4px 9px', cursor: 'pointer' }}>
+                ✕ Limpar filtros
+              </button>
+            )}
+            <span style={{ fontFamily: FONT_DISPLAY, fontSize: 14, fontWeight: 700, color: T.terracotta }}>{fmtMoedaCompacta(totalPedidosValor)}</span>
             <BotaoExportar small onClick={() => exportCSV(pedidosFiltrados, 'pedidos_venda_equip.csv',
               ['br','numero_pedido','cliente_nome','produto_descricao','produto_kaleng','quantidade','unidade','valor_liquido','data_neg','vendedor_nome','uf'])} />
           </div>
         }
       >
+        {/* BRs sem nenhum pedido de venda */}
+        {brsSemPedido.length > 0 && (
+          <div style={{ background: T.rustSoft, border: `1px solid ${T.rust}33`, borderRadius: 8, padding: '10px 14px', marginBottom: 12 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: T.rustText, marginBottom: 6 }}>
+              ⚠ {brsSemPedido.length} BR{brsSemPedido.length !== 1 ? 's' : ''} sem pedido de venda no sistema
+            </div>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              {brsSemPedido.map(br => (
+                <button key={br} onClick={() => { setBrFiltro(br); }}
+                  style={{ fontSize: 11.5, fontWeight: 700, color: T.rustText, background: '#fff', border: `1px solid ${T.rust}55`, borderRadius: 5, padding: '3px 10px', cursor: 'pointer' }}>
+                  {br}
+                </button>
+              ))}
+            </div>
+            <div style={{ fontSize: 11, color: T.inkFaint, marginTop: 6 }}>
+              Equipamentos recebidos mas sem pedido de venda correspondente sincronizado em Faturamento.
+            </div>
+          </div>
+        )}
         {loading ? (
           <p style={{ color: T.inkFaint, fontSize: 13, margin: '10px 0 0' }}>Carregando…</p>
         ) : pedidosVenda.length === 0 ? (
@@ -1857,6 +1909,54 @@ function EquipamentosTerceiros() {
                   ].map(([label, , w]) => (
                     <th key={label} style={{ ...thFat(w, 'left'), whiteSpace: 'nowrap' }}>{label}</th>
                   ))}
+                </tr>
+                {/* ── LINHA DE FILTROS POR COLUNA ── */}
+                <tr style={{ background: T.panelAlt, borderBottom: `1px solid ${T.line}` }}>
+                  {/* BR */}
+                  <td style={{ padding: '4px 6px' }}>
+                    <input value={colFilters.br} onChange={e => setColFilter('br', e.target.value)}
+                      placeholder="Filtrar…" style={{ width: '100%', fontSize: 11, padding: '3px 6px', border: `1px solid ${T.line}`, borderRadius: 4, background: T.panel }} />
+                  </td>
+                  {/* Nº Pedido — sem filtro */}
+                  <td style={{ padding: '4px 6px' }} />
+                  {/* Cliente */}
+                  <td style={{ padding: '4px 6px' }}>
+                    <input value={colFilters.cliente_nome} onChange={e => setColFilter('cliente_nome', e.target.value)}
+                      placeholder="Filtrar…" style={{ width: '100%', fontSize: 11, padding: '3px 6px', border: `1px solid ${T.line}`, borderRadius: 4, background: T.panel }} />
+                  </td>
+                  {/* Produto */}
+                  <td style={{ padding: '4px 6px' }}>
+                    <input value={colFilters.produto_descricao} onChange={e => setColFilter('produto_descricao', e.target.value)}
+                      placeholder="Filtrar…" style={{ width: '100%', fontSize: 11, padding: '3px 6px', border: `1px solid ${T.line}`, borderRadius: 4, background: T.panel }} />
+                  </td>
+                  {/* Kaleng */}
+                  <td style={{ padding: '4px 6px' }}>
+                    <input value={colFilters.produto_kaleng} onChange={e => setColFilter('produto_kaleng', e.target.value)}
+                      placeholder="Filtrar…" style={{ width: '100%', fontSize: 11, padding: '3px 6px', border: `1px solid ${T.line}`, borderRadius: 4, background: T.panel }} />
+                  </td>
+                  {/* Qtd / Un — sem filtro */}
+                  <td /><td />
+                  {/* Valor / Data — sem filtro */}
+                  <td /><td />
+                  {/* Vendedor */}
+                  <td style={{ padding: '4px 6px' }}>
+                    <input value={colFilters.vendedor_nome} onChange={e => setColFilter('vendedor_nome', e.target.value)}
+                      placeholder="Filtrar…" style={{ width: '100%', fontSize: 11, padding: '3px 6px', border: `1px solid ${T.line}`, borderRadius: 4, background: T.panel }} />
+                  </td>
+                  {/* UF */}
+                  <td style={{ padding: '4px 6px' }}>
+                    <input value={colFilters.uf} onChange={e => setColFilter('uf', e.target.value)}
+                      placeholder="UF" style={{ width: 36, fontSize: 11, padding: '3px 5px', border: `1px solid ${T.line}`, borderRadius: 4, background: T.panel, textTransform: 'uppercase' }} />
+                  </td>
+                  {/* NF status */}
+                  <td style={{ padding: '4px 6px' }}>
+                    <select value={colFilters.nf_status} onChange={e => setColFilter('nf_status', e.target.value)}
+                      style={{ width: '100%', fontSize: 11, padding: '3px 5px', border: `1px solid ${T.line}`, borderRadius: 4, background: T.panel }}>
+                      <option value="Todos">Todos</option>
+                      <option value="Faturado">✓ Faturado</option>
+                      <option value="Sem NF">✗ Sem NF</option>
+                    </select>
+                  </td>
                 </tr>
               </thead>
               <tbody>
