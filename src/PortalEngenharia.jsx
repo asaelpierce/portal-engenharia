@@ -360,6 +360,7 @@ function PortalConteudo({ currentUser, session }) {
           {view === 'faturamento' && <Faturamento />}
           {view === 'consumo_mp' && <TabErrorBoundary tab="Consumo de MP"><ConsumoMP /></TabErrorBoundary>}
           {view === 'almoxarifado' && <TabErrorBoundary tab="Almoxarifado"><Almoxarifado /></TabErrorBoundary>}
+          {view === 'equipamentos' && <TabErrorBoundary tab="Equipamentos de Terceiros"><EquipamentosTerceiros /></TabErrorBoundary>}
           {view === 'pedidosvale' && <PedidosVale />}
           {view === 'integracao' && <Integracao />}
           {view === 'admin' && <Admin />}
@@ -392,6 +393,7 @@ function Sidebar({ view, setView, pendCount, papel }) {
     { id: 'faturamento',  label: 'Faturamento (Sankhya)',  icon: DollarSign },
     { id: 'consumo_mp',   label: 'Consumo de MP',          icon: Layers },
     { id: 'almoxarifado', label: 'Almoxarifado',           icon: Package },
+    { id: 'equipamentos', label: 'Equip. Terceiros',        icon: Webhook },
     { id: 'pedidosvale',  label: 'Pedidos Vale',           icon: FileWarning },
     { id: 'integracao',   label: 'Integrações',            icon: Workflow },
   ];
@@ -472,6 +474,7 @@ const VIEW_TITLES = {
   produtividade: 'Produtividade da equipe', faturamento: 'Faturamento (Sankhya)',
   consumo_mp: 'Consumo de Matéria-Prima — SGQ',
   almoxarifado: 'Almoxarifado — Estoque & Movimentação',
+  equipamentos: 'Equipamentos de Terceiros',
   pedidosvale: 'Pedidos Vale', integracao: 'Integrações', admin: 'Administração',
 };
 
@@ -1386,6 +1389,346 @@ function Metricas({ propostas }) {
           ))}
         </div>
       </Panel>
+    </div>
+  );
+}
+
+/* ============================================================================
+   EQUIPAMENTOS DE TERCEIROS
+   Espelha a view Sankhya: TOPs 2105/2108 (entrada) vs 2409/2410 (retorno)
+   Sync via Edge Function sankhya-equipamentos-sync
+============================================================================ */
+function EquipamentosTerceiros() {
+  const [dados, setDados] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [syncing, setSyncing] = useState(false);
+  const [syncMsg, setSyncMsg] = useState(null);
+  const [lastSync, setLastSync] = useState(null);
+  const [erro, setErro] = useState(null);
+
+  const [busca, setBusca] = useState('');
+  const [fornFiltro, setFornFiltro] = useState('Todos');
+  const [statusFiltro, setStatusFiltro] = useState('Todos'); // Todos | Pendente | Em devolução
+  const [sortCol, setSortCol] = useState('data_entrada');
+  const [sortDir, setSortDir] = useState('asc');
+  const [detalhe, setDetalhe] = useState(null);
+
+  const carregar = useCallback(async () => {
+    setErro(null);
+    const { data, error } = await supabase
+      .from('equipamentos_terceiros')
+      .select('*')
+      .order('data_entrada', { ascending: true });
+    if (error) { setErro(error.message); setLoading(false); return; }
+    setDados(data || []);
+    if (data?.length) setLastSync(data[0].sincronizado_em);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { carregar(); }, [carregar]);
+
+  const sincronizar = async () => {
+    setSyncing(true); setSyncMsg(null); setErro(null);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const r = await fetch(
+        `https://sieztnpchjjmrwrmrhoa.supabase.co/functions/v1/sankhya-equipamentos-sync`,
+        { method: 'POST', headers: { Authorization: `Bearer ${session?.access_token}` } }
+      );
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error);
+      setSyncMsg(`✓ ${j.total} registros sincronizados`);
+      await carregar();
+    } catch (e) {
+      setErro(String(e?.message || e));
+    }
+    setSyncing(false);
+  };
+
+  const fornecedores = useMemo(() => {
+    const s = new Set(dados.map(d => d.fornecedor).filter(Boolean));
+    return ['Todos', ...[...s].sort()];
+  }, [dados]);
+
+  const diasAberto = (row) => {
+    if (!row.data_entrada || row.data_retorno) return null;
+    return Math.round((Date.now() - new Date(row.data_entrada)) / 86400000);
+  };
+
+  const statusRow = (row) => row.data_retorno ? 'Em devolução' : 'Pendente';
+
+  const filtrados = useMemo(() => {
+    return dados.filter(r => {
+      const st = statusRow(r);
+      const matchBusca = !busca ||
+        (r.numnota_origem || '').includes(busca) ||
+        (r.projeto_br || '').toLowerCase().includes(busca.toLowerCase()) ||
+        (r.cod_produto || '').includes(busca) ||
+        (r.descr_produto || '').toLowerCase().includes(busca.toLowerCase()) ||
+        (r.fornecedor || '').toLowerCase().includes(busca.toLowerCase());
+      const matchForn = fornFiltro === 'Todos' || r.fornecedor === fornFiltro;
+      const matchSt = statusFiltro === 'Todos' || st === statusFiltro;
+      return matchBusca && matchForn && matchSt;
+    }).sort((a, b) => {
+      let va = a[sortCol] ?? '';
+      let vb = b[sortCol] ?? '';
+      if (sortCol === 'data_entrada' || sortCol === 'data_retorno') {
+        va = va ? new Date(va).getTime() : 0;
+        vb = vb ? new Date(vb).getTime() : 0;
+      }
+      if (va < vb) return sortDir === 'asc' ? -1 : 1;
+      if (va > vb) return sortDir === 'asc' ? 1 : -1;
+      return 0;
+    });
+  }, [dados, busca, fornFiltro, statusFiltro, sortCol, sortDir]);
+
+  const totais = useMemo(() => ({
+    pendentes:      filtrados.filter(r => !r.data_retorno).length,
+    em_devolucao:   filtrados.filter(r => r.data_retorno).length,
+    fornecedores:   new Set(filtrados.map(r => r.fornecedor).filter(Boolean)).size,
+    mais_antigo:    filtrados.filter(r => !r.data_retorno)
+                      .reduce((mx, r) => {
+                        const d = diasAberto(r) ?? 0;
+                        return d > mx ? d : mx;
+                      }, 0),
+  }), [filtrados]);
+
+  const handleSort = (col) => {
+    if (sortCol === col) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+    else { setSortCol(col); setSortDir('asc'); }
+  };
+
+  const fmtData = (iso) => {
+    if (!iso) return '—';
+    return new Date(iso).toLocaleDateString('pt-BR');
+  };
+
+  const diasCor = (d) => {
+    if (d === null) return [T.inkFaint, T.lineSoft];
+    if (d > 90) return [T.rustText, T.rustSoft];
+    if (d > 30) return [T.amberText, T.amberSoft];
+    return [T.oliveText, T.oliveSoft];
+  };
+
+  const SortTh2 = ({ label, col, width }) => {
+    const active = sortCol === col;
+    return (
+      <th onClick={() => handleSort(col)} style={{
+        ...thFat(width || 0, 'left'), cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap',
+      }}>
+        <span style={{ color: active ? T.terracotta : T.inkFaint }}>
+          {label}{active ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''}
+        </span>
+      </th>
+    );
+  };
+
+  return (
+    <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 18, maxWidth: 1400 }}>
+
+      {/* Header sync */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
+        <p style={{ fontSize: 12, color: T.inkFaint, margin: 0 }}>
+          Equipamentos recebidos de terceiros (TOPs 2105/2108) com itens pendentes desde jan/2026.
+          {lastSync && ` Último sync: ${new Date(lastSync).toLocaleString('pt-BR')}.`}
+        </p>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          {syncMsg && <span style={{ fontSize: 12, color: T.oliveText, fontWeight: 600 }}>{syncMsg}</span>}
+          <button onClick={sincronizar} disabled={syncing} style={{
+            display: 'flex', alignItems: 'center', gap: 6, background: T.terracotta, color: '#fff',
+            border: 'none', borderRadius: 6, padding: '8px 14px', fontSize: 13, fontWeight: 600, opacity: syncing ? 0.7 : 1,
+          }}>
+            <RefreshCw size={14} style={{ animation: syncing ? 'spin 1s linear infinite' : 'none' }} />
+            {syncing ? 'Sincronizando…' : 'Sincronizar Sankhya'}
+          </button>
+        </div>
+      </div>
+
+      {erro && (
+        <div style={{ background: T.rustSoft, border: `1px solid ${T.rust}33`, borderRadius: 8, padding: '11px 15px', display: 'flex', gap: 10, alignItems: 'center' }}>
+          <AlertTriangle size={15} color={T.rustText} />
+          <span style={{ fontSize: 12.5, color: T.rustText, fontWeight: 600 }}>{erro}</span>
+        </div>
+      )}
+
+      {/* KPIs */}
+      <div className="grid-kpis-5" style={{ gridTemplateColumns: 'repeat(auto-fit,minmax(155px,1fr))' }}>
+        {[
+          { label: 'Itens pendentes',      value: totais.pendentes,    color: totais.pendentes > 0 ? T.amberText : T.oliveText },
+          { label: 'Em processo devolução',value: totais.em_devolucao, color: T.blueText },
+          { label: 'Fornecedores',          value: totais.fornecedores, color: T.ink },
+          { label: 'Mais antigo em aberto', value: totais.mais_antigo ? `${totais.mais_antigo}d` : '—',
+            color: totais.mais_antigo > 90 ? T.rustText : totais.mais_antigo > 30 ? T.amberText : T.oliveText },
+          { label: 'Total no período',      value: filtrados.length,    color: T.ink },
+        ].map(k => (
+          <div key={k.label} style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '14px 16px', boxShadow: SHADOW_SM }}>
+            <div style={{ fontSize: 11, color: T.inkFaint, fontWeight: 600 }}>{k.label}</div>
+            <div style={{ fontFamily: FONT_DISPLAY, fontSize: 24, fontWeight: 700, color: k.color, marginTop: 8 }}>{loading ? '…' : k.value}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Filtros */}
+      <Panel>
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+          <FiltroCampoFat label="Buscar nota, BR, produto ou fornecedor">
+            <div style={{ position: 'relative' }}>
+              <Search size={13} style={{ position: 'absolute', left: 9, top: 9, color: T.inkFaint }} />
+              <input value={busca} onChange={e => setBusca(e.target.value)}
+                placeholder="Ex: 12345, BR-2026, VÁLVULA, Gerdau…"
+                style={{ ...selectStyleFat(280), paddingLeft: 28 }} />
+            </div>
+          </FiltroCampoFat>
+          <FiltroCampoFat label="Fornecedor">
+            <div style={{ position: 'relative' }}>
+              <select value={fornFiltro} onChange={e => setFornFiltro(e.target.value)} style={selectStyleFat(200)}>
+                {fornecedores.map(f => <option key={f} value={f}>{f}</option>)}
+              </select>
+              <ChevronDown size={13} style={chevronStyleFat} />
+            </div>
+          </FiltroCampoFat>
+          <FiltroCampoFat label="Status">
+            <div style={{ position: 'relative' }}>
+              <select value={statusFiltro} onChange={e => setStatusFiltro(e.target.value)} style={selectStyleFat(160)}>
+                {['Todos', 'Pendente', 'Em devolução'].map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
+              <ChevronDown size={13} style={chevronStyleFat} />
+            </div>
+          </FiltroCampoFat>
+        </div>
+      </Panel>
+
+      {/* Tabela */}
+      <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+            <thead>
+              <tr style={{ background: T.panelAlt, borderBottom: `1px solid ${T.line}` }}>
+                <SortTh2 label="Nº Nota"       col="numnota_origem"  width={80} />
+                <SortTh2 label="Projeto / BR"   col="projeto_br"      />
+                <SortTh2 label="Cod. Produto"   col="cod_produto"     width={90} />
+                <th style={thFat()}>Descrição</th>
+                <SortTh2 label="Qtd"            col="quantidade"      width={55} />
+                <SortTh2 label="Fornecedor"     col="fornecedor"      />
+                <SortTh2 label="Entrada"        col="data_entrada"    width={90} />
+                <th style={{ ...thFat(70), textAlign: 'center' }}>Dias</th>
+                <th style={{ ...thFat(90), textAlign: 'center' }}>Status</th>
+                <SortTh2 label="Nº Retorno"     col="numnota_retorno" width={90} />
+                <SortTh2 label="Data Retorno"   col="data_retorno"    width={100} />
+              </tr>
+            </thead>
+            <tbody>
+              {loading ? (
+                <tr><td colSpan={11} style={{ padding: 40, textAlign: 'center', color: T.inkFaint }}>Carregando…</td></tr>
+              ) : filtrados.length === 0 ? (
+                <tr><td colSpan={11} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>
+                  {dados.length === 0 ? 'Nenhum dado — clique em "Sincronizar Sankhya" para importar.' : 'Nenhum item encontrado com os filtros aplicados.'}
+                </td></tr>
+              ) : filtrados.map(r => {
+                const d = diasAberto(r);
+                const [dCor, dBg] = diasCor(d);
+                const st = statusRow(r);
+                const isRetorno = st === 'Em devolução';
+                return (
+                  <tr key={r.id} onClick={() => setDetalhe(r)} style={{
+                    borderBottom: `1px solid ${T.lineSoft}`, cursor: 'pointer',
+                    background: d !== null && d > 90 ? `${T.rustSoft}33` : 'transparent',
+                  }}
+                    onMouseEnter={e => e.currentTarget.style.background = T.panelAlt}
+                    onMouseLeave={e => e.currentTarget.style.background = d !== null && d > 90 ? `${T.rustSoft}33` : 'transparent'}
+                  >
+                    <td style={{ padding: '9px 12px', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.terracotta }}>{r.numnota_origem || '—'}</td>
+                    <td style={{ padding: '9px 12px', fontWeight: 600, color: T.blueText, fontSize: 11.5 }}>{r.projeto_br || '—'}</td>
+                    <td style={{ padding: '9px 12px', fontFamily: FONT_DISPLAY, fontSize: 12, color: T.inkDim }}>{r.cod_produto}</td>
+                    <td style={{ padding: '9px 12px', maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.descr_produto}>{r.descr_produto}</td>
+                    <td style={{ padding: '9px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 600 }}>{Number(r.quantidade).toLocaleString('pt-BR')}</td>
+                    <td style={{ padding: '9px 12px', maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 11.5 }} title={r.fornecedor}>{r.fornecedor}</td>
+                    <td style={{ padding: '9px 12px', whiteSpace: 'nowrap', fontSize: 11.5 }}>{fmtData(r.data_entrada)}</td>
+                    <td style={{ padding: '9px 12px', textAlign: 'center' }}>
+                      {d !== null ? (
+                        <span style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 12, color: dCor, background: dBg, padding: '3px 7px', borderRadius: 4 }}>{d}d</span>
+                      ) : <span style={{ fontSize: 11, color: T.inkFaint }}>—</span>}
+                    </td>
+                    <td style={{ padding: '9px 12px', textAlign: 'center' }}>
+                      <span style={{
+                        fontSize: 10.5, fontWeight: 700, padding: '3px 8px', borderRadius: 4, whiteSpace: 'nowrap',
+                        background: isRetorno ? T.blueSoft : T.amberSoft,
+                        color: isRetorno ? T.blueText : T.amberText,
+                      }}>{st}</span>
+                    </td>
+                    <td style={{ padding: '9px 12px', fontFamily: FONT_DISPLAY, fontSize: 11.5, color: T.oliveText }}>{r.numnota_retorno || '—'}</td>
+                    <td style={{ padding: '9px 12px', whiteSpace: 'nowrap', fontSize: 11.5, color: r.data_retorno ? T.oliveText : T.inkFaint }}>{fmtData(r.data_retorno)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        <div style={{ padding: '10px 16px', borderTop: `1px solid ${T.line}`, fontSize: 11, color: T.inkFaint, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span>
+            {filtrados.length} item{filtrados.length !== 1 ? 's' : ''} ·
+            <span style={{ color: T.rustText, fontWeight: 600 }}> Vermelho</span> = &gt;90 dias ·
+            <span style={{ color: T.amberText, fontWeight: 600 }}> Âmbar</span> = 31–90 dias ·
+            <span style={{ color: T.oliveText, fontWeight: 600 }}> Verde</span> = até 30 dias ·
+            Clique em um item para detalhes
+          </span>
+          <BotaoExportar small onClick={() => exportCSV(filtrados, 'equipamentos_terceiros.csv',
+            ['numnota_origem','projeto_br','cod_produto','descr_produto','quantidade','fornecedor','data_entrada','data_retorno','numnota_retorno'])} />
+        </div>
+      </div>
+
+      {/* Modal de detalhe */}
+      {detalhe && (
+        <Overlay onClose={() => setDetalhe(null)}>
+          <div className="scale-in" style={{
+            background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12,
+            width: '100%', maxWidth: 560, boxShadow: SHADOW_XL, overflow: 'hidden',
+          }}>
+            <div style={{ padding: '18px 22px', borderBottom: `1px solid ${T.line}`, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+              <div>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <span style={{ fontFamily: FONT_DISPLAY, fontSize: 20, fontWeight: 700, color: T.terracotta }}>Nota {detalhe.numnota_origem}</span>
+                  {detalhe.projeto_br && <span style={{ fontSize: 12, fontWeight: 700, color: T.blueText, background: T.blueSoft, padding: '2px 8px', borderRadius: 4 }}>{detalhe.projeto_br}</span>}
+                </div>
+                <p style={{ margin: '4px 0 0', fontSize: 12, color: T.inkDim }}>{detalhe.fornecedor}</p>
+              </div>
+              <button onClick={() => setDetalhe(null)} style={{ background: 'transparent', border: 'none', color: T.inkFaint }}><X size={20} /></button>
+            </div>
+            <div style={{ padding: '18px 22px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                {[
+                  { label: 'Nº Único Origem', value: detalhe.nunota_origem },
+                  { label: 'TOP Origem',       value: detalhe.top_origem },
+                  { label: 'Data Entrada',     value: new Date(detalhe.data_entrada).toLocaleDateString('pt-BR') },
+                  { label: 'Dias em aberto',   value: diasAberto(detalhe) !== null ? `${diasAberto(detalhe)} dias` : '—' },
+                ].map(f => (
+                  <div key={f.label} style={{ background: T.panelAlt, borderRadius: 7, padding: '10px 12px' }}>
+                    <div style={{ fontSize: 10.5, color: T.inkFaint, fontWeight: 600, marginBottom: 3 }}>{f.label}</div>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: T.ink, fontFamily: FONT_DISPLAY }}>{f.value}</div>
+                  </div>
+                ))}
+              </div>
+              <div style={{ background: T.panelAlt, borderRadius: 8, padding: '12px 14px' }}>
+                <div style={{ fontSize: 10.5, color: T.inkFaint, fontWeight: 600, marginBottom: 4 }}>Produto</div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: T.ink }}>[{detalhe.cod_produto}] {detalhe.descr_produto}</div>
+                <div style={{ fontSize: 12, color: T.inkDim, marginTop: 4 }}>Quantidade: <strong>{Number(detalhe.quantidade).toLocaleString('pt-BR')}</strong></div>
+              </div>
+              {detalhe.nunota_retorno ? (
+                <div style={{ background: T.oliveSoft, border: `1px solid ${T.olive}33`, borderRadius: 8, padding: '12px 14px' }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: T.oliveText, marginBottom: 6 }}>RETORNO REGISTRADO</div>
+                  <div style={{ fontSize: 12.5, color: T.ink }}>Nota retorno: <strong>{detalhe.numnota_retorno}</strong> · TOP {detalhe.top_retorno}</div>
+                  <div style={{ fontSize: 12, color: T.inkDim, marginTop: 3 }}>Data: {new Date(detalhe.data_retorno).toLocaleDateString('pt-BR')}</div>
+                </div>
+              ) : (
+                <div style={{ background: T.amberSoft, border: `1px solid ${T.amber}33`, borderRadius: 8, padding: '12px 14px' }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: T.amberText, marginBottom: 4 }}>AGUARDANDO DEVOLUÇÃO</div>
+                  <div style={{ fontSize: 12, color: T.inkDim }}>Nenhuma nota de retorno (TOPs 2409/2410) vinculada ainda.</div>
+                </div>
+              )}
+            </div>
+          </div>
+        </Overlay>
+      )}
     </div>
   );
 }
