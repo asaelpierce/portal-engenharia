@@ -1400,8 +1400,9 @@ function Metricas({ propostas }) {
 ============================================================================ */
 function EquipamentosTerceiros() {
   const [dados, setDados] = useState([]);
-  const [pedidosVenda, setPedidosVenda] = useState([]);
-  const [notaVendaMap, setNotaVendaMap] = useState({}); // numero_pedido → {nunota, data_faturamento, valor_bruto}
+  const [pedidosVenda, setPedidosVenda] = useState([]); // itens brutos de pedidos_itens
+  // Map: numero_pedido → { nfs: [{nro, data}], valor_total, brs: Set }
+  const [notaVendaMap, setNotaVendaMap] = useState({});
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState(null);
@@ -1411,7 +1412,7 @@ function EquipamentosTerceiros() {
   const [busca, setBusca] = useState('');
   const [fornFiltro, setFornFiltro] = useState('Todos');
   const [statusFiltro, setStatusFiltro] = useState('Todos');
-  const [brFiltro, setBrFiltro] = useState('Todos'); // filtra AMBAS as tabelas pelo BR
+  const [brFiltro, setBrFiltro] = useState('Todos');
   const [sortCol, setSortCol] = useState('data_entrada');
   const [sortDir, setSortDir] = useState('asc');
   const [detalhe, setDetalhe] = useState(null);
@@ -1423,7 +1424,6 @@ function EquipamentosTerceiros() {
     setDetalhe(row);
     setPedidosRel([]);
     setPropostasRel([]);
-    // Ao clicar, aplica o filtro de BR automaticamente
     const brRef = row.br_referencia || row.projeto_br || row.projeto_br_retorno;
     if (brRef && brRef !== '<SEM PROJETO>') setBrFiltro(brRef);
     const brs = [...new Set([row.projeto_br, row.projeto_br_retorno, row.br_referencia].filter(Boolean))];
@@ -1454,7 +1454,6 @@ function EquipamentosTerceiros() {
     setDados(data || []);
     if (data?.length) setLastSync(data[0].sincronizado_em);
 
-    // Carrega pedidos de venda para todos os BRs dos equipamentos
     const brs = [...new Set(
       (data || []).map(d => d.br_referencia).filter(b => b && b !== '<SEM PROJETO>')
     )];
@@ -1466,25 +1465,31 @@ function EquipamentosTerceiros() {
         .order('data_neg', { ascending: false });
       setPedidosVenda(pedidos || []);
 
-      // Verifica quais pedidos têm nota fiscal emitida
+      // Busca notas fiscais emitidas para esses pedidos
       const numPedidos = [...new Set((pedidos || []).map(p => p.numero_pedido).filter(Boolean))];
       if (numPedidos.length > 0) {
         const { data: notas } = await supabase
           .from('nota_venda_itens')
-          .select('numero_pedido, nunota, nro_interno_sankhya, data_faturamento, valor_bruto')
+          .select('numero_pedido, br, nro_interno_sankhya, data_faturamento, valor_bruto')
           .in('numero_pedido', numPedidos);
-        // Agrupa por numero_pedido: pega a primeira NF e soma o valor
+
+        // Agrupa por numero_pedido capturando TODAS as NFs distintas do mesmo pedido
+        // e evitando duplicar valor (cada nro_interno_sankhya só soma uma vez por item único)
         const map = {};
+        const contados = new Set(); // evita somar mesmo item NF duplicado
         (notas || []).forEach(n => {
-          if (!map[n.numero_pedido]) {
-            map[n.numero_pedido] = {
-              nunota: n.nunota,
-              nf_numero: n.nro_interno_sankhya, // número real da NF (NUMNOTA no Sankhya)
-              data_faturamento: n.data_faturamento,
-              valor_bruto: 0,
-            };
+          const key = n.numero_pedido;
+          if (!map[key]) map[key] = { nfs: [], valor_total: 0 };
+          // Registra NF se ainda não foi vista
+          if (!map[key].nfs.find(nf => nf.nro === n.nro_interno_sankhya)) {
+            map[key].nfs.push({ nro: n.nro_interno_sankhya, data: n.data_faturamento });
           }
-          map[n.numero_pedido].valor_bruto += Number(n.valor_bruto) || 0;
+          // Soma valor apenas uma vez por combinação pedido+nf+item (via valor_bruto único por linha)
+          const itemKey = `${n.numero_pedido}|${n.nro_interno_sankhya}|${n.valor_bruto}`;
+          if (!contados.has(itemKey)) {
+            contados.add(itemKey);
+            map[key].valor_total += Number(n.valor_bruto) || 0;
+          }
         });
         setNotaVendaMap(map);
       }
@@ -1522,7 +1527,7 @@ function EquipamentosTerceiros() {
     return ['Todos', ...[...s].sort()];
   }, [dados]);
 
-  // BRs que têm ao menos um pedido de venda sincronizado
+  // BRs que têm ao menos um pedido de venda
   const brsComPedido = useMemo(() =>
     new Set(pedidosVenda.map(p => p.br).filter(Boolean)),
   [pedidosVenda]);
@@ -1536,6 +1541,56 @@ function EquipamentosTerceiros() {
       .sort(),
   [dados, brsComPedido]);
 
+  // Pedidos agrupados por numero_pedido (um pedido por linha, não um item por linha)
+  const pedidosAgrupados = useMemo(() => {
+    const map = {};
+    pedidosVenda.forEach(p => {
+      const key = `${p.br}||${p.numero_pedido || p.nunota}`;
+      if (!map[key]) {
+        map[key] = {
+          br: p.br, numero_pedido: p.numero_pedido,
+          cliente_nome: p.cliente_nome, data_neg: p.data_neg,
+          vendedor_nome: p.vendedor_nome, uf: p.uf,
+          valor_total: 0, qtd_itens: 0,
+          kaleng_set: new Set(),
+        };
+      }
+      map[key].valor_total += Number(p.valor_liquido) || 0;
+      map[key].qtd_itens += 1;
+      if (p.produto_kaleng) map[key].kaleng_set.add(p.produto_kaleng);
+    });
+    return Object.values(map).map(g => ({ ...g, kaleng_lista: [...g.kaleng_set].join(', ') }));
+  }, [pedidosVenda]);
+
+  // BRs que têm NF de itens emitida (em nota_venda_itens via notaVendaMap)
+  const brsComNfItens = useMemo(() => {
+    const s = new Set();
+    pedidosVenda.forEach(p => {
+      if (notaVendaMap[p.numero_pedido]) s.add(p.br);
+    });
+    return s;
+  }, [pedidosVenda, notaVendaMap]);
+
+  // BRs que têm nota de retorno registrada (equipamento voltou)
+  const brsComRetorno = useMemo(() =>
+    new Set(dados.filter(d => d.nunota_retorno).map(d => d.br_referencia).filter(Boolean)),
+  [dados]);
+
+  // Status por BR (lógica de negócio real)
+  const statusBR = useCallback((br) => {
+    const temNf      = brsComNfItens.has(br);
+    const temRetorno = brsComRetorno.has(br);
+    if  (temNf && !temRetorno) return 'alerta';       // 🚨 NF emitida mas sem retorno → NF serviço bloqueada
+    if  (temNf &&  temRetorno) return 'completo';     // ✓ Ambas condições: pode emitir NF serviço
+    if (!temNf &&  temRetorno) return 'retornou';     // Equipamento voltou, faturamento pendente
+    return 'pendente';                                // Nenhuma das duas
+  }, [brsComNfItens, brsComRetorno]);
+
+  // BRs em alerta (NF itens emitida, sem retorno)
+  const alertasBR = useMemo(() =>
+    [...brsComNfItens].filter(br => !brsComRetorno.has(br)).sort(),
+  [brsComNfItens, brsComRetorno]);
+
   // Filtros por coluna na tabela de pedidos
   const [colFilters, setColFilters] = useState({
     br: '', cliente_nome: '', produto_descricao: '',
@@ -1544,24 +1599,23 @@ function EquipamentosTerceiros() {
   const setColFilter = (col, val) => setColFilters(f => ({ ...f, [col]: val }));
 
   const pedidosFiltrados = useMemo(() => {
-    return pedidosVenda.filter(p => {
+    return pedidosAgrupados.filter(p => {
       const matchBr     = (brFiltro === 'Todos' || p.br === brFiltro) &&
                           (!colFilters.br || (p.br || '').toLowerCase().includes(colFilters.br.toLowerCase()));
       const matchCli    = !colFilters.cliente_nome    || (p.cliente_nome    || '').toLowerCase().includes(colFilters.cliente_nome.toLowerCase());
-      const matchProd   = !colFilters.produto_descricao || (p.produto_descricao || '').toLowerCase().includes(colFilters.produto_descricao.toLowerCase());
-      const matchKaleng = !colFilters.produto_kaleng  || (p.produto_kaleng  || '').toLowerCase().includes(colFilters.produto_kaleng.toLowerCase());
+      const matchKaleng = !colFilters.produto_kaleng  || (p.kaleng_lista    || '').toLowerCase().includes(colFilters.produto_kaleng.toLowerCase());
       const matchVend   = !colFilters.vendedor_nome   || (p.vendedor_nome   || '').toLowerCase().includes(colFilters.vendedor_nome.toLowerCase());
       const matchUf     = !colFilters.uf              || (p.uf              || '').toLowerCase().includes(colFilters.uf.toLowerCase());
       const hasNf = !!notaVendaMap[p.numero_pedido];
       const matchNfSt   = colFilters.nf_status === 'Todos' ||
                           (colFilters.nf_status === 'Faturado' && hasNf) ||
                           (colFilters.nf_status === 'Sem NF' && !hasNf);
-      return matchBr && matchCli && matchProd && matchKaleng && matchVend && matchUf && matchNfSt;
+      return matchBr && matchCli && matchKaleng && matchVend && matchUf && matchNfSt;
     });
-  }, [pedidosVenda, brFiltro, colFilters, notaVendaMap]);
+  }, [pedidosAgrupados, brFiltro, colFilters, notaVendaMap]);
 
   const totalPedidosValor = useMemo(() =>
-    pedidosFiltrados.reduce((s, p) => s + (Number(p.valor_liquido) || 0), 0),
+    pedidosFiltrados.reduce((s, p) => s + (p.valor_total || 0), 0),
   [pedidosFiltrados]);
 
   const diasAberto = (row) => {
@@ -1863,6 +1917,33 @@ function EquipamentosTerceiros() {
           </div>
         }
       >
+        {/* 🚨 ALERTA: NF de itens emitida mas sem nota de retorno → NF de serviço bloqueada */}
+        {alertasBR.length > 0 && (
+          <div style={{ background: '#FBE6E3', border: '1.5px solid #C8261C66', borderRadius: 8, padding: '12px 16px', marginBottom: 12 }}>
+            <div style={{ fontSize: 12.5, fontWeight: 700, color: '#8A170F', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 8 }}>
+              <AlertTriangle size={15} color="#C8261C" />
+              {alertasBR.length} BR{alertasBR.length !== 1 ? 's' : ''} com NF de itens emitida mas SEM nota de retorno — NF de serviço bloqueada
+            </div>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
+              {alertasBR.map(br => {
+                const nfInfo = pedidosVenda
+                  .filter(p => p.br === br)
+                  .map(p => notaVendaMap[p.numero_pedido])
+                  .find(n => n);
+                return (
+                  <button key={br} onClick={() => setBrFiltro(br === brFiltro ? 'Todos' : br)}
+                    style={{ fontSize: 12, fontWeight: 700, color: '#8A170F', background: '#fff', border: '1px solid #C8261C55', borderRadius: 5, padding: '4px 12px', cursor: 'pointer' }}>
+                    {br} {nfInfo ? `· NF ${nfInfo.nfs.map(n => n.nro).join(', ')}` : ''}
+                  </button>
+                );
+              })}
+            </div>
+            <div style={{ fontSize: 11, color: '#615A4F' }}>
+              Regra: NF de serviço só pode ser emitida quando o equipamento retornar (nota de entrada no Portal de Compras, TOPs 2409/2410).
+            </div>
+          </div>
+        )}
+
         {/* BRs sem nenhum pedido de venda */}
         {brsSemPedido.length > 0 && (
           <div style={{ background: T.rustSoft, border: `1px solid ${T.rust}33`, borderRadius: 8, padding: '10px 14px', marginBottom: 12 }}>
@@ -1894,106 +1975,99 @@ function EquipamentosTerceiros() {
               <thead>
                 <tr style={{ borderBottom: `1px solid ${T.line}`, background: T.panelAlt }}>
                   {[
-                    ['BR',        'br',               80],
-                    ['Nº Pedido', 'numero_pedido',    90],
-                    ['Cliente',   'cliente_nome',       0],
-                    ['Produto',   'produto_descricao',  0],
-                    ['Kaleng',    'produto_kaleng',    80],
-                    ['Qtd',       'quantidade',        55],
-                    ['Un.',       'unidade',           40],
-                    ['Valor Ped.','valor_liquido',     90],
-                    ['Data Ped.', 'data_neg',          90],
-                    ['Vendedor',  'vendedor_nome',     120],
-                    ['UF',        'uf',                40],
-                    ['NF emitida?','nf',              130],
-                  ].map(([label, , w]) => (
+                    ['BR',        80],
+                    ['Nº Pedido', 100],
+                    ['Cliente',   0],
+                    ['Kaleng',    100],
+                    ['Itens',     50],
+                    ['Valor Ped.',90],
+                    ['Data',      90],
+                    ['Vendedor',  120],
+                    ['UF',        35],
+                    ['NF de itens emitida?', 160],
+                    ['Status BR', 110],
+                  ].map(([label, w]) => (
                     <th key={label} style={{ ...thFat(w, 'left'), whiteSpace: 'nowrap' }}>{label}</th>
                   ))}
                 </tr>
-                {/* ── LINHA DE FILTROS POR COLUNA ── */}
+                {/* Linha de filtros por coluna */}
                 <tr style={{ background: T.panelAlt, borderBottom: `1px solid ${T.line}` }}>
-                  {/* BR */}
                   <td style={{ padding: '4px 6px' }}>
-                    <input value={colFilters.br} onChange={e => setColFilter('br', e.target.value)}
-                      placeholder="Filtrar…" style={{ width: '100%', fontSize: 11, padding: '3px 6px', border: `1px solid ${T.line}`, borderRadius: 4, background: T.panel }} />
+                    <input value={colFilters.br} onChange={e => setColFilter('br', e.target.value)} placeholder="BR…"
+                      style={{ width: '100%', fontSize: 11, padding: '3px 6px', border: `1px solid ${T.line}`, borderRadius: 4, background: T.panel }} />
                   </td>
-                  {/* Nº Pedido — sem filtro */}
-                  <td style={{ padding: '4px 6px' }} />
-                  {/* Cliente */}
+                  <td />
                   <td style={{ padding: '4px 6px' }}>
-                    <input value={colFilters.cliente_nome} onChange={e => setColFilter('cliente_nome', e.target.value)}
-                      placeholder="Filtrar…" style={{ width: '100%', fontSize: 11, padding: '3px 6px', border: `1px solid ${T.line}`, borderRadius: 4, background: T.panel }} />
+                    <input value={colFilters.cliente_nome} onChange={e => setColFilter('cliente_nome', e.target.value)} placeholder="Cliente…"
+                      style={{ width: '100%', fontSize: 11, padding: '3px 6px', border: `1px solid ${T.line}`, borderRadius: 4, background: T.panel }} />
                   </td>
-                  {/* Produto */}
                   <td style={{ padding: '4px 6px' }}>
-                    <input value={colFilters.produto_descricao} onChange={e => setColFilter('produto_descricao', e.target.value)}
-                      placeholder="Filtrar…" style={{ width: '100%', fontSize: 11, padding: '3px 6px', border: `1px solid ${T.line}`, borderRadius: 4, background: T.panel }} />
+                    <input value={colFilters.produto_kaleng} onChange={e => setColFilter('produto_kaleng', e.target.value)} placeholder="Kaleng…"
+                      style={{ width: '100%', fontSize: 11, padding: '3px 6px', border: `1px solid ${T.line}`, borderRadius: 4, background: T.panel }} />
                   </td>
-                  {/* Kaleng */}
+                  <td /><td /><td />
                   <td style={{ padding: '4px 6px' }}>
-                    <input value={colFilters.produto_kaleng} onChange={e => setColFilter('produto_kaleng', e.target.value)}
-                      placeholder="Filtrar…" style={{ width: '100%', fontSize: 11, padding: '3px 6px', border: `1px solid ${T.line}`, borderRadius: 4, background: T.panel }} />
+                    <input value={colFilters.vendedor_nome} onChange={e => setColFilter('vendedor_nome', e.target.value)} placeholder="Vendedor…"
+                      style={{ width: '100%', fontSize: 11, padding: '3px 6px', border: `1px solid ${T.line}`, borderRadius: 4, background: T.panel }} />
                   </td>
-                  {/* Qtd / Un — sem filtro */}
-                  <td /><td />
-                  {/* Valor / Data — sem filtro */}
-                  <td /><td />
-                  {/* Vendedor */}
                   <td style={{ padding: '4px 6px' }}>
-                    <input value={colFilters.vendedor_nome} onChange={e => setColFilter('vendedor_nome', e.target.value)}
-                      placeholder="Filtrar…" style={{ width: '100%', fontSize: 11, padding: '3px 6px', border: `1px solid ${T.line}`, borderRadius: 4, background: T.panel }} />
+                    <input value={colFilters.uf} onChange={e => setColFilter('uf', e.target.value)} placeholder="UF"
+                      style={{ width: 36, fontSize: 11, padding: '3px 5px', border: `1px solid ${T.line}`, borderRadius: 4, background: T.panel }} />
                   </td>
-                  {/* UF */}
-                  <td style={{ padding: '4px 6px' }}>
-                    <input value={colFilters.uf} onChange={e => setColFilter('uf', e.target.value)}
-                      placeholder="UF" style={{ width: 36, fontSize: 11, padding: '3px 5px', border: `1px solid ${T.line}`, borderRadius: 4, background: T.panel, textTransform: 'uppercase' }} />
-                  </td>
-                  {/* NF status */}
                   <td style={{ padding: '4px 6px' }}>
                     <select value={colFilters.nf_status} onChange={e => setColFilter('nf_status', e.target.value)}
                       style={{ width: '100%', fontSize: 11, padding: '3px 5px', border: `1px solid ${T.line}`, borderRadius: 4, background: T.panel }}>
                       <option value="Todos">Todos</option>
-                      <option value="Faturado">✓ Faturado</option>
+                      <option value="Faturado">✓ Com NF</option>
                       <option value="Sem NF">✗ Sem NF</option>
                     </select>
                   </td>
+                  <td />
                 </tr>
               </thead>
               <tbody>
                 {pedidosFiltrados.map((p, i) => {
                   const isSelecionado = brFiltro !== 'Todos' && p.br === brFiltro;
                   const nfInfo = notaVendaMap[p.numero_pedido];
+                  const stBR = statusBR(p.br);
+                  const rowBgPed = stBR === 'alerta' ? '#FBE6E344' : isSelecionado ? `${T.terracottaSoft}66` : 'transparent';
                   return (
-                    <tr key={i} style={{ borderBottom: `1px solid ${T.lineSoft}`, background: isSelecionado ? `${T.terracottaSoft}66` : 'transparent' }}>
-                      <td style={{ padding: '8px 10px', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.terracotta, whiteSpace: 'nowrap' }}>
-                        <button onClick={() => setBrFiltro(p.br === brFiltro ? 'Todos' : p.br)} style={{
-                          background: 'none', border: 'none', color: T.terracotta, fontFamily: FONT_DISPLAY,
-                          fontWeight: 700, fontSize: 12, cursor: 'pointer', padding: 0,
-                        }}>{p.br}</button>
+                    <tr key={i} style={{ borderBottom: `1px solid ${T.lineSoft}`, background: rowBgPed }}>
+                      <td style={{ padding: '9px 10px', whiteSpace: 'nowrap' }}>
+                        <button onClick={() => setBrFiltro(p.br === brFiltro ? 'Todos' : p.br)}
+                          style={{ background: 'none', border: 'none', color: T.terracotta, fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 12, cursor: 'pointer', padding: 0 }}>
+                          {p.br}
+                        </button>
                       </td>
-                      <td style={{ padding: '8px 10px', fontFamily: FONT_DISPLAY, fontSize: 11.5, color: T.inkDim }}>{p.numero_pedido || p.nunota || '—'}</td>
-                      <td style={{ padding: '8px 10px', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={p.cliente_nome}>{p.cliente_nome}</td>
-                      <td style={{ padding: '8px 10px', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 11.5, color: T.inkDim }} title={p.produto_descricao}>{p.produto_descricao}</td>
-                      <td style={{ padding: '8px 10px', fontSize: 11, color: T.blueText, whiteSpace: 'nowrap' }}>{p.produto_kaleng}</td>
-                      <td style={{ padding: '8px 10px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontSize: 12 }}>{Number(p.quantidade || 0).toLocaleString('pt-BR')}</td>
-                      <td style={{ padding: '8px 10px', fontSize: 11, color: T.inkFaint, textAlign: 'center' }}>{p.unidade}</td>
-                      <td style={{ padding: '8px 10px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 600, fontSize: 12, whiteSpace: 'nowrap' }}>{fmtMoedaCompacta(Number(p.valor_liquido) || 0)}</td>
-                      <td style={{ padding: '8px 10px', whiteSpace: 'nowrap', fontSize: 11.5, color: T.inkDim }}>{fmtData(p.data_neg)}</td>
-                      <td style={{ padding: '8px 10px', maxWidth: 130, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 11.5 }}>{p.vendedor_nome}</td>
-                      <td style={{ padding: '8px 10px', textAlign: 'center', fontSize: 11, fontWeight: 600, color: T.inkDim }}>{p.uf}</td>
-                      <td style={{ padding: '8px 10px', whiteSpace: 'nowrap' }}>
+                      <td style={{ padding: '9px 10px', fontFamily: FONT_DISPLAY, fontSize: 11, color: T.inkDim, whiteSpace: 'nowrap' }}>{p.numero_pedido || '—'}</td>
+                      <td style={{ padding: '9px 10px', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 12 }} title={p.cliente_nome}>{p.cliente_nome}</td>
+                      <td style={{ padding: '9px 10px', fontSize: 11, color: T.blueText, whiteSpace: 'nowrap' }}>{p.kaleng_lista || '—'}</td>
+                      <td style={{ padding: '9px 10px', textAlign: 'right', fontSize: 11, color: T.inkFaint }}>{p.qtd_itens}</td>
+                      <td style={{ padding: '9px 10px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 600, fontSize: 12, whiteSpace: 'nowrap' }}>{fmtMoedaCompacta(p.valor_total)}</td>
+                      <td style={{ padding: '9px 10px', whiteSpace: 'nowrap', fontSize: 11, color: T.inkDim }}>{fmtData(p.data_neg)}</td>
+                      <td style={{ padding: '9px 10px', maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 11 }}>{p.vendedor_nome}</td>
+                      <td style={{ padding: '9px 10px', textAlign: 'center', fontSize: 11, fontWeight: 600, color: T.inkDim }}>{p.uf}</td>
+                      <td style={{ padding: '9px 10px' }}>
                         {nfInfo ? (
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                            <span style={{ fontSize: 10.5, fontWeight: 700, background: T.oliveSoft, color: T.oliveText, padding: '2px 7px', borderRadius: 4 }}>
-                              ✓ NF {nfInfo.nf_numero}
-                            </span>
-                            <span style={{ fontSize: 10, color: T.inkFaint }}>{fmtData(nfInfo.data_faturamento)} · {fmtMoedaCompacta(nfInfo.valor_bruto)}</span>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                            {nfInfo.nfs.map(nf => (
+                              <div key={nf.nro} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                <span style={{ fontSize: 11, fontWeight: 700, background: T.oliveSoft, color: T.oliveText, padding: '2px 7px', borderRadius: 4, whiteSpace: 'nowrap' }}>
+                                  ✓ NF {nf.nro}
+                                </span>
+                                <span style={{ fontSize: 10, color: T.inkFaint }}>{fmtData(nf.data)}</span>
+                              </div>
+                            ))}
                           </div>
                         ) : (
-                          <span style={{ fontSize: 10.5, fontWeight: 700, background: T.amberSoft, color: T.amberText, padding: '2px 7px', borderRadius: 4 }}>
-                            ✗ Sem NF
-                          </span>
+                          <span style={{ fontSize: 11, fontWeight: 700, background: T.amberSoft, color: T.amberText, padding: '2px 7px', borderRadius: 4 }}>✗ Sem NF</span>
                         )}
+                      </td>
+                      <td style={{ padding: '9px 10px' }}>
+                        {stBR === 'alerta'    && <span style={{ fontSize: 10.5, fontWeight: 700, background: '#FBE6E3', color: '#8A170F', padding: '3px 8px', borderRadius: 4, whiteSpace: 'nowrap' }}>🚨 Sem retorno</span>}
+                        {stBR === 'completo'  && <span style={{ fontSize: 10.5, fontWeight: 700, background: T.oliveSoft, color: T.oliveText, padding: '3px 8px', borderRadius: 4, whiteSpace: 'nowrap' }}>✓ Completo</span>}
+                        {stBR === 'retornou'  && <span style={{ fontSize: 10.5, fontWeight: 700, background: T.blueSoft, color: T.blueText, padding: '3px 8px', borderRadius: 4, whiteSpace: 'nowrap' }}>↩ Retornou</span>}
+                        {stBR === 'pendente'  && <span style={{ fontSize: 10.5, fontWeight: 700, background: T.lineSoft, color: T.inkFaint, padding: '3px 8px', borderRadius: 4, whiteSpace: 'nowrap' }}>Em andamento</span>}
                       </td>
                     </tr>
                   );
