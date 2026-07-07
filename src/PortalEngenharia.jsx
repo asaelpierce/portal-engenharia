@@ -1523,15 +1523,6 @@ function EquipamentosTerceiros() {
     new Set(pedidosVenda.map(p => p.br).filter(Boolean)),
   [pedidosVenda]);
 
-  // BRs sem nenhum pedido de venda
-  const brsSemPedido = useMemo(() =>
-    dados
-      .map(d => d.br_referencia)
-      .filter(b => b && b !== '<SEM PROJETO>' && !brsComPedido.has(b) && !brsComNf.has(b))
-      .filter((b, i, arr) => arr.indexOf(b) === i)
-      .sort(),
-  [dados, brsComPedido, brsComNf]);
-
   // BRs com NF de venda emitida (direto do notaVendaMap, keyed by BR)
   const brsComNf = useMemo(() =>
     new Set(Object.keys(notaVendaMap)),
@@ -1541,6 +1532,15 @@ function EquipamentosTerceiros() {
   const brsComRetorno = useMemo(() =>
     new Set(dados.filter(d => d.nunota_retorno).map(d => d.br_referencia).filter(Boolean)),
   [dados]);
+
+  // BRs sem pedido de venda E sem NF — excluir os que têm NF (pedido só está fora do range de sync)
+  const brsSemPedido = useMemo(() =>
+    dados
+      .map(d => d.br_referencia)
+      .filter(b => b && b !== '<SEM PROJETO>' && !brsComPedido.has(b) && !brsComNf.has(b))
+      .filter((b, i, arr) => arr.indexOf(b) === i)
+      .sort(),
+  [dados, brsComPedido, brsComNf]);
 
   // ALERTA: NF de itens emitida mas sem nota de retorno → NF de serviço bloqueada
   const alertasBR = useMemo(() =>
