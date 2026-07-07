@@ -1466,21 +1466,21 @@ function EquipamentosTerceiros() {
         .order('data_neg', { ascending: false });
       setPedidosVenda(pedidos || []);
 
-      // Verifica NFs de venda diretamente pelo BR (não via numero_pedido)
-      // TOPs de venda: 3101, 3200, 3210, 3213, 3214, 3220
-      // Chave por BR para capturar inclusive BRs sem pedido em pedidos_itens
+      // Carrega registros completos de nota_venda_itens por BR
+      // (exibe quando pedidos_itens não tem dados — ex: pedido anterior a jan/2026)
       if (brs.length > 0) {
         const { data: notas } = await supabase
           .from('nota_venda_itens')
-          .select('br, data_faturamento')
+          .select('br, nro_interno_sankhya, codtipoper, numero_pedido, data_faturamento, cliente_nome, produto_descricao, valor_bruto')
           .in('br', brs)
-          .in('codtipoper', [3101, 3200, 3210, 3213, 3214, 3220]);
-        // Map: br → data da NF mais recente
+          .in('codtipoper', [3101, 3200, 3210, 3213, 3214, 3220])
+          .order('data_faturamento', { ascending: false });
+        // Map por BR para lookup rápido
         const map = {};
         (notas || []).forEach(n => {
-          if (!map[n.br] || n.data_faturamento > map[n.br]) {
-            map[n.br] = n.data_faturamento;
-          }
+          if (!map[n.br]) map[n.br] = { data: n.data_faturamento, itens: [] };
+          if (n.data_faturamento > map[n.br].data) map[n.br].data = n.data_faturamento;
+          map[n.br].itens.push(n);
         });
         setNotaVendaMap(map);
       }
@@ -2063,7 +2063,7 @@ function EquipamentosTerceiros() {
                         {nfInfo ? (
                           <div>
                             <span style={{ fontSize: 10.5, fontWeight: 700, background: T.oliveSoft, color: T.oliveText, padding: '2px 7px', borderRadius: 4 }}>✓ Faturado</span>
-                            <div style={{ fontSize: 10, color: T.inkFaint, marginTop: 2 }}>{fmtData(nfInfo)}</div>
+                            <div style={{ fontSize: 10, color: T.inkFaint, marginTop: 2 }}>{fmtData(nfInfo.data)}</div>
                           </div>
                         ) : (
                           <span style={{ fontSize: 10.5, fontWeight: 700, background: T.amberSoft, color: T.amberText, padding: '2px 7px', borderRadius: 4 }}>✗ Sem NF</span>
@@ -2074,8 +2074,48 @@ function EquipamentosTerceiros() {
                 })}
               </tbody>
             </table>
+            {/* Fallback: BR selecionado com NF mas sem pedido em pedidos_itens */}
+            {pedidosFiltrados.length === 0 && brFiltro !== 'Todos' && notaVendaMap[brFiltro] && (
+              <div style={{ padding: '14px 16px' }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: T.amberText, marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <AlertTriangle size={14} color={T.amberText} />
+                  Pedido de venda fora do período sincronizado — mostrando NFs direto de nota_venda_itens
+                </div>
+                <div style={{ fontSize: 11, color: T.inkFaint, marginBottom: 10 }}>
+                  O pedido deste BR tem data de negociação anterior a jan/2026 (limite atual do sync em Faturamento).
+                  Para ver o pedido completo, sincronize o Faturamento com o período correspondente.
+                </div>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11.5 }}>
+                  <thead>
+                    <tr style={{ background: T.panelAlt, borderBottom: `1px solid ${T.line}` }}>
+                      {['NF', 'TOP', 'Nº Pedido', 'Cliente', 'Produto', 'Valor', 'Data Faturamento'].map(h => (
+                        <th key={h} style={{ ...thFat(0, 'left'), whiteSpace: 'nowrap' }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {notaVendaMap[brFiltro].itens.map((n, i) => (
+                      <tr key={i} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                        <td style={{ padding: '8px 10px', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.oliveText }}>✓ NF {n.nro_interno_sankhya}</td>
+                        <td style={{ padding: '8px 10px', fontSize: 11, color: T.inkFaint }}>{n.codtipoper}</td>
+                        <td style={{ padding: '8px 10px', fontFamily: FONT_DISPLAY, fontSize: 11, color: T.inkDim }}>{n.numero_pedido}</td>
+                        <td style={{ padding: '8px 10px', maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={n.cliente_nome}>{n.cliente_nome}</td>
+                        <td style={{ padding: '8px 10px', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: T.inkDim }} title={n.produto_descricao}>{n.produto_descricao}</td>
+                        <td style={{ padding: '8px 10px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 600 }}>{fmtMoedaCompacta(Number(n.valor_bruto) || 0)}</td>
+                        <td style={{ padding: '8px 10px', whiteSpace: 'nowrap', color: T.oliveText, fontWeight: 600 }}>{fmtData(n.data_faturamento)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            {pedidosFiltrados.length === 0 && brFiltro !== 'Todos' && !notaVendaMap[brFiltro] && (
+              <div style={{ padding: '20px 16px', textAlign: 'center', color: T.inkFaint, fontSize: 13 }}>
+                Nenhum pedido de venda ou NF encontrado para {brFiltro} no período sincronizado.
+              </div>
+            )}
             <div style={{ padding: '8px 10px', borderTop: `1px solid ${T.line}`, fontSize: 11, color: T.inkFaint }}>
-              Clique em um BR para filtrar as duas tabelas · dados de <code style={{ fontSize: 10 }}>pedidos_itens</code> (sync Faturamento)
+              Clique em um BR para filtrar · pedidos_itens sincronizado de <strong>jan/2026</strong> em diante · NFs desde sempre
             </div>
           </div>
         )}
