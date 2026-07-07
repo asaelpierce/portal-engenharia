@@ -1527,10 +1527,10 @@ function EquipamentosTerceiros() {
   const brsSemPedido = useMemo(() =>
     dados
       .map(d => d.br_referencia)
-      .filter(b => b && b !== '<SEM PROJETO>' && !brsComPedido.has(b))
+      .filter(b => b && b !== '<SEM PROJETO>' && !brsComPedido.has(b) && !brsComNf.has(b))
       .filter((b, i, arr) => arr.indexOf(b) === i)
       .sort(),
-  [dados, brsComPedido]);
+  [dados, brsComPedido, brsComNf]);
 
   // BRs com NF de venda emitida (direto do notaVendaMap, keyed by BR)
   const brsComNf = useMemo(() =>
@@ -1925,7 +1925,7 @@ function EquipamentosTerceiros() {
           <div style={{ marginBottom: 14 }}>
             <div style={{ fontSize: 11.5, fontWeight: 700, color: T.rustText, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
               <AlertTriangle size={13} color={T.rust} />
-              {brsSemPedido.length} BR{brsSemPedido.length !== 1 ? 's' : ''} sem pedido de venda no sistema
+              {brsSemPedido.length} BR{brsSemPedido.length !== 1 ? 's' : ''} sem pedido de venda — verifique se o Faturamento está sincronizado desde ago/2025
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 8 }}>
               {brsSemPedido.map(br => {
@@ -2516,7 +2516,7 @@ const MESES_FAT = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set'
 
 function Faturamento() {
   const anoAtual = new Date().getFullYear();
-  const [filtros, setFiltros] = useState({ anoIni: anoAtual, anoFim: anoAtual, mesIni: 1, mesFim: 12, vendedor: '' });
+  const [filtros, setFiltros] = useState({ anoIni: 2025, anoFim: anoAtual, mesIni: 8, mesFim: 12, vendedor: '' });
   const [netMensal, setNetMensal] = useState([]);
   const [notaVenda, setNotaVenda] = useState([]);
   const [porKaleng, setPorKaleng] = useState([]);
@@ -2809,7 +2809,7 @@ function Faturamento() {
         </div>
       )}
 
-      <button onClick={() => setFiltros(f => ({ ...f, anoIni: 2020, anoFim: anoAtual, mesIni: 1, mesFim: 12 }))} style={{
+      <button onClick={() => setFiltros(f => ({ ...f, anoIni: 2025, anoFim: anoAtual, mesIni: 8, mesFim: 12 }))} style={{
         alignSelf: 'flex-start', background: 'transparent', border: 'none', color: T.terracottaText, fontSize: 12, fontWeight: 600,
         textDecoration: 'underline', padding: 0, marginTop: -10,
       }}>
