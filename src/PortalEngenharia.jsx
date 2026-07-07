@@ -1826,25 +1826,37 @@ function EquipamentosTerceiros() {
                 <tr><td colSpan={12} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>
                   {dados.length === 0 ? 'Nenhum dado — clique em "Sincronizar Sankhya" para importar.' : 'Nenhum item encontrado com os filtros aplicados.'}
                 </td></tr>
-              ) : filtrados.map(r => {
+              ) : filtrados.map((r, i) => {
                 const d = diasAberto(r);
                 const [dCor, dBg] = diasCor(d);
                 const st = statusRow(r);
                 const { cor: stCor, bg: stBg, icone } = statusMeta(st);
                 const brRef = r.br_referencia || r.projeto_br || r.projeto_br_retorno;
                 const bg = rowBg(r);
+                // Agrupa visualmente linhas da mesma nota de origem
+                const prevR = i > 0 ? filtrados[i - 1] : null;
+                const mesmaNotaAnterior = prevR && prevR.nunota_origem === r.nunota_origem;
+                const rowBgFinal = mesmaNotaAnterior ? `${bg === 'transparent' ? T.panelAlt + '88' : bg}` : bg;
                 return (
                   <tr key={r.id} onClick={() => abrirDetalhe(r)} style={{
-                    borderBottom: `1px solid ${T.lineSoft}`, cursor: 'pointer', background: bg,
+                    borderBottom: `1px solid ${T.lineSoft}`, cursor: 'pointer',
+                    background: rowBgFinal,
+                    borderLeft: mesmaNotaAnterior ? `3px solid ${T.terracotta}44` : '3px solid transparent',
                   }}
                     onMouseEnter={e => e.currentTarget.style.background = T.panelAlt}
-                    onMouseLeave={e => e.currentTarget.style.background = bg}
+                    onMouseLeave={e => e.currentTarget.style.background = rowBgFinal}
                   >
-                    <td style={{ padding: '9px 12px', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.terracotta }}>{r.numnota_origem || '—'}</td>
+                    <td style={{ padding: '9px 12px', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.terracotta }}>
+                      {mesmaNotaAnterior
+                        ? <span style={{ color: T.terracotta, opacity: 0.4, paddingLeft: 4 }}>↳</span>
+                        : r.numnota_origem || '—'}
+                    </td>
                     <td style={{ padding: '9px 12px', fontSize: 11.5 }}>
-                      {r.projeto_br
-                        ? <span style={{ fontWeight: 700, color: T.blueText }}>{r.projeto_br}</span>
-                        : <span style={{ color: T.inkFaint }}>—</span>}
+                      {mesmaNotaAnterior
+                        ? <span style={{ color: T.inkFaint, fontSize: 11 }}>↳</span>
+                        : r.projeto_br
+                          ? <span style={{ fontWeight: 700, color: T.blueText }}>{r.projeto_br}</span>
+                          : <span style={{ color: T.inkFaint }}>—</span>}
                     </td>
                     <td style={{ padding: '9px 12px', fontSize: 11.5 }}>
                       {r.projeto_br_retorno
