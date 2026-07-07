@@ -2075,10 +2075,18 @@ function EquipamentosTerceiros() {
                   const isSelecionado = brFiltro !== 'Todos' && p.br === brFiltro;
                   const nfInfo = notaVendaMap[p.br];
                   const semNf = !nfInfo;
-                  const rowBg = semNf ? `${T.amberSoft}BB` : isSelecionado ? `${T.terracottaSoft}66` : 'transparent';
+                  // Detecta se a linha anterior tem a mesma NF (para agrupar visualmente)
+                  const prevP = i > 0 ? pedidosFiltrados[i - 1] : null;
+                  const mesmoNfAnterior = prevP && prevP.numero_pedido === p.numero_pedido && prevP.br === p.br;
+                  const rowBg = semNf
+                    ? `${T.amberSoft}BB`
+                    : mesmoNfAnterior
+                    ? `${T.oliveSoft}55`
+                    : isSelecionado ? `${T.terracottaSoft}66` : 'transparent';
                   return (
                     <tr key={i}
-                      style={{ borderBottom: `1px solid ${T.lineSoft}`, background: rowBg }}
+                      style={{ borderBottom: `1px solid ${T.lineSoft}`, background: rowBg,
+                        borderLeft: mesmoNfAnterior ? `3px solid ${T.olive}55` : '3px solid transparent' }}
                       onMouseEnter={e => e.currentTarget.style.background = semNf ? T.amberSoft : T.panelAlt}
                       onMouseLeave={e => e.currentTarget.style.background = rowBg}
                     >
@@ -2099,8 +2107,9 @@ function EquipamentosTerceiros() {
                       <td style={{ padding: '8px 10px', maxWidth: 130, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 11.5 }}>{p.vendedor_nome}</td>
                       <td style={{ padding: '8px 10px', textAlign: 'center', fontSize: 11, fontWeight: 600, color: T.inkDim }}>{p.uf}</td>
                       <td style={{ padding: '8px 10px', whiteSpace: 'nowrap' }}>
-                        {nfInfo ? (() => {
-                          // Filtra NFs pelo numero_pedido da linha; se não achar, mostra todas do BR
+                        {mesmoNfAnterior ? (
+                          <span style={{ fontSize: 11, color: T.oliveText, paddingLeft: 4 }}>↳</span>
+                        ) : nfInfo ? (() => {
                           const itens = nfInfo.itens || [];
                           const doPedido = itens.filter(n => n.numero_pedido === p.numero_pedido);
                           const lista = doPedido.length > 0 ? doPedido : itens;
