@@ -1466,21 +1466,20 @@ function EquipamentosTerceiros() {
         .order('data_neg', { ascending: false });
       setPedidosVenda(pedidos || []);
 
-      // Verifica quais pedidos têm NF emitida — chave composta br+numero_pedido
-      // para evitar cruzar BRs com mesmo numero_pedido (ex: ArcelorMittal tem múltiplos projetos)
-      // TOPs 3200, 3213, 3214, 3220 = notas fiscais de venda reais
+      // Verifica NFs de venda diretamente pelo BR (não via numero_pedido)
+      // TOPs de venda: 3101, 3200, 3210, 3213, 3214, 3220
+      // Chave por BR para capturar inclusive BRs sem pedido em pedidos_itens
       if (brs.length > 0) {
         const { data: notas } = await supabase
           .from('nota_venda_itens')
-          .select('br, numero_pedido, data_faturamento')
+          .select('br, data_faturamento')
           .in('br', brs)
-          .in('codtipoper', [3200, 3213, 3214, 3220]);
-        // Map: "br||numero_pedido" → data da NF mais recente
+          .in('codtipoper', [3101, 3200, 3210, 3213, 3214, 3220]);
+        // Map: br → data da NF mais recente
         const map = {};
         (notas || []).forEach(n => {
-          const key = `${n.br}||${n.numero_pedido}`;
-          if (!map[key] || n.data_faturamento > map[key]) {
-            map[key] = n.data_faturamento;
+          if (!map[n.br] || n.data_faturamento > map[n.br]) {
+            map[n.br] = n.data_faturamento;
           }
         });
         setNotaVendaMap(map);
@@ -1533,10 +1532,10 @@ function EquipamentosTerceiros() {
       .sort(),
   [dados, brsComPedido]);
 
-  // BRs com NF de itens emitida (pedido tem entrada em notaVendaMap)
+  // BRs com NF de venda emitida (direto do notaVendaMap, keyed by BR)
   const brsComNf = useMemo(() =>
-    new Set(pedidosVenda.filter(p => notaVendaMap[`${p.br}||${p.numero_pedido}`]).map(p => p.br).filter(Boolean)),
-  [pedidosVenda, notaVendaMap]);
+    new Set(Object.keys(notaVendaMap)),
+  [notaVendaMap]);
 
   // BRs com nota de retorno (equipamento voltou)
   const brsComRetorno = useMemo(() =>
@@ -1564,7 +1563,7 @@ function EquipamentosTerceiros() {
       const matchKaleng = !colFilters.produto_kaleng  || (p.produto_kaleng  || '').toLowerCase().includes(colFilters.produto_kaleng.toLowerCase());
       const matchVend   = !colFilters.vendedor_nome   || (p.vendedor_nome   || '').toLowerCase().includes(colFilters.vendedor_nome.toLowerCase());
       const matchUf     = !colFilters.uf              || (p.uf              || '').toLowerCase().includes(colFilters.uf.toLowerCase());
-      const hasNf = !!notaVendaMap[`${p.br}||${p.numero_pedido}`];
+      const hasNf = !!notaVendaMap[p.br];
       const matchNfSt   = colFilters.nf_status === 'Todos' ||
                           (colFilters.nf_status === 'Faturado' && hasNf) ||
                           (colFilters.nf_status === 'Sem NF' && !hasNf);
@@ -1868,7 +1867,7 @@ function EquipamentosTerceiros() {
                 background: colFilters.nf_status === 'Sem NF' ? T.amberText : T.amberSoft,
                 color:      colFilters.nf_status === 'Sem NF' ? '#fff'      : T.amberText,
               }}>
-              ✗ Sem NF ({pedidosVenda.filter(p => !notaVendaMap[`${p.br}||${p.numero_pedido}`]).length})
+              ✗ Sem NF ({pedidosVenda.filter(p => !notaVendaMap[p.br]).length})
             </button>
             {brFiltro !== 'Todos' && (
               <button onClick={() => { setBrFiltro('Todos'); }} style={{ fontSize: 11, color: T.inkFaint, background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 5, padding: '4px 9px', cursor: 'pointer' }}>✕ Limpar BR</button>
@@ -2035,7 +2034,7 @@ function EquipamentosTerceiros() {
               <tbody>
                 {pedidosFiltrados.map((p, i) => {
                   const isSelecionado = brFiltro !== 'Todos' && p.br === brFiltro;
-                  const nfInfo = notaVendaMap[`${p.br}||${p.numero_pedido}`];
+                  const nfInfo = notaVendaMap[p.br];
                   const semNf = !nfInfo;
                   const rowBg = semNf ? `${T.amberSoft}BB` : isSelecionado ? `${T.terracottaSoft}66` : 'transparent';
                   return (
