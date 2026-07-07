@@ -1398,6 +1398,45 @@ function Metricas({ propostas }) {
    Espelha a view Sankhya: TOPs 2105/2108 (entrada) vs 2409/2410 (retorno)
    Sync via Edge Function sankhya-equipamentos-sync
 ============================================================================ */
+/* NFs agrupadas por número — usado no fallback quando pedido está fora do sync */
+function NfsAgrupadasCard({ itens, fmtData, fmtMoedaCompacta }) {
+  const grupos = React.useMemo(() => {
+    const map = {};
+    (itens || []).forEach(n => {
+      const k = String(n.nro_interno_sankhya || '?').trim();
+      if (!map[k]) map[k] = { nf: k, top: n.codtipoper, pedido: n.numero_pedido, cliente: n.cliente_nome, data: n.data_faturamento, valor: 0, descricoes: [] };
+      map[k].valor += Number(n.valor_bruto) || 0;
+      if (n.produto_descricao) map[k].descricoes.push(n.produto_descricao);
+    });
+    return Object.values(map).sort((a, b) => (b.data || '').localeCompare(a.data || ''));
+  }, [itens]);
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      {grupos.map((g, i) => (
+        <div key={i} style={{ border: `1.5px solid #1D9E7544`, borderRadius: 8, overflow: 'hidden' }}>
+          <div style={{ background: '#E8F5F0', padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
+            <span style={{ fontFamily: FONT_DISPLAY, fontSize: 19, fontWeight: 700, color: '#1D7A55' }}>✓ NF {g.nf}</span>
+            <span style={{ fontSize: 11, color: '#4A7A6A' }}>TOP {g.top}</span>
+            {g.pedido && <span style={{ fontSize: 11, color: '#4A7A6A' }}>Pedido {g.pedido}</span>}
+            <span style={{ flex: 1 }} />
+            <span style={{ fontFamily: FONT_DISPLAY, fontSize: 15, fontWeight: 700, color: '#1D7A55' }}>{fmtMoedaCompacta(g.valor)}</span>
+            <span style={{ fontSize: 12, fontWeight: 600, color: '#1D7A55' }}>{fmtData(g.data)}</span>
+          </div>
+          <div style={{ padding: '8px 14px', background: '#fff' }}>
+            <div style={{ fontSize: 10.5, color: '#888', fontWeight: 600, marginBottom: 6 }}>
+              {g.descricoes.length} item{g.descricoes.length !== 1 ? 's' : ''} · {g.cliente}
+            </div>
+            {g.descricoes.map((d, j) => (
+              <div key={j} style={{ fontSize: 11.5, color: '#555', padding: '3px 0', borderBottom: j < g.descricoes.length - 1 ? '1px solid #f0ede8' : 'none' }}>{d}</div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function EquipamentosTerceiros() {
   const [dados, setDados] = useState([]);
   const [pedidosVenda, setPedidosVenda] = useState([]);
@@ -2095,45 +2134,11 @@ function EquipamentosTerceiros() {
                   O pedido deste BR tem data de negociação anterior a jan/2026. Sincronize o Faturamento desde ago/2025 para ver o pedido completo.
                 </div>
                 {/* Agrupa por NF */}
-                {(() => {
-                  const grupos = Object.values(
-                    (notaVendaMap[brFiltro].itens || []).reduce((acc, n) => {
-                      const k = n.nro_interno_sankhya || '?';
-                      if (!acc[k]) acc[k] = { nf: k, top: n.codtipoper, pedido: n.numero_pedido, cliente: n.cliente_nome, data: n.data_faturamento, valor: 0, itens: [] };
-                      acc[k].valor += Number(n.valor_bruto) || 0;
-                      if (n.produto_descricao) acc[k].itens.push(n.produto_descricao);
-                      return acc;
-                    }, {})
-                  );
-                  return (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                      {grupos.map((g, i) => (
-                        <div key={i} style={{ border: `1.5px solid ${T.olive}44`, borderRadius: 8, overflow: 'hidden' }}>
-                          {/* Cabeçalho da NF */}
-                          <div style={{ background: T.oliveSoft, padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
-                            <span style={{ fontFamily: FONT_DISPLAY, fontSize: 18, fontWeight: 700, color: T.oliveText }}>✓ NF {g.nf}</span>
-                            <span style={{ fontSize: 11, color: T.inkFaint }}>TOP {g.top}</span>
-                            {g.pedido && <span style={{ fontSize: 11, color: T.inkFaint }}>Pedido {g.pedido}</span>}
-                            <span style={{ flex: 1 }} />
-                            <span style={{ fontFamily: FONT_DISPLAY, fontSize: 15, fontWeight: 700, color: T.oliveText }}>{fmtMoedaCompacta(g.valor)}</span>
-                            <span style={{ fontSize: 12, fontWeight: 600, color: T.oliveText }}>{fmtData(g.data)}</span>
-                          </div>
-                          {/* Itens da NF */}
-                          <div style={{ padding: '8px 14px' }}>
-                            <div style={{ fontSize: 10.5, color: T.inkFaint, fontWeight: 600, marginBottom: 5 }}>
-                              {g.itens.length} item{g.itens.length !== 1 ? 's' : ''} · {g.cliente}
-                            </div>
-                            {g.itens.map((desc, j) => (
-                              <div key={j} style={{ fontSize: 11.5, color: T.inkDim, padding: '3px 0', borderBottom: j < g.itens.length - 1 ? `1px solid ${T.lineSoft}` : 'none' }}>
-                                {desc}
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  );
-                })()}
+                <NfsAgrupadasCard
+                  itens={notaVendaMap[brFiltro].itens}
+                  fmtData={fmtData}
+                  fmtMoedaCompacta={fmtMoedaCompacta}
+                />
               </div>
             )}
             {pedidosFiltrados.length === 0 && brFiltro !== 'Todos' && !notaVendaMap[brFiltro] && (
