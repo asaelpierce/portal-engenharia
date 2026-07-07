@@ -2060,12 +2060,22 @@ function EquipamentosTerceiros() {
                       <td style={{ padding: '8px 10px', maxWidth: 130, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 11.5 }}>{p.vendedor_nome}</td>
                       <td style={{ padding: '8px 10px', textAlign: 'center', fontSize: 11, fontWeight: 600, color: T.inkDim }}>{p.uf}</td>
                       <td style={{ padding: '8px 10px', whiteSpace: 'nowrap' }}>
-                        {nfInfo ? (
-                          <div>
-                            <span style={{ fontSize: 10.5, fontWeight: 700, background: T.oliveSoft, color: T.oliveText, padding: '2px 7px', borderRadius: 4 }}>✓ Faturado</span>
-                            <div style={{ fontSize: 10, color: T.inkFaint, marginTop: 2 }}>{fmtData(nfInfo.data)}</div>
-                          </div>
-                        ) : (
+                        {nfInfo ? (() => {
+                          // Filtra NFs pelo numero_pedido da linha; se não achar, mostra todas do BR
+                          const itens = nfInfo.itens || [];
+                          const doPedido = itens.filter(n => n.numero_pedido === p.numero_pedido);
+                          const lista = doPedido.length > 0 ? doPedido : itens;
+                          const nfs = [...new Set(lista.map(n => n.nro_interno_sankhya).filter(Boolean))];
+                          const dataStr = nfInfo.data ? fmtData(nfInfo.data) : '';
+                          return (
+                            <div>
+                              <span style={{ fontSize: 10.5, fontWeight: 700, background: T.oliveSoft, color: T.oliveText, padding: '2px 7px', borderRadius: 4 }}>
+                                ✓ NF {nfs.join(', ') || '—'}
+                              </span>
+                              {dataStr && <div style={{ fontSize: 10, color: T.inkFaint, marginTop: 2 }}>{dataStr}</div>}
+                            </div>
+                          );
+                        })() : (
                           <span style={{ fontSize: 10.5, fontWeight: 700, background: T.amberSoft, color: T.amberText, padding: '2px 7px', borderRadius: 4 }}>✗ Sem NF</span>
                         )}
                       </td>
@@ -2081,32 +2091,49 @@ function EquipamentosTerceiros() {
                   <AlertTriangle size={14} color={T.amberText} />
                   Pedido de venda fora do período sincronizado — mostrando NFs direto de nota_venda_itens
                 </div>
-                <div style={{ fontSize: 11, color: T.inkFaint, marginBottom: 10 }}>
-                  O pedido deste BR tem data de negociação anterior a jan/2026 (limite atual do sync em Faturamento).
-                  Para ver o pedido completo, sincronize o Faturamento com o período correspondente.
+                <div style={{ fontSize: 11, color: T.inkFaint, marginBottom: 12 }}>
+                  O pedido deste BR tem data de negociação anterior a jan/2026. Sincronize o Faturamento desde ago/2025 para ver o pedido completo.
                 </div>
-                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11.5 }}>
-                  <thead>
-                    <tr style={{ background: T.panelAlt, borderBottom: `1px solid ${T.line}` }}>
-                      {['NF', 'TOP', 'Nº Pedido', 'Cliente', 'Produto', 'Valor', 'Data Faturamento'].map(h => (
-                        <th key={h} style={{ ...thFat(0, 'left'), whiteSpace: 'nowrap' }}>{h}</th>
+                {/* Agrupa por NF */}
+                {(() => {
+                  const grupos = Object.values(
+                    (notaVendaMap[brFiltro].itens || []).reduce((acc, n) => {
+                      const k = n.nro_interno_sankhya || '?';
+                      if (!acc[k]) acc[k] = { nf: k, top: n.codtipoper, pedido: n.numero_pedido, cliente: n.cliente_nome, data: n.data_faturamento, valor: 0, itens: [] };
+                      acc[k].valor += Number(n.valor_bruto) || 0;
+                      if (n.produto_descricao) acc[k].itens.push(n.produto_descricao);
+                      return acc;
+                    }, {})
+                  );
+                  return (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                      {grupos.map((g, i) => (
+                        <div key={i} style={{ border: `1.5px solid ${T.olive}44`, borderRadius: 8, overflow: 'hidden' }}>
+                          {/* Cabeçalho da NF */}
+                          <div style={{ background: T.oliveSoft, padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+                            <span style={{ fontFamily: FONT_DISPLAY, fontSize: 18, fontWeight: 700, color: T.oliveText }}>✓ NF {g.nf}</span>
+                            <span style={{ fontSize: 11, color: T.inkFaint }}>TOP {g.top}</span>
+                            {g.pedido && <span style={{ fontSize: 11, color: T.inkFaint }}>Pedido {g.pedido}</span>}
+                            <span style={{ flex: 1 }} />
+                            <span style={{ fontFamily: FONT_DISPLAY, fontSize: 15, fontWeight: 700, color: T.oliveText }}>{fmtMoedaCompacta(g.valor)}</span>
+                            <span style={{ fontSize: 12, fontWeight: 600, color: T.oliveText }}>{fmtData(g.data)}</span>
+                          </div>
+                          {/* Itens da NF */}
+                          <div style={{ padding: '8px 14px' }}>
+                            <div style={{ fontSize: 10.5, color: T.inkFaint, fontWeight: 600, marginBottom: 5 }}>
+                              {g.itens.length} item{g.itens.length !== 1 ? 's' : ''} · {g.cliente}
+                            </div>
+                            {g.itens.map((desc, j) => (
+                              <div key={j} style={{ fontSize: 11.5, color: T.inkDim, padding: '3px 0', borderBottom: j < g.itens.length - 1 ? `1px solid ${T.lineSoft}` : 'none' }}>
+                                {desc}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
                       ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {notaVendaMap[brFiltro].itens.map((n, i) => (
-                      <tr key={i} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
-                        <td style={{ padding: '8px 10px', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.oliveText }}>✓ NF {n.nro_interno_sankhya}</td>
-                        <td style={{ padding: '8px 10px', fontSize: 11, color: T.inkFaint }}>{n.codtipoper}</td>
-                        <td style={{ padding: '8px 10px', fontFamily: FONT_DISPLAY, fontSize: 11, color: T.inkDim }}>{n.numero_pedido}</td>
-                        <td style={{ padding: '8px 10px', maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={n.cliente_nome}>{n.cliente_nome}</td>
-                        <td style={{ padding: '8px 10px', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: T.inkDim }} title={n.produto_descricao}>{n.produto_descricao}</td>
-                        <td style={{ padding: '8px 10px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 600 }}>{fmtMoedaCompacta(Number(n.valor_bruto) || 0)}</td>
-                        <td style={{ padding: '8px 10px', whiteSpace: 'nowrap', color: T.oliveText, fontWeight: 600 }}>{fmtData(n.data_faturamento)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </div>
+                  );
+                })()}
               </div>
             )}
             {pedidosFiltrados.length === 0 && brFiltro !== 'Todos' && !notaVendaMap[brFiltro] && (
