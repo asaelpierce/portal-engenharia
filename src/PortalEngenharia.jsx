@@ -1502,13 +1502,7 @@ function PainelComercial() {
         const { cat } = statusMeta(d);
         const matchVend   = vendFiltro === 'Todos' || r.vendedor === vendFiltro;
         const matchBr     = !brBusca || (r.br||'').toLowerCase().includes(brBusca.toLowerCase());
-        const matchStatus =
-          statusFiltro === 'Todos'       ? true :
-          statusFiltro === 'Antecipado'  ? cat === 'antecipado' :
-          statusFiltro === 'No prazo'    ? cat === 'prazo' :
-          statusFiltro === 'Atraso leve' ? cat === 'leve' :
-          statusFiltro === 'Atraso mod.' ? cat === 'moderado' :
-          statusFiltro === 'Atraso grave'? cat === 'grave' : true;
+        const matchStatus = statusFiltro === 'Todos' || cat === statusFiltro;
         return matchVend && matchBr && matchStatus;
       })
       .sort((a, b) => {
@@ -1577,11 +1571,11 @@ function PainelComercial() {
   // Distribuição por categoria para barras visuais
   const dist = useMemo(() => {
     const cats = [
-      { key: 'antecipado',  label: 'Antecipado',   cor: T.blueText,  bg: T.blueSoft,  fn: r => diasAtraso(r) !== null && diasAtraso(r) < 0 },
-      { key: 'prazo',       label: 'No prazo',      cor: T.oliveText, bg: T.oliveSoft, fn: r => diasAtraso(r) === 0 },
-      { key: 'leve',        label: 'Atraso 1–7d',   cor: '#065f46',   bg: '#d1fae5',   fn: r => { const d=diasAtraso(r); return d!==null&&d>0&&d<=7; } },
-      { key: 'moderado',    label: 'Atraso 8–14d',  cor: T.amberText, bg: T.amberSoft, fn: r => { const d=diasAtraso(r); return d!==null&&d>7&&d<=14; } },
-      { key: 'grave',       label: 'Atraso 15d+',   cor: T.rustText,  bg: T.rustSoft,  fn: r => { const d=diasAtraso(r); return d!==null&&d>14; } },
+      { cat: 'antecipado', label: 'Antecipado',   cor: T.blueText,  bg: T.blueSoft,  fn: r => diasAtraso(r) !== null && diasAtraso(r) < 0 },
+      { cat: 'prazo',      label: 'No prazo',      cor: T.oliveText, bg: T.oliveSoft, fn: r => diasAtraso(r) === 0 },
+      { cat: 'leve',       label: 'Atraso 1–7d',   cor: '#065f46',   bg: '#d1fae5',   fn: r => { const d=diasAtraso(r); return d!==null&&d>0&&d<=7; } },
+      { cat: 'moderado',   label: 'Atraso 8–14d',  cor: T.amberText, bg: T.amberSoft, fn: r => { const d=diasAtraso(r); return d!==null&&d>7&&d<=14; } },
+      { cat: 'grave',      label: 'Atraso 15d+',   cor: T.rustText,  bg: T.rustSoft,  fn: r => { const d=diasAtraso(r); return d!==null&&d>14; } },
     ];
     const total = filtrados.filter(r => diasAtraso(r) !== null).length || 1;
     return cats.map(c => ({ ...c, count: filtrados.filter(c.fn).length, pct: Math.round(filtrados.filter(c.fn).length / total * 100) }));
@@ -1644,7 +1638,7 @@ function PainelComercial() {
         <Panel title="Distribuição de pontualidade" subtitle="NF emitida vs data prevista no pedido — clique para filtrar">
           <div style={{ display: 'flex', gap: 0, marginTop: 12, borderRadius: 8, overflow: 'hidden', height: 28 }}>
             {dist.filter(c => c.count > 0).map(c => (
-              <div key={c.key} onClick={() => setStatusFiltro(statusFiltro === c.label ? 'Todos' : c.label)}
+              <div key={c.cat} onClick={() => setStatusFiltro(statusFiltro === c.cat ? 'Todos' : c.cat)}
                 title={`${c.label}: ${c.count} NFs (${c.pct}%)`}
                 style={{ flex: c.count, background: c.bg, borderRight: '1px solid rgba(255,255,255,0.5)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                 {c.pct >= 10 && <span style={{ fontSize: 10.5, fontWeight: 700, color: c.cor }}>{c.pct}%</span>}
@@ -1653,10 +1647,10 @@ function PainelComercial() {
           </div>
           <div style={{ display: 'flex', gap: 16, marginTop: 10, flexWrap: 'wrap' }}>
             {dist.map(c => (
-              <div key={c.key} onClick={() => setStatusFiltro(statusFiltro === c.label ? 'Todos' : c.label)}
+              <div key={c.cat} onClick={() => setStatusFiltro(statusFiltro === c.cat ? 'Todos' : c.cat)}
                 style={{ display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer' }}>
                 <span style={{ width: 10, height: 10, borderRadius: 2, background: c.bg, border: `1px solid ${c.cor}`, display: 'inline-block' }} />
-                <span style={{ fontSize: 11, color: statusFiltro === c.label ? c.cor : T.inkFaint, fontWeight: statusFiltro === c.label ? 700 : 400 }}>
+                <span style={{ fontSize: 11, color: statusFiltro === c.cat ? c.cor : T.inkFaint, fontWeight: statusFiltro === c.cat ? 700 : 400 }}>
                   {c.label} ({c.count})
                 </span>
               </div>
@@ -1683,9 +1677,12 @@ function PainelComercial() {
           <FiltroCampoFat label="Pontualidade">
             <div style={{ position: 'relative' }}>
               <select value={statusFiltro} onChange={e => setStatusFiltro(e.target.value)} style={selectStyleFat(170)}>
-                {['Todos','Antecipado','No prazo','Atraso leve','Atraso mod.','Atraso grave'].map(v => (
-                  <option key={v} value={v}>{v}</option>
-                ))}
+                <option value="Todos">Todos</option>
+                <option value="antecipado">Antecipado</option>
+                <option value="prazo">No prazo</option>
+                <option value="leve">Atraso 1–7d</option>
+                <option value="moderado">Atraso 8–14d</option>
+                <option value="grave">Atraso 15d+</option>
               </select>
               <ChevronDown size={13} style={chevronStyleFat} />
             </div>
