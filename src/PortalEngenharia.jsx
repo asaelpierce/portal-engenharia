@@ -1412,6 +1412,7 @@ function PainelComercial() {
   const [deAte, setDeAte] = useState(mesAtual);
   const [vendFiltro, setVendFiltro] = useState('Todos');
   const [brBusca, setBrBusca] = useState('');
+  const [clienteBusca, setClienteBusca] = useState('');
   const [statusFiltro, setStatusFiltro] = useState('Todos');
   const [sortCol, setSortCol] = useState('nf_emitida');
   const [sortDir, setSortDir] = useState('desc');
@@ -1502,8 +1503,9 @@ function PainelComercial() {
         const { cat } = statusMeta(d);
         const matchVend   = vendFiltro === 'Todos' || r.vendedor === vendFiltro;
         const matchBr     = !brBusca || (r.br||'').toLowerCase().includes(brBusca.toLowerCase());
+        const matchCliente = !clienteBusca || (r.cliente||'').toLowerCase().includes(clienteBusca.toLowerCase());
         const matchStatus = statusFiltro === 'Todos' || cat === statusFiltro;
-        return matchVend && matchBr && matchStatus;
+        return matchVend && matchBr && matchCliente && matchStatus;
       })
       .sort((a, b) => {
         let va = sortCol === 'atraso' ? (diasAtraso(a) ?? 9999) : (a[sortCol] ?? '');
@@ -1517,16 +1519,18 @@ function PainelComercial() {
   const kpis = useMemo(() => {
     const total = filtrados.reduce((s,r) => s + r.valor, 0);
     const comData = filtrados.filter(r => diasAtraso(r) !== null);
-    const nPrazo  = comData.filter(r => diasAtraso(r) <= 0).length;
-    const nAtraso = comData.filter(r => diasAtraso(r) > 0).length;
-    const nAntes  = comData.filter(r => diasAtraso(r) < 0).length;
+    const n = comData.length || 1;
+    const nAntes   = comData.filter(r => diasAtraso(r) < 0).length;
+    const nPrazo   = comData.filter(r => diasAtraso(r) === 0).length;
+    const nAtraso  = comData.filter(r => diasAtraso(r) > 0).length;
     const atrasados = comData.filter(r => diasAtraso(r) > 0).map(r => diasAtraso(r));
     return {
       total,
       nfs: filtrados.length,
-      pctPrazo:  comData.length ? Math.round(nPrazo  / comData.length * 100) : null,
-      pctAtraso: comData.length ? Math.round(nAtraso / comData.length * 100) : null,
-      pctAntes:  comData.length ? Math.round(nAntes  / comData.length * 100) : null,
+      pctAntes:        Math.round(nAntes  / n * 100),
+      pctPrazo:        Math.round(nPrazo  / n * 100),
+      pctNoPrazoOuAntes: Math.round((nAntes + nPrazo) / n * 100),
+      pctAtraso:       Math.round(nAtraso / n * 100),
       mediaAtraso: atrasados.length ? Math.round(atrasados.reduce((s,d)=>s+d,0)/atrasados.length) : null,
     };
   }, [filtrados]);
@@ -1614,13 +1618,14 @@ function PainelComercial() {
       {/* KPIs */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(140px,1fr))', gap: 12 }}>
         {[
-          { label: 'Total faturado',      value: fmtMoedaCompacta(kpis.total),                             color: T.terracotta, big: true },
-          { label: 'NFs emitidas',         value: kpis.nfs,                                                  color: T.ink },
-          { label: '% no prazo ou antes', value: kpis.pctPrazo !== null ? `${kpis.pctPrazo + (kpis.pctAntes||0)}%` : '—',
-            color: (kpis.pctPrazo + (kpis.pctAntes||0)) >= 70 ? T.oliveText : T.amberText },
-          { label: '% atrasado',          value: kpis.pctAtraso !== null ? `${kpis.pctAtraso}%` : '—',
-            color: kpis.pctAtraso > 30 ? T.rustText : kpis.pctAtraso > 10 ? T.amberText : T.oliveText },
-          { label: '% antecipado',        value: kpis.pctAntes !== null ? `${kpis.pctAntes}%` : '—',        color: T.blueText },
+          { label: 'Total faturado',      value: fmtMoedaCompacta(kpis.total),                color: T.terracotta, big: true },
+          { label: 'NFs emitidas',         value: kpis.nfs,                                    color: T.ink },
+          { label: '% no prazo ou antes', value: `${kpis.pctNoPrazoOuAntes}%`,
+            color: kpis.pctNoPrazoOuAntes >= 70 ? T.oliveText : kpis.pctNoPrazoOuAntes >= 40 ? T.amberText : T.rustText },
+          { label: '% atrasado',          value: `${kpis.pctAtraso}%`,
+            color: kpis.pctAtraso > 50 ? T.rustText : kpis.pctAtraso > 20 ? T.amberText : T.oliveText },
+          { label: '% antecipado',        value: `${kpis.pctAntes}%`,  color: T.blueText },
+          { label: '% no prazo exato',    value: `${kpis.pctPrazo}%`,  color: T.oliveText },
           { label: 'Atraso médio (dias)', value: kpis.mediaAtraso !== null ? `${kpis.mediaAtraso}d` : '—',
             color: kpis.mediaAtraso > 14 ? T.rustText : kpis.mediaAtraso > 7 ? T.amberText : T.oliveText },
         ].map(k => (
@@ -1641,7 +1646,7 @@ function PainelComercial() {
               <div key={c.cat} onClick={() => setStatusFiltro(statusFiltro === c.cat ? 'Todos' : c.cat)}
                 title={`${c.label}: ${c.count} NFs (${c.pct}%)`}
                 style={{ flex: c.count, background: c.bg, borderRight: '1px solid rgba(255,255,255,0.5)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                {c.pct >= 10 && <span style={{ fontSize: 10.5, fontWeight: 700, color: c.cor }}>{c.pct}%</span>}
+                {c.pct > 0 && <span style={{ fontSize: 10.5, fontWeight: 700, color: c.cor }}>{c.pct >= 5 ? `${c.pct}%` : '·'}</span>}
               </div>
             ))}
           </div>
@@ -1662,6 +1667,11 @@ function PainelComercial() {
       {/* Filtros */}
       <Panel>
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+          <FiltroCampoFat label="Cliente">
+            <input value={clienteBusca} onChange={e => setClienteBusca(e.target.value)}
+              placeholder="Ex: Vale, Ternium…"
+              style={{ ...selectStyleFat(180), paddingLeft: 10 }} />
+          </FiltroCampoFat>
           <FiltroCampoFat label="BR">
             <input value={brBusca} onChange={e => setBrBusca(e.target.value)} placeholder="Ex: BR14191/26"
               style={{ ...selectStyleFat(160), paddingLeft: 10 }} />
@@ -1687,8 +1697,8 @@ function PainelComercial() {
               <ChevronDown size={13} style={chevronStyleFat} />
             </div>
           </FiltroCampoFat>
-          {(brBusca || vendFiltro !== 'Todos' || statusFiltro !== 'Todos') && (
-            <button onClick={() => { setBrBusca(''); setVendFiltro('Todos'); setStatusFiltro('Todos'); }}
+          {(brBusca || clienteBusca || vendFiltro !== 'Todos' || statusFiltro !== 'Todos') && (
+            <button onClick={() => { setBrBusca(''); setClienteBusca(''); setVendFiltro('Todos'); setStatusFiltro('Todos'); }}
               style={{ fontSize: 12, color: T.amberText, background: T.amberSoft, border: 'none', borderRadius: 5, padding: '6px 12px', cursor: 'pointer', fontWeight: 600 }}>
               ✕ Limpar
             </button>
