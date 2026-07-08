@@ -200,6 +200,13 @@ function TelaCarregando({ texto = 'Carregando…' }) {
 
 function PortalConteudo({ currentUser, session }) {
   const [view, setView] = useState('dashboard');
+
+  // Redireciona papel 'comercial' para a primeira aba permitida
+  useEffect(() => {
+    if (currentUser?.papel === 'comercial' && view === 'dashboard') {
+      setView('comercial');
+    }
+  }, [currentUser?.papel]);
   const [propostas, setPropostas] = useState([]);
   const [propostasLoading, setPropostasLoading] = useState(true);
   const [modal, setModal] = useState(null);
@@ -385,20 +392,26 @@ function PortalConteudo({ currentUser, session }) {
    SIDEBAR
 ============================================================================ */
 function Sidebar({ view, setView, pendCount, papel }) {
-  const items = [
+  // Controle de acesso por papel
+  const ACESSO = {
+    comercial: ['comercial', 'faturamento', 'equipamentos'],
+  };
+  const todosItems = [
     { id: 'dashboard',    label: 'Visão geral',           icon: LayoutGrid },
     { id: 'pendencias',   label: 'Minhas pendências',      icon: ClipboardCheck, badge: pendCount },
     { id: 'propostas',    label: 'Todas as propostas',     icon: FileStack },
     { id: 'metricas',     label: 'Métricas',               icon: BarChart2 },
     { id: 'produtividade',label: 'Produtividade',          icon: Gauge },
-    { id: 'comercial',    label: 'Painel Comercial',          icon: TrendingUp },
+    { id: 'comercial',    label: 'Painel Comercial',       icon: TrendingUp },
     { id: 'faturamento',  label: 'Faturamento (Sankhya)',  icon: DollarSign },
     { id: 'consumo_mp',   label: 'Consumo de MP',          icon: Layers },
     { id: 'almoxarifado', label: 'Almoxarifado',           icon: Package },
-    { id: 'equipamentos', label: 'Equip. Terceiros',        icon: Webhook },
+    { id: 'equipamentos', label: 'Equip. Terceiros',       icon: Webhook },
     { id: 'pedidosvale',  label: 'Pedidos Vale',           icon: FileWarning },
     { id: 'integracao',   label: 'Integrações',            icon: Workflow },
   ];
+  const permitidos = ACESSO[papel];
+  const items = permitidos ? todosItems.filter(i => permitidos.includes(i.id)) : todosItems;
   return (
     <div className="sidebar-responsive" style={{ background: T.panel, borderRight: `1px solid ${T.line}`, display: 'flex', flexDirection: 'column', flexShrink: 0, boxShadow: '1px 0 0 rgba(28,26,23,.02), 2px 0 8px rgba(28,26,23,.03)' }}>
       <div className="sidebar-header" style={{ padding: '24px 22px 22px', borderBottom: `1px solid ${T.line}` }}>
@@ -1514,7 +1527,7 @@ function PainelComercial() {
         if (va > vb) return sortDir === 'asc' ? 1 : -1;
         return 0;
       });
-  }, [registros, vendFiltro, brBusca, statusFiltro, sortCol, sortDir]);
+  }, [registros, vendFiltro, brBusca, clienteBusca, statusFiltro, sortCol, sortDir]);
 
   const kpis = useMemo(() => {
     const total = filtrados.reduce((s,r) => s + r.valor, 0);
