@@ -1408,19 +1408,21 @@ function PainelComercial() {
   const mesAtual = `${hoje.getFullYear()}-${String(hoje.getMonth()+1).padStart(2,'0')}`;
   const [registros, setRegistros] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [mes, setMes] = useState(mesAtual);
+  const [deDe, setDeDe] = useState('2026-01');
+  const [deAte, setDeAte] = useState(mesAtual);
   const [vendFiltro, setVendFiltro] = useState('Todos');
   const [brBusca, setBrBusca] = useState('');
-  const [cicloFiltro, setCicloFiltro] = useState('Todos');
-  const [sortCol, setSortCol] = useState('data_faturamento');
+  const [statusFiltro, setStatusFiltro] = useState('Todos');
+  const [sortCol, setSortCol] = useState('nf_emitida');
   const [sortDir, setSortDir] = useState('desc');
 
   const carregar = useCallback(async () => {
     setLoading(true);
-    const [ano, m] = mes.split('-');
-    const inicio = `${mes}-01`;
-    const fim = new Date(Number(ano), Number(m), 0).toISOString().slice(0,10);
+    const inicio = `${deDe}-01`;
+    const [anoAte, mAte] = deAte.split('-');
+    const fim = new Date(Number(anoAte), Number(mAte), 0).toISOString().slice(0,10);
 
+    // NFs emitidas no período (data real de emissão)
     const { data: nfs } = await supabase
       .from('nota_venda_itens')
       .select('br,nro_interno_sankhya,numero_pedido,codtipoper,cliente_nome,data_faturamento,valor_bruto')
@@ -1434,7 +1436,7 @@ function PainelComercial() {
     if (numPeds.length > 0) {
       const { data: peds } = await supabase
         .from('pedidos_itens')
-        .select('br,numero_pedido,data_neg,vendedor_nome,produto_kaleng,uf')
+        .select('br,numero_pedido,data_neg,data_faturamento,vendedor_nome,produto_kaleng,uf,cliente_nome')
         .in('numero_pedido', numPeds);
       (peds||[]).forEach(p => {
         const k = `${p.br}||${p.numero_pedido}`;
@@ -1442,7 +1444,7 @@ function PainelComercial() {
       });
     }
 
-    // Agrupa por NF (uma linha por nota fiscal)
+    // Agrupa por NF (br + nro_interno_sankhya) — evita duplicatas por item
     const nfsMap = {};
     (nfs||[]).forEach(n => {
       const k = `${n.br}||${n.nro_interno_sankhya}`;
@@ -1453,10 +1455,11 @@ function PainelComercial() {
           nf: n.nro_interno_sankhya,
           numero_pedido: n.numero_pedido,
           top: n.codtipoper,
-          cliente: n.cliente_nome,
-          data_faturamento: n.data_faturamento,
+          cliente: n.cliente_nome || ped?.cliente_nome || '—',
+          nf_emitida: n.data_faturamento,        // data real da NF
+          fat_previsto: ped?.data_faturamento || null, // data prometida no pedido
+          pedido_criado: ped?.data_neg || null,
           valor: 0,
-          data_neg: ped?.data_neg || null,
           vendedor: ped?.vendedor_nome || '—',
           kaleng: ped?.produto_kaleng || '—',
           uf: ped?.uf || '—',
@@ -1467,21 +1470,24 @@ function PainelComercial() {
 
     setRegistros(Object.values(nfsMap));
     setLoading(false);
-  }, [mes]);
+  }, [deDe, deAte]);
 
   useEffect(() => { carregar(); }, [carregar]);
 
-  const ciclo = (r) => {
-    if (!r.data_neg || !r.data_faturamento) return null;
-    return Math.round((new Date(r.data_faturamento) - new Date(r.data_neg)) / 86400000);
+  // Atraso = NF emitida - data prevista no pedido
+  // Negativo = antecipado, Zero = no prazo, Positivo = atrasado
+  const diasAtraso = (r) => {
+    if (!r.fat_previsto || !r.nf_emitida) return null;
+    return Math.round((new Date(r.nf_emitida) - new Date(r.fat_previsto)) / 86400000);
   };
 
-  const cicloMeta = (dias) => {
-    if (dias === null) return { cor: T.inkFaint, bg: T.lineSoft, label: 'Sem data' };
-    if (dias === 0)    return { cor: T.oliveText, bg: T.oliveSoft, label: '0d — Mesmo dia' };
-    if (dias <= 7)     return { cor: '#065f46', bg: '#d1fae5', label: `${dias}d` };
-    if (dias <= 30)    return { cor: T.amberText, bg: T.amberSoft, label: `${dias}d` };
-    return               { cor: T.rustText, bg: T.rustSoft, label: `${dias}d — Lento` };
+  const statusMeta = (dias) => {
+    if (dias === null)  return { cor: T.inkFaint, bg: T.lineSoft,   label: 'Sem data prevista', cat: 'sem_data' };
+    if (dias < 0)       return { cor: T.blueText,  bg: T.blueSoft,   label: `${Math.abs(dias)}d antes`,  cat: 'antecipado' };
+    if (dias === 0)     return { cor: T.oliveText,  bg: T.oliveSoft,  label: 'No prazo',          cat: 'prazo' };
+    if (dias <= 7)      return { cor: '#065f46',    bg: '#d1fae5',    label: `${dias}d atraso`,   cat: 'leve' };
+    if (dias <= 14)     return { cor: T.amberText,  bg: T.amberSoft,  label: `${dias}d atraso`,   cat: 'moderado' };
+    return               { cor: T.rustText,   bg: T.rustSoft,   label: `${dias}d atraso`,   cat: 'grave' };
   };
 
   const vendedores = useMemo(() => {
@@ -1492,44 +1498,48 @@ function PainelComercial() {
   const filtrados = useMemo(() => {
     return registros
       .filter(r => {
-        const c = ciclo(r);
-        const matchVend = vendFiltro === 'Todos' || r.vendedor === vendFiltro;
-        const matchBr   = !brBusca || (r.br||'').toLowerCase().includes(brBusca.toLowerCase());
-        const matchCiclo =
-          cicloFiltro === 'Todos'    ? true :
-          cicloFiltro === 'Mesmo dia'? c === 0 :
-          cicloFiltro === 'Até 7d'   ? c !== null && c > 0 && c <= 7 :
-          cicloFiltro === 'Até 30d'  ? c !== null && c > 7 && c <= 30 :
-          cicloFiltro === '30d+'     ? c !== null && c > 30 : true;
-        return matchVend && matchBr && matchCiclo;
+        const d = diasAtraso(r);
+        const { cat } = statusMeta(d);
+        const matchVend   = vendFiltro === 'Todos' || r.vendedor === vendFiltro;
+        const matchBr     = !brBusca || (r.br||'').toLowerCase().includes(brBusca.toLowerCase());
+        const matchStatus =
+          statusFiltro === 'Todos'       ? true :
+          statusFiltro === 'Antecipado'  ? cat === 'antecipado' :
+          statusFiltro === 'No prazo'    ? cat === 'prazo' :
+          statusFiltro === 'Atraso leve' ? cat === 'leve' :
+          statusFiltro === 'Atraso mod.' ? cat === 'moderado' :
+          statusFiltro === 'Atraso grave'? cat === 'grave' : true;
+        return matchVend && matchBr && matchStatus;
       })
       .sort((a, b) => {
-        let va = a[sortCol] ?? '';
-        let vb = b[sortCol] ?? '';
-        if (sortCol === 'ciclo') { va = ciclo(a) ?? 9999; vb = ciclo(b) ?? 9999; }
+        let va = sortCol === 'atraso' ? (diasAtraso(a) ?? 9999) : (a[sortCol] ?? '');
+        let vb = sortCol === 'atraso' ? (diasAtraso(b) ?? 9999) : (b[sortCol] ?? '');
         if (va < vb) return sortDir === 'asc' ? -1 : 1;
         if (va > vb) return sortDir === 'asc' ? 1 : -1;
         return 0;
       });
-  }, [registros, vendFiltro, brBusca, cicloFiltro, sortCol, sortDir]);
+  }, [registros, vendFiltro, brBusca, statusFiltro, sortCol, sortDir]);
 
   const kpis = useMemo(() => {
-    const ciclos = filtrados.map(r => ciclo(r)).filter(d => d !== null);
-    const mesmoDia = ciclos.filter(d => d === 0).length;
-    const rapido   = ciclos.filter(d => d <= 7).length;
+    const total = filtrados.reduce((s,r) => s + r.valor, 0);
+    const comData = filtrados.filter(r => diasAtraso(r) !== null);
+    const nPrazo  = comData.filter(r => diasAtraso(r) <= 0).length;
+    const nAtraso = comData.filter(r => diasAtraso(r) > 0).length;
+    const nAntes  = comData.filter(r => diasAtraso(r) < 0).length;
+    const atrasados = comData.filter(r => diasAtraso(r) > 0).map(r => diasAtraso(r));
     return {
-      total:      filtrados.reduce((s,r) => s + r.valor, 0),
-      nfs:        filtrados.length,
-      brs:        new Set(filtrados.map(r => r.br)).size,
-      cicloMedio: ciclos.length ? Math.round(ciclos.reduce((s,d) => s+d,0) / ciclos.length) : null,
-      pctRapido:  ciclos.length ? Math.round(rapido / ciclos.length * 100) : null,
-      pctMesmoDia:ciclos.length ? Math.round(mesmoDia / ciclos.length * 100) : null,
+      total,
+      nfs: filtrados.length,
+      pctPrazo:  comData.length ? Math.round(nPrazo  / comData.length * 100) : null,
+      pctAtraso: comData.length ? Math.round(nAtraso / comData.length * 100) : null,
+      pctAntes:  comData.length ? Math.round(nAntes  / comData.length * 100) : null,
+      mediaAtraso: atrasados.length ? Math.round(atrasados.reduce((s,d)=>s+d,0)/atrasados.length) : null,
     };
   }, [filtrados]);
 
   const handleSort = (col) => {
     if (sortCol === col) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
-    else { setSortCol(col); setSortDir(col === 'data_faturamento' ? 'desc' : 'asc'); }
+    else { setSortCol(col); setSortDir(col === 'nf_emitida' ? 'desc' : 'asc'); }
   };
 
   const SortThC = ({ label, col, right }) => {
@@ -1549,31 +1559,58 @@ function PainelComercial() {
     return d && m && y ? `${d}/${m}/${y}` : iso;
   };
 
-  // Meses disponíveis (últimos 12)
+  // Gera lista de meses (jan/2026 até mês atual)
   const meses = useMemo(() => {
     const arr = [];
-    for (let i = 0; i < 12; i++) {
-      const d = new Date(hoje.getFullYear(), hoje.getMonth() - i, 1);
-      const val = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
-      const label = d.toLocaleString('pt-BR', { month: 'long', year: 'numeric' });
+    const inicio = new Date(2026, 0, 1);
+    const fim = new Date(hoje.getFullYear(), hoje.getMonth(), 1);
+    let cur = new Date(inicio);
+    while (cur <= fim) {
+      const val = `${cur.getFullYear()}-${String(cur.getMonth()+1).padStart(2,'0')}`;
+      const label = cur.toLocaleString('pt-BR', { month: 'short', year: 'numeric' });
       arr.push({ val, label: label.charAt(0).toUpperCase() + label.slice(1) });
+      cur.setMonth(cur.getMonth() + 1);
     }
-    return arr;
+    return arr.reverse();
   }, []);
+
+  // Distribuição por categoria para barras visuais
+  const dist = useMemo(() => {
+    const cats = [
+      { key: 'antecipado',  label: 'Antecipado',   cor: T.blueText,  bg: T.blueSoft,  fn: r => diasAtraso(r) !== null && diasAtraso(r) < 0 },
+      { key: 'prazo',       label: 'No prazo',      cor: T.oliveText, bg: T.oliveSoft, fn: r => diasAtraso(r) === 0 },
+      { key: 'leve',        label: 'Atraso 1–7d',   cor: '#065f46',   bg: '#d1fae5',   fn: r => { const d=diasAtraso(r); return d!==null&&d>0&&d<=7; } },
+      { key: 'moderado',    label: 'Atraso 8–14d',  cor: T.amberText, bg: T.amberSoft, fn: r => { const d=diasAtraso(r); return d!==null&&d>7&&d<=14; } },
+      { key: 'grave',       label: 'Atraso 15d+',   cor: T.rustText,  bg: T.rustSoft,  fn: r => { const d=diasAtraso(r); return d!==null&&d>14; } },
+    ];
+    const total = filtrados.filter(r => diasAtraso(r) !== null).length || 1;
+    return cats.map(c => ({ ...c, count: filtrados.filter(c.fn).length, pct: Math.round(filtrados.filter(c.fn).length / total * 100) }));
+  }, [filtrados]);
 
   return (
     <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 18, maxWidth: 1300 }}>
 
-      {/* Seletor de mês */}
-      <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-        <div style={{ position: 'relative' }}>
-          <select value={mes} onChange={e => setMes(e.target.value)} style={selectStyleFat(220)}>
-            {meses.map(m => <option key={m.val} value={m.val}>{m.label}</option>)}
-          </select>
-          <ChevronDown size={13} style={chevronStyleFat} />
+      {/* Filtro de período — de/até */}
+      <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '14px 18px' }}>
+        <span style={{ fontSize: 12, fontWeight: 600, color: T.inkDim }}>Período:</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ fontSize: 12, color: T.inkFaint }}>De</span>
+          <div style={{ position: 'relative' }}>
+            <select value={deDe} onChange={e => setDeDe(e.target.value)} style={selectStyleFat(150)}>
+              {meses.map(m => <option key={m.val} value={m.val}>{m.label}</option>)}
+            </select>
+            <ChevronDown size={13} style={chevronStyleFat} />
+          </div>
+          <span style={{ fontSize: 12, color: T.inkFaint }}>até</span>
+          <div style={{ position: 'relative' }}>
+            <select value={deAte} onChange={e => setDeAte(e.target.value)} style={selectStyleFat(150)}>
+              {meses.filter(m => m.val >= deDe).map(m => <option key={m.val} value={m.val}>{m.label}</option>)}
+            </select>
+            <ChevronDown size={13} style={chevronStyleFat} />
+          </div>
         </div>
         <span style={{ fontSize: 12, color: T.inkFaint }}>
-          {loading ? 'Carregando…' : `${filtrados.length} NF${filtrados.length !== 1 ? 's' : ''} · dados até hoje`}
+          {loading ? 'Carregando…' : `${filtrados.length} NF${filtrados.length !== 1 ? 's' : ''}`}
         </span>
         <button onClick={carregar} style={{ display: 'flex', alignItems: 'center', gap: 5, background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 6, padding: '6px 12px', fontSize: 12, cursor: 'pointer', color: T.inkDim }}>
           <RefreshCw size={12} /> Atualizar
@@ -1581,42 +1618,47 @@ function PainelComercial() {
       </div>
 
       {/* KPIs */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 12 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(140px,1fr))', gap: 12 }}>
         {[
-          { label: 'Total faturado',    value: fmtMoedaCompacta(kpis.total),   color: T.terracotta, big: true },
-          { label: 'NFs emitidas',      value: kpis.nfs,                        color: T.ink },
-          { label: 'BRs faturados',     value: kpis.brs,                        color: T.blueText },
-          { label: 'Ciclo médio',       value: kpis.cicloMedio !== null ? `${kpis.cicloMedio}d` : '—',
-            color: kpis.cicloMedio > 30 ? T.rustText : kpis.cicloMedio > 7 ? T.amberText : T.oliveText },
-          { label: '% faturado ≤7 dias',value: kpis.pctRapido !== null ? `${kpis.pctRapido}%` : '—',
-            color: kpis.pctRapido >= 70 ? T.oliveText : kpis.pctRapido >= 40 ? T.amberText : T.rustText },
-          { label: '% mesmo dia',       value: kpis.pctMesmoDia !== null ? `${kpis.pctMesmoDia}%` : '—',
-            color: T.oliveText },
+          { label: 'Total faturado',      value: fmtMoedaCompacta(kpis.total),                             color: T.terracotta, big: true },
+          { label: 'NFs emitidas',         value: kpis.nfs,                                                  color: T.ink },
+          { label: '% no prazo ou antes', value: kpis.pctPrazo !== null ? `${kpis.pctPrazo + (kpis.pctAntes||0)}%` : '—',
+            color: (kpis.pctPrazo + (kpis.pctAntes||0)) >= 70 ? T.oliveText : T.amberText },
+          { label: '% atrasado',          value: kpis.pctAtraso !== null ? `${kpis.pctAtraso}%` : '—',
+            color: kpis.pctAtraso > 30 ? T.rustText : kpis.pctAtraso > 10 ? T.amberText : T.oliveText },
+          { label: '% antecipado',        value: kpis.pctAntes !== null ? `${kpis.pctAntes}%` : '—',        color: T.blueText },
+          { label: 'Atraso médio (dias)', value: kpis.mediaAtraso !== null ? `${kpis.mediaAtraso}d` : '—',
+            color: kpis.mediaAtraso > 14 ? T.rustText : kpis.mediaAtraso > 7 ? T.amberText : T.oliveText },
         ].map(k => (
           <div key={k.label} style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '14px 16px', boxShadow: SHADOW_SM }}>
             <div style={{ fontSize: 11, color: T.inkFaint, fontWeight: 600 }}>{k.label}</div>
-            <div style={{ fontFamily: FONT_DISPLAY, fontSize: k.big ? 26 : 22, fontWeight: 700, color: k.color, marginTop: 6 }}>
+            <div style={{ fontFamily: FONT_DISPLAY, fontSize: k.big ? 24 : 22, fontWeight: 700, color: k.color, marginTop: 6 }}>
               {loading ? '…' : k.value}
             </div>
           </div>
         ))}
       </div>
 
-      {/* Indicador visual de ciclo — barra de distribuição */}
+      {/* Distribuição visual com barra de percentual */}
       {!loading && filtrados.length > 0 && (
-        <Panel title="Ciclo pedido → NF" subtitle="Distribuição em dias (data do pedido até emissão da nota fiscal)">
-          <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
-            {[
-              { label: 'Mesmo dia (0d)',  count: filtrados.filter(r => ciclo(r) === 0).length,                         cor: T.oliveText, bg: T.oliveSoft },
-              { label: 'Rápido (1–7d)',   count: filtrados.filter(r => { const c=ciclo(r); return c!==null&&c>0&&c<=7; }).length, cor: '#065f46', bg: '#d1fae5' },
-              { label: 'Normal (8–30d)',  count: filtrados.filter(r => { const c=ciclo(r); return c!==null&&c>7&&c<=30; }).length, cor: T.amberText, bg: T.amberSoft },
-              { label: 'Lento (31d+)',    count: filtrados.filter(r => { const c=ciclo(r); return c!==null&&c>30; }).length,       cor: T.rustText, bg: T.rustSoft },
-              { label: 'Sem data',        count: filtrados.filter(r => ciclo(r) === null).length,                      cor: T.inkFaint, bg: T.lineSoft },
-            ].map(g => (
-              <div key={g.label} onClick={() => setCicloFiltro(cicloFiltro === g.label.split(' ')[0] ? 'Todos' : g.label.split(' ')[0])}
-                style={{ flex: 1, minWidth: 100, background: g.bg, borderRadius: 8, padding: '12px 14px', cursor: 'pointer', textAlign: 'center' }}>
-                <div style={{ fontFamily: FONT_DISPLAY, fontSize: 26, fontWeight: 700, color: g.cor }}>{g.count}</div>
-                <div style={{ fontSize: 11, color: g.cor, fontWeight: 600, marginTop: 3 }}>{g.label}</div>
+        <Panel title="Distribuição de pontualidade" subtitle="NF emitida vs data prevista no pedido — clique para filtrar">
+          <div style={{ display: 'flex', gap: 0, marginTop: 12, borderRadius: 8, overflow: 'hidden', height: 28 }}>
+            {dist.filter(c => c.count > 0).map(c => (
+              <div key={c.key} onClick={() => setStatusFiltro(statusFiltro === c.label ? 'Todos' : c.label)}
+                title={`${c.label}: ${c.count} NFs (${c.pct}%)`}
+                style={{ flex: c.count, background: c.bg, borderRight: '1px solid rgba(255,255,255,0.5)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                {c.pct >= 10 && <span style={{ fontSize: 10.5, fontWeight: 700, color: c.cor }}>{c.pct}%</span>}
+              </div>
+            ))}
+          </div>
+          <div style={{ display: 'flex', gap: 16, marginTop: 10, flexWrap: 'wrap' }}>
+            {dist.map(c => (
+              <div key={c.key} onClick={() => setStatusFiltro(statusFiltro === c.label ? 'Todos' : c.label)}
+                style={{ display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer' }}>
+                <span style={{ width: 10, height: 10, borderRadius: 2, background: c.bg, border: `1px solid ${c.cor}`, display: 'inline-block' }} />
+                <span style={{ fontSize: 11, color: statusFiltro === c.label ? c.cor : T.inkFaint, fontWeight: statusFiltro === c.label ? 700 : 400 }}>
+                  {c.label} ({c.count})
+                </span>
               </div>
             ))}
           </div>
@@ -1638,16 +1680,18 @@ function PainelComercial() {
               <ChevronDown size={13} style={chevronStyleFat} />
             </div>
           </FiltroCampoFat>
-          <FiltroCampoFat label="Ciclo">
+          <FiltroCampoFat label="Pontualidade">
             <div style={{ position: 'relative' }}>
-              <select value={cicloFiltro} onChange={e => setCicloFiltro(e.target.value)} style={selectStyleFat(150)}>
-                {['Todos','Mesmo dia','Até 7d','Até 30d','30d+'].map(v => <option key={v} value={v}>{v}</option>)}
+              <select value={statusFiltro} onChange={e => setStatusFiltro(e.target.value)} style={selectStyleFat(170)}>
+                {['Todos','Antecipado','No prazo','Atraso leve','Atraso mod.','Atraso grave'].map(v => (
+                  <option key={v} value={v}>{v}</option>
+                ))}
               </select>
               <ChevronDown size={13} style={chevronStyleFat} />
             </div>
           </FiltroCampoFat>
-          {(brBusca || vendFiltro !== 'Todos' || cicloFiltro !== 'Todos') && (
-            <button onClick={() => { setBrBusca(''); setVendFiltro('Todos'); setCicloFiltro('Todos'); }}
+          {(brBusca || vendFiltro !== 'Todos' || statusFiltro !== 'Todos') && (
+            <button onClick={() => { setBrBusca(''); setVendFiltro('Todos'); setStatusFiltro('Todos'); }}
               style={{ fontSize: 12, color: T.amberText, background: T.amberSoft, border: 'none', borderRadius: 5, padding: '6px 12px', cursor: 'pointer', fontWeight: 600 }}>
               ✕ Limpar
             </button>
@@ -1661,46 +1705,41 @@ function PainelComercial() {
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
             <thead>
               <tr style={{ background: T.panelAlt, borderBottom: `1px solid ${T.line}` }}>
-                <SortThC label="BR"              col="br" />
-                <SortThC label="NF"              col="nf" />
-                <SortThC label="Pedido"          col="numero_pedido" />
-                <SortThC label="TOP"             col="top" />
-                <th style={thFat()}>Cliente</th>
-                <SortThC label="Kaleng"          col="kaleng" />
-                <SortThC label="Vendedor"        col="vendedor" />
-                <SortThC label="UF"              col="uf" />
-                <SortThC label="Data Pedido"     col="data_neg" />
-                <SortThC label="Data NF"         col="data_faturamento" />
-                <SortThC label="Ciclo ↕"         col="ciclo" />
-                <SortThC label="Valor NF"        col="valor" right />
+                <SortThC label="BR"               col="br" />
+                <SortThC label="NF"               col="nf" />
+                <SortThC label="Cliente"          col="cliente" />
+                <SortThC label="Kaleng"           col="kaleng" />
+                <SortThC label="Vendedor"         col="vendedor" />
+                <SortThC label="UF"               col="uf" />
+                <SortThC label="Previsto"         col="fat_previsto" />
+                <SortThC label="NF emitida"       col="nf_emitida" />
+                <SortThC label="Situação ↕"       col="atraso" />
+                <SortThC label="Valor NF"         col="valor" right />
               </tr>
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={12} style={{ padding: 40, textAlign: 'center', color: T.inkFaint }}>Carregando…</td></tr>
+                <tr><td colSpan={10} style={{ padding: 40, textAlign: 'center', color: T.inkFaint }}>Carregando…</td></tr>
               ) : filtrados.length === 0 ? (
-                <tr><td colSpan={12} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Nenhuma NF emitida no período com os filtros aplicados.</td></tr>
+                <tr><td colSpan={10} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Nenhuma NF no período com os filtros aplicados.</td></tr>
               ) : filtrados.map((r, i) => {
-                const c = ciclo(r);
-                const { cor, bg, label: cicloLabel } = cicloMeta(c);
+                const d = diasAtraso(r);
+                const { cor, bg, label: sitLabel } = statusMeta(d);
+                const rowBg = d !== null && d > 14 ? `${T.rustSoft}33` : 'transparent';
                 return (
-                  <tr key={i} style={{ borderBottom: `1px solid ${T.lineSoft}` }}
+                  <tr key={i} style={{ borderBottom: `1px solid ${T.lineSoft}`, background: rowBg }}
                     onMouseEnter={e => e.currentTarget.style.background = T.panelAlt}
-                    onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                    onMouseLeave={e => e.currentTarget.style.background = rowBg}>
                     <td style={{ padding: '9px 10px', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText, whiteSpace: 'nowrap' }}>{r.br}</td>
                     <td style={{ padding: '9px 10px', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.oliveText }}>NF {r.nf}</td>
-                    <td style={{ padding: '9px 10px', fontSize: 11, color: T.inkDim }}>{r.numero_pedido}</td>
-                    <td style={{ padding: '9px 10px', textAlign: 'center' }}>
-                      <span style={{ fontSize: 10, background: T.lineSoft, color: T.inkFaint, padding: '2px 5px', borderRadius: 3 }}>{r.top}</span>
-                    </td>
                     <td style={{ padding: '9px 10px', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.cliente}>{r.cliente}</td>
                     <td style={{ padding: '9px 10px', color: T.blueText, fontWeight: 600, fontSize: 11 }}>{r.kaleng}</td>
-                    <td style={{ padding: '9px 10px', maxWidth: 130, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 11 }}>{r.vendedor}</td>
+                    <td style={{ padding: '9px 10px', maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 11 }}>{r.vendedor}</td>
                     <td style={{ padding: '9px 10px', textAlign: 'center', fontSize: 11 }}>{r.uf}</td>
-                    <td style={{ padding: '9px 10px', whiteSpace: 'nowrap', fontSize: 11, color: T.inkDim }}>{fmtData(r.data_neg)}</td>
-                    <td style={{ padding: '9px 10px', whiteSpace: 'nowrap', fontSize: 11, fontWeight: 600, color: T.oliveText }}>{fmtData(r.data_faturamento)}</td>
+                    <td style={{ padding: '9px 10px', whiteSpace: 'nowrap', fontSize: 11, color: T.inkDim }}>{fmtData(r.fat_previsto)}</td>
+                    <td style={{ padding: '9px 10px', whiteSpace: 'nowrap', fontSize: 11, fontWeight: 600 }}>{fmtData(r.nf_emitida)}</td>
                     <td style={{ padding: '9px 10px', textAlign: 'center' }}>
-                      <span style={{ fontSize: 10.5, fontWeight: 700, color: cor, background: bg, padding: '3px 8px', borderRadius: 4, whiteSpace: 'nowrap' }}>{cicloLabel}</span>
+                      <span style={{ fontSize: 10.5, fontWeight: 700, color: cor, background: bg, padding: '3px 8px', borderRadius: 4, whiteSpace: 'nowrap' }}>{sitLabel}</span>
                     </td>
                     <td style={{ padding: '9px 10px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 13, whiteSpace: 'nowrap' }}>{fmtMoedaCompacta(r.valor)}</td>
                   </tr>
@@ -1710,14 +1749,15 @@ function PainelComercial() {
           </table>
         </div>
         <div style={{ padding: '10px 16px', borderTop: `1px solid ${T.line}`, fontSize: 11, color: T.inkFaint, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span>Ciclo = dias entre data do pedido (data_neg) e emissão da NF (data_faturamento) · TOPs 3101, 3200, 3210, 3213, 3214, 3220</span>
-          <BotaoExportar small onClick={() => exportCSV(filtrados.map(r => ({ ...r, ciclo_dias: ciclo(r) })), 'painel_comercial.csv',
-            ['br','nf','numero_pedido','top','cliente','kaleng','vendedor','uf','data_neg','data_faturamento','ciclo_dias','valor'])} />
+          <span>Situação = NF emitida vs data de faturamento prevista no pedido (DTFATUR Sankhya) · negativo = antecipado</span>
+          <BotaoExportar small onClick={() => exportCSV(filtrados.map(r => ({ ...r, dias_atraso: diasAtraso(r) })), `comercial_${deDe}_${deAte}.csv`,
+            ['br','nf','numero_pedido','top','cliente','kaleng','vendedor','uf','fat_previsto','nf_emitida','dias_atraso','valor'])} />
         </div>
       </div>
     </div>
   );
 }
+
 
 /* NFs agrupadas por número — usado no fallback quando pedido está fora do sync */
 function NfsAgrupadasCard({ itens, fmtData, fmtMoedaCompacta }) {
@@ -2890,7 +2930,7 @@ const MESES_FAT = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set'
 
 function Faturamento() {
   const anoAtual = new Date().getFullYear();
-  const [filtros, setFiltros] = useState({ anoIni: 2025, anoFim: anoAtual, mesIni: 8, mesFim: 12, vendedor: '' });
+  const [filtros, setFiltros] = useState({ anoIni: 2026, anoFim: anoAtual, mesIni: 1, mesFim: 12, vendedor: '' });
   const [netMensal, setNetMensal] = useState([]);
   const [notaVenda, setNotaVenda] = useState([]);
   const [porKaleng, setPorKaleng] = useState([]);
@@ -3183,7 +3223,7 @@ function Faturamento() {
         </div>
       )}
 
-      <button onClick={() => setFiltros(f => ({ ...f, anoIni: 2025, anoFim: anoAtual, mesIni: 8, mesFim: 12 }))} style={{
+      <button onClick={() => setFiltros(f => ({ ...f, anoIni: 2026, anoFim: anoAtual, mesIni: 1, mesFim: 12 }))} style={{
         alignSelf: 'flex-start', background: 'transparent', border: 'none', color: T.terracottaText, fontSize: 12, fontWeight: 600,
         textDecoration: 'underline', padding: 0, marginTop: -10,
       }}>
