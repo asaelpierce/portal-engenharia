@@ -249,6 +249,9 @@ function PortalConteudo({ currentUser, session }) {
   const propostasMes = useMemo(() => propostas.filter(p => p.mes === mesFiltro), [propostas, mesFiltro]);
 
   const pendencias = useMemo(() => propostas.filter(p => {
+    // Propostas vindas do Sankhya (origem_dados === 'sankhya') são só histórico/informativo —
+    // não passam pelo fluxo de aprovação do portal, só as enviadas manualmente (Word/PDF) passam.
+    if (p.origem_dados === 'sankhya') return false;
     if (currentUser.papel === 'engenheiro') {
       return p.responsavel === currentUser.nome && (p.status === 'rascunho' || p.status === 'reprovada' || p.status === 'aprovada');
     }
@@ -1022,6 +1025,8 @@ function PropostasTable({ propostas, titulo, onRowClick, empty = 'Nenhuma propos
   const [busca, setBusca] = useState('');
   const [filtroStatus, setFiltroStatus] = useState('todos');
   const [filtroMes, setFiltroMes] = useState('todos');
+  const [filtroOrigem, setFiltroOrigem] = useState('todos'); // todos | sankhya | manual_word
+  const [filtroConhecimento, setFiltroConhecimento] = useState('todos'); // todos | sim | nao
   const [page, setPage] = useState(1);
   const PER_PAGE = 25;
 
@@ -1030,9 +1035,11 @@ function PropostasTable({ propostas, titulo, onRowClick, empty = 'Nenhuma propos
       const matchBusca = p.br.toLowerCase().includes(busca.toLowerCase()) || p.cliente.toLowerCase().includes(busca.toLowerCase());
       const matchStatus = filtroStatus === 'todos' || p.status === filtroStatus;
       const matchMes = filtroMes === 'todos' || p.mes === filtroMes;
-      return matchBusca && matchStatus && matchMes;
+      const matchOrigem = filtroOrigem === 'todos' || p.origem_dados === filtroOrigem;
+      const matchConhecimento = filtroConhecimento === 'todos' || (filtroConhecimento === 'sim' ? !!p.conhecimento_pedido : !p.conhecimento_pedido);
+      return matchBusca && matchStatus && matchMes && matchOrigem && matchConhecimento;
     });
-  }, [propostas, busca, filtroStatus, filtroMes]);
+  }, [propostas, busca, filtroStatus, filtroMes, filtroOrigem, filtroConhecimento]);
 
   const totalPages = Math.max(1, Math.ceil(filtradas.length / PER_PAGE));
   const pageClamped = Math.min(page, totalPages);
@@ -1049,6 +1056,18 @@ function PropostasTable({ propostas, titulo, onRowClick, empty = 'Nenhuma propos
             <input value={busca} onChange={e => { setBusca(e.target.value); setPage(1); }} placeholder="Buscar BR ou cliente…" className="focus-ring"
               style={{ background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 6, padding: '7px 12px 7px 30px', fontSize: 12.5, color: T.ink, width: 200, outline: 'none' }} />
           </div>
+          <select value={filtroOrigem} onChange={e => { setFiltroOrigem(e.target.value); setPage(1); }} className="focus-ring"
+            style={{ background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 6, padding: '7px 10px', fontSize: 12.5, color: T.inkDim }}>
+            <option value="todos">Origem: todas</option>
+            <option value="sankhya">Sankhya</option>
+            <option value="manual_word">Manual (Word/e-mail)</option>
+          </select>
+          <select value={filtroConhecimento} onChange={e => { setFiltroConhecimento(e.target.value); setPage(1); }} className="focus-ring"
+            style={{ background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 6, padding: '7px 10px', fontSize: 12.5, color: T.inkDim }}>
+            <option value="todos">Conhecimento de pedido: todos</option>
+            <option value="sim">Com conhecimento de pedido</option>
+            <option value="nao">Sem conhecimento de pedido</option>
+          </select>
           <select value={filtroMes} onChange={e => { setFiltroMes(e.target.value); setPage(1); }} className="focus-ring"
             style={{ background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 6, padding: '7px 10px', fontSize: 12.5, color: T.inkDim }}>
             <option value="todos">Todos os meses</option>
