@@ -382,7 +382,7 @@ function PortalConteudo({ currentUser, session }) {
           {view === 'equipamentos' && <TabErrorBoundary tab="Equipamentos de Terceiros"><EquipamentosTerceiros /></TabErrorBoundary>}
           {view === 'pedidosvale' && <PedidosVale />}
           {view === 'integracao' && <Integracao />}
-          {view === 'admin' && <Admin />}
+          {view === 'admin' && <Admin currentUser={currentUser} />}
         </main>
       </div>
 
@@ -4939,26 +4939,179 @@ function FluxoMini({ steps }) {
 /* ============================================================================
    ADMIN
 ============================================================================ */
-function Admin() {
+const TELAS_CATALOGO = [
+  { id: 'dashboard',    label: 'Visão geral' },
+  { id: 'pendencias',   label: 'Minhas pendências' },
+  { id: 'propostas',    label: 'Todas as propostas' },
+  { id: 'metricas',     label: 'Métricas' },
+  { id: 'produtividade',label: 'Produtividade' },
+  { id: 'comercial',    label: 'Painel Comercial' },
+  { id: 'faturamento',  label: 'Faturamento (Sankhya)' },
+  { id: 'consumo_mp',   label: 'Consumo de MP' },
+  { id: 'almoxarifado', label: 'Almoxarifado' },
+  { id: 'equipamentos', label: 'Equip. Terceiros' },
+  { id: 'pedidosvale',  label: 'Pedidos Vale' },
+  { id: 'integracao',   label: 'Integrações' },
+  { id: 'admin',        label: 'Admin' },
+];
+
+function PermissoesManager() {
+  const [colabs, setColabs] = useState([]);
+  const [telasPorUsuario, setTelasPorUsuario] = useState({}); // { colaborador_id: Set(tela) }
+  const [loading, setLoading] = useState(true);
+  const [selecionado, setSelecionado] = useState(null);
+  const [salvando, setSalvando] = useState(false);
+
+  const carregar = useCallback(async () => {
+    setLoading(true);
+    const [{ data: c }, { data: t }] = await Promise.all([
+      supabase.from('colaboradores').select('*').eq('ativo', true).order('nome'),
+      supabase.from('colaborador_telas').select('*'),
+    ]);
+    setColabs(c || []);
+    const mapa = {};
+    (t || []).forEach(row => {
+      if (!mapa[row.colaborador_id]) mapa[row.colaborador_id] = new Set();
+      mapa[row.colaborador_id].add(row.tela);
+    });
+    setTelasPorUsuario(mapa);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { carregar(); }, [carregar]);
+
+  const usuario = colabs.find(c => c.id === selecionado);
+  const telasSet = selecionado ? telasPorUsuario[selecionado] : null;
+  const temRestricao = !!(telasSet && telasSet.size > 0);
+
+  const toggleTela = async (tela) => {
+    if (!selecionado) return;
+    setSalvando(true);
+    const atualSet = telasPorUsuario[selecionado] || new Set();
+    const jaMarcado = temRestricao ? atualSet.has(tela) : true; // sem restrição = tudo marcado
+    if (jaMarcado) {
+      // Vai desmarcar. Se ainda não havia restrição, materializa a lista inteira menos essa tela.
+      const base = temRestricao ? [...atualSet] : TELAS_CATALOGO.map(t => t.id);
+      const novaLista = base.filter(t => t !== tela);
+      await supabase.from('colaborador_telas').delete().eq('colaborador_id', selecionado);
+      if (novaLista.length) {
+        await supabase.from('colaborador_telas').insert(novaLista.map(t => ({ colaborador_id: selecionado, tela: t })));
+      }
+    } else {
+      await supabase.from('colaborador_telas').insert({ colaborador_id: selecionado, tela });
+    }
+    await carregar();
+    setSalvando(false);
+  };
+
+  const liberarTudo = async () => {
+    if (!selecionado) return;
+    setSalvando(true);
+    await supabase.from('colaborador_telas').delete().eq('colaborador_id', selecionado);
+    await carregar();
+    setSalvando(false);
+  };
+
+  const bloquearTudo = async () => {
+    if (!selecionado) return;
+    setSalvando(true);
+    await supabase.from('colaborador_telas').delete().eq('colaborador_id', selecionado);
+    await carregar();
+    setSalvando(false);
+  };
+
+  const toggleProdutividadeCompleta = async () => {
+    if (!usuario) return;
+    setSalvando(true);
+    await supabase.from('colaboradores').update({ ve_produtividade_completa: !usuario.ve_produtividade_completa }).eq('id', usuario.id);
+    await carregar();
+    setSalvando(false);
+  };
+
   return (
-    <div className="fade-up grid-2col" style={{ maxWidth: 1100 }}>
-      <Panel title="Pool de aprovadores" subtitle="Qualquer um dos três decide — sem ordem fixa, sem fila">
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
-          {APROVADORES_POOL.map(nome => (
-            <div key={nome} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 10px', background: T.panelAlt, borderRadius: 6 }}>
-              <span style={{ fontSize: 13 }}>{nome}</span>
-              <span style={{ fontSize: 11, color: T.inkFaint }}>analista aprovador</span>
+    <Panel title="Permissões de acesso por usuário" subtitle="Controla quais telas cada colaborador vê e se a produtividade é própria ou de todos">
+      <div style={{ display: 'flex', gap: 20, marginTop: 12, flexWrap: 'wrap' }}>
+        <div style={{ minWidth: 220, display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 420, overflow: 'auto' }}>
+          {loading && <div style={{ fontSize: 12, color: T.inkFaint }}>Carregando…</div>}
+          {colabs.map(c => {
+            const restrito = (telasPorUsuario[c.id]?.size || 0) > 0;
+            return (
+              <button key={c.id} onClick={() => setSelecionado(c.id)} style={{
+                textAlign: 'left', padding: '8px 10px', borderRadius: 6, border: `1px solid ${T.line}`,
+                background: selecionado === c.id ? T.terracottaSoft : T.panelAlt, cursor: 'pointer',
+              }}>
+                <div style={{ fontSize: 12.5, fontWeight: 600, color: T.ink }}>{c.nome}</div>
+                <div style={{ fontSize: 10.5, color: T.inkFaint }}>{c.papel} · {restrito ? 'acesso restrito' : 'acesso total'}</div>
+              </button>
+            );
+          })}
+        </div>
+
+        <div style={{ flex: 1, minWidth: 260 }}>
+          {!usuario && <div style={{ fontSize: 12.5, color: T.inkFaint }}>Selecione um colaborador à esquerda.</div>}
+          {usuario && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button disabled={salvando} onClick={liberarTudo} style={{ fontSize: 12, padding: '7px 12px', borderRadius: 6, border: `1px solid ${T.line}`, background: T.panelAlt }}>Liberar acesso total</button>
+                <button disabled={salvando} onClick={bloquearTudo} style={{ fontSize: 12, padding: '7px 12px', borderRadius: 6, border: `1px solid ${T.line}`, background: T.panelAlt }}>Bloquear todas as telas</button>
+              </div>
+
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                {TELAS_CATALOGO.map(t => {
+                  const marcado = temRestricao ? telasSet.has(t.id) : true;
+                  return (
+                    <label key={t.id} style={{
+                      display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, padding: '6px 10px',
+                      border: `1px solid ${T.line}`, borderRadius: 6, background: marcado ? T.oliveSoft : T.panelAlt, cursor: 'pointer',
+                    }}>
+                      <input type="checkbox" checked={marcado} disabled={salvando} onChange={() => toggleTela(t.id)} />
+                      {t.label}
+                    </label>
+                  );
+                })}
+              </div>
+
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, marginTop: 4 }}>
+                <input type="checkbox" checked={!!usuario.ve_produtividade_completa} disabled={salvando} onChange={toggleProdutividadeCompleta} />
+                Vê produtividade de todo mundo (não só a própria)
+              </label>
             </div>
-          ))}
+          )}
         </div>
-      </Panel>
-      <Panel title="Catálogo de escopos" subtitle="Domínio editável — usado em formulário de cadastro">
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
-          {ESCOPOS_TOP.map(e => (
-            <span key={e} style={{ fontSize: 12, padding: '5px 10px', background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 5, color: T.inkDim }}>{e}</span>
-          ))}
+      </div>
+    </Panel>
+  );
+}
+
+function Admin({ currentUser }) {
+  const ehGestor = currentUser?.papel === 'gestor';
+  return (
+    <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 18, maxWidth: 1100 }}>
+      {ehGestor && <PermissoesManager />}
+      {!ehGestor && (
+        <div style={{ fontSize: 13, color: T.inkFaint, padding: '10px 4px' }}>
+          Gerenciamento de permissões disponível apenas para usuários com papel "gestor".
         </div>
-      </Panel>
+      )}
+      <div className="grid-2col">
+        <Panel title="Pool de aprovadores" subtitle="Qualquer um dos três decide — sem ordem fixa, sem fila">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
+            {APROVADORES_POOL.map(nome => (
+              <div key={nome} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 10px', background: T.panelAlt, borderRadius: 6 }}>
+                <span style={{ fontSize: 13 }}>{nome}</span>
+                <span style={{ fontSize: 11, color: T.inkFaint }}>analista aprovador</span>
+              </div>
+            ))}
+          </div>
+        </Panel>
+        <Panel title="Catálogo de escopos" subtitle="Domínio editável — usado em formulário de cadastro">
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+            {ESCOPOS_TOP.map(e => (
+              <span key={e} style={{ fontSize: 12, padding: '5px 10px', background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 5, color: T.inkDim }}>{e}</span>
+            ))}
+          </div>
+        </Panel>
+      </div>
     </div>
   );
 }
