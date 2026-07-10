@@ -97,6 +97,11 @@ const STATUS_META = {
 
 const FLUXO_ORDEM = ['rascunho', 'em_revisao_tecnica', 'aguardando_aprovacao', 'concluida'];
 
+// TOPs (Tipo de Operação Sankhya) que representam faturamento de venda real.
+// Confirmado com o time comercial: 3200, 3201, 3214, 3220, 3227.
+// Qualquer outro TOP (ex.: 3213, devoluções, remessas) não deve entrar na conta de faturamento.
+const TOPS_FATURAMENTO_VALIDOS = [3200, 3201, 3214, 3220, 3227];
+
 const MESES_ORDEM = ['JANEIRO', 'FEVEREIRO', 'MARÇO', 'ABRIL', 'MAIO', 'JUNHO', 'JULHO', 'AGOSTO', 'SETEMBRO', 'OUTUBRO', 'NOVEMBRO', 'DEZEMBRO'];
 const MESES_LABEL = { JANEIRO: 'Jan', FEVEREIRO: 'Fev', MARÇO: 'Mar', ABRIL: 'Abr', MAIO: 'Mai', JUNHO: 'Jun', JULHO: 'Jul', AGOSTO: 'Ago', SETEMBRO: 'Set', OUTUBRO: 'Out', NOVEMBRO: 'Nov', DEZEMBRO: 'Dez' };
 
@@ -1503,22 +1508,26 @@ function CicloComercial() {
         viraramPedido: doMes.filter(d => d.etapa_atual !== 'sem_pedido').length,
         faturadas: doMes.filter(d => d.etapa_atual === 'faturado').length,
         valorTotal: doMes.reduce((s, d) => s + (Number(d.valor_liquido) || 0), 0),
-        valorFaturado: doMes.filter(d => d.etapa_atual === 'faturado').reduce((s, d) => s + (Number(d.valor_liquido) || 0), 0),
+        netValue: doMes.reduce((s, d) => s + (Number(d.net_value) || 0), 0),
+        valorFaturado: doMes.reduce((s, d) => s + (Number(d.valor_faturado) || 0), 0),
       };
     }).filter(m => m.propostas > 0);
   }, [dados]);
 
   // ── totais de valor por etapa (KPIs) ──
+  // valor_faturado = soma de valor_bruto em nota_venda_itens, já filtrado pelos TOPs
+  // de faturamento válidos (3200/3201/3214/3220/3227) direto na view do banco.
+  // net_value = soma de valor_liquido em pedidos_itens (valor do pedido confirmado).
   const totais = useMemo(() => {
-    let valorTotal = 0, valorFaturado = 0, valorPedidoSemFatura = 0, valorSemPedido = 0;
+    let valorTotal = 0, valorFaturado = 0, netValue = 0, valorPedidoSemFatura = 0, valorSemPedido = 0;
     dados.forEach(d => {
-      const v = Number(d.valor_liquido) || 0;
-      valorTotal += v;
-      if (d.etapa_atual === 'faturado') valorFaturado += v;
-      else if (d.etapa_atual === 'pedido_sem_fatura') valorPedidoSemFatura += v;
-      else valorSemPedido += v;
+      valorTotal += Number(d.valor_liquido) || 0;
+      valorFaturado += Number(d.valor_faturado) || 0;
+      netValue += Number(d.net_value) || 0;
+      if (d.etapa_atual === 'sem_pedido') valorSemPedido += Number(d.valor_liquido) || 0;
+      if (d.etapa_atual === 'pedido_sem_fatura') valorPedidoSemFatura += Number(d.net_value) || 0;
     });
-    return { valorTotal, valorFaturado, valorPedidoSemFatura, valorSemPedido };
+    return { valorTotal, valorFaturado, netValue, valorPedidoSemFatura, valorSemPedido };
   }, [dados]);
 
   // ── cross-tab: faturamento por mês real (data_faturamento) x mês de origem da proposta ──
@@ -1534,7 +1543,7 @@ function CicloComercial() {
       if (!d.data_faturamento) return;
       const key = d.data_faturamento.slice(0, 7); // YYYY-MM
       if (!map[key]) map[key] = { key, count: 0, valor: 0, origem: {} };
-      const v = Number(d.valor_liquido) || 0;
+      const v = Number(d.valor_faturado) || 0;
       map[key].count++;
       map[key].valor += v;
       const origKey = d.mes_proposta || '—';
@@ -1570,17 +1579,18 @@ function CicloComercial() {
       {/* KPIs de valor por etapa */}
       <div className="grid-kpis-7">
         <Kpi label="Valor total em propostas" value={fmtMoedaCompacta(totais.valorTotal)} icon={FileStack} />
-        <Kpi label="Valor faturado" value={fmtMoedaCompacta(totais.valorFaturado)} icon={CheckCircle2} tone="olive" />
-        <Kpi label="Valor em pedido, aguarda fatura" value={fmtMoedaCompacta(totais.valorPedidoSemFatura)} icon={Clock3} tone="blue" />
-        <Kpi label="Valor ainda sem pedido" value={fmtMoedaCompacta(totais.valorSemPedido)} icon={AlertTriangle} tone="amber" />
+        <Kpi label="Net Value (pedidos confirmados)" value={fmtMoedaCompacta(totais.netValue)} icon={TrendingUp} tone="blue" />
+        <Kpi label="Valor faturado (NF, TOPs válidos)" value={fmtMoedaCompacta(totais.valorFaturado)} icon={CheckCircle2} tone="olive" />
+        <Kpi label="Pedido confirmado, aguarda fatura" value={fmtMoedaCompacta(totais.valorPedidoSemFatura)} icon={Clock3} tone="amber" />
+        <Kpi label="Valor ainda sem pedido" value={fmtMoedaCompacta(totais.valorSemPedido)} icon={AlertTriangle} tone="rust" />
       </div>
 
-      <Panel title="Proposta → Pedido → Faturamento, por mês de origem" subtitle="Quantas propostas de cada mês já viraram pedido e já foram faturadas, com valor">
+      <Panel title="Proposta → Pedido → Faturamento, por mês de origem" subtitle="Quantas propostas de cada mês já viraram pedido e já foram faturadas, com Net Value e valor faturado">
         <div style={{ overflowX: 'auto', marginTop: 10 }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
             <thead>
               <tr style={{ borderBottom: `1px solid ${T.line}` }}>
-                {['Mês da proposta', 'Propostas', 'Viraram pedido', 'Faturadas', 'Valor total', 'Valor faturado'].map(h => (
+                {['Mês da proposta', 'Propostas', 'Viraram pedido', 'Faturadas', 'Valor total', 'Net Value', 'Valor faturado'].map(h => (
                   <th key={h} style={{ padding: '8px 12px', textAlign: 'left', fontSize: 10.5, fontWeight: 600, color: T.inkFaint, textTransform: 'uppercase' }}>{h}</th>
                 ))}
               </tr>
@@ -1593,6 +1603,7 @@ function CicloComercial() {
                   <td style={{ padding: '10px 12px', fontFamily: FONT_DISPLAY, color: T.blueText }}>{m.viraramPedido} <span style={{ color: T.inkFaint, fontSize: 11 }}>({m.propostas ? Math.round(m.viraramPedido/m.propostas*100) : 0}%)</span></td>
                   <td style={{ padding: '10px 12px', fontFamily: FONT_DISPLAY, color: T.oliveText }}>{m.faturadas} <span style={{ color: T.inkFaint, fontSize: 11 }}>({m.propostas ? Math.round(m.faturadas/m.propostas*100) : 0}%)</span></td>
                   <td style={{ padding: '10px 12px', fontFamily: FONT_DISPLAY, color: T.inkDim }}>{fmtMoedaCompacta(m.valorTotal)}</td>
+                  <td style={{ padding: '10px 12px', fontFamily: FONT_DISPLAY, color: T.blueText, fontWeight: 600 }}>{fmtMoedaCompacta(m.netValue)}</td>
                   <td style={{ padding: '10px 12px', fontFamily: FONT_DISPLAY, color: T.oliveText, fontWeight: 600 }}>{fmtMoedaCompacta(m.valorFaturado)}</td>
                 </tr>
               ))}
@@ -1673,7 +1684,7 @@ function CicloComercial() {
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
             <thead>
               <tr style={{ borderBottom: `1px solid ${T.line}` }}>
-                {['BR', 'Cliente', 'Proposta em', 'Virou pedido em', 'Faturado em', 'Valor', 'Etapa'].map(h => (
+                {['BR', 'Cliente', 'Proposta em', 'Virou pedido em', 'Faturado em', 'Valor proposta', 'Net Value', 'Valor faturado', 'Etapa'].map(h => (
                   <th key={h} style={{ padding: '10px 16px', textAlign: 'left', fontSize: 10.5, fontWeight: 600, color: T.inkFaint, textTransform: 'uppercase', position: 'sticky', top: 0, background: T.panel }}>{h}</th>
                 ))}
               </tr>
@@ -1689,6 +1700,8 @@ function CicloComercial() {
                     <td style={{ padding: '10px 16px', fontSize: 12.5 }}>{d.data_pedido ? fmtData(d.data_pedido) : '—'}</td>
                     <td style={{ padding: '10px 16px', fontSize: 12.5 }}>{d.data_faturamento ? fmtData(d.data_faturamento) : '—'}</td>
                     <td style={{ padding: '10px 16px', fontSize: 12.5, fontFamily: FONT_DISPLAY, color: T.inkDim }}>{fmtMoeda(d.valor_liquido)}</td>
+                    <td style={{ padding: '10px 16px', fontSize: 12.5, fontFamily: FONT_DISPLAY, color: T.blueText }}>{d.net_value ? fmtMoeda(d.net_value) : '—'}</td>
+                    <td style={{ padding: '10px 16px', fontSize: 12.5, fontFamily: FONT_DISPLAY, color: T.oliveText }}>{d.valor_faturado ? fmtMoeda(d.valor_faturado) : '—'}</td>
                     <td style={{ padding: '10px 16px' }}>
                       <span style={{ background: meta.bg, color: meta.color, fontSize: 11, fontWeight: 600, padding: '4px 9px', borderRadius: 4, whiteSpace: 'nowrap' }}>{meta.label}</span>
                     </td>
@@ -1736,21 +1749,23 @@ function PainelComercial() {
     const { data: nfs } = await supabase
       .from('nota_venda_itens')
       .select('br,nro_interno_sankhya,numero_pedido,codtipoper,cliente_nome,data_faturamento,valor_bruto')
-      .in('codtipoper', [3101,3200,3210,3213,3214,3220])
+      .in('codtipoper', TOPS_FATURAMENTO_VALIDOS)
       .gte('data_faturamento', inicio)
       .lte('data_faturamento', fim)
       .order('data_faturamento', { ascending: false });
 
     const numPeds = [...new Set((nfs||[]).map(n => n.numero_pedido).filter(Boolean))];
     let pedMap = {};
+    let netValueMap = {}; // soma de valor_liquido por pedido (pode ter vários itens)
     if (numPeds.length > 0) {
       const { data: peds } = await supabase
         .from('pedidos_itens')
-        .select('br,numero_pedido,data_neg,data_faturamento,vendedor_nome,produto_kaleng,uf,cliente_nome')
+        .select('br,numero_pedido,data_neg,data_faturamento,vendedor_nome,produto_kaleng,uf,cliente_nome,valor_liquido')
         .in('numero_pedido', numPeds);
       (peds||[]).forEach(p => {
         const k = `${p.br}||${p.numero_pedido}`;
         if (!pedMap[k]) pedMap[k] = p;
+        netValueMap[k] = (netValueMap[k] || 0) + (Number(p.valor_liquido) || 0);
       });
     }
 
@@ -1759,7 +1774,8 @@ function PainelComercial() {
     (nfs||[]).forEach(n => {
       const k = `${n.br}||${n.nro_interno_sankhya}`;
       if (!nfsMap[k]) {
-        const ped = pedMap[`${n.br}||${n.numero_pedido}`];
+        const chavePedido = `${n.br}||${n.numero_pedido}`;
+        const ped = pedMap[chavePedido];
         nfsMap[k] = {
           br: n.br,
           nf: n.nro_interno_sankhya,
@@ -1770,6 +1786,7 @@ function PainelComercial() {
           fat_previsto: ped?.data_faturamento || null, // data prometida no pedido
           pedido_criado: ped?.data_neg || null,
           valor: 0,
+          netValue: netValueMap[chavePedido] || 0,
           vendedor: ped?.vendedor_nome || '—',
           kaleng: ped?.produto_kaleng || '—',
           uf: ped?.uf || '—',
@@ -1833,6 +1850,7 @@ function PainelComercial() {
 
   const kpis = useMemo(() => {
     const total = filtrados.reduce((s,r) => s + r.valor, 0);
+    const totalNet = filtrados.reduce((s,r) => s + (r.netValue || 0), 0);
     const comData = filtrados.filter(r => diasAtraso(r) !== null);
     const n = comData.length || 1;
     const nAntes   = comData.filter(r => diasAtraso(r) < 0).length;
@@ -1841,6 +1859,7 @@ function PainelComercial() {
     const atrasados = comData.filter(r => diasAtraso(r) > 0).map(r => diasAtraso(r));
     return {
       total,
+      totalNet,
       nfs: filtrados.length,
       pctAntes:        Math.round(nAntes  / n * 100),
       pctPrazo:        Math.round(nPrazo  / n * 100),
@@ -1934,6 +1953,7 @@ function PainelComercial() {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(140px,1fr))', gap: 12 }}>
         {[
           { label: 'Total faturado',      value: fmtMoedaCompacta(kpis.total),                color: T.terracotta, big: true },
+          { label: 'Net Value (pedidos)', value: fmtMoedaCompacta(kpis.totalNet),             color: T.blueText },
           { label: 'NFs emitidas',         value: kpis.nfs,                                    color: T.ink },
           { label: '% no prazo ou antes', value: `${kpis.pctNoPrazoOuAntes}%`,
             color: kpis.pctNoPrazoOuAntes >= 70 ? T.oliveText : kpis.pctNoPrazoOuAntes >= 40 ? T.amberText : T.rustText },
@@ -2037,13 +2057,14 @@ function PainelComercial() {
                 <SortThC label="NF emitida"       col="nf_emitida" />
                 <SortThC label="Situação ↕"       col="atraso" />
                 <SortThC label="Valor NF"         col="valor" right />
+                <SortThC label="Net Value"        col="netValue" right />
               </tr>
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={10} style={{ padding: 40, textAlign: 'center', color: T.inkFaint }}>Carregando…</td></tr>
+                <tr><td colSpan={11} style={{ padding: 40, textAlign: 'center', color: T.inkFaint }}>Carregando…</td></tr>
               ) : filtrados.length === 0 ? (
-                <tr><td colSpan={10} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Nenhuma NF no período com os filtros aplicados.</td></tr>
+                <tr><td colSpan={11} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Nenhuma NF no período com os filtros aplicados.</td></tr>
               ) : filtrados.map((r, i) => {
                 const d = diasAtraso(r);
                 const { cor, bg, label: sitLabel } = statusMeta(d);
@@ -2064,6 +2085,7 @@ function PainelComercial() {
                       <span style={{ fontSize: 10.5, fontWeight: 700, color: cor, background: bg, padding: '3px 8px', borderRadius: 4, whiteSpace: 'nowrap' }}>{sitLabel}</span>
                     </td>
                     <td style={{ padding: '9px 10px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 13, whiteSpace: 'nowrap' }}>{fmtMoedaCompacta(r.valor)}</td>
+                    <td style={{ padding: '9px 10px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 600, fontSize: 13, whiteSpace: 'nowrap', color: T.blueText }}>{r.netValue ? fmtMoedaCompacta(r.netValue) : '—'}</td>
                   </tr>
                 );
               })}
@@ -2195,7 +2217,7 @@ function EquipamentosTerceiros() {
           .from('nota_venda_itens')
           .select('br, nro_interno_sankhya, codtipoper, numero_pedido, data_faturamento, cliente_nome, produto_descricao, valor_bruto')
           .in('br', brs)
-          .in('codtipoper', [3101, 3200, 3210, 3213, 3214, 3220])
+          .in('codtipoper', TOPS_FATURAMENTO_VALIDOS)
           .order('data_faturamento', { ascending: false });
         // Map por BR para lookup rápido
         const map = {};
@@ -3413,7 +3435,7 @@ function Faturamento() {
 
     // Nota de Venda (bruto) agora tem o MESMO tratamento: fonte por item,
     // agregada no front exatamente como o líquido, com drill-down próprio.
-    let qNotaItens = supabase.from('nota_venda_itens').select('*').gte('data_neg', ini).lte('data_neg', fim);
+    let qNotaItens = supabase.from('nota_venda_itens').select('*').in('codtipoper', TOPS_FATURAMENTO_VALIDOS).gte('data_neg', ini).lte('data_neg', fim);
     if (vendCod) qNotaItens = qNotaItens.eq('vendedor_codigo', vendCod);
 
     const qVend = supabase.from('sankhya_vendedores').select('*').order('nome');
@@ -3571,7 +3593,7 @@ function Faturamento() {
     setDrillDown({ titulo, itens: [], campoValor: 'valor_bruto' });
     setDrillLoading(true);
     const { ini, fim } = rangeDatas();
-    let q = supabase.from('nota_venda_itens').select('*').gte('data_neg', ini).lte('data_neg', fim).order('data_neg', { ascending: false });
+    let q = supabase.from('nota_venda_itens').select('*').in('codtipoper', TOPS_FATURAMENTO_VALIDOS).gte('data_neg', ini).lte('data_neg', fim).order('data_neg', { ascending: false });
     if (filtro?.coluna && filtro?.valor) q = q.eq(filtro.coluna, filtro.valor);
     const { data } = await q;
     setDrillDown({ titulo, itens: data || [], campoValor: 'valor_bruto' });
@@ -4305,7 +4327,7 @@ function ConsumoMP() {
         .select('br,cliente_nome,produto_kaleng,valor_liquido,vendedor_nome,numero_pedido,uf'),
       supabase.from('nota_venda_itens')
         .select('br,valor_bruto,codtipoper')
-        .in('codtipoper', [3101,3200,3210,3213,3214,3220]),
+        .in('codtipoper', TOPS_FATURAMENTO_VALIDOS),
     ]);
 
     // Agrupa pedidos por BR
@@ -4535,7 +4557,7 @@ function ConsumoMP() {
           </table>
         </div>
         <div style={{ padding: '10px 16px', borderTop: `1px solid ${T.line}`, fontSize: 11, color: T.inkFaint, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span>{filtrados.length} projeto{filtrados.length !== 1 ? 's' : ''} · Previsto = soma dos pedidos de venda · Faturado = NFs emitidas (TOPs 3101/3200/3210/3213/3214/3220)</span>
+          <span>{filtrados.length} projeto{filtrados.length !== 1 ? 's' : ''} · Previsto = soma dos pedidos de venda · Faturado = NFs emitidas (TOPs 3200/3201/3214/3220/3227)</span>
           <BotaoExportar small onClick={() => exportCSV(filtrados, 'consumo_por_projeto.csv',
             ['br','cliente','kaleng','uf','num_pedidos','previsto','faturado','pendente','pct'])} />
         </div>
