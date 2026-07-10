@@ -97,8 +97,8 @@ const STATUS_META = {
 
 const FLUXO_ORDEM = ['rascunho', 'em_revisao_tecnica', 'aguardando_aprovacao', 'concluida'];
 
-const MESES_ORDEM = ['JANEIRO', 'FEVEREIRO', 'MARÇO', 'ABRIL', 'MAIO', 'JUNHO'];
-const MESES_LABEL = { JANEIRO: 'Jan', FEVEREIRO: 'Fev', MARÇO: 'Mar', ABRIL: 'Abr', MAIO: 'Mai', JUNHO: 'Jun' };
+const MESES_ORDEM = ['JANEIRO', 'FEVEREIRO', 'MARÇO', 'ABRIL', 'MAIO', 'JUNHO', 'JULHO', 'AGOSTO', 'SETEMBRO', 'OUTUBRO', 'NOVEMBRO', 'DEZEMBRO'];
+const MESES_LABEL = { JANEIRO: 'Jan', FEVEREIRO: 'Fev', MARÇO: 'Mar', ABRIL: 'Abr', MAIO: 'Mai', JUNHO: 'Jun', JULHO: 'Jul', AGOSTO: 'Ago', SETEMBRO: 'Set', OUTUBRO: 'Out', NOVEMBRO: 'Nov', DEZEMBRO: 'Dez' };
 
 /* ============================================================================
    UTILS
@@ -383,6 +383,7 @@ function PortalConteudo({ currentUser, session }) {
           {view === 'equipamentos' && <TabErrorBoundary tab="Equipamentos de Terceiros"><EquipamentosTerceiros /></TabErrorBoundary>}
           {view === 'pedidosvale' && <PedidosVale />}
           {view === 'aberturacotacao' && <TabErrorBoundary tab="Abertura de Cotação"><AberturaCotacao currentUser={currentUser} /></TabErrorBoundary>}
+          {view === 'ranking' && <TabErrorBoundary tab="Ranking"><RankingPontuacao /></TabErrorBoundary>}
           {view === 'auditoria' && <TabErrorBoundary tab="Auditoria"><Auditoria /></TabErrorBoundary>}
           {view === 'integracao' && <Integracao />}
           {view === 'admin' && <Admin currentUser={currentUser} />}
@@ -425,6 +426,7 @@ function Sidebar({ view, setView, pendCount, papel, telasPermitidas }) {
     { id: 'equipamentos', label: 'Equip. Terceiros',       icon: Webhook },
     { id: 'pedidosvale',  label: 'Pedidos Vale',           icon: FileWarning },
     { id: 'aberturacotacao', label: 'Abertura de Cotação',  icon: FileStack },
+    { id: 'ranking',      label: 'Ranking de Pontuação',    icon: TrendingUp },
     { id: 'auditoria',    label: 'Auditoria',              icon: History },
     { id: 'integracao',   label: 'Integrações',            icon: Workflow },
   ];
@@ -5268,6 +5270,7 @@ const TELAS_CATALOGO = [
   { id: 'equipamentos', label: 'Equip. Terceiros' },
   { id: 'pedidosvale',  label: 'Pedidos Vale' },
   { id: 'aberturacotacao', label: 'Abertura de Cotação' },
+  { id: 'ranking',      label: 'Ranking de Pontuação' },
   { id: 'auditoria',    label: 'Auditoria' },
   { id: 'integracao',   label: 'Integrações' },
   { id: 'admin',        label: 'Admin' },
@@ -5485,6 +5488,79 @@ function PainelMetas() {
         </div>
       </Panel>
     </>
+  );
+}
+
+function RankingPontuacao() {
+  const [coletivas, setColetivas] = useState([]);
+  const [coletivasStatus, setColetivasStatus] = useState(null);
+  const [ranking, setRanking] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  const carregar = useCallback(async () => {
+    setLoading(true);
+    const [{ data: c }, { data: cs }, { data: r }] = await Promise.all([
+      supabase.from('metas_coletivas').select('*').order('id'),
+      supabase.from('v_metas_coletivas_status').select('*').maybeSingle(),
+      supabase.from('v_metas_pontuacao').select('*').order('pontuacao_total', { ascending: false }),
+    ]);
+    setColetivas(c || []);
+    setColetivasStatus(cs || null);
+    setRanking(r || []);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { carregar(); }, [carregar]);
+
+  // Auto-refresh a cada 30 minutos.
+  useEffect(() => {
+    const id = setInterval(carregar, 30 * 60 * 1000);
+    return () => clearInterval(id);
+  }, [carregar]);
+
+  return (
+    <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 18, maxWidth: 900 }}>
+      {loading ? (
+        <div style={{ textAlign: 'center', padding: 50, color: T.inkFaint, fontSize: 13 }}>Carregando…</div>
+      ) : (
+        <>
+          <Panel title="Metas coletivas" subtitle="Calculadas automaticamente com base nas propostas concluídas">
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 10 }}>
+              {coletivas.map(c => {
+                const atual = c.id === 1 ? coletivasStatus?.pct_no_prazo : c.id === 2 ? coletivasStatus?.pct_reprogramadas : coletivasStatus?.media_dias_uteis_aberto;
+                return (
+                  <div key={c.id} style={{ padding: '10px 12px', background: T.panelAlt, borderRadius: 8, border: `1px solid ${T.lineSoft}` }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span style={{ fontSize: 13, fontWeight: 600 }}>{c.descricao}</span>
+                      <span style={{ fontSize: 12, color: T.terracottaText, fontWeight: 700 }}>Meta: {c.meta_texto}</span>
+                    </div>
+                    <div style={{ fontSize: 11.5, color: T.inkFaint, marginTop: 4 }}>
+                      {c.baseline_texto && <>Baseline: {c.baseline_texto} · </>}
+                      Atual: {atual != null ? (c.id === 3 ? `${atual} dias úteis` : `${atual}%`) : 'sem dados suficientes ainda'}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </Panel>
+
+          <Panel title="Ranking de pontuação por engenheiro" subtitle="Calculado em tempo real a partir das propostas cadastradas">
+            <div style={{ marginTop: 10 }}>
+              {ranking.length === 0 && <div style={{ fontSize: 13, color: T.inkFaint, padding: '8px 0' }}>Nenhum dado ainda.</div>}
+              {ranking.map((r, i) => (
+                <div key={r.colaborador_id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 10px', borderBottom: `1px solid ${T.lineSoft}` }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <span style={{ width: 22, height: 22, borderRadius: '50%', background: i === 0 ? T.terracottaSoft : T.panelAlt, color: i === 0 ? T.terracottaText : T.inkFaint, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700 }}>{i + 1}</span>
+                    <span style={{ fontSize: 13.5, fontWeight: 600 }}>{r.nome}</span>
+                  </div>
+                  <span style={{ fontSize: 14, fontWeight: 700, color: T.blueText }}>{r.pontuacao_total} pts</span>
+                </div>
+              ))}
+            </div>
+          </Panel>
+        </>
+      )}
+    </div>
   );
 }
 
@@ -5855,7 +5931,7 @@ function ModalNovaProposta({ currentUser, onClose, onCreated }) {
 
 function MES_ATUAL_LABEL() {
   const m = new Date().getMonth();
-  return MESES_ORDEM[m] || MESES_ORDEM[5];
+  return MESES_ORDEM[m] || MESES_ORDEM[MESES_ORDEM.length - 1];
 }
 
 function ModalDetalhe({ proposta, usuario, onClose, onAction }) {
