@@ -641,13 +641,14 @@ function Dashboard({ stats, propostas, todasPropostas, mesFiltro, onNovaProposta
   const [prodLoading, setProdLoading] = useState(true);
 
   useEffect(() => {
-    // Passo 1: descobre qual foi o último período sincronizado consultando a
-    // própria tabela (data_fim mais recente). Assim evita somar syncs distintos.
+    // Passo 1: descobre qual foi o ÚLTIMO SYNC DE VERDADE (sincronizado_em), não a
+    // data_fim mais "no futuro" — um sync antigo de teste com data_fim distante
+    // pode ter poucos registros e não deve vencer um sync completo mais recente.
     setProdLoading(true);
     supabase
       .from('produtividade_orcamentos')
-      .select('data_ini, data_fim')
-      .order('data_fim', { ascending: false })
+      .select('data_ini, data_fim, sincronizado_em')
+      .order('sincronizado_em', { ascending: false })
       .limit(1)
       .maybeSingle()
       .then(({ data: latest }) => {
@@ -655,8 +656,8 @@ function Dashboard({ stats, propostas, todasPropostas, mesFiltro, onNovaProposta
           // Tenta fallback na tabela de pedidos
           return supabase
             .from('produtividade_pedidos')
-            .select('data_ini, data_fim')
-            .order('data_fim', { ascending: false })
+            .select('data_ini, data_fim, sincronizado_em')
+            .order('sincronizado_em', { ascending: false })
             .limit(1)
             .maybeSingle()
             .then(({ data }) => data);
@@ -5425,24 +5426,13 @@ function PermissoesManager() {
 
 function PainelMetas() {
   const [pesos, setPesos] = useState([]);
-  const [coletivas, setColetivas] = useState([]);
-  const [coletivasStatus, setColetivasStatus] = useState(null);
-  const [ranking, setRanking] = useState([]);
   const [loading, setLoading] = useState(true);
   const [editando, setEditando] = useState(null); // item sendo editado
 
   const carregar = useCallback(async () => {
     setLoading(true);
-    const [{ data: p }, { data: c }, { data: cs }, { data: r }] = await Promise.all([
-      supabase.from('metas_individuais_config').select('*').order('item'),
-      supabase.from('metas_coletivas').select('*').order('id'),
-      supabase.from('v_metas_coletivas_status').select('*').maybeSingle(),
-      supabase.from('v_metas_pontuacao').select('*').order('pontuacao_total', { ascending: false }),
-    ]);
+    const { data: p } = await supabase.from('metas_individuais_config').select('*').order('item');
     setPesos(p || []);
-    setColetivas(c || []);
-    setColetivasStatus(cs || null);
-    setRanking(r || []);
     setLoading(false);
   }, []);
 
@@ -5476,36 +5466,7 @@ function PainelMetas() {
         </div>
       </Panel>
 
-      <Panel title="Metas coletivas" subtitle="Calculadas automaticamente com base nas propostas concluídas">
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 10 }}>
-          {coletivas.map(c => {
-            const atual = c.id === 1 ? coletivasStatus?.pct_no_prazo : c.id === 2 ? coletivasStatus?.pct_reprogramadas : coletivasStatus?.media_dias_uteis_aberto;
-            return (
-              <div key={c.id} style={{ padding: '10px 12px', background: T.panelAlt, borderRadius: 8, border: `1px solid ${T.lineSoft}` }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span style={{ fontSize: 13, fontWeight: 600 }}>{c.descricao}</span>
-                  <span style={{ fontSize: 12, color: T.terracottaText, fontWeight: 700 }}>Meta: {c.meta_texto}</span>
-                </div>
-                <div style={{ fontSize: 11.5, color: T.inkFaint, marginTop: 4 }}>
-                  {c.baseline_texto && <>Baseline: {c.baseline_texto} · </>}
-                  Atual: {atual != null ? (c.id === 3 ? `${atual} dias úteis` : `${atual}%`) : 'sem dados suficientes ainda'}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </Panel>
-
-      <Panel title="Ranking de pontuação" subtitle="Calculado em tempo real a partir das propostas de cada engenheiro (fica em 0 até o time cadastrar propostas de verdade)">
-        <div style={{ marginTop: 10 }}>
-          {ranking.map(r => (
-            <div key={r.colaborador_id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 10px', borderBottom: `1px solid ${T.lineSoft}` }}>
-              <span style={{ fontSize: 13 }}>{r.nome}</span>
-              <span style={{ fontSize: 13, fontWeight: 700, color: T.blueText }}>{r.pontuacao_total} pts</span>
-            </div>
-          ))}
-        </div>
-      </Panel>
+      <RankingPontuacao />
     </>
   );
 }
@@ -5513,19 +5474,23 @@ function PainelMetas() {
 function RankingPontuacao() {
   const [coletivas, setColetivas] = useState([]);
   const [coletivasStatus, setColetivasStatus] = useState(null);
-  const [ranking, setRanking] = useState([]);
+  const [rankingAcumulado, setRankingAcumulado] = useState([]);
+  const [rankingMensal, setRankingMensal] = useState([]);
+  const [mesSelecionado, setMesSelecionado] = useState('todos');
   const [loading, setLoading] = useState(true);
 
   const carregar = useCallback(async () => {
     setLoading(true);
-    const [{ data: c }, { data: cs }, { data: r }] = await Promise.all([
+    const [{ data: c }, { data: cs }, { data: rAcum }, { data: rMes }] = await Promise.all([
       supabase.from('metas_coletivas').select('*').order('id'),
       supabase.from('v_metas_coletivas_status').select('*').maybeSingle(),
       supabase.from('v_metas_pontuacao').select('*').order('pontuacao_total', { ascending: false }),
+      supabase.from('v_metas_pontuacao_mensal').select('*'),
     ]);
     setColetivas(c || []);
     setColetivasStatus(cs || null);
-    setRanking(r || []);
+    setRankingAcumulado(rAcum || []);
+    setRankingMensal(rMes || []);
     setLoading(false);
   }, []);
 
@@ -5536,6 +5501,16 @@ function RankingPontuacao() {
     const id = setInterval(carregar, 30 * 60 * 1000);
     return () => clearInterval(id);
   }, [carregar]);
+
+  const mesesDisponiveis = useMemo(() => {
+    const meses = Array.from(new Set(rankingMensal.map(r => r.mes)));
+    return MESES_ORDEM.filter(m => meses.includes(m));
+  }, [rankingMensal]);
+
+  const rankingExibido = useMemo(() => {
+    if (mesSelecionado === 'todos') return rankingAcumulado;
+    return rankingMensal.filter(r => r.mes === mesSelecionado).sort((a, b) => b.pontuacao_total - a.pontuacao_total);
+  }, [mesSelecionado, rankingAcumulado, rankingMensal]);
 
   return (
     <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 18, maxWidth: 900 }}>
@@ -5563,10 +5538,24 @@ function RankingPontuacao() {
             </div>
           </Panel>
 
-          <Panel title="Ranking de pontuação por engenheiro" subtitle="Calculado em tempo real a partir das propostas cadastradas">
+          <Panel title="Ranking de pontuação por engenheiro" subtitle="Escolha entre visão acumulada (todo o histórico) ou de um mês específico">
+            <div style={{ display: 'flex', gap: 8, marginTop: 10, marginBottom: 4, flexWrap: 'wrap' }}>
+              <button onClick={() => setMesSelecionado('todos')} style={{
+                fontSize: 12, padding: '6px 12px', borderRadius: 6, border: `1px solid ${T.line}`,
+                background: mesSelecionado === 'todos' ? T.terracotta : T.panelAlt,
+                color: mesSelecionado === 'todos' ? '#fff' : T.inkDim, fontWeight: 600,
+              }}>Acumulado</button>
+              {mesesDisponiveis.map(m => (
+                <button key={m} onClick={() => setMesSelecionado(m)} style={{
+                  fontSize: 12, padding: '6px 12px', borderRadius: 6, border: `1px solid ${T.line}`,
+                  background: mesSelecionado === m ? T.terracotta : T.panelAlt,
+                  color: mesSelecionado === m ? '#fff' : T.inkDim, fontWeight: 600,
+                }}>{MESES_LABEL[m]}</button>
+              ))}
+            </div>
             <div style={{ marginTop: 10 }}>
-              {ranking.length === 0 && <div style={{ fontSize: 13, color: T.inkFaint, padding: '8px 0' }}>Nenhum dado ainda.</div>}
-              {ranking.map((r, i) => (
+              {rankingExibido.length === 0 && <div style={{ fontSize: 13, color: T.inkFaint, padding: '8px 0' }}>Nenhum dado ainda para essa visão.</div>}
+              {rankingExibido.map((r, i) => (
                 <div key={r.colaborador_id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 10px', borderBottom: `1px solid ${T.lineSoft}` }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                     <span style={{ width: 22, height: 22, borderRadius: '50%', background: i === 0 ? T.terracottaSoft : T.panelAlt, color: i === 0 ? T.terracottaText : T.inkFaint, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700 }}>{i + 1}</span>
