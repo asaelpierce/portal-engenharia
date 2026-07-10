@@ -1482,6 +1482,7 @@ function CicloComercial() {
   const [busca, setBusca] = useState('');
   const [filtroEtapa, setFiltroEtapa] = useState('todas');
   const [filtroMes, setFiltroMes] = useState('todos');
+  const [mesFaturamentoAberto, setMesFaturamentoAberto] = useState(null);
 
   useEffect(() => {
     setLoading(true);
@@ -1501,8 +1502,49 @@ function CicloComercial() {
         propostas: doMes.length,
         viraramPedido: doMes.filter(d => d.etapa_atual !== 'sem_pedido').length,
         faturadas: doMes.filter(d => d.etapa_atual === 'faturado').length,
+        valorTotal: doMes.reduce((s, d) => s + (Number(d.valor_liquido) || 0), 0),
+        valorFaturado: doMes.filter(d => d.etapa_atual === 'faturado').reduce((s, d) => s + (Number(d.valor_liquido) || 0), 0),
       };
     }).filter(m => m.propostas > 0);
+  }, [dados]);
+
+  // ── totais de valor por etapa (KPIs) ──
+  const totais = useMemo(() => {
+    let valorTotal = 0, valorFaturado = 0, valorPedidoSemFatura = 0, valorSemPedido = 0;
+    dados.forEach(d => {
+      const v = Number(d.valor_liquido) || 0;
+      valorTotal += v;
+      if (d.etapa_atual === 'faturado') valorFaturado += v;
+      else if (d.etapa_atual === 'pedido_sem_fatura') valorPedidoSemFatura += v;
+      else valorSemPedido += v;
+    });
+    return { valorTotal, valorFaturado, valorPedidoSemFatura, valorSemPedido };
+  }, [dados]);
+
+  // ── cross-tab: faturamento por mês real (data_faturamento) x mês de origem da proposta ──
+  const monthLabel = (ymd) => {
+    if (!ymd) return '—';
+    const [y, m] = ymd.split('-');
+    return `${['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'][Number(m) - 1]}/${y}`;
+  };
+
+  const faturamentoPorMes = useMemo(() => {
+    const map = {};
+    dados.forEach(d => {
+      if (!d.data_faturamento) return;
+      const key = d.data_faturamento.slice(0, 7); // YYYY-MM
+      if (!map[key]) map[key] = { key, count: 0, valor: 0, origem: {} };
+      const v = Number(d.valor_liquido) || 0;
+      map[key].count++;
+      map[key].valor += v;
+      const origKey = d.mes_proposta || '—';
+      if (!map[key].origem[origKey]) map[key].origem[origKey] = { count: 0, valor: 0 };
+      map[key].origem[origKey].count++;
+      map[key].origem[origKey].valor += v;
+    });
+    return Object.values(map)
+      .map(m => ({ ...m, origem: Object.entries(m.origem).map(([mesOrigem, v]) => ({ mesOrigem, ...v })).sort((a, b) => b.count - a.count) }))
+      .sort((a, b) => b.key.localeCompare(a.key));
   }, [dados]);
 
   const filtrados = useMemo(() => {
@@ -1524,12 +1566,21 @@ function CicloComercial() {
 
   return (
     <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 22, maxWidth: 1400 }}>
-      <Panel title="Proposta → Pedido → Faturamento, por mês" subtitle="Quantas propostas de cada mês já viraram pedido e já foram faturadas">
+
+      {/* KPIs de valor por etapa */}
+      <div className="grid-kpis-7">
+        <Kpi label="Valor total em propostas" value={fmtMoedaCompacta(totais.valorTotal)} icon={FileStack} />
+        <Kpi label="Valor faturado" value={fmtMoedaCompacta(totais.valorFaturado)} icon={CheckCircle2} tone="olive" />
+        <Kpi label="Valor em pedido, aguarda fatura" value={fmtMoedaCompacta(totais.valorPedidoSemFatura)} icon={Clock3} tone="blue" />
+        <Kpi label="Valor ainda sem pedido" value={fmtMoedaCompacta(totais.valorSemPedido)} icon={AlertTriangle} tone="amber" />
+      </div>
+
+      <Panel title="Proposta → Pedido → Faturamento, por mês de origem" subtitle="Quantas propostas de cada mês já viraram pedido e já foram faturadas, com valor">
         <div style={{ overflowX: 'auto', marginTop: 10 }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
             <thead>
               <tr style={{ borderBottom: `1px solid ${T.line}` }}>
-                {['Mês da proposta', 'Propostas', 'Viraram pedido', 'Faturadas'].map(h => (
+                {['Mês da proposta', 'Propostas', 'Viraram pedido', 'Faturadas', 'Valor total', 'Valor faturado'].map(h => (
                   <th key={h} style={{ padding: '8px 12px', textAlign: 'left', fontSize: 10.5, fontWeight: 600, color: T.inkFaint, textTransform: 'uppercase' }}>{h}</th>
                 ))}
               </tr>
@@ -1541,10 +1592,62 @@ function CicloComercial() {
                   <td style={{ padding: '10px 12px', fontFamily: FONT_DISPLAY }}>{m.propostas}</td>
                   <td style={{ padding: '10px 12px', fontFamily: FONT_DISPLAY, color: T.blueText }}>{m.viraramPedido} <span style={{ color: T.inkFaint, fontSize: 11 }}>({m.propostas ? Math.round(m.viraramPedido/m.propostas*100) : 0}%)</span></td>
                   <td style={{ padding: '10px 12px', fontFamily: FONT_DISPLAY, color: T.oliveText }}>{m.faturadas} <span style={{ color: T.inkFaint, fontSize: 11 }}>({m.propostas ? Math.round(m.faturadas/m.propostas*100) : 0}%)</span></td>
+                  <td style={{ padding: '10px 12px', fontFamily: FONT_DISPLAY, color: T.inkDim }}>{fmtMoedaCompacta(m.valorTotal)}</td>
+                  <td style={{ padding: '10px 12px', fontFamily: FONT_DISPLAY, color: T.oliveText, fontWeight: 600 }}>{fmtMoedaCompacta(m.valorFaturado)}</td>
                 </tr>
               ))}
             </tbody>
           </table>
+        </div>
+      </Panel>
+
+      {/* Cross-tab: faturamento real por mês x mês de origem da proposta */}
+      <Panel title="Faturamento por mês × mês de origem da proposta" subtitle="Ex.: do que foi faturado em junho, quanto era proposta de abril, maio, etc. Clique num mês para abrir">
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 10 }}>
+          {faturamentoPorMes.length === 0 ? (
+            <p style={{ fontSize: 13, color: T.inkFaint }}>Nenhuma nota de faturamento encontrada ainda.</p>
+          ) : faturamentoPorMes.map(f => {
+            const aberto = mesFaturamentoAberto === f.key;
+            return (
+              <div key={f.key} style={{ border: `1px solid ${T.line}`, borderRadius: 8, overflow: 'hidden' }}>
+                <button onClick={() => setMesFaturamentoAberto(aberto ? null : f.key)} style={{
+                  width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                  padding: '12px 16px', background: aberto ? T.panelAlt : T.panel, border: 'none', cursor: 'pointer', textAlign: 'left',
+                }}>
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13.5, fontWeight: 700, fontFamily: FONT_DISPLAY, color: T.ink }}>
+                    {aberto ? <ChevronDown size={15} /> : <ChevronRight size={15} />} Faturado em {monthLabel(f.key)}
+                  </span>
+                  <span style={{ display: 'flex', gap: 16, fontSize: 12.5 }}>
+                    <span style={{ color: T.inkDim }}>{f.count} nota{f.count !== 1 ? 's' : ''}</span>
+                    <span style={{ color: T.oliveText, fontWeight: 700, fontFamily: FONT_DISPLAY }}>{fmtMoedaCompacta(f.valor)}</span>
+                  </span>
+                </button>
+                {aberto && (
+                  <div style={{ padding: '4px 16px 12px' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+                      <thead>
+                        <tr>
+                          {['Mês de origem da proposta', 'Qtd.', '%', 'Valor'].map(h => (
+                            <th key={h} style={{ padding: '6px 10px', textAlign: 'left', fontSize: 10, fontWeight: 600, color: T.inkFaint, textTransform: 'uppercase' }}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {f.origem.map(o => (
+                          <tr key={o.mesOrigem} style={{ borderTop: `1px solid ${T.lineSoft}` }}>
+                            <td style={{ padding: '6px 10px', fontWeight: 600 }}>{MESES_LABEL[o.mesOrigem] || o.mesOrigem}</td>
+                            <td style={{ padding: '6px 10px', fontFamily: FONT_DISPLAY }}>{o.count}</td>
+                            <td style={{ padding: '6px 10px', color: T.inkFaint }}>{f.count ? Math.round(o.count / f.count * 100) : 0}%</td>
+                            <td style={{ padding: '6px 10px', fontFamily: FONT_DISPLAY, color: T.oliveText }}>{fmtMoedaCompacta(o.valor)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       </Panel>
 
@@ -1570,7 +1673,7 @@ function CicloComercial() {
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
             <thead>
               <tr style={{ borderBottom: `1px solid ${T.line}` }}>
-                {['BR', 'Cliente', 'Proposta em', 'Virou pedido em', 'Faturado em', 'Etapa'].map(h => (
+                {['BR', 'Cliente', 'Proposta em', 'Virou pedido em', 'Faturado em', 'Valor', 'Etapa'].map(h => (
                   <th key={h} style={{ padding: '10px 16px', textAlign: 'left', fontSize: 10.5, fontWeight: 600, color: T.inkFaint, textTransform: 'uppercase', position: 'sticky', top: 0, background: T.panel }}>{h}</th>
                 ))}
               </tr>
@@ -1585,6 +1688,7 @@ function CicloComercial() {
                     <td style={{ padding: '10px 16px', fontSize: 12.5 }}>{fmtData(d.data_abertura)}</td>
                     <td style={{ padding: '10px 16px', fontSize: 12.5 }}>{d.data_pedido ? fmtData(d.data_pedido) : '—'}</td>
                     <td style={{ padding: '10px 16px', fontSize: 12.5 }}>{d.data_faturamento ? fmtData(d.data_faturamento) : '—'}</td>
+                    <td style={{ padding: '10px 16px', fontSize: 12.5, fontFamily: FONT_DISPLAY, color: T.inkDim }}>{fmtMoeda(d.valor_liquido)}</td>
                     <td style={{ padding: '10px 16px' }}>
                       <span style={{ background: meta.bg, color: meta.color, fontSize: 11, fontWeight: 600, padding: '4px 9px', borderRadius: 4, whiteSpace: 'nowrap' }}>{meta.label}</span>
                     </td>
