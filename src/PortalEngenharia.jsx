@@ -173,6 +173,7 @@ export default function PortalEngenharia() {
             id: data.id, nome: data.nome, papel: data.papel,
             email: session.user.email,
             ve_produtividade_completa: data.ve_produtividade_completa,
+            sankhyaUsuario: data.sankhya_usuario,
             // Sem linhas em colaborador_telas = sem restrição cadastrada (mantém acesso total, comportamento antigo).
             // Com linhas = restrição ativa, só essas telas aparecem.
             telasPermitidas: telasData && telasData.length ? telasData.map(t => t.tela) : null,
@@ -516,7 +517,7 @@ function Topbar({ view, mesFiltro, setMesFiltro, currentUser, userEmail, userMen
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
         <h1 style={{ fontFamily: FONT_DISPLAY, fontSize: 21, fontWeight: 600, margin: 0, letterSpacing: '0.01em', color: T.ink }}>{VIEW_TITLES[view]}</h1>
-        {(view === 'dashboard' || view === 'produtividade') && (
+        {view === 'dashboard' && (
           <div style={{ position: 'relative' }}>
             <select value={mesFiltro} onChange={e => setMesFiltro(e.target.value)} className="focus-ring"
               style={{
@@ -2792,15 +2793,17 @@ function Produtividade({ currentUser }) {
   const [lastSync, setLastSync] = useState(null);
 
   // Usuários sem visão completa (ve_produtividade_completa = false) só veem os próprios números.
+  // O filtro compara pelo login do Sankhya (sankhya_usuario), não pelo nome cadastrado no portal —
+  // os dados sincronizados vêm com o usuário do ERP (ex: "EDSON.J"), que é diferente do nome de exibição.
   const veTudo = currentUser?.ve_produtividade_completa === true;
 
   const carregarDados = useCallback(async () => {
     setLoading(true);
     let q1 = supabase.from('produtividade_pedidos').select('*').eq('data_ini', periodo.dataIni).eq('data_fim', periodo.dataFim).order('total_pedidos', { ascending: false });
     let q2 = supabase.from('produtividade_orcamentos').select('*').eq('data_ini', periodo.dataIni).eq('data_fim', periodo.dataFim).order('total_geral', { ascending: false });
-    if (!veTudo && currentUser?.nome) {
-      q1 = q1.eq('vendedor_nome', currentUser.nome);
-      q2 = q2.eq('vendedor_nome', currentUser.nome);
+    if (!veTudo && currentUser?.sankhyaUsuario) {
+      q1 = q1.eq('vendedor_nome', currentUser.sankhyaUsuario);
+      q2 = q2.eq('orcamentista_nome', currentUser.sankhyaUsuario);
     }
     const [r1, r2, r3] = await Promise.all([
       q1, q2,
