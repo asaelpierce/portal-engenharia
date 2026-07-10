@@ -166,11 +166,16 @@ export default function PortalEngenharia() {
   useEffect(() => {
     if (!session?.user?.email) { setCurrentUser(null); return; }
     supabase.from('colaboradores').select('*').eq('email', session.user.email).maybeSingle()
-      .then(({ data }) => {
+      .then(async ({ data }) => {
         if (data) {
+          const { data: telasData } = await supabase.from('colaborador_telas').select('tela').eq('colaborador_id', data.id);
           setCurrentUser({
             id: data.id, nome: data.nome, papel: data.papel,
             email: session.user.email,
+            ve_produtividade_completa: data.ve_produtividade_completa,
+            // Sem linhas em colaborador_telas = sem restrição cadastrada (mantém acesso total, comportamento antigo).
+            // Com linhas = restrição ativa, só essas telas aparecem.
+            telasPermitidas: telasData && telasData.length ? telasData.map(t => t.tela) : null,
             iniciais: data.nome.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase(),
           });
         }
@@ -233,6 +238,12 @@ function PortalConteudo({ currentUser, session }) {
   }, []);
 
   useEffect(() => { carregarPropostas(); }, [carregarPropostas]);
+
+  // Auto-refresh a cada 30 minutos.
+  useEffect(() => {
+    const id = setInterval(carregarPropostas, 30 * 60 * 1000);
+    return () => clearInterval(id);
+  }, [carregarPropostas]);
 
   const propostasMes = useMemo(() => propostas.filter(p => p.mes === mesFiltro), [propostas, mesFiltro]);
 
@@ -342,7 +353,7 @@ function PortalConteudo({ currentUser, session }) {
         }
       `}</style>
 
-      <Sidebar view={view} setView={setView} pendCount={pendencias.length} papel={currentUser.papel} />
+      <Sidebar view={view} setView={setView} pendCount={pendencias.length} papel={currentUser.papel} telasPermitidas={currentUser.telasPermitidas} />
 
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, overflow: 'hidden' }}>
         <Topbar
@@ -364,7 +375,7 @@ function PortalConteudo({ currentUser, session }) {
           )}
           {view === 'comercial' && <TabErrorBoundary tab="Painel Comercial"><PainelComercial /></TabErrorBoundary>}
           {view === 'metricas' && <Metricas propostas={propostas} />}
-          {view === 'produtividade' && <Produtividade propostas={propostas} mesFiltro={mesFiltro} />}
+          {view === 'produtividade' && <Produtividade propostas={propostas} mesFiltro={mesFiltro} currentUser={currentUser} />}
           {view === 'faturamento' && <Faturamento />}
           {view === 'consumo_mp' && <TabErrorBoundary tab="Consumo de MP"><ConsumoMP /></TabErrorBoundary>}
           {view === 'almoxarifado' && <TabErrorBoundary tab="Almoxarifado"><Almoxarifado /></TabErrorBoundary>}
@@ -391,9 +402,11 @@ function PortalConteudo({ currentUser, session }) {
 /* ============================================================================
    SIDEBAR
 ============================================================================ */
-function Sidebar({ view, setView, pendCount, papel }) {
-  // Controle de acesso por papel
-  const ACESSO = {
+function Sidebar({ view, setView, pendCount, papel, telasPermitidas }) {
+  // Controle de acesso: telasPermitidas vem de colaborador_telas (banco).
+  // null = sem restrição cadastrada -> mantém acesso total (comportamento antigo).
+  // Regra legada mantida como fallback pro papel 'comercial' sem linhas cadastradas.
+  const ACESSO_LEGADO = {
     comercial: ['comercial', 'faturamento', 'equipamentos'],
   };
   const todosItems = [
@@ -410,7 +423,7 @@ function Sidebar({ view, setView, pendCount, papel }) {
     { id: 'pedidosvale',  label: 'Pedidos Vale',           icon: FileWarning },
     { id: 'integracao',   label: 'Integrações',            icon: Workflow },
   ];
-  const permitidos = ACESSO[papel];
+  const permitidos = telasPermitidas || ACESSO_LEGADO[papel];
   const items = permitidos ? todosItems.filter(i => permitidos.includes(i.id)) : todosItems;
   return (
     <div className="sidebar-responsive" style={{ background: T.panel, borderRight: `1px solid ${T.line}`, display: 'flex', flexDirection: 'column', flexShrink: 0, boxShadow: '1px 0 0 rgba(28,26,23,.02), 2px 0 8px rgba(28,26,23,.03)' }}>
@@ -1421,7 +1434,7 @@ function PainelComercial() {
   const mesAtual = `${hoje.getFullYear()}-${String(hoje.getMonth()+1).padStart(2,'0')}`;
   const [registros, setRegistros] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [deDe, setDeDe] = useState('2026-01');
+  const [deDe, setDeDe] = useState('2025-08');
   const [deAte, setDeAte] = useState(mesAtual);
   const [vendFiltro, setVendFiltro] = useState('Todos');
   const [brBusca, setBrBusca] = useState('');
@@ -1487,6 +1500,12 @@ function PainelComercial() {
   }, [deDe, deAte]);
 
   useEffect(() => { carregar(); }, [carregar]);
+
+  // Auto-refresh a cada 30 minutos.
+  useEffect(() => {
+    const id = setInterval(carregar, 30 * 60 * 1000);
+    return () => clearInterval(id);
+  }, [carregar]);
 
   // Atraso = NF emitida - data prevista no pedido
   // Negativo = antecipado, Zero = no prazo, Positivo = atrasado
@@ -1573,7 +1592,7 @@ function PainelComercial() {
   // Gera lista de meses (jan/2026 até mês atual)
   const meses = useMemo(() => {
     const arr = [];
-    const inicio = new Date(2026, 0, 1);
+    const inicio = new Date(2025, 7, 1); // ago/2025 — início real dos dados de faturamento no banco
     const fim = new Date(hoje.getFullYear(), hoje.getMonth(), 1);
     let cur = new Date(inicio);
     while (cur <= fim) {
@@ -1909,6 +1928,12 @@ function EquipamentosTerceiros() {
   }, []);
 
   useEffect(() => { carregar(); }, [carregar]);
+
+  // Auto-refresh a cada 30 minutos.
+  useEffect(() => {
+    const id = setInterval(carregar, 30 * 60 * 1000);
+    return () => clearInterval(id);
+  }, [carregar]);
 
   const sincronizar = async () => {
     setSyncing(true); setSyncMsg(null); setErro(null);
@@ -2754,7 +2779,7 @@ class TabErrorBoundary extends React.Component {
    PRODUTIVIDADE — dados reais do Sankhya (TGFCAB+TSIUSU / AD_ORCPRECO)
    Botão "Atualizar" dispara sankhya-produtividade-sync.
 ============================================================================ */
-function Produtividade() {
+function Produtividade({ currentUser }) {
   const hoje = '2026-06-26';
   const [periodo, setPeriodo] = useState({ dataIni: '2026-06-01', dataFim: hoje });
   const [pedidos, setPedidos] = useState([]);
@@ -2764,20 +2789,34 @@ function Produtividade() {
   const [syncStatus, setSyncStatus] = useState(null);
   const [lastSync, setLastSync] = useState(null);
 
+  // Usuários sem visão completa (ve_produtividade_completa = false) só veem os próprios números.
+  const veTudo = currentUser?.ve_produtividade_completa === true;
+
   const carregarDados = useCallback(async () => {
     setLoading(true);
+    let q1 = supabase.from('produtividade_pedidos').select('*').eq('data_ini', periodo.dataIni).eq('data_fim', periodo.dataFim).order('total_pedidos', { ascending: false });
+    let q2 = supabase.from('produtividade_orcamentos').select('*').eq('data_ini', periodo.dataIni).eq('data_fim', periodo.dataFim).order('total_geral', { ascending: false });
+    if (!veTudo && currentUser?.nome) {
+      q1 = q1.eq('vendedor_nome', currentUser.nome);
+      q2 = q2.eq('vendedor_nome', currentUser.nome);
+    }
     const [r1, r2, r3] = await Promise.all([
-      supabase.from('produtividade_pedidos').select('*').eq('data_ini', periodo.dataIni).eq('data_fim', periodo.dataFim).order('total_pedidos', { ascending: false }),
-      supabase.from('produtividade_orcamentos').select('*').eq('data_ini', periodo.dataIni).eq('data_fim', periodo.dataFim).order('total_geral', { ascending: false }),
+      q1, q2,
       supabase.from('sankhya_sync_log').select('*').eq('tipo', 'produtividade').order('finalizado_em', { ascending: false }).limit(1),
     ]);
     setPedidos(r1.data || []);
     setOrcamentos(r2.data || []);
     setLastSync((r3.data || [])[0] || null);
     setLoading(false);
-  }, [periodo]);
+  }, [periodo, veTudo, currentUser?.nome]);
 
   useEffect(() => { carregarDados(); }, [carregarDados]);
+
+  // Auto-refresh a cada 30 minutos.
+  useEffect(() => {
+    const id = setInterval(carregarDados, 30 * 60 * 1000);
+    return () => clearInterval(id);
+  }, [carregarDados]);
 
   const handleAtualizar = async () => {
     setSyncing(true);
@@ -3122,6 +3161,12 @@ function Faturamento() {
   }, [filtros]);
 
   useEffect(() => { carregarDados(); }, [carregarDados]);
+
+  // Auto-refresh a cada 30 minutos.
+  useEffect(() => {
+    const id = setInterval(carregarDados, 30 * 60 * 1000);
+    return () => clearInterval(id);
+  }, [carregarDados]);
 
   const handleAtualizar = async () => {
     setSyncing(true);
@@ -3886,98 +3931,153 @@ function categoriaMP(descricao) {
 }
 
 function ConsumoMP() {
-  const [dados, setDados] = useState([]);
+  const [projetos, setProjetos] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [erro, setErro] = useState(null);
   const [busca, setBusca] = useState('');
-  const [catFiltro, setCatFiltro] = useState('Todos');
-  const [sortBy, setSortBy] = useState('qtd_consumida'); // qtd_consumida | saldo | cobertura_pct
+  const [kalengFiltro, setKalengFiltro] = useState('Todos');
+  const [statusFiltro, setStatusFiltro] = useState('Todos');
+  const [sortCol, setSortCol] = useState('previsto');
   const [sortDir, setSortDir] = useState('desc');
 
-  useEffect(() => {
+  const carregar = useCallback(async () => {
     setLoading(true);
-    setErro(null);
-    supabaseSGQ
-      .from('v_consumo_mp')
-      .select('*')
-      .then(({ data, error }) => {
-        if (error) { setErro(`Erro SGQ: ${error.message}`); setLoading(false); return; }
-        setDados((data || []).map(r => ({ ...r, categoria: categoriaMP(r.descricao) })));
-        setLoading(false);
-      })
-      .catch(err => { setErro(`Falha de rede: ${err?.message || String(err)}`); setLoading(false); });
+
+    const [rPed, rNf] = await Promise.all([
+      supabase.from('pedidos_itens')
+        .select('br,cliente_nome,produto_kaleng,valor_liquido,vendedor_nome,numero_pedido,uf'),
+      supabase.from('nota_venda_itens')
+        .select('br,valor_bruto,codtipoper')
+        .in('codtipoper', [3101,3200,3210,3213,3214,3220]),
+    ]);
+
+    // Agrupa pedidos por BR
+    const pedMap = {};
+    (rPed.data||[]).forEach(p => {
+      if (!p.br) return;
+      if (!pedMap[p.br]) pedMap[p.br] = {
+        br: p.br, cliente: p.cliente_nome || '—',
+        vendedor: p.vendedor_nome || '—', uf: p.uf || '—',
+        kalengSet: new Set(), pedidosSet: new Set(),
+        previsto: 0,
+      };
+      pedMap[p.br].previsto += Number(p.valor_liquido) || 0;
+      if (p.produto_kaleng) pedMap[p.br].kalengSet.add(p.produto_kaleng);
+      if (p.numero_pedido)  pedMap[p.br].pedidosSet.add(p.numero_pedido);
+      // Mantém cliente do primeiro item
+    });
+
+    // Agrupa NFs por BR (soma direta — cada linha é um item de NF)
+    const nfMap = {};
+    (rNf.data||[]).forEach(n => {
+      if (!n.br) return;
+      nfMap[n.br] = (nfMap[n.br] || 0) + (Number(n.valor_bruto) || 0);
+    });
+
+    const lista = Object.values(pedMap).map(p => {
+      const faturado  = nfMap[p.br] || 0;
+      const pendente  = Math.max(0, p.previsto - faturado);
+      const pct       = p.previsto > 0 ? Math.round(faturado / p.previsto * 100) : 0;
+      return {
+        br: p.br, cliente: p.cliente, vendedor: p.vendedor, uf: p.uf,
+        kaleng: [...p.kalengSet].filter(Boolean).join(', '),
+        num_pedidos: p.pedidosSet.size,
+        previsto: p.previsto, faturado, pendente, pct,
+      };
+    });
+
+    setProjetos(lista);
+    setLoading(false);
   }, []);
 
-  const categorias = useMemo(() => ['Todos', ...Object.keys(CATEGORIA_MP)], []);
+  useEffect(() => { carregar(); }, [carregar]);
+
+  // Auto-refresh a cada 30 minutos.
+  useEffect(() => {
+    const id = setInterval(carregar, 30 * 60 * 1000);
+    return () => clearInterval(id);
+  }, [carregar]);
+
+  const statusDo = (r) =>
+    r.pct >= 100 ? 'faturado' : r.pct > 0 ? 'parcial' : 'pendente';
+
+  const statusMeta = (s) => ({
+    faturado: { cor: T.oliveText, bg: T.oliveSoft,  label: '✓ Faturado' },
+    parcial:  { cor: T.amberText, bg: T.amberSoft,  label: '◑ Parcial' },
+    pendente: { cor: T.rustText,  bg: T.rustSoft,   label: '○ Pendente' },
+  }[s] || { cor: T.inkFaint, bg: T.lineSoft, label: '—' });
+
+  const kalengs = useMemo(() => {
+    const s = new Set(projetos.flatMap(p => p.kaleng.split(', ').filter(Boolean)));
+    return ['Todos', ...[...s].sort()];
+  }, [projetos]);
 
   const filtrados = useMemo(() => {
-    return dados
+    return projetos
       .filter(r => {
-        const matchBusca = !busca || r.codigo_mp?.includes(busca) || (r.descricao || '').toLowerCase().includes(busca.toLowerCase());
-        const matchCat = catFiltro === 'Todos' || r.categoria === catFiltro;
-        return matchBusca && matchCat;
+        const st = statusDo(r);
+        const matchBusca  = !busca || r.br.toLowerCase().includes(busca.toLowerCase()) ||
+                            r.cliente.toLowerCase().includes(busca.toLowerCase());
+        const matchKaleng = kalengFiltro === 'Todos' || r.kaleng.includes(kalengFiltro);
+        const matchStatus = statusFiltro === 'Todos' || st === statusFiltro;
+        return matchBusca && matchKaleng && matchStatus;
       })
       .sort((a, b) => {
-        const va = Number(a[sortBy]) || 0;
-        const vb = Number(b[sortBy]) || 0;
-        return sortDir === 'desc' ? vb - va : va - vb;
+        let va = a[sortCol] ?? 0;
+        let vb = b[sortCol] ?? 0;
+        if (typeof va === 'string') va = va.toLowerCase();
+        if (typeof vb === 'string') vb = vb.toLowerCase();
+        if (va < vb) return sortDir === 'asc' ? -1 : 1;
+        if (va > vb) return sortDir === 'asc' ? 1 : -1;
+        return 0;
       });
-  }, [dados, busca, catFiltro, sortBy, sortDir]);
+  }, [projetos, busca, kalengFiltro, statusFiltro, sortCol, sortDir]);
 
-  const totais = useMemo(() => ({
-    itens: filtrados.length,
-    qtdConsumida: filtrados.reduce((s, r) => s + Number(r.qtd_consumida || 0), 0),
-    saldoTotal: filtrados.reduce((s, r) => s + Number(r.saldo_disponivel || 0), 0),
-    criticos: filtrados.filter(r => Number(r.cobertura_pct) < 30).length,
-    atencao: filtrados.filter(r => Number(r.cobertura_pct) >= 30 && Number(r.cobertura_pct) < 80).length,
-  }), [filtrados]);
+  const kpis = useMemo(() => {
+    const previsto  = filtrados.reduce((s,r) => s + r.previsto, 0);
+    const faturado  = filtrados.reduce((s,r) => s + r.faturado, 0);
+    const pendente  = filtrados.reduce((s,r) => s + r.pendente, 0);
+    const pctMedio  = previsto > 0 ? Math.round(faturado / previsto * 100) : 0;
+    return { previsto, faturado, pendente, pctMedio,
+      nFaturado: filtrados.filter(r => statusDo(r) === 'faturado').length,
+      nParcial:  filtrados.filter(r => statusDo(r) === 'parcial').length,
+      nPendente: filtrados.filter(r => statusDo(r) === 'pendente').length,
+    };
+  }, [filtrados]);
 
   const handleSort = (col) => {
-    if (sortBy === col) setSortDir(d => d === 'desc' ? 'asc' : 'desc');
-    else { setSortBy(col); setSortDir('desc'); }
+    if (sortCol === col) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+    else { setSortCol(col); setSortDir('desc'); }
   };
 
-  const cobColor = (pct) => {
-    const v = Number(pct);
-    if (!v && v !== 0) return T.inkFaint;
-    if (v < 30) return T.rustText;
-    if (v < 80) return T.amberText;
-    return T.oliveText;
+  const SortTh = ({ label, col, right }) => {
+    const active = sortCol === col;
+    return (
+      <th onClick={() => handleSort(col)} style={{ ...thFat(0, right ? 'right' : 'left'), cursor: 'pointer', whiteSpace: 'nowrap' }}>
+        <span style={{ color: active ? T.terracotta : T.inkFaint }}>{label}{active ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''}</span>
+      </th>
+    );
   };
-  const cobBg = (pct) => {
-    const v = Number(pct);
-    if (!v && v !== 0) return T.lineSoft;
-    if (v < 30) return T.rustSoft;
-    if (v < 80) return T.amberSoft;
-    return T.oliveSoft;
-  };
+
+  const fmtR = (v) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL', notation: 'compact', maximumFractionDigits: 1 }).format(v);
 
   return (
-    <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 18, maxWidth: 1320 }}>
-      <p style={{ fontSize: 12, color: T.inkFaint, margin: 0 }}>
-        Dados do SGQ — consumo calculado pela composição de cada produto acabado × quantidade das remessas de industrialização. Saldo = estoque disponível atual no almoxarifado.
-      </p>
+    <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
 
-      {erro && (
-        <div style={{ background: T.rustSoft, border: `1px solid ${T.rust}33`, borderRadius: 8, padding: '12px 16px', display: 'flex', gap: 10, alignItems: 'center' }}>
-          <AlertTriangle size={16} color={T.rustText} />
-          <div>
-            <div style={{ fontSize: 13, fontWeight: 600, color: T.rustText }}>Erro ao carregar dados do SGQ</div>
-            <div style={{ fontSize: 12, color: T.inkDim, marginTop: 2 }}>{erro}</div>
-          </div>
-        </div>
-      )}
-      <div className="grid-kpis-5" style={{ gridTemplateColumns: 'repeat(auto-fit,minmax(160px,1fr))' }}>
+      {/* KPIs */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(155px,1fr))', gap: 12 }}>
         {[
-          { label: 'Itens de MP', value: totais.itens, color: T.ink },
-          { label: 'Qtd total consumida', value: totais.qtdConsumida.toLocaleString('pt-BR', { maximumFractionDigits: 0 }), color: T.ink },
-          { label: 'Saldo total (mix unid.)', value: totais.saldoTotal.toLocaleString('pt-BR', { maximumFractionDigits: 0 }), color: T.ink },
-          { label: 'Itens críticos (<30%)', value: totais.criticos, color: T.rustText },
-          { label: 'Atenção (30–80%)', value: totais.atencao, color: T.amberText },
+          { label: 'Total em pedido',  value: fmtR(kpis.previsto),  color: T.ink,       desc: 'Valor total dos pedidos de venda' },
+          { label: 'Total faturado',   value: fmtR(kpis.faturado),  color: T.oliveText, desc: 'NFs já emitidas' },
+          { label: 'Pendente faturar', value: fmtR(kpis.pendente),  color: kpis.pendente > 0 ? T.amberText : T.oliveText, desc: 'Pedido - Faturado' },
+          { label: '% faturado',       value: `${kpis.pctMedio}%`,  color: kpis.pctMedio >= 80 ? T.oliveText : kpis.pctMedio >= 40 ? T.amberText : T.rustText },
+          { label: '✓ Faturados',      value: kpis.nFaturado,       color: T.oliveText },
+          { label: '◑ Parciais',       value: kpis.nParcial,        color: T.amberText },
+          { label: '○ Pendentes',      value: kpis.nPendente,       color: T.rustText },
         ].map(k => (
-          <div key={k.label} style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '14px 16px', boxShadow: SHADOW_SM }}>
-            <div style={{ fontSize: 11, color: T.inkFaint, fontWeight: 600 }}>{k.label}</div>
-            <div style={{ fontFamily: FONT_DISPLAY, fontSize: 26, fontWeight: 700, color: k.color, marginTop: 8 }}>{k.value}</div>
+          <div key={k.label} style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '12px 14px', boxShadow: SHADOW_SM }}>
+            <div style={{ fontSize: 10.5, color: T.inkFaint, fontWeight: 600 }}>{k.label}</div>
+            <div style={{ fontFamily: FONT_DISPLAY, fontSize: 20, fontWeight: 700, color: k.color, marginTop: 6 }}>{loading ? '…' : k.value}</div>
+            {k.desc && <div style={{ fontSize: 10, color: T.inkFaint, marginTop: 2 }}>{k.desc}</div>}
           </div>
         ))}
       </div>
@@ -3985,94 +4085,90 @@ function ConsumoMP() {
       {/* Filtros */}
       <Panel>
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-          <FiltroCampoFat label="Buscar código ou descrição">
+          <FiltroCampoFat label="Buscar BR ou cliente">
             <div style={{ position: 'relative' }}>
               <Search size={13} style={{ position: 'absolute', left: 9, top: 9, color: T.inkFaint }} />
-              <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Ex: 10988, PLACA, KLC…"
-                style={{ ...selectStyleFat(220), paddingLeft: 28 }} />
+              <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Ex: Vale, BR13582, Ternium…"
+                style={{ ...selectStyleFat(240), paddingLeft: 28 }} />
             </div>
           </FiltroCampoFat>
-          <FiltroCampoFat label="Categoria">
+          <FiltroCampoFat label="Kaleng">
             <div style={{ position: 'relative' }}>
-              <select value={catFiltro} onChange={e => setCatFiltro(e.target.value)} style={selectStyleFat(170)}>
-                {categorias.map(c => <option key={c} value={c}>{c}</option>)}
+              <select value={kalengFiltro} onChange={e => setKalengFiltro(e.target.value)} style={selectStyleFat(140)}>
+                {kalengs.map(k => <option key={k} value={k}>{k}</option>)}
               </select>
               <ChevronDown size={13} style={chevronStyleFat} />
             </div>
           </FiltroCampoFat>
-          <FiltroCampoFat label="Ordenar por">
+          <FiltroCampoFat label="Status">
             <div style={{ position: 'relative' }}>
-              <select value={sortBy} onChange={e => { setSortBy(e.target.value); setSortDir('desc'); }} style={selectStyleFat(170)}>
-                <option value="qtd_consumida">Qtd consumida</option>
-                <option value="saldo_disponivel">Saldo disponível</option>
-                <option value="cobertura_pct">Cobertura %</option>
-                <option value="qtd_remessas">Nº remessas</option>
+              <select value={statusFiltro} onChange={e => setStatusFiltro(e.target.value)} style={selectStyleFat(140)}>
+                <option value="Todos">Todos</option>
+                <option value="faturado">✓ Faturado</option>
+                <option value="parcial">◑ Parcial</option>
+                <option value="pendente">○ Pendente</option>
               </select>
               <ChevronDown size={13} style={chevronStyleFat} />
             </div>
           </FiltroCampoFat>
+          {(busca || kalengFiltro !== 'Todos' || statusFiltro !== 'Todos') && (
+            <button onClick={() => { setBusca(''); setKalengFiltro('Todos'); setStatusFiltro('Todos'); }}
+              style={{ fontSize: 12, color: T.amberText, background: T.amberSoft, border: 'none', borderRadius: 5, padding: '6px 12px', cursor: 'pointer', fontWeight: 600 }}>
+              ✕ Limpar
+            </button>
+          )}
         </div>
       </Panel>
 
-      {/* Tabela principal */}
+      {/* Tabela */}
       <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
         <div style={{ overflowX: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
             <thead>
-              <tr style={{ borderBottom: `1px solid ${T.line}`, background: T.panelAlt }}>
-                <th style={{ ...thFat(), width: 90 }}>Código MP</th>
-                <th style={thFat()}>Descrição</th>
-                <th style={{ ...thFat(70), textAlign: 'center' }}>Unid.</th>
-                <SortTh label="Qtd consumida" col="qtd_consumida" sortBy={sortBy} sortDir={sortDir} onClick={handleSort} />
-                <SortTh label="Saldo estoque" col="saldo_disponivel" sortBy={sortBy} sortDir={sortDir} onClick={handleSort} />
-                <th style={{ ...thFat(90), textAlign: 'right' }}>Mín. estoque</th>
-                <SortTh label="Cobertura" col="cobertura_pct" sortBy={sortBy} sortDir={sortDir} onClick={handleSort} />
-                <th style={{ ...thFat(0, 'right') }}>Remessas</th>
-                <th style={thFat(110)}>Categoria</th>
+              <tr style={{ background: T.panelAlt, borderBottom: `1px solid ${T.line}` }}>
+                <SortTh label="BR"           col="br" />
+                <SortTh label="Cliente"      col="cliente" />
+                <SortTh label="Kaleng"       col="kaleng" />
+                <SortTh label="UF"           col="uf" />
+                <SortTh label="Pedidos"      col="num_pedidos" />
+                <SortTh label="Previsto"     col="previsto"  right />
+                <SortTh label="Faturado"     col="faturado"  right />
+                <SortTh label="Pendente"     col="pendente"  right />
+                <th style={{ ...thFat(90), textAlign: 'center' }}>% Fat.</th>
+                <th style={{ ...thFat(110), textAlign: 'center' }}>Status</th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={8} style={{ padding: 40, textAlign: 'center', color: T.inkFaint }}>Carregando dados do SGQ…</td></tr>
+                <tr><td colSpan={10} style={{ padding: 40, textAlign: 'center', color: T.inkFaint }}>Carregando…</td></tr>
               ) : filtrados.length === 0 ? (
-                <tr><td colSpan={8} style={{ padding: 40, textAlign: 'center', color: T.inkFaint }}>Nenhum item encontrado.</td></tr>
-              ) : filtrados.map(r => {
-                const pct = Number(r.cobertura_pct);
-                const isCrit = pct < 30 && r.cobertura_pct !== null;
+                <tr><td colSpan={10} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Nenhum projeto encontrado.</td></tr>
+              ) : filtrados.map((r, i) => {
+                const st = statusDo(r);
+                const { cor, bg, label: stLabel } = statusMeta(st);
+                const rowBg = st === 'faturado' ? `${T.oliveSoft}33` : st === 'pendente' && r.pct === 0 ? `${T.rustSoft}22` : 'transparent';
                 return (
-                  <tr key={r.codigo_mp} style={{ borderBottom: `1px solid ${T.lineSoft}`, background: isCrit ? `${T.rustSoft}55` : 'transparent' }}>
-                    <td style={{ padding: '10px 12px', fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 13, color: T.terracotta }}>{r.codigo_mp}</td>
-                    <td style={{ padding: '10px 12px', maxWidth: 340, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 12 }} title={r.descricao}>{r.descricao || '—'}</td>
-                    <td style={{ padding: '10px 12px', textAlign: 'center', color: T.inkFaint, fontSize: 11, fontWeight: 600 }}>{r.unidade || '—'}</td>
-                    <td style={{ padding: '10px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.ink, fontSize: 13 }}>
-                      {Number(r.qtd_consumida).toLocaleString('pt-BR', { maximumFractionDigits: 2 })}
-                    </td>
-                    <td style={{ padding: '10px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontSize: 13, color: Number(r.saldo_disponivel) === 0 ? T.rustText : T.ink, fontWeight: Number(r.saldo_disponivel) === 0 ? 700 : 400 }}>
-                      {Number(r.saldo_disponivel).toLocaleString('pt-BR', { maximumFractionDigits: 2 })}
-                      {Number(r.saldo_disponivel) === 0 && <span style={{ marginLeft: 5, fontSize: 10, background: T.rustSoft, color: T.rustText, borderRadius: 3, padding: '1px 5px', fontWeight: 700 }}>ZERADO</span>}
-                      {r.abaixo_minimo && Number(r.saldo_disponivel) > 0 && <span style={{ marginLeft: 5, fontSize: 10, background: T.amberSoft, color: T.amberText, borderRadius: 3, padding: '1px 5px', fontWeight: 700 }}>↓MÍN</span>}
-                    </td>
-                    <td style={{ padding: '6px 12px', textAlign: 'right' }}>
-                      <MinEstoqueInput codigoMp={r.codigo_mp} valorAtual={r.estoque_minimo} />
-                    </td>
-                    <td style={{ padding: '10px 12px' }}>
-                      {r.cobertura_pct === null ? (
-                        <span style={{ fontSize: 11, color: T.inkFaint }}>—</span>
-                      ) : (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                          <div style={{ flex: 1, minWidth: 60, background: T.lineSoft, height: 6, borderRadius: 3, overflow: 'hidden' }}>
-                            <div style={{ width: `${Math.min(pct, 100)}%`, height: '100%', background: cobColor(r.cobertura_pct), borderRadius: 3 }} />
-                          </div>
-                          <span style={{ fontSize: 11.5, fontWeight: 700, color: cobColor(r.cobertura_pct), width: 40, textAlign: 'right' }}>{pct.toFixed(1)}%</span>
+                  <tr key={i} style={{ borderBottom: `1px solid ${T.lineSoft}`, background: rowBg }}
+                    onMouseEnter={e => e.currentTarget.style.background = T.panelAlt}
+                    onMouseLeave={e => e.currentTarget.style.background = rowBg}>
+                    <td style={{ padding: '9px 12px', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText, whiteSpace: 'nowrap' }}>{r.br}</td>
+                    <td style={{ padding: '9px 12px', maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.cliente}>{r.cliente}</td>
+                    <td style={{ padding: '9px 12px', color: T.blueText, fontWeight: 600, fontSize: 11 }}>{r.kaleng || '—'}</td>
+                    <td style={{ padding: '9px 12px', textAlign: 'center', fontSize: 11, color: T.inkFaint }}>{r.uf}</td>
+                    <td style={{ padding: '9px 12px', textAlign: 'center', fontSize: 11, color: T.inkFaint }}>{r.num_pedidos}</td>
+                    <td style={{ padding: '9px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 600, color: T.ink }}>{fmtR(r.previsto)}</td>
+                    <td style={{ padding: '9px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.oliveText }}>{r.faturado > 0 ? fmtR(r.faturado) : '—'}</td>
+                    <td style={{ padding: '9px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 600, color: r.pendente > 0 ? T.amberText : T.inkFaint }}>{r.pendente > 0 ? fmtR(r.pendente) : '—'}</td>
+                    <td style={{ padding: '9px 12px', textAlign: 'center' }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 2, alignItems: 'center' }}>
+                        <span style={{ fontSize: 11.5, fontWeight: 700, color: cor }}>{r.pct}%</span>
+                        <div style={{ width: 60, height: 5, background: T.lineSoft, borderRadius: 3, overflow: 'hidden' }}>
+                          <div style={{ width: `${Math.min(r.pct, 100)}%`, height: '100%', background: cor, borderRadius: 3 }} />
                         </div>
-                      )}
+                      </div>
                     </td>
-                    <td style={{ padding: '10px 12px', textAlign: 'right', color: T.inkDim, fontFamily: FONT_DISPLAY }}>{r.qtd_remessas}</td>
-                    <td style={{ padding: '10px 12px' }}>
-                      <span style={{
-                        fontSize: 10.5, fontWeight: 600, padding: '3px 7px', borderRadius: 4,
-                        background: cobBg(r.cobertura_pct), color: cobColor(r.cobertura_pct),
-                      }}>{r.categoria}</span>
+                    <td style={{ padding: '9px 12px', textAlign: 'center' }}>
+                      <span style={{ fontSize: 10.5, fontWeight: 700, color: cor, background: bg, padding: '3px 8px', borderRadius: 4, whiteSpace: 'nowrap' }}>{stLabel}</span>
                     </td>
                   </tr>
                 );
@@ -4081,24 +4177,14 @@ function ConsumoMP() {
           </table>
         </div>
         <div style={{ padding: '10px 16px', borderTop: `1px solid ${T.line}`, fontSize: 11, color: T.inkFaint, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span>
-            {filtrados.length} item{filtrados.length !== 1 ? 's' : ''} ·
-            <span style={{ color: T.rustText, fontWeight: 600 }}> Vermelho &lt;30%</span> ·
-            <span style={{ color: T.amberText, fontWeight: 600 }}> Âmbar 30–80%</span> ·
-            <span style={{ color: T.oliveText, fontWeight: 600 }}> Verde &gt;80%</span>
-          </span>
-          <BotaoExportar small onClick={() => exportCSV(filtrados, 'consumo_mp.csv', ['codigo_mp','descricao','unidade','qtd_consumida','saldo_disponivel','estoque_minimo','cobertura_pct','qtd_remessas','categoria'])} />
+          <span>{filtrados.length} projeto{filtrados.length !== 1 ? 's' : ''} · Previsto = soma dos pedidos de venda · Faturado = NFs emitidas (TOPs 3101/3200/3210/3213/3214/3220)</span>
+          <BotaoExportar small onClick={() => exportCSV(filtrados, 'consumo_por_projeto.csv',
+            ['br','cliente','kaleng','uf','num_pedidos','previsto','faturado','pendente','pct'])} />
         </div>
       </div>
     </div>
   );
 }
-
-/* ============================================================================
-   ALMOXARIFADO — estoque consolidado por produto + movimentação acumulada
-   Fonte: v_almoxarifado_consolidado (SGQ — sync horária do Sankhya)
-============================================================================ */
-const GRUPOS_DESTAQUE = ['PLACA KLC', 'KALOCER', 'ABRESIST', 'KALIMPACT', 'ELEMENTOS DE FIXAÇÃO', 'CHAPA', 'COLA', 'BORRACHA'];
 
 function Almoxarifado() {
   const [dados, setDados] = useState([]);
@@ -4112,7 +4198,7 @@ function Almoxarifado() {
   const [detalhe, setDetalhe] = useState(null); // produto selecionado para drill-down por local
   const [locaisDetalhe, setLocaisDetalhe] = useState([]);
 
-  useEffect(() => {
+  const carregar = useCallback(() => {
     setLoading(true);
     setErro(null);
     supabaseSGQ.from('v_almoxarifado_consolidado').select('*')
@@ -4123,6 +4209,14 @@ function Almoxarifado() {
       })
       .catch(err => { setErro(`Falha de rede: ${err?.message || String(err)}`); setLoading(false); });
   }, []);
+
+  useEffect(() => { carregar(); }, [carregar]);
+
+  // Auto-refresh a cada 30 minutos.
+  useEffect(() => {
+    const id = setInterval(carregar, 30 * 60 * 1000);
+    return () => clearInterval(id);
+  }, [carregar]);
 
   const grupos = useMemo(() => {
     const set = new Set(dados.map(d => d.descrgrupoprod).filter(Boolean));
@@ -4520,6 +4614,12 @@ function PedidosVale() {
   }, [periodo]);
 
   useEffect(() => { carregar(); carregarBrv(); }, [carregar, carregarBrv]);
+
+  // Auto-refresh a cada 30 minutos.
+  useEffect(() => {
+    const id = setInterval(() => { carregar(); carregarBrv(); }, 30 * 60 * 1000);
+    return () => clearInterval(id);
+  }, [carregar, carregarBrv]);
 
   const handleAtualizarBrv = async () => {
     setBrvSyncing(true);
