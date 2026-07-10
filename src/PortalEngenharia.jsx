@@ -87,7 +87,7 @@ const USUARIOS = [
 const ESCOPOS_TOP = ['KALIMPACT KALOCER', 'TUBO REVESTIDO - KALOCER', 'TUBO REVESTIDO - ABRESIST', 'EQUIPAMENTO REVESTIDO - KALOCER', 'KALOCER', 'KALFIX'];
 
 const STATUS_META = {
-  rascunho: { label: 'Rascunho', color: T.slate, bg: T.lineSoft },
+  rascunho: { label: 'Aguardando confirmação', color: T.slate, bg: T.lineSoft },
   em_revisao_tecnica: { label: 'Revisão técnica', color: T.amberText, bg: T.amberSoft },
   aguardando_aprovacao: { label: 'Aguardando aprovação', color: T.blueText, bg: T.blueSoft },
   aprovada: { label: 'Aprovada', color: T.oliveText, bg: T.oliveSoft },
@@ -379,6 +379,7 @@ function PortalConteudo({ currentUser, session }) {
           )}
           {view === 'comercial' && <TabErrorBoundary tab="Painel Comercial"><PainelComercial /></TabErrorBoundary>}
           {view === 'metricas' && <Metricas propostas={propostas} />}
+          {view === 'ciclo_comercial' && <TabErrorBoundary tab="Ciclo Comercial"><CicloComercial /></TabErrorBoundary>}
           {view === 'produtividade' && <Produtividade propostas={propostas} mesFiltro={mesFiltro} currentUser={currentUser} />}
           {view === 'faturamento' && <Faturamento />}
           {view === 'consumo_mp' && <TabErrorBoundary tab="Consumo de MP"><ConsumoMP /></TabErrorBoundary>}
@@ -421,6 +422,7 @@ function Sidebar({ view, setView, pendCount, papel, telasPermitidas }) {
     { id: 'pendencias',   label: 'Minhas pendências',      icon: ClipboardCheck, badge: pendCount },
     { id: 'propostas',    label: 'Todas as propostas',     icon: FileStack },
     { id: 'metricas',     label: 'Métricas',               icon: BarChart2 },
+    { id: 'ciclo_comercial', label: 'Ciclo Comercial',     icon: Workflow },
     { id: 'produtividade',label: 'Produtividade',          icon: Gauge },
     { id: 'comercial',    label: 'Painel Comercial',       icon: TrendingUp },
     { id: 'faturamento',  label: 'Faturamento (Sankhya)',  icon: DollarSign },
@@ -605,6 +607,19 @@ function Topbar({ view, mesFiltro, setMesFiltro, currentUser, userEmail, userMen
    DASHBOARD — v2 · produtividade + pedidos Sankhya + registro manual
 ============================================================================ */
 function Dashboard({ stats, propostas, todasPropostas, mesFiltro, onNovaProposta, onNavigate }) {
+  const [kpiModal, setKpiModal] = useState(null); // { titulo, itens } | null
+
+  // ── grupos reais por proposta do mês (não pela tabela agregada Sankhya) ──
+  // conhecimento_pedido = true  → já virou pedido / "confirmada"
+  // conhecimento_pedido = false → ainda não confirmou (hoje aparece com status "Aguardando confirmação")
+  const propostasConfirmadas = useMemo(() => propostas.filter(p => p.conhecimento_pedido), [propostas]);
+  const propostasNaoConfirmadas = useMemo(() => propostas.filter(p => !p.conhecimento_pedido), [propostas]);
+  const valorConfirmadasMes = propostasConfirmadas.reduce((s, p) => s + (Number(p.valor_liquido) || 0), 0);
+  const valorNaoConfirmadasMes = propostasNaoConfirmadas.reduce((s, p) => s + (Number(p.valor_liquido) || 0), 0);
+  const propostasAtrasadasLista = useMemo(() =>
+    propostas.filter(p => p.status !== 'concluida' && calcularAtraso(p.data_entrega_prevista, p.data_conclusao) > 0),
+  [propostas]);
+
   /* ── dados derivados das propostas ── */
   const porEscopo = useMemo(() => {
     const map = {};
@@ -688,10 +703,6 @@ function Dashboard({ stats, propostas, todasPropostas, mesFiltro, onNovaProposta
       });
   }, []); // roda uma vez — produtividade é independente do mesFiltro de propostas
 
-  const totalPedidosSankhya = prodPedidos.reduce((s, p) => s + (p.total_pedidos || 0), 0);
-  const valorPedidosSankhya = prodPedidos.reduce((s, p) => s + (Number(p.valor_total) || 0), 0);
-  const totalOrcSankhya = prodOrc.reduce((s, o) => s + (o.total_geral || 0), 0);
-
   const maxEscopo = Math.max(...porEscopo.map(([, v]) => v), 1);
   const maxMensal = Math.max(...evolucaoMensal.map(m => m.count), 1);
   const maxProd = Math.max(...prodOrc.map(o => o.total_geral || 0), ...prodPedidos.map(p => p.total_pedidos || 0), 1);
@@ -723,24 +734,32 @@ function Dashboard({ stats, propostas, todasPropostas, mesFiltro, onNovaProposta
 
       {/* ── KPI ROW (7 cards) ── */}
       <div className="grid-kpis-7">
-        <Kpi label="Propostas no mês" value={stats.total} icon={FileStack} />
-        <Kpi label="Em andamento" value={stats.ativas} icon={Clock3} tone="amber" />
-        <Kpi label="Em atraso" value={stats.atrasadas} icon={AlertTriangle} tone="rust" />
-        <Kpi label="Valor em fluxo" value={fmtMoedaCompacta(stats.valorMes)} icon={DollarSign} />
+        <Kpi label="Propostas no mês" value={stats.total} icon={FileStack}
+          onClick={() => setKpiModal({ titulo: `Propostas no mês — todas`, itens: propostas })} />
+        <Kpi label="Em andamento" value={stats.ativas} icon={Clock3} tone="amber"
+          onClick={() => setKpiModal({ titulo: 'Em andamento (ainda não confirmadas)', itens: propostas.filter(p => p.status !== 'concluida') })} />
+        <Kpi label="Em atraso" value={stats.atrasadas} icon={AlertTriangle} tone="rust"
+          onClick={() => setKpiModal({ titulo: 'Propostas em atraso', itens: propostasAtrasadasLista })} />
+        <Kpi label="Valor em fluxo" value={fmtMoedaCompacta(stats.valorMes)} icon={DollarSign}
+          onClick={() => setKpiModal({ titulo: 'Valor em fluxo — todas as propostas do mês', itens: propostas })} />
         <Kpi
           label="Pedidos confirmados"
-          value={prodLoading ? '…' : totalPedidosSankhya}
+          value={propostasConfirmadas.length}
           icon={CheckCircle2} tone="olive"
-          sub={prodLoading || totalPedidosSankhya === 0 ? null : fmtMoedaCompacta(valorPedidosSankhya)}
+          sub={fmtMoedaCompacta(valorConfirmadasMes)}
+          onClick={() => setKpiModal({ titulo: 'Pedidos confirmados (viraram pedido)', itens: propostasConfirmadas })}
         />
         <Kpi
-          label="Orçamentos gerados"
-          value={prodLoading ? '…' : totalOrcSankhya}
-          icon={TrendingUp} tone="blue"
-          sub={prodLoading ? null : 'via Sankhya'}
+          label="Faltam confirmar"
+          value={propostasNaoConfirmadas.length}
+          icon={Clock3} tone="amber"
+          sub={fmtMoedaCompacta(valorNaoConfirmadasMes)}
+          onClick={() => setKpiModal({ titulo: 'Propostas que ainda faltam confirmar', itens: propostasNaoConfirmadas })}
         />
         <OrigemCard percWord={stats.percWord} wordCount={stats.wordCount} sankhyaCount={stats.sankhyaCount} />
       </div>
+
+      {kpiModal && <KpiDetalheModal titulo={kpiModal.titulo} itens={kpiModal.itens} onClose={() => setKpiModal(null)} />}
 
       {/* ── ROW 2: Volume mensal + Produtividade da equipe ── */}
       <div className="grid-2col-wide">
@@ -959,13 +978,13 @@ function Dashboard({ stats, propostas, todasPropostas, mesFiltro, onNovaProposta
   );
 }
 
-function Kpi({ label, value, icon: Icon, tone, sub }) {
+function Kpi({ label, value, icon: Icon, tone, sub, onClick }) {
   const toneColor = tone === 'amber' ? T.amberText : tone === 'rust' ? T.rustText : tone === 'olive' ? T.oliveText : tone === 'blue' ? T.blueText : T.ink;
   const toneSoft = tone === 'amber' ? T.amberSoft : tone === 'rust' ? T.rustSoft : tone === 'olive' ? T.oliveSoft : tone === 'blue' ? T.blueSoft : T.terracottaSoft;
   return (
-    <div style={{
+    <div onClick={onClick} style={{
       background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, padding: '18px 20px',
-      boxShadow: SHADOW_SM, transition: 'box-shadow .2s, transform .2s',
+      boxShadow: SHADOW_SM, transition: 'box-shadow .2s, transform .2s', cursor: onClick ? 'pointer' : 'default',
     }}
       onMouseEnter={e => { e.currentTarget.style.boxShadow = SHADOW_MD; e.currentTarget.style.transform = 'translateY(-1px)'; }}
       onMouseLeave={e => { e.currentTarget.style.boxShadow = SHADOW_SM; e.currentTarget.style.transform = 'none'; }}
@@ -978,6 +997,41 @@ function Kpi({ label, value, icon: Icon, tone, sub }) {
       </div>
       <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, color: toneColor, marginTop: 14, fontSize: 28, letterSpacing: '-0.01em' }}>{value}</div>
       {sub && <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 3 }}>{sub}</div>}
+      {onClick && <div style={{ fontSize: 10, color: T.terracottaText, marginTop: 6, fontWeight: 600 }}>Ver detalhamento →</div>}
+    </div>
+  );
+}
+
+/* ============================================================================
+   MODAL DE DETALHAMENTO DE KPI — mostra quem está confirmado/não confirmado,
+   com valor, a partir das propostas reais do mês (não da tabela agregada Sankhya)
+============================================================================ */
+function KpiDetalheModal({ titulo, itens, onClose }) {
+  const totalValor = itens.reduce((s, p) => s + (Number(p.valor_liquido) || 0), 0);
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,23,.45)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }} onClick={onClose}>
+      <div className="scale-in" onClick={e => e.stopPropagation()} style={{ background: T.panel, borderRadius: 12, width: 640, maxHeight: '80vh', display: 'flex', flexDirection: 'column', boxShadow: SHADOW_LG }}>
+        <div style={{ padding: '16px 20px', borderBottom: `1px solid ${T.line}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            <h3 style={{ margin: 0, fontSize: 15, fontWeight: 700, color: T.ink }}>{titulo}</h3>
+            <span style={{ fontSize: 12, color: T.inkFaint }}>{itens.length} proposta{itens.length !== 1 ? 's' : ''} · {fmtMoedaCompacta(totalValor)}</span>
+          </div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.inkFaint }}><X size={18} /></button>
+        </div>
+        <div style={{ overflowY: 'auto', padding: '6px 0' }}>
+          {itens.length === 0 ? (
+            <div style={{ padding: 30, textAlign: 'center', color: T.inkFaint, fontSize: 13 }}>Nenhuma proposta nesse grupo.</div>
+          ) : itens.map(p => (
+            <div key={p.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 20px', borderBottom: `1px solid ${T.lineSoft}` }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, fontFamily: FONT_DISPLAY, color: T.ink }}>{p.br}</div>
+                <div style={{ fontSize: 12, color: T.inkDim, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.cliente}</div>
+              </div>
+              <div style={{ fontSize: 13, fontFamily: FONT_DISPLAY, color: T.inkDim, flexShrink: 0, marginLeft: 12 }}>{fmtMoeda(p.valor_liquido)}</div>
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
@@ -1114,7 +1168,10 @@ function PropostasTable({ propostas, titulo, onRowClick, empty = 'Nenhuma propos
                         <span style={{ color: T.oliveText, fontWeight: 600 }}>no prazo</span>}
                   </td>
                   <td style={{ padding: '12px 16px', fontSize: 12.5, fontFamily: FONT_DISPLAY, color: T.inkDim }}>
-                    {p.dias_uteis_aberto != null ? `${p.dias_uteis_aberto}d úteis` : '—'}
+                    {p.dias_uteis_aberto == null ? '—' :
+                      p.status === 'concluida' || p.conhecimento_pedido
+                        ? <span style={{ color: T.inkFaint }}>fechou em {p.dias_uteis_aberto}d</span>
+                        : <span style={{ fontWeight: 600, color: p.dias_uteis_aberto > 45 ? T.rustText : T.ink }}>{p.dias_uteis_aberto}d úteis</span>}
                   </td>
                   <td style={{ padding: '12px 16px', fontSize: 12.5 }}>
                     {p.foi_reprogramada ? <span style={{ color: T.rustText, fontWeight: 600 }}>Sim</span> : <span style={{ color: T.inkFaint }}>Não</span>}
@@ -1285,51 +1342,44 @@ function Metricas({ propostas }) {
     return periodo === 'tudo' ? propostas : propostas.filter(p => new Date(p.data_abertura) >= corte);
   }, [propostas, periodo]);
 
-  const funil = useMemo(() => {
-    const total = base.length;
-    const revisadas  = base.filter(p => ['em_revisao_tecnica','aguardando_aprovacao','aprovada','concluida','reprovada'].includes(p.status)).length;
-    const aprovadas  = base.filter(p => ['aprovada','concluida'].includes(p.status)).length;
-    const concluidas = base.filter(p => p.status === 'concluida').length;
-    const reprovadas = base.filter(p => p.status === 'reprovada').length;
-    return [
-      { label: 'Cadastradas',   n: total,      pct: 100 },
-      { label: 'Em revisão +',  n: revisadas,  pct: total ? Math.round(revisadas  / total * 100) : 0 },
-      { label: 'Aprovadas +',   n: aprovadas,  pct: total ? Math.round(aprovadas  / total * 100) : 0 },
-      { label: 'Concluídas',    n: concluidas, pct: total ? Math.round(concluidas / total * 100) : 0 },
-      { label: 'Reprovadas',    n: reprovadas, pct: total ? Math.round(reprovadas / total * 100) : 0, cor: T.rustText },
-    ];
-  }, [base]);
-
-  const ciclo = useMemo(() => {
-    const concl = base.filter(p => p.status === 'concluida' && p.data_abertura && p.data_conclusao);
-    if (!concl.length) return null;
-    const dias = concl.map(p => Math.round((new Date(p.data_conclusao) - new Date(p.data_abertura)) / 86400000));
-    const avg = Math.round(dias.reduce((s, d) => s + d, 0) / dias.length);
-    return { avg, min: Math.min(...dias), max: Math.max(...dias), total: concl.length };
+  const rankingClientes = useMemo(() => {
+    const map = {};
+    base.forEach(p => {
+      const c = p.cliente || '—';
+      if (!map[c]) map[c] = { nome: c, propostas: 0, confirmadas: 0, valorConfirmado: 0 };
+      map[c].propostas++;
+      if (p.conhecimento_pedido) { map[c].confirmadas++; map[c].valorConfirmado += Number(p.valor_liquido) || 0; }
+    });
+    return Object.values(map)
+      .map(c => ({ ...c, taxa: c.propostas ? Math.round((c.confirmadas / c.propostas) * 100) : 0 }))
+      .sort((a, b) => b.propostas - a.propostas)
+      .slice(0, 10);
   }, [base]);
 
   const ranking = useMemo(() => {
     const map = {};
     base.forEach(p => {
       const r = p.responsavel || p.responsavel_nome || '—';
-      if (!map[r]) map[r] = { nome: r, total: 0, concluidas: 0, reprovadas: 0 };
+      if (!map[r]) map[r] = { nome: r, total: 0, confirmadas: 0, aguardando: 0, reprovadas: 0 };
       map[r].total++;
-      if (p.status === 'concluida') map[r].concluidas++;
+      if (p.conhecimento_pedido) map[r].confirmadas++;
+      else map[r].aguardando++;
       if (p.status === 'reprovada') map[r].reprovadas++;
     });
-    return Object.values(map).sort((a, b) => b.concluidas - a.concluidas).slice(0, 8);
+    return Object.values(map).sort((a, b) => b.confirmadas - a.confirmadas).slice(0, 8);
   }, [base]);
 
   const mensal = useMemo(() => {
     return MESES_ORDEM.map(mes => ({
       mes,
       total: propostas.filter(p => p.mes === mes).length,
-      concluidas: propostas.filter(p => p.mes === mes && p.status === 'concluida').length,
+      confirmadas: propostas.filter(p => p.mes === mes && p.conhecimento_pedido).length,
     }));
   }, [propostas]);
 
   const maxMensal = Math.max(...mensal.map(m => m.total), 1);
   const maxRanking = Math.max(...ranking.map(r => r.total), 1);
+  const maxRankingCli = Math.max(...rankingClientes.map(c => c.propostas), 1);
 
   return (
     <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 22, maxWidth: 1200 }}>
@@ -1346,71 +1396,37 @@ function Metricas({ propostas }) {
         <span style={{ fontSize: 12, color: T.inkFaint, alignSelf: 'center', marginLeft: 4 }}>{base.length} propostas no período</span>
       </div>
 
-      <div className="grid-2col">
-        {/* Funil */}
-        <Panel title="Funil de propostas" subtitle="Quantas passam por cada etapa">
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 10 }}>
-            {funil.map((f, i) => (
-              <div key={f.label} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                <span style={{ width: 100, fontSize: 12, color: T.inkDim, fontWeight: 500 }}>{f.label}</span>
-                <div style={{ flex: 1, background: T.lineSoft, height: 22, borderRadius: 4, overflow: 'hidden', position: 'relative' }}>
-                  <div style={{ width: `${f.pct}%`, height: '100%', background: f.cor || (i === 0 ? T.terracotta : i < 4 ? T.olive : T.rust), borderRadius: 4, transition: 'width .5s ease' }} />
-                  <span style={{ position: 'absolute', left: 8, top: 4, fontSize: 11, fontWeight: 700, color: f.pct > 20 ? '#fff' : (f.cor || T.ink) }}>
-                    {f.n} · {f.pct}%
-                  </span>
-                </div>
+      {/* Ranking de clientes */}
+      <Panel title="Ranking por cliente" subtitle="Propostas feitas × viraram pedido × taxa de atendimento"
+        right={<BotaoExportar onClick={() => exportCSV(rankingClientes, 'ranking_clientes.csv', ['nome','propostas','confirmadas','taxa','valorConfirmado'])} small />}
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 10 }}>
+          {rankingClientes.map((c, i) => (
+            <div key={c.nome} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <span style={{ width: 18, textAlign: 'right', fontSize: 11, color: T.inkFaint, fontFamily: FONT_DISPLAY }}>#{i + 1}</span>
+              <span style={{ width: 170, fontSize: 13, color: T.ink, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={c.nome}>{c.nome}</span>
+              <div style={{ flex: 1, background: T.lineSoft, height: 8, borderRadius: 4, overflow: 'hidden' }}>
+                <div style={{ width: `${(c.propostas / maxRankingCli) * 100}%`, height: '100%', background: T.terracotta, borderRadius: 4 }} />
               </div>
-            ))}
-          </div>
-        </Panel>
-
-        {/* Ciclo + KPIs */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          {ciclo ? (
-            <Panel title="Tempo de ciclo" subtitle="Do cadastro à conclusão — propostas concluídas">
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginTop: 10 }}>
-                {[
-                  { label: 'Média', value: `${ciclo.avg}d`, color: T.ink },
-                  { label: 'Mais rápida', value: `${ciclo.min}d`, color: T.oliveText },
-                  { label: 'Mais lenta', value: `${ciclo.max}d`, color: T.rustText },
-                ].map(k => (
-                  <div key={k.label} style={{ background: T.panelAlt, borderRadius: 8, padding: '12px 10px', textAlign: 'center' }}>
-                    <div style={{ fontSize: 10.5, color: T.inkFaint, fontWeight: 600, marginBottom: 4 }}>{k.label}</div>
-                    <div style={{ fontFamily: FONT_DISPLAY, fontSize: 22, fontWeight: 700, color: k.color }}>{k.value}</div>
-                  </div>
-                ))}
+              <div style={{ display: 'flex', gap: 8, fontSize: 12, fontFamily: FONT_DISPLAY, width: 190, justifyContent: 'flex-end' }}>
+                <span style={{ color: T.ink, fontWeight: 700 }}>{c.propostas} prop.</span>
+                <span style={{ color: T.oliveText }}>{c.confirmadas} pedido{c.confirmadas !== 1 ? 's' : ''}</span>
+                <span style={{ color: T.inkFaint }}>({c.taxa}%)</span>
               </div>
-              <div style={{ fontSize: 11.5, color: T.inkFaint, marginTop: 12 }}>Base: {ciclo.total} propostas concluídas no período</div>
-            </Panel>
-          ) : (
-            <Panel title="Tempo de ciclo"><p style={{ fontSize: 13, color: T.inkFaint, margin: '10px 0 0' }}>Sem propostas concluídas no período.</p></Panel>
-          )}
-
-          <Panel title="Taxa de conversão" subtitle="No período selecionado">
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 10 }}>
-              {[
-                { label: 'Conclusão', pct: base.length ? Math.round(base.filter(p=>p.status==='concluida').length/base.length*100) : 0, cor: T.oliveText, bg: T.oliveSoft },
-                { label: 'Reprovação', pct: base.length ? Math.round(base.filter(p=>p.status==='reprovada').length/base.length*100) : 0, cor: T.rustText, bg: T.rustSoft },
-              ].map(k => (
-                <div key={k.label} style={{ background: k.bg, borderRadius: 8, padding: '12px', textAlign: 'center' }}>
-                  <div style={{ fontFamily: FONT_DISPLAY, fontSize: 26, fontWeight: 700, color: k.cor }}>{k.pct}%</div>
-                  <div style={{ fontSize: 11.5, color: k.cor, fontWeight: 600, marginTop: 2 }}>{k.label}</div>
-                </div>
-              ))}
             </div>
-          </Panel>
+          ))}
         </div>
-      </div>
+      </Panel>
 
       {/* Evolução mensal */}
-      <Panel title="Evolução mensal — Jan a Jun" subtitle="Cadastradas vs Concluídas">
+      <Panel title="Evolução mensal" subtitle="Propostas cadastradas vs viraram pedido (confirmadas)">
         <div style={{ display: 'flex', alignItems: 'flex-end', gap: 18, height: 140, padding: '10px 4px 0', overflowX: 'auto' }}>
           {mensal.map(m => {
             const hT = Math.max((m.total / maxMensal) * 100, m.total > 0 ? 4 : 2);
-            const hC = Math.max((m.concluidas / maxMensal) * 100, m.concluidas > 0 ? 4 : 2);
+            const hC = Math.max((m.confirmadas / maxMensal) * 100, m.confirmadas > 0 ? 4 : 2);
             return (
               <div key={m.mes} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flex: 1, minWidth: 60 }}>
-                <div style={{ fontSize: 10, color: T.inkFaint, marginBottom: 4 }}>{m.concluidas}/{m.total}</div>
+                <div style={{ fontSize: 10, color: T.inkFaint, marginBottom: 4 }}>{m.confirmadas}/{m.total}</div>
                 <div style={{ display: 'flex', gap: 3, alignItems: 'flex-end' }}>
                   <div style={{ width: 16, height: hT, background: T.line, borderRadius: '2px 2px 0 0' }} />
                   <div style={{ width: 16, height: hC, background: T.terracotta, borderRadius: '2px 2px 0 0' }} />
@@ -1422,13 +1438,13 @@ function Metricas({ propostas }) {
         </div>
         <div style={{ display: 'flex', gap: 16, marginTop: 10, fontSize: 11, color: T.inkFaint }}>
           <span><span style={{ display: 'inline-block', width: 10, height: 10, background: T.line, borderRadius: 2, marginRight: 4 }} />Cadastradas</span>
-          <span><span style={{ display: 'inline-block', width: 10, height: 10, background: T.terracotta, borderRadius: 2, marginRight: 4 }} />Concluídas</span>
+          <span><span style={{ display: 'inline-block', width: 10, height: 10, background: T.terracotta, borderRadius: 2, marginRight: 4 }} />Confirmadas (viraram pedido)</span>
         </div>
       </Panel>
 
       {/* Ranking responsáveis */}
-      <Panel title="Ranking por responsável" subtitle="Total de propostas · concluídas · reprovadas no período"
-        right={<BotaoExportar onClick={() => exportCSV(ranking, 'ranking_responsaveis.csv', ['nome','total','concluidas','reprovadas'])} small />}
+      <Panel title="Ranking por responsável" subtitle="Total de propostas · confirmadas (viraram pedido) · ainda aguardando"
+        right={<BotaoExportar onClick={() => exportCSV(ranking, 'ranking_responsaveis.csv', ['nome','total','confirmadas','aguardando','reprovadas'])} small />}
       >
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 10 }}>
           {ranking.map((r, i) => (
@@ -1443,13 +1459,143 @@ function Metricas({ propostas }) {
               </div>
               <div style={{ display: 'flex', gap: 8, fontSize: 12, fontFamily: FONT_DISPLAY }}>
                 <span style={{ color: T.ink, fontWeight: 700 }}>{r.total}</span>
-                <span style={{ color: T.oliveText }}>✓{r.concluidas}</span>
-                <span style={{ color: T.rustText }}>✗{r.reprovadas}</span>
+                <span style={{ color: T.oliveText }}>✓{r.confirmadas}</span>
+                <span style={{ color: T.amberText }}>⏳{r.aguardando}</span>
+                {r.reprovadas > 0 && <span style={{ color: T.rustText }}>✗{r.reprovadas}</span>}
               </div>
             </div>
           ))}
         </div>
       </Panel>
+    </div>
+  );
+}
+
+/* ============================================================================
+   CICLO COMERCIAL — proposta → pedido → faturamento
+   Usa a view v_ciclo_comercial_proposta (join propostas + pedidos_itens + nota_venda_itens por BR)
+   Responde: fizemos a proposta em X, virou pedido quando? foi faturado quando?
+============================================================================ */
+function CicloComercial() {
+  const [dados, setDados] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [busca, setBusca] = useState('');
+  const [filtroEtapa, setFiltroEtapa] = useState('todas');
+  const [filtroMes, setFiltroMes] = useState('todos');
+
+  useEffect(() => {
+    setLoading(true);
+    supabase.from('v_ciclo_comercial_proposta').select('*').order('data_abertura', { ascending: false })
+      .then(({ data, error }) => {
+        if (error) console.error('Erro ao carregar ciclo comercial:', error.message);
+        setDados(data || []);
+        setLoading(false);
+      });
+  }, []);
+
+  const porMes = useMemo(() => {
+    return MESES_ORDEM.map(mes => {
+      const doMes = dados.filter(d => d.mes_proposta === mes);
+      return {
+        mes,
+        propostas: doMes.length,
+        viraramPedido: doMes.filter(d => d.etapa_atual !== 'sem_pedido').length,
+        faturadas: doMes.filter(d => d.etapa_atual === 'faturado').length,
+      };
+    }).filter(m => m.propostas > 0);
+  }, [dados]);
+
+  const filtrados = useMemo(() => {
+    return dados.filter(d => {
+      const matchBusca = !busca || (d.br || '').toLowerCase().includes(busca.toLowerCase()) || (d.cliente || '').toLowerCase().includes(busca.toLowerCase());
+      const matchEtapa = filtroEtapa === 'todas' || d.etapa_atual === filtroEtapa;
+      const matchMes = filtroMes === 'todos' || d.mes_proposta === filtroMes;
+      return matchBusca && matchEtapa && matchMes;
+    });
+  }, [dados, busca, filtroEtapa, filtroMes]);
+
+  const ETAPA_META = {
+    sem_pedido: { label: 'Ainda não virou pedido', color: T.amberText, bg: T.amberSoft },
+    pedido_sem_fatura: { label: 'Virou pedido, aguarda faturamento', color: T.blueText, bg: T.blueSoft },
+    faturado: { label: 'Faturado', color: T.oliveText, bg: T.oliveSoft },
+  };
+
+  if (loading) return <div style={{ padding: 40, textAlign: 'center', color: T.inkFaint }}>Carregando…</div>;
+
+  return (
+    <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 22, maxWidth: 1400 }}>
+      <Panel title="Proposta → Pedido → Faturamento, por mês" subtitle="Quantas propostas de cada mês já viraram pedido e já foram faturadas">
+        <div style={{ overflowX: 'auto', marginTop: 10 }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+            <thead>
+              <tr style={{ borderBottom: `1px solid ${T.line}` }}>
+                {['Mês da proposta', 'Propostas', 'Viraram pedido', 'Faturadas'].map(h => (
+                  <th key={h} style={{ padding: '8px 12px', textAlign: 'left', fontSize: 10.5, fontWeight: 600, color: T.inkFaint, textTransform: 'uppercase' }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {porMes.map(m => (
+                <tr key={m.mes} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                  <td style={{ padding: '10px 12px', fontWeight: 600, fontFamily: FONT_DISPLAY }}>{MESES_LABEL[m.mes]}</td>
+                  <td style={{ padding: '10px 12px', fontFamily: FONT_DISPLAY }}>{m.propostas}</td>
+                  <td style={{ padding: '10px 12px', fontFamily: FONT_DISPLAY, color: T.blueText }}>{m.viraramPedido} <span style={{ color: T.inkFaint, fontSize: 11 }}>({m.propostas ? Math.round(m.viraramPedido/m.propostas*100) : 0}%)</span></td>
+                  <td style={{ padding: '10px 12px', fontFamily: FONT_DISPLAY, color: T.oliveText }}>{m.faturadas} <span style={{ color: T.inkFaint, fontSize: 11 }}>({m.propostas ? Math.round(m.faturadas/m.propostas*100) : 0}%)</span></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Panel>
+
+      <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
+        <div style={{ padding: '15px 18px', borderBottom: `1px solid ${T.line}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
+          <h3 style={{ fontSize: 14, fontWeight: 600, margin: 0, color: T.ink }}>Detalhe por BR <span style={{ color: T.inkFaint, fontWeight: 400 }}>({filtrados.length})</span></h3>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Buscar BR ou cliente…" className="focus-ring"
+              style={{ background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 6, padding: '7px 12px', fontSize: 12.5, width: 200 }} />
+            <select value={filtroMes} onChange={e => setFiltroMes(e.target.value)} className="focus-ring"
+              style={{ background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 6, padding: '7px 10px', fontSize: 12.5 }}>
+              <option value="todos">Todos os meses</option>
+              {MESES_ORDEM.map(m => <option key={m} value={m}>{MESES_LABEL[m]}</option>)}
+            </select>
+            <select value={filtroEtapa} onChange={e => setFiltroEtapa(e.target.value)} className="focus-ring"
+              style={{ background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 6, padding: '7px 10px', fontSize: 12.5 }}>
+              <option value="todas">Todas as etapas</option>
+              {Object.entries(ETAPA_META).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+            </select>
+          </div>
+        </div>
+        <div style={{ overflowX: 'auto', maxHeight: 500, overflowY: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+            <thead>
+              <tr style={{ borderBottom: `1px solid ${T.line}` }}>
+                {['BR', 'Cliente', 'Proposta em', 'Virou pedido em', 'Faturado em', 'Etapa'].map(h => (
+                  <th key={h} style={{ padding: '10px 16px', textAlign: 'left', fontSize: 10.5, fontWeight: 600, color: T.inkFaint, textTransform: 'uppercase', position: 'sticky', top: 0, background: T.panel }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {filtrados.slice(0, 300).map(d => {
+                const meta = ETAPA_META[d.etapa_atual];
+                return (
+                  <tr key={d.id} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                    <td style={{ padding: '10px 16px', fontWeight: 600, fontFamily: FONT_DISPLAY }}>{d.br}</td>
+                    <td style={{ padding: '10px 16px', color: T.inkDim, maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.cliente}</td>
+                    <td style={{ padding: '10px 16px', fontSize: 12.5 }}>{fmtData(d.data_abertura)}</td>
+                    <td style={{ padding: '10px 16px', fontSize: 12.5 }}>{d.data_pedido ? fmtData(d.data_pedido) : '—'}</td>
+                    <td style={{ padding: '10px 16px', fontSize: 12.5 }}>{d.data_faturamento ? fmtData(d.data_faturamento) : '—'}</td>
+                    <td style={{ padding: '10px 16px' }}>
+                      <span style={{ background: meta.bg, color: meta.color, fontSize: 11, fontWeight: 600, padding: '4px 9px', borderRadius: 4, whiteSpace: 'nowrap' }}>{meta.label}</span>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          {filtrados.length > 300 && <div style={{ padding: 12, textAlign: 'center', fontSize: 12, color: T.inkFaint }}>Mostrando 300 de {filtrados.length} — refine a busca ou o filtro de mês.</div>}
+        </div>
+      </div>
     </div>
   );
 }
