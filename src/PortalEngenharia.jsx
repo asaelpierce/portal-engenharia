@@ -2780,8 +2780,10 @@ class TabErrorBoundary extends React.Component {
    Botão "Atualizar" dispara sankhya-produtividade-sync.
 ============================================================================ */
 function Produtividade({ currentUser }) {
-  const hoje = '2026-06-26';
-  const [periodo, setPeriodo] = useState({ dataIni: '2026-06-01', dataFim: hoje });
+  const agora = new Date();
+  const hoje = agora.toISOString().slice(0, 10);
+  const primeiroDiaMes = `${agora.getFullYear()}-${String(agora.getMonth() + 1).padStart(2, '0')}-01`;
+  const [periodo, setPeriodo] = useState({ dataIni: primeiroDiaMes, dataFim: hoje });
   const [pedidos, setPedidos] = useState([]);
   const [orcamentos, setOrcamentos] = useState([]);
   const [loading, setLoading] = useState(true);
