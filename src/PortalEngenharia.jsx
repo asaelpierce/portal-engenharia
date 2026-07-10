@@ -7,7 +7,7 @@ import {
   ChevronRight, ChevronDown, Building2, CalendarDays, Link2, DownloadCloud,
   Filter, FileWarning, Stamp, ArrowUpRight, ArrowDownRight, Minus, Zap,
   CircleDot, ShieldCheck, MessageSquareWarning, ListFilter, Webhook, Users,
-  RefreshCw, TrendingUp, DollarSign, CheckCircle2, Package, Layers, Bell, BarChart2, Download,
+  RefreshCw, TrendingUp, DollarSign, CheckCircle2, Package, Layers, Bell, BarChart2, Download, History,
 } from 'lucide-react';
 
 /* ============================================================================
@@ -382,6 +382,8 @@ function PortalConteudo({ currentUser, session }) {
           {view === 'almoxarifado' && <TabErrorBoundary tab="Almoxarifado"><Almoxarifado /></TabErrorBoundary>}
           {view === 'equipamentos' && <TabErrorBoundary tab="Equipamentos de Terceiros"><EquipamentosTerceiros /></TabErrorBoundary>}
           {view === 'pedidosvale' && <PedidosVale />}
+          {view === 'aberturacotacao' && <TabErrorBoundary tab="Abertura de Cotação"><AberturaCotacao currentUser={currentUser} /></TabErrorBoundary>}
+          {view === 'auditoria' && <TabErrorBoundary tab="Auditoria"><Auditoria /></TabErrorBoundary>}
           {view === 'integracao' && <Integracao />}
           {view === 'admin' && <Admin currentUser={currentUser} />}
         </main>
@@ -422,6 +424,8 @@ function Sidebar({ view, setView, pendCount, papel, telasPermitidas }) {
     { id: 'almoxarifado', label: 'Almoxarifado',           icon: Package },
     { id: 'equipamentos', label: 'Equip. Terceiros',       icon: Webhook },
     { id: 'pedidosvale',  label: 'Pedidos Vale',           icon: FileWarning },
+    { id: 'aberturacotacao', label: 'Abertura de Cotação',  icon: FileStack },
+    { id: 'auditoria',    label: 'Auditoria',              icon: History },
     { id: 'integracao',   label: 'Integrações',            icon: Workflow },
   ];
   const permitidos = telasPermitidas || ACESSO_LEGADO[papel];
@@ -796,7 +800,7 @@ function Dashboard({ stats, propostas, todasPropostas, mesFiltro, onNovaProposta
               {prodPedidos.length > 0 && (
                 <div>
                   <div style={{ fontSize: 10.5, fontWeight: 700, color: T.oliveText, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 10 }}>
-                    Vendedores — pedidos confirmados
+                    Conhecimento de pedidos confirmados
                   </div>
                   {prodPedidos.slice(0, 4).map(p => (
                     <div key={p.vendedor_nome} style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
@@ -1060,14 +1064,14 @@ function PropostasTable({ propostas, titulo, onRowClick, empty = 'Nenhuma propos
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
           <thead>
             <tr style={{ borderBottom: `1px solid ${T.line}` }}>
-              {['BR / Ref', 'Cliente', 'Escopo', 'Origem', 'Entrega prev.', 'Atraso', 'Valor', 'Status'].map(h => (
+              {['BR / Ref', 'Cliente', 'Escopo', 'Origem', 'Entrega prev.', 'Atraso', 'Dias em aberto', 'Reprog.', 'Valor', 'Status'].map(h => (
                 <th key={h} style={{ padding: '10px 16px', textAlign: 'left', fontSize: 10.5, fontWeight: 600, color: T.inkFaint, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{h}</th>
               ))}
             </tr>
           </thead>
           <tbody>
             {paginadas.length === 0 ? (
-              <tr><td colSpan={8} style={{ padding: 40, textAlign: 'center', color: T.inkFaint, fontSize: 13 }}>{empty}</td></tr>
+              <tr><td colSpan={10} style={{ padding: 40, textAlign: 'center', color: T.inkFaint, fontSize: 13 }}>{empty}</td></tr>
             ) : paginadas.map(p => {
               const atraso = calcularAtraso(p.data_entrega_prevista, p.data_conclusao);
               const isAtrasado = atraso > 0 && p.status !== 'concluida';
@@ -1086,6 +1090,12 @@ function PropostasTable({ propostas, titulo, onRowClick, empty = 'Nenhuma propos
                     {p.status === 'concluida' ? <span style={{ color: T.inkFaint }}>—</span> :
                       isAtrasado ? <span style={{ color: T.rustText, fontWeight: 600 }}>+{atraso}d</span> :
                         <span style={{ color: T.oliveText, fontWeight: 600 }}>no prazo</span>}
+                  </td>
+                  <td style={{ padding: '12px 16px', fontSize: 12.5, fontFamily: FONT_DISPLAY, color: T.inkDim }}>
+                    {p.dias_uteis_aberto != null ? `${p.dias_uteis_aberto}d úteis` : '—'}
+                  </td>
+                  <td style={{ padding: '12px 16px', fontSize: 12.5 }}>
+                    {p.foi_reprogramada ? <span style={{ color: T.rustText, fontWeight: 600 }}>Sim</span> : <span style={{ color: T.inkFaint }}>Não</span>}
                   </td>
                   <td style={{ padding: '12px 16px', color: T.inkDim, fontSize: 12.5, fontFamily: FONT_DISPLAY }}>{fmtMoeda(p.valor_liquido)}</td>
                   <td style={{ padding: '12px 16px' }}>
@@ -2846,6 +2856,8 @@ function Produtividade({ currentUser }) {
     }
   };
 
+  const [drillDown, setDrillDown] = useState(null); // { tipo: 'pedidos'|'orcamentos', nome: string }
+
   const maxPedidos = Math.max(...pedidos.map(p => p.total_pedidos), 1);
   const maxOrc = Math.max(...orcamentos.map(o => o.total_geral), 1);
 
@@ -2911,8 +2923,8 @@ function Produtividade({ currentUser }) {
                   {pedidos.length === 0 ? (
                     <tr><td colSpan={9} style={{ padding: 30, textAlign: 'center', color: T.inkFaint, fontSize: 12.5 }}>Sem dados — clique em "Atualizar do Sankhya".</td></tr>
                   ) : pedidos.map(p => (
-                    <tr key={p.vendedor_nome} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
-                      <td style={{ padding: '11px 12px', fontWeight: 600 }}>{p.vendedor_nome}</td>
+                    <tr key={p.vendedor_nome} onClick={() => setDrillDown({ tipo: 'pedidos', nome: p.vendedor_nome })} style={{ borderBottom: `1px solid ${T.lineSoft}`, cursor: 'pointer' }}>
+                      <td style={{ padding: '11px 12px', fontWeight: 600, color: T.terracottaText, textDecoration: 'underline', textDecorationStyle: 'dotted' }}>{p.vendedor_nome}</td>
                       <td style={{ padding: '11px 12px' }}>
                         <div style={{ background: T.lineSoft, height: 7, borderRadius: 4, overflow: 'hidden' }}>
                           <div style={{ width: `${(p.total_pedidos / maxPedidos) * 100}%`, height: '100%', background: T.terracotta, borderRadius: 4 }} />
@@ -2953,8 +2965,8 @@ function Produtividade({ currentUser }) {
                   {orcamentos.length === 0 ? (
                     <tr><td colSpan={9} style={{ padding: 30, textAlign: 'center', color: T.inkFaint, fontSize: 12.5 }}>Sem dados — clique em "Atualizar do Sankhya".</td></tr>
                   ) : orcamentos.map(o => (
-                    <tr key={o.orcamentista_nome} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
-                      <td style={{ padding: '11px 12px', fontWeight: 600 }}>{o.orcamentista_nome}</td>
+                    <tr key={o.orcamentista_nome} onClick={() => setDrillDown({ tipo: 'orcamentos', nome: o.orcamentista_nome })} style={{ borderBottom: `1px solid ${T.lineSoft}`, cursor: 'pointer' }}>
+                      <td style={{ padding: '11px 12px', fontWeight: 600, color: T.blueText, textDecoration: 'underline', textDecorationStyle: 'dotted' }}>{o.orcamentista_nome}</td>
                       <td style={{ padding: '11px 12px' }}>
                         <div style={{ background: T.lineSoft, height: 7, borderRadius: 4, overflow: 'hidden' }}>
                           <div style={{ width: `${(o.total_geral / maxOrc) * 100}%`, height: '100%', background: T.blue, borderRadius: 4 }} />
@@ -2975,6 +2987,15 @@ function Produtividade({ currentUser }) {
           </Panel>
         </>
       )}
+
+      {drillDown && (
+        <ModalDrillDownProdutividade
+          tipo={drillDown.tipo}
+          nome={drillDown.nome}
+          periodo={periodo}
+          onClose={() => setDrillDown(null)}
+        />
+      )}
     </div>
   );
 }
@@ -2984,6 +3005,66 @@ function thFat(width, align = 'left') {
 }
 function tdFat() {
   return { padding: '11px 12px', textAlign: 'right', color: T.inkDim, fontFamily: FONT_DISPLAY };
+}
+
+function ModalDrillDownProdutividade({ tipo, nome, periodo, onClose }) {
+  const [linhas, setLinhas] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let ativo = true;
+    setLoading(true);
+    const tabela = tipo === 'pedidos' ? 'produtividade_pedidos_detalhe' : 'produtividade_orcamentos_detalhe';
+    const campoNome = tipo === 'pedidos' ? 'vendedor_nome' : 'orcamentista_nome';
+    const campoData = tipo === 'pedidos' ? 'data_neg' : 'data_emissao';
+    supabase.from(tabela).select('*').eq(campoNome, nome)
+      .gte(campoData, periodo.dataIni).lte(campoData, periodo.dataFim)
+      .order(campoData, { ascending: false })
+      .then(({ data }) => { if (ativo) { setLinhas(data || []); setLoading(false); } });
+    return () => { ativo = false; };
+  }, [tipo, nome, periodo.dataIni, periodo.dataFim]);
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,23,.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }} onClick={onClose}>
+      <div className="scale-in" style={{ background: T.panel, borderRadius: 12, padding: 24, width: 620, maxHeight: '80vh', overflow: 'auto', boxShadow: '0 20px 60px rgba(0,0,0,.25)' }} onClick={e => e.stopPropagation()}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+          <h3 style={{ margin: 0, fontFamily: FONT_DISPLAY, fontSize: 17 }}>{nome}</h3>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.inkFaint }}><X size={18} /></button>
+        </div>
+        <p style={{ fontSize: 12, color: T.inkFaint, margin: '2px 0 16px' }}>
+          {tipo === 'pedidos' ? 'Pedidos confirmados (conhecimento de pedido)' : 'Orçamentos/propostas gerados'} — {periodo.dataIni} a {periodo.dataFim}
+        </p>
+        {loading ? (
+          <div style={{ padding: 30, textAlign: 'center', color: T.inkFaint, fontSize: 13 }}>Carregando…</div>
+        ) : linhas.length === 0 ? (
+          <div style={{ padding: 30, textAlign: 'center', color: T.inkFaint, fontSize: 13 }}>Nenhum registro de detalhe encontrado nesse período.</div>
+        ) : (
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+            <thead>
+              <tr style={{ borderBottom: `1px solid ${T.line}`, textAlign: 'left', color: T.inkFaint, fontSize: 11 }}>
+                <th style={{ padding: '6px 8px' }}>Data</th>
+                <th style={{ padding: '6px 8px' }}>Cliente</th>
+                {tipo === 'pedidos' ? <th style={{ padding: '6px 8px', textAlign: 'right' }}>Valor</th> : <th style={{ padding: '6px 8px' }}>Identificação</th>}
+              </tr>
+            </thead>
+            <tbody>
+              {linhas.map(l => (
+                <tr key={tipo === 'pedidos' ? l.nunota : l.nureg} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                  <td style={{ padding: '8px' }}>{new Date((tipo === 'pedidos' ? l.data_neg : l.data_emissao) + 'T00:00:00').toLocaleDateString('pt-BR')}</td>
+                  <td style={{ padding: '8px' }}>{l.cliente_nome || '—'}</td>
+                  {tipo === 'pedidos' ? (
+                    <td style={{ padding: '8px', textAlign: 'right', fontWeight: 600 }}>{fmtMoedaCompacta(l.valor_nota)}</td>
+                  ) : (
+                    <td style={{ padding: '8px' }}>{l.identificacao || '—'} {l.eh_revisao && <span style={{ fontSize: 10, color: T.rustText }}>(revisão)</span>}</td>
+                  )}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
 }
 
 /* ============================================================================
@@ -4869,6 +4950,238 @@ function PedidosVale() {
 /* ============================================================================
    INTEGRAÇÕES — ponte com Power Automate
 ============================================================================ */
+/* ============================================================================
+   AUDITORIA — quem alterou o quê em cada proposta
+============================================================================ */
+const CAMPO_LABEL = {
+  br: 'BR', cliente: 'Cliente', uf: 'UF', tipo_proposta: 'Tipo', escopo: 'Escopo',
+  grupo_produto: 'Grupo de produto', descricao_servico: 'Descrição do serviço',
+  classificacao: 'Classificação', mes: 'Mês', responsavel_id: 'Responsável',
+  data_abertura: 'Data de abertura', data_entrega_prevista: 'Prazo de entrega',
+  data_conclusao: 'Data de conclusão', status: 'Status', conhecimento_pedido: 'Conhecimento de pedido',
+  data_conhecimento_pedido: 'Data de conhecimento de pedido', valor_liquido: 'Valor líquido',
+  observacao: 'Observação', informacoes_faltantes: 'Informações faltantes',
+  sankhya_referencia: 'Referência Sankhya', validado_pelo_engenheiro: 'Validado pelo engenheiro',
+  aprovador_pool_id: 'Aprovador', data_decisao_final: 'Data da decisão final', comentario_decisao: 'Comentário da decisão',
+};
+
+/* ============================================================================
+   ABERTURA DE COTAÇÃO — comercial solicita abertura, gera e-mail padronizado
+   NOTA: isso gera o texto e registra a solicitação no banco. O envio automático
+   mantendo a thread do e-mail (Outlook/Power Automate) depende de uma
+   integração à parte que ainda não está configurada neste portal.
+============================================================================ */
+function AberturaCotacao({ currentUser }) {
+  const vazio = { brNumero: '', clienteNome: '', projeto: '', categoriaCliente: '', contato: '', prazoEnvio: '', escopoExtra: '', emailThreadReferencia: '' };
+  const [form, setForm] = useState(vazio);
+  const [salvando, setSalvando] = useState(false);
+  const [copiado, setCopiado] = useState(false);
+  const [historico, setHistorico] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  const carregar = useCallback(async () => {
+    setLoading(true);
+    const { data } = await supabase.from('cotacoes_abertura').select('*').order('solicitado_em', { ascending: false }).limit(50);
+    setHistorico(data || []);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { carregar(); }, [carregar]);
+
+  const assunto = `ABERTURA DE COTAÇÃO - BR${form.brNumero || '{número}'} - ${form.clienteNome || '{cliente}'}`;
+  const corpo = `Prezados, boa tarde!
+
+Encaminho abaixo as informações para abertura de proposta da ${form.clienteNome || '{cliente}'}
+
+- Projeto: ${form.projeto || '—'}
+- Categoria do cliente: ${form.categoriaCliente || '—'}
+- Contato: ${form.contato || '—'}
+- Prazo para envio da proposta: ${form.prazoEnvio ? fmtData(form.prazoEnvio) : '—'}
+- Escopo: Conforme e-mail abaixo.
+            Proposta técnica e comercial.
+${form.escopoExtra ? `\n${form.escopoExtra}\n` : ''}
+Fico à disposição para qualquer dúvida e agradeço desde já pela atenção.`;
+
+  const copiarEmail = async () => {
+    try {
+      await navigator.clipboard.writeText(`Assunto: ${assunto}\n\n${corpo}`);
+      setCopiado(true);
+      setTimeout(() => setCopiado(false), 2500);
+    } catch (_e) { /* clipboard indisponível, ignora */ }
+  };
+
+  const registrar = async () => {
+    if (!form.brNumero || !form.clienteNome) return;
+    setSalvando(true);
+    await supabase.from('cotacoes_abertura').insert({
+      br_numero: form.brNumero, cliente_nome: form.clienteNome, projeto: form.projeto,
+      categoria_cliente: form.categoriaCliente, contato: form.contato,
+      prazo_envio: form.prazoEnvio || null, escopo_extra: form.escopoExtra,
+      email_thread_referencia: form.emailThreadReferencia || null,
+      solicitado_por_id: currentUser?.id || null,
+    });
+    setForm(vazio);
+    setSalvando(false);
+    await carregar();
+  };
+
+  return (
+    <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 18, maxWidth: 1280 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', background: T.blueSoft, borderRadius: 8, fontSize: 12, color: T.blueText }}>
+        <AlertTriangle size={15} />
+        O envio automático do e-mail mantendo a thread existente (Outlook/Power Automate) ainda não está conectado aqui — por enquanto essa tela gera o texto pra você copiar e colar na resposta do e-mail em andamento, sem perder o histórico.
+      </div>
+
+      <div className="grid-2col-wide">
+        <Panel title="Nova solicitação de abertura" subtitle="Preencha e gere o e-mail padronizado">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 10 }}>
+            <FiltroCampoFat label="Número BR"><input value={form.brNumero} onChange={e => setForm(f => ({ ...f, brNumero: e.target.value }))} style={{ ...selectStyleFat(160), appearance: 'auto' }} /></FiltroCampoFat>
+            <FiltroCampoFat label="Cliente"><input value={form.clienteNome} onChange={e => setForm(f => ({ ...f, clienteNome: e.target.value }))} style={{ ...selectStyleFat(300), appearance: 'auto' }} /></FiltroCampoFat>
+            <FiltroCampoFat label="Projeto"><input value={form.projeto} onChange={e => setForm(f => ({ ...f, projeto: e.target.value }))} style={{ ...selectStyleFat(300), appearance: 'auto' }} /></FiltroCampoFat>
+            <FiltroCampoFat label="Categoria do cliente"><input value={form.categoriaCliente} onChange={e => setForm(f => ({ ...f, categoriaCliente: e.target.value }))} style={{ ...selectStyleFat(200), appearance: 'auto' }} /></FiltroCampoFat>
+            <FiltroCampoFat label="Contato"><input value={form.contato} onChange={e => setForm(f => ({ ...f, contato: e.target.value }))} style={{ ...selectStyleFat(260), appearance: 'auto' }} /></FiltroCampoFat>
+            <FiltroCampoFat label="Prazo para envio da proposta"><input type="date" value={form.prazoEnvio} onChange={e => setForm(f => ({ ...f, prazoEnvio: e.target.value }))} style={{ ...selectStyleFat(180), appearance: 'auto' }} /></FiltroCampoFat>
+            <FiltroCampoFat label="Escopo adicional (opcional)"><textarea value={form.escopoExtra} onChange={e => setForm(f => ({ ...f, escopoExtra: e.target.value }))} rows={2} style={{ width: '100%', padding: '8px 10px', borderRadius: 6, border: `1px solid ${T.line}`, fontSize: 13, fontFamily: 'inherit' }} /></FiltroCampoFat>
+            <FiltroCampoFat label="Referência do e-mail existente (assunto/thread, se já tinha e-mail rolando)"><input value={form.emailThreadReferencia} onChange={e => setForm(f => ({ ...f, emailThreadReferencia: e.target.value }))} placeholder="ex: RE: Cotação Mineração X" style={{ ...selectStyleFat(320), appearance: 'auto' }} /></FiltroCampoFat>
+
+            <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+              <button onClick={copiarEmail} style={{ background: T.terracotta, color: '#fff', border: 'none', borderRadius: 8, padding: '10px 16px', fontSize: 13, fontWeight: 700 }}>
+                {copiado ? 'Copiado!' : 'Copiar e-mail'}
+              </button>
+              <button onClick={registrar} disabled={salvando || !form.brNumero || !form.clienteNome} style={{ background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 8, padding: '10px 16px', fontSize: 13, fontWeight: 600, opacity: (salvando || !form.brNumero || !form.clienteNome) ? 0.5 : 1 }}>
+                Registrar solicitação
+              </button>
+            </div>
+          </div>
+        </Panel>
+
+        <Panel title="Pré-visualização do e-mail" subtitle="Exatamente o que vai ser copiado">
+          <div style={{ marginTop: 10, fontSize: 12, color: T.inkFaint }}>Assunto:</div>
+          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 10 }}>{assunto}</div>
+          <pre style={{ whiteSpace: 'pre-wrap', fontSize: 12.5, fontFamily: 'inherit', background: T.panelAlt, padding: 14, borderRadius: 8, border: `1px solid ${T.lineSoft}` }}>{corpo}</pre>
+        </Panel>
+      </div>
+
+      <Panel title="Solicitações recentes" subtitle="Últimas 50 aberturas de cotação registradas">
+        <div className="table-scroll" style={{ marginTop: 10 }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+            <thead>
+              <tr style={{ borderBottom: `1px solid ${T.line}`, textAlign: 'left', color: T.inkFaint, fontSize: 11 }}>
+                <th style={{ padding: '8px 10px' }}>Solicitado em</th>
+                <th style={{ padding: '8px 10px' }}>BR</th>
+                <th style={{ padding: '8px 10px' }}>Cliente</th>
+                <th style={{ padding: '8px 10px' }}>Prazo</th>
+                <th style={{ padding: '8px 10px' }}>Ref. e-mail</th>
+              </tr>
+            </thead>
+            <tbody>
+              {loading && <tr><td colSpan={5} style={{ padding: 16, textAlign: 'center', color: T.inkFaint }}>Carregando…</td></tr>}
+              {!loading && historico.length === 0 && <tr><td colSpan={5} style={{ padding: 16, textAlign: 'center', color: T.inkFaint }}>Nenhuma solicitação ainda.</td></tr>}
+              {historico.map(h => (
+                <tr key={h.id} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                  <td style={{ padding: '8px 10px', color: T.inkFaint }}>{new Date(h.solicitado_em).toLocaleString('pt-BR')}</td>
+                  <td style={{ padding: '8px 10px', fontWeight: 600 }}>{h.br_numero}</td>
+                  <td style={{ padding: '8px 10px' }}>{h.cliente_nome}</td>
+                  <td style={{ padding: '8px 10px' }}>{h.prazo_envio ? fmtData(h.prazo_envio) : '—'}</td>
+                  <td style={{ padding: '8px 10px', color: T.inkFaint }}>{h.email_thread_referencia || '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Panel>
+    </div>
+  );
+}
+
+function Auditoria() {
+  const [registros, setRegistros] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [responsaveis, setResponsaveis] = useState([]);
+  const [filtroResponsavel, setFiltroResponsavel] = useState('Todos');
+  const [busca, setBusca] = useState('');
+
+  const carregar = useCallback(async () => {
+    setLoading(true);
+    const { data } = await supabase.from('v_auditoria_completo').select('*').order('alterado_em', { ascending: false }).limit(500);
+    setRegistros(data || []);
+    const nomes = Array.from(new Set((data || []).map(r => r.responsavel_nome).filter(Boolean))).sort();
+    setResponsaveis(nomes);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { carregar(); }, [carregar]);
+
+  // Auto-refresh a cada 30 minutos.
+  useEffect(() => {
+    const id = setInterval(carregar, 30 * 60 * 1000);
+    return () => clearInterval(id);
+  }, [carregar]);
+
+  const filtrados = useMemo(() => registros.filter(r => {
+    if (filtroResponsavel !== 'Todos' && r.responsavel_nome !== filtroResponsavel) return false;
+    if (busca) {
+      const q = busca.toLowerCase();
+      if (!(r.br || '').toLowerCase().includes(q) && !(r.cliente || '').toLowerCase().includes(q) && !(r.alterado_por_nome || '').toLowerCase().includes(q)) return false;
+    }
+    return true;
+  }), [registros, filtroResponsavel, busca]);
+
+  return (
+    <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 18, maxWidth: 1280 }}>
+      <Panel title="Quem alterou o quê" subtitle="Histórico de mudanças em propostas — cada alteração registrada campo a campo, com quem fez e quando">
+        <div style={{ display: 'flex', gap: 12, marginTop: 10, marginBottom: 14, flexWrap: 'wrap' }}>
+          <FiltroCampoFat label="Responsável pela proposta">
+            <select value={filtroResponsavel} onChange={e => setFiltroResponsavel(e.target.value)} style={selectStyleFat(200)}>
+              <option value="Todos">Todos</option>
+              {responsaveis.map(n => <option key={n} value={n}>{n}</option>)}
+            </select>
+          </FiltroCampoFat>
+          <FiltroCampoFat label="Buscar (BR, cliente, quem alterou)">
+            <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Buscar…" style={{ ...selectStyleFat(220), appearance: 'auto' }} />
+          </FiltroCampoFat>
+        </div>
+
+        <div className="table-scroll">
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+            <thead>
+              <tr style={{ borderBottom: `1px solid ${T.line}`, textAlign: 'left', color: T.inkFaint, fontSize: 11 }}>
+                <th style={{ padding: '8px 10px' }}>Quando</th>
+                <th style={{ padding: '8px 10px' }}>BR / Cliente</th>
+                <th style={{ padding: '8px 10px' }}>Responsável</th>
+                <th style={{ padding: '8px 10px' }}>Campo</th>
+                <th style={{ padding: '8px 10px' }}>De</th>
+                <th style={{ padding: '8px 10px' }}>Para</th>
+                <th style={{ padding: '8px 10px' }}>Alterado por</th>
+              </tr>
+            </thead>
+            <tbody>
+              {loading && <tr><td colSpan={7} style={{ padding: 16, textAlign: 'center', color: T.inkFaint }}>Carregando…</td></tr>}
+              {!loading && filtrados.length === 0 && (
+                <tr><td colSpan={7} style={{ padding: 16, textAlign: 'center', color: T.inkFaint }}>Nenhuma alteração registrada ainda.</td></tr>
+              )}
+              {filtrados.map(r => (
+                <tr key={r.id} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                  <td style={{ padding: '8px 10px', whiteSpace: 'nowrap', color: T.inkFaint }}>{new Date(r.alterado_em).toLocaleString('pt-BR')}</td>
+                  <td style={{ padding: '8px 10px' }}>{r.br} — {r.cliente}</td>
+                  <td style={{ padding: '8px 10px' }}>{r.responsavel_nome || '—'}</td>
+                  <td style={{ padding: '8px 10px' }}>{CAMPO_LABEL[r.campo] || r.campo}</td>
+                  <td style={{ padding: '8px 10px', color: T.inkFaint }}>{r.valor_anterior ?? '—'}</td>
+                  <td style={{ padding: '8px 10px', fontWeight: 600 }}>{r.valor_novo ?? '—'}</td>
+                  <td style={{ padding: '8px 10px' }}>{r.alterado_por_nome}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Panel>
+    </div>
+  );
+}
+
+/* ============================================================================
+   INTEGRAÇÃO — Power Automate
+============================================================================ */
 function Integracao() {
   const eventos = [
     { evento: 'proposta.enviada_revisao', desc: 'Disparado quando o engenheiro envia para revisão técnica', destino: 'Teams — canal Engenharia' },
@@ -4954,6 +5267,8 @@ const TELAS_CATALOGO = [
   { id: 'almoxarifado', label: 'Almoxarifado' },
   { id: 'equipamentos', label: 'Equip. Terceiros' },
   { id: 'pedidosvale',  label: 'Pedidos Vale' },
+  { id: 'aberturacotacao', label: 'Abertura de Cotação' },
+  { id: 'auditoria',    label: 'Auditoria' },
   { id: 'integracao',   label: 'Integrações' },
   { id: 'admin',        label: 'Admin' },
 ];
@@ -5086,11 +5401,99 @@ function PermissoesManager() {
   );
 }
 
+function PainelMetas() {
+  const [pesos, setPesos] = useState([]);
+  const [coletivas, setColetivas] = useState([]);
+  const [coletivasStatus, setColetivasStatus] = useState(null);
+  const [ranking, setRanking] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [editando, setEditando] = useState(null); // item sendo editado
+
+  const carregar = useCallback(async () => {
+    setLoading(true);
+    const [{ data: p }, { data: c }, { data: cs }, { data: r }] = await Promise.all([
+      supabase.from('metas_individuais_config').select('*').order('item'),
+      supabase.from('metas_coletivas').select('*').order('id'),
+      supabase.from('v_metas_coletivas_status').select('*').maybeSingle(),
+      supabase.from('v_metas_pontuacao').select('*').order('pontuacao_total', { ascending: false }),
+    ]);
+    setPesos(p || []);
+    setColetivas(c || []);
+    setColetivasStatus(cs || null);
+    setRanking(r || []);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { carregar(); }, [carregar]);
+
+  const salvarPeso = async (item, novoPeso) => {
+    await supabase.from('metas_individuais_config').update({ peso: novoPeso }).eq('item', item);
+    setEditando(null);
+    await carregar();
+  };
+
+  return (
+    <>
+      <Panel title="Metas individuais — pesos por ação" subtitle="Regra: Conhecimento de Pedido só é contabilizado até 10 realizações">
+        <div style={{ marginTop: 10 }}>
+          {pesos.map(p => (
+            <div key={p.item} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 10px', borderBottom: `1px solid ${T.lineSoft}` }}>
+              <span style={{ fontSize: 13 }}>{p.descricao}{p.limite_contabilizado ? ` (máx. ${p.limite_contabilizado})` : ''}</span>
+              {editando === p.item ? (
+                <input type="number" step="0.5" autoFocus defaultValue={p.peso}
+                  onBlur={e => salvarPeso(p.item, Number(e.target.value))}
+                  onKeyDown={e => { if (e.key === 'Enter') salvarPeso(p.item, Number(e.target.value)); }}
+                  style={{ width: 60, padding: '4px 6px', borderRadius: 5, border: `1px solid ${T.line}`, fontSize: 13 }} />
+              ) : (
+                <span onClick={() => setEditando(p.item)} style={{ fontSize: 13, fontWeight: 700, color: T.terracottaText, cursor: 'pointer', padding: '2px 8px' }} title="Clique para editar">
+                  Peso {p.peso}
+                </span>
+              )}
+            </div>
+          ))}
+        </div>
+      </Panel>
+
+      <Panel title="Metas coletivas" subtitle="Calculadas automaticamente com base nas propostas concluídas">
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 10 }}>
+          {coletivas.map(c => {
+            const atual = c.id === 1 ? coletivasStatus?.pct_no_prazo : c.id === 2 ? coletivasStatus?.pct_reprogramadas : coletivasStatus?.media_dias_uteis_aberto;
+            return (
+              <div key={c.id} style={{ padding: '10px 12px', background: T.panelAlt, borderRadius: 8, border: `1px solid ${T.lineSoft}` }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontSize: 13, fontWeight: 600 }}>{c.descricao}</span>
+                  <span style={{ fontSize: 12, color: T.terracottaText, fontWeight: 700 }}>Meta: {c.meta_texto}</span>
+                </div>
+                <div style={{ fontSize: 11.5, color: T.inkFaint, marginTop: 4 }}>
+                  {c.baseline_texto && <>Baseline: {c.baseline_texto} · </>}
+                  Atual: {atual != null ? (c.id === 3 ? `${atual} dias úteis` : `${atual}%`) : 'sem dados suficientes ainda'}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </Panel>
+
+      <Panel title="Ranking de pontuação" subtitle="Calculado em tempo real a partir das propostas de cada engenheiro (fica em 0 até o time cadastrar propostas de verdade)">
+        <div style={{ marginTop: 10 }}>
+          {ranking.map(r => (
+            <div key={r.colaborador_id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 10px', borderBottom: `1px solid ${T.lineSoft}` }}>
+              <span style={{ fontSize: 13 }}>{r.nome}</span>
+              <span style={{ fontSize: 13, fontWeight: 700, color: T.blueText }}>{r.pontuacao_total} pts</span>
+            </div>
+          ))}
+        </div>
+      </Panel>
+    </>
+  );
+}
+
 function Admin({ currentUser }) {
   const ehGestor = currentUser?.papel === 'gestor';
   return (
     <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 18, maxWidth: 1100 }}>
       {ehGestor && <PermissoesManager />}
+      {ehGestor && <PainelMetas />}
       {!ehGestor && (
         <div style={{ fontSize: 13, color: T.inkFaint, padding: '10px 4px' }}>
           Gerenciamento de permissões disponível apenas para usuários com papel "gestor".
@@ -5268,7 +5671,7 @@ function ModalTrocarSenha({ onClose }) {
 function ModalNovaProposta({ currentUser, onClose, onCreated }) {
   const [form, setForm] = useState({
     br: '', cliente: '', uf: '', escopo: ESCOPOS_TOP[0], descricao_servico: '',
-    classificacao: 'B', data_entrega_prevista: '', valor_liquido: '',
+    classificacao: 'B', data_entrega_prevista: '', valor_liquido: '', eh_revisao: false,
   });
   const [arquivos, setArquivos] = useState([]); // Array de File objects
   const [salvando, setSalvando] = useState(false);
@@ -5325,10 +5728,12 @@ function ModalNovaProposta({ currentUser, onClose, onCreated }) {
       descricao_servico: form.descricao_servico.trim() || null,
       classificacao: form.classificacao,
       responsavel_id: colab?.id || null,
+      data_abertura: new Date().toISOString().slice(0, 10),
       data_entrega_prevista: form.data_entrega_prevista || null,
       valor_liquido: form.valor_liquido ? Number(form.valor_liquido) : 0,
+      eh_revisao: form.eh_revisao,
       arquivo_word_url: urlsUploadadas[0]?.url || null,
-      arquivos_json: JSON.stringify(urlsUploadadas), // todos os arquivos
+      arquivos_json: urlsUploadadas, // array de {nome, url} — coluna jsonb
       status: 'rascunho',
       mes: MES_ATUAL_LABEL(),
     };
@@ -5394,6 +5799,11 @@ function ModalNovaProposta({ currentUser, onClose, onCreated }) {
           <FiltroCampoFat label="Descrição do serviço">
             <textarea rows={3} value={form.descricao_servico} onChange={e => setForm(f => ({ ...f, descricao_servico: e.target.value }))} style={{ ...inputStyle(), resize: 'vertical' }} />
           </FiltroCampoFat>
+
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: T.inkDim }}>
+            <input type="checkbox" checked={form.eh_revisao} onChange={e => setForm(f => ({ ...f, eh_revisao: e.target.checked }))} />
+            Esta é uma revisão de um orçamento já existente
+          </label>
 
           {/* Upload de arquivos — Word e PDF */}
           <div>
