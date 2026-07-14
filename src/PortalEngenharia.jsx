@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useCallback } from 'react';
+import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import ReactDOM from 'react-dom';
 import { createClient } from '@supabase/supabase-js';
 import {
@@ -742,6 +742,7 @@ function Dashboard({ stats, propostas, todasPropostas, mesFiltro, onNovaProposta
         <Kpi label="Propostas no mês" value={stats.total} icon={FileStack}
           onClick={() => setKpiModal({ titulo: `Propostas no mês — todas`, itens: propostas })} />
         <Kpi label="Em andamento" value={stats.ativas} icon={Clock3} tone="amber"
+          sub={fmtMoedaCompacta(valorNaoConfirmadasMes)}
           onClick={() => setKpiModal({ titulo: 'Em andamento (ainda não confirmadas)', itens: propostas.filter(p => p.status !== 'concluida') })} />
         <Kpi label="Em atraso" value={stats.atrasadas} icon={AlertTriangle} tone="rust"
           onClick={() => setKpiModal({ titulo: 'Propostas em atraso', itens: propostasAtrasadasLista })} />
@@ -1338,8 +1339,17 @@ function NotificacoesButton({ userEmail }) {
 /* ============================================================================
    MÉTRICAS — funil, ciclo, taxa de conclusão, ranking responsáveis
 ============================================================================ */
-function Metricas({ propostas }) {
+// Clientes que na verdade são modelos/templates usados para automação (duplicados
+// manualmente pra gerar outras propostas) — não representam propostas comerciais
+// reais e por isso não devem contar em nenhum ranking ou métrica.
+const CLIENTES_EXCLUIDOS_METRICAS = ['VALE - DISU'];
+
+function Metricas({ propostas: propostasTodas }) {
   const [periodo, setPeriodo] = useState('90'); // dias
+
+  const propostas = useMemo(() =>
+    propostasTodas.filter(p => !CLIENTES_EXCLUIDOS_METRICAS.includes(p.cliente)),
+  [propostasTodas]);
 
   const base = useMemo(() => {
     const corte = new Date();
@@ -1398,7 +1408,7 @@ function Metricas({ propostas }) {
             color: periodo === v ? '#fff' : T.inkDim,
           }}>{l}</button>
         ))}
-        <span style={{ fontSize: 12, color: T.inkFaint, alignSelf: 'center', marginLeft: 4 }}>{base.length} propostas no período</span>
+        <span style={{ fontSize: 12, color: T.inkFaint, alignSelf: 'center', marginLeft: 4 }}>{base.length} propostas no período · exclui modelos de automação (VALE - DISU)</span>
       </div>
 
       {/* Ranking de clientes */}
@@ -1488,8 +1498,10 @@ function CicloComercial() {
   const [filtroEtapa, setFiltroEtapa] = useState('todas');
   const [filtroMes, setFiltroMes] = useState('todos');
   const [mesFaturamentoAberto, setMesFaturamentoAberto] = useState(null);
+  const [syncing, setSyncing] = useState(false);
+  const [syncMsg, setSyncMsg] = useState(null);
 
-  useEffect(() => {
+  const carregar = useCallback(() => {
     setLoading(true);
     supabase.from('v_ciclo_comercial_proposta').select('*').order('data_abertura', { ascending: false })
       .then(({ data, error }) => {
@@ -1498,6 +1510,26 @@ function CicloComercial() {
         setLoading(false);
       });
   }, []);
+
+  useEffect(() => { carregar(); }, [carregar]);
+
+  const sincronizarFaturamento = async () => {
+    setSyncing(true); setSyncMsg(null);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const r = await fetch(
+        `https://sieztnpchjjmrwrmrhoa.supabase.co/functions/v1/sankhya-faturamento-resumo-sync`,
+        { method: 'POST', headers: { Authorization: `Bearer ${session?.access_token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({}) }
+      );
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.erro || 'Falha na sincronização');
+      setSyncMsg(`✓ ${j.notas_sincronizadas} notas sincronizadas (Valor da Nota + Net Offer Value)`);
+      await carregar();
+    } catch (e) {
+      setSyncMsg(`✗ ${String(e?.message || e)}`);
+    }
+    setSyncing(false);
+  };
 
   const porMes = useMemo(() => {
     return MESES_ORDEM.map(mes => {
@@ -1510,24 +1542,27 @@ function CicloComercial() {
         valorTotal: doMes.reduce((s, d) => s + (Number(d.valor_liquido) || 0), 0),
         netValue: doMes.reduce((s, d) => s + (Number(d.net_value) || 0), 0),
         valorFaturado: doMes.reduce((s, d) => s + (Number(d.valor_faturado) || 0), 0),
+        faturamentoLiquido: doMes.reduce((s, d) => s + (Number(d.net_offer_value_faturado) || 0), 0),
       };
     }).filter(m => m.propostas > 0);
   }, [dados]);
 
   // ── totais de valor por etapa (KPIs) ──
-  // valor_faturado = soma de valor_bruto em nota_venda_itens, já filtrado pelos TOPs
-  // de faturamento válidos (3200/3201/3214/3220/3227) direto na view do banco.
-  // net_value = soma de valor_liquido em pedidos_itens (valor do pedido confirmado).
+  // valor_faturado          = Valor da Nota (CAB.VLRNOTA), bruto, TOPs 3200/3201/3214/3220/3227, STATUSNOTA='L'
+  // net_offer_value_faturado = Net Offer Value = VLRNOTA - ICMS - IPI - PIS - COFINS
+  // net_value               = Net Offer Value do lado do PEDIDO (mesma fórmula, TIPMOV='P')
+  // Fonte: tabela faturamento_resumo, sincronizada por sankhya-faturamento-resumo-sync.
   const totais = useMemo(() => {
-    let valorTotal = 0, valorFaturado = 0, netValue = 0, valorPedidoSemFatura = 0, valorSemPedido = 0;
+    let valorTotal = 0, valorFaturado = 0, faturamentoLiquido = 0, netValue = 0, valorPedidoSemFatura = 0, valorSemPedido = 0;
     dados.forEach(d => {
       valorTotal += Number(d.valor_liquido) || 0;
       valorFaturado += Number(d.valor_faturado) || 0;
+      faturamentoLiquido += Number(d.net_offer_value_faturado) || 0;
       netValue += Number(d.net_value) || 0;
       if (d.etapa_atual === 'sem_pedido') valorSemPedido += Number(d.valor_liquido) || 0;
       if (d.etapa_atual === 'pedido_sem_fatura') valorPedidoSemFatura += Number(d.net_value) || 0;
     });
-    return { valorTotal, valorFaturado, netValue, valorPedidoSemFatura, valorSemPedido };
+    return { valorTotal, valorFaturado, faturamentoLiquido, netValue, valorPedidoSemFatura, valorSemPedido };
   }, [dados]);
 
   // ── cross-tab: faturamento por mês real (data_faturamento) x mês de origem da proposta ──
@@ -1576,21 +1611,36 @@ function CicloComercial() {
   return (
     <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 22, maxWidth: 1400 }}>
 
+      {/* Sync do faturamento (bruto + Net Offer Value) */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <button onClick={sincronizarFaturamento} disabled={syncing} style={{
+          display: 'flex', alignItems: 'center', gap: 6, padding: '7px 14px', fontSize: 12.5, fontWeight: 600,
+          borderRadius: 6, border: `1px solid ${T.line}`, background: T.panel, color: T.ink, cursor: syncing ? 'default' : 'pointer',
+        }}>
+          <RefreshCw size={13} className={syncing ? 'spin' : ''} /> {syncing ? 'Sincronizando…' : 'Sincronizar faturamento (bruto + Net Offer Value)'}
+        </button>
+        {syncMsg && <span style={{ fontSize: 12, color: syncMsg.startsWith('✓') ? T.oliveText : T.rustText }}>{syncMsg}</span>}
+      </div>
+
       {/* KPIs de valor por etapa */}
       <div className="grid-kpis-7">
         <Kpi label="Valor total em propostas" value={fmtMoedaCompacta(totais.valorTotal)} icon={FileStack} />
-        <Kpi label="Net Value (pedidos confirmados)" value={fmtMoedaCompacta(totais.netValue)} icon={TrendingUp} tone="blue" />
-        <Kpi label="Valor faturado (NF, TOPs válidos)" value={fmtMoedaCompacta(totais.valorFaturado)} icon={CheckCircle2} tone="olive" />
+        <Kpi label="Net Value (pedido, líquido)" value={fmtMoedaCompacta(totais.netValue)} icon={TrendingUp} tone="blue" />
+        <Kpi label="Faturamento bruto (Vlr Nota)" value={fmtMoedaCompacta(totais.valorFaturado)} icon={CheckCircle2} tone="olive" />
+        <Kpi label="Faturamento líquido (Net Offer Value)" value={fmtMoedaCompacta(totais.faturamentoLiquido)} icon={DollarSign} tone="olive" />
         <Kpi label="Pedido confirmado, aguarda fatura" value={fmtMoedaCompacta(totais.valorPedidoSemFatura)} icon={Clock3} tone="amber" />
         <Kpi label="Valor ainda sem pedido" value={fmtMoedaCompacta(totais.valorSemPedido)} icon={AlertTriangle} tone="rust" />
       </div>
+      <p style={{ fontSize: 11.5, color: T.inkFaint, margin: '-14px 0 0' }}>
+        Bruto = Vlr Nota (CAB.VLRNOTA) · Líquido = Net Offer Value (Vlr Nota − ICMS − IPI − PIS − COFINS) · TOPs 3200/3201/3214/3220/3227 · só notas com STATUSNOTA = 'L'
+      </p>
 
       <Panel title="Proposta → Pedido → Faturamento, por mês de origem" subtitle="Quantas propostas de cada mês já viraram pedido e já foram faturadas, com Net Value e valor faturado">
         <div style={{ overflowX: 'auto', marginTop: 10 }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
             <thead>
               <tr style={{ borderBottom: `1px solid ${T.line}` }}>
-                {['Mês da proposta', 'Propostas', 'Viraram pedido', 'Faturadas', 'Valor total', 'Net Value', 'Valor faturado'].map(h => (
+                {['Mês da proposta', 'Propostas', 'Viraram pedido', 'Faturadas', 'Valor total', 'Net Value', 'Fat. bruto', 'Fat. líquido'].map(h => (
                   <th key={h} style={{ padding: '8px 12px', textAlign: 'left', fontSize: 10.5, fontWeight: 600, color: T.inkFaint, textTransform: 'uppercase' }}>{h}</th>
                 ))}
               </tr>
@@ -1605,6 +1655,7 @@ function CicloComercial() {
                   <td style={{ padding: '10px 12px', fontFamily: FONT_DISPLAY, color: T.inkDim }}>{fmtMoedaCompacta(m.valorTotal)}</td>
                   <td style={{ padding: '10px 12px', fontFamily: FONT_DISPLAY, color: T.blueText, fontWeight: 600 }}>{fmtMoedaCompacta(m.netValue)}</td>
                   <td style={{ padding: '10px 12px', fontFamily: FONT_DISPLAY, color: T.oliveText, fontWeight: 600 }}>{fmtMoedaCompacta(m.valorFaturado)}</td>
+                  <td style={{ padding: '10px 12px', fontFamily: FONT_DISPLAY, color: T.oliveText }}>{fmtMoedaCompacta(m.faturamentoLiquido)}</td>
                 </tr>
               ))}
             </tbody>
@@ -3380,6 +3431,9 @@ function Faturamento() {
   const [qtdPedidos, setQtdPedidos] = useState(0);
   const [viewFatTab, setViewFatTab] = useState('faturados'); // 'faturados' | 'nao_faturados'
   const [vendedores, setVendedores] = useState([]);
+  const vendedoresRef = useRef([]);
+  useEffect(() => { vendedoresRef.current = vendedores; }, [vendedores]);
+  const [auditado, setAuditado] = useState({ pedidoBruto: 0, pedidoLiquido: 0, notaBruto: 0, notaLiquido: 0 });
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [syncStatus, setSyncStatus] = useState(null);
@@ -3425,25 +3479,44 @@ function Faturamento() {
   const carregarDados = useCallback(async () => {
     setLoading(true);
     const { ini, fim } = rangeDatas();
-    const vendCod = filtros.vendedor ? Number(filtros.vendedor) : null;
+    // BUG CORRIGIDO: pedidos_itens/nota_venda_itens só têm vendedor_nome,
+    // não vendedor_codigo. Filtrar direto por código fazia a query falhar
+    // silenciosamente e voltar vazia sempre que um vendedor era selecionado.
+    const vendNome = filtros.vendedor
+      ? (vendedoresRef.current.find(v => String(v.codigo) === String(filtros.vendedor))?.nome || null)
+      : null;
 
     // Tudo abaixo (Net Value, Segmento Kalenborn, Segmento de Mercado, Pedido
     // de Venda) vem da MESMA tabela pedidos_itens — garante que os números
     // sempre somam entre si, sem nenhum arredondamento (Number direto da string).
     let qItens = supabase.from('pedidos_itens').select('*').gte('data_neg', ini).lte('data_neg', fim);
-    if (vendCod) qItens = qItens.eq('vendedor_codigo', vendCod);
+    if (vendNome) qItens = qItens.eq('vendedor_nome', vendNome);
 
     // Nota de Venda (bruto) agora tem o MESMO tratamento: fonte por item,
     // agregada no front exatamente como o líquido, com drill-down próprio.
     let qNotaItens = supabase.from('nota_venda_itens').select('*').in('codtipoper', TOPS_FATURAMENTO_VALIDOS).gte('data_neg', ini).lte('data_neg', fim);
-    if (vendCod) qNotaItens = qNotaItens.eq('vendedor_codigo', vendCod);
+    if (vendNome) qNotaItens = qNotaItens.eq('vendedor_nome', vendNome);
 
     const qVend = supabase.from('sankhya_vendedores').select('*').order('nome');
     const qSync = supabase.from('sankhya_sync_log').select('*').eq('tipo', 'pedidos_itens').order('finalizado_em', { ascending: false }).limit(1);
 
-    const [rItens, rNotaItens, rVend, rSync] = await Promise.all([qItens, qNotaItens, qVend, qSync]);
+    // Totais auditados (nível de nota, sem duplicidade, com STATUSNOTA='L' e
+    // Net Offer Value real já descontando ICMS/IPI/PIS/COFINS) — fonte
+    // sankhya-faturamento-resumo-sync. Mostrados ao lado dos números por
+    // item pra conferência; item ainda é usado pros gráficos por produto/segmento.
+    let qResumo = supabase.from('faturamento_resumo').select('tipmov,valor_nota,net_offer_value').gte('data_neg', ini).lte('data_neg', fim);
+    if (vendNome) qResumo = qResumo.eq('vendedor_nome', vendNome);
+
+    const [rItens, rNotaItens, rVend, rSync, rResumo] = await Promise.all([qItens, qNotaItens, qVend, qSync, qResumo]);
     const itens = rItens.data || [];
     const notaItensData = rNotaItens.data || [];
+    const resumo = rResumo.data || [];
+    const resumoTotais = { pedidoBruto: 0, pedidoLiquido: 0, notaBruto: 0, notaLiquido: 0 };
+    resumo.forEach(r => {
+      if (r.tipmov === 'P') { resumoTotais.pedidoBruto += Number(r.valor_nota) || 0; resumoTotais.pedidoLiquido += Number(r.net_offer_value) || 0; }
+      if (r.tipmov === 'V') { resumoTotais.notaBruto += Number(r.valor_nota) || 0; resumoTotais.notaLiquido += Number(r.net_offer_value) || 0; }
+    });
+    setAuditado(resumoTotais);
 
     // Agregação no próprio front, mas sempre da MESMA lista de itens —
     // elimina o risco de Net Value e Segmento divergirem entre si.
@@ -3737,6 +3810,30 @@ function Faturamento() {
               onClick={pedidosNaoFat.length > 0 ? () => setDrillDown({ titulo: 'Pedidos não faturados — por cliente', itens: pedidosNaoFat, tipo: 'nao_fat' }) : undefined}
             />
           </div>
+
+          {/* Conferência auditada — nível de nota (faturamento_resumo), sem risco de
+              duplicidade por item, com Net Offer Value real (líquido de impostos).
+              Serve para validar os números acima, que ainda vêm por item (produto/segmento). */}
+          <Panel title="Conferência auditada (nível de nota)" subtitle="Fonte: faturamento_resumo — Vlr Nota e Net Offer Value (Vlr Nota − ICMS − IPI − PIS − COFINS), TOPs válidos, STATUSNOTA='L'">
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12, marginTop: 10 }}>
+              {[
+                { label: 'Pedido — bruto',    valor: auditado.pedidoBruto,  cor: T.blueText },
+                { label: 'Pedido — líquido',  valor: auditado.pedidoLiquido, cor: T.blueText },
+                { label: 'Nota — bruto',      valor: auditado.notaBruto,    cor: T.oliveText },
+                { label: 'Nota — líquido',    valor: auditado.notaLiquido,  cor: T.oliveText },
+              ].map(k => (
+                <div key={k.label} style={{ background: T.panelAlt, borderRadius: 8, padding: '10px 12px' }}>
+                  <div style={{ fontSize: 10.5, color: T.inkFaint, fontWeight: 600 }}>{k.label}</div>
+                  <div style={{ fontFamily: FONT_DISPLAY, fontSize: 18, fontWeight: 700, color: k.cor, marginTop: 2 }}>{fmtValor(k.valor)}</div>
+                </div>
+              ))}
+            </div>
+            {auditado.notaBruto === 0 && auditado.pedidoBruto === 0 && (
+              <p style={{ fontSize: 11.5, color: T.amberText, marginTop: 10 }}>
+                Ainda sem dados — rode a sincronização "faturamento_resumo" (aba Ciclo Comercial) pra popular esses números.
+              </p>
+            )}
+          </Panel>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
             <Panel title="Evolução mensal — Net Value" subtitle={filtros.anoIni === filtros.anoFim ? `${filtros.anoIni}` : `${filtros.anoIni}–${filtros.anoFim}`}>
