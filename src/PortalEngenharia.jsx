@@ -3795,7 +3795,8 @@ function Faturamento() {
               onClick={() => abrirDrillDown('Net Value — todos os itens do período', null)}
             />
             <KpiClicavel
-              label="Nota de Venda (faturamento emitido)" valor={totalNotaVenda} icon={TrendingUp} cor={T.blue} formatador={fmtValor}
+              label="Nota de Venda (faturamento emitido)" valor={auditado.notaBruto || totalNotaVenda} icon={TrendingUp} cor={T.blue} formatador={fmtValor}
+              sub={auditado.notaBruto ? 'valor auditado (nível de nota)' : 'aprox. por item — sincronize p/ valor exato'}
               onClick={() => abrirDrillDownNota('Nota de Venda — todos os itens do período', null)}
             />
             <KpiClicavel
