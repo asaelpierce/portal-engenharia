@@ -101,6 +101,10 @@ const FLUXO_ORDEM = ['rascunho', 'em_revisao_tecnica', 'aguardando_aprovacao', '
 // Confirmado com o time comercial: 3200, 3201, 3214, 3220, 3227.
 // Qualquer outro TOP (ex.: 3213, devoluções, remessas) não deve entrar na conta de faturamento.
 const TOPS_FATURAMENTO_VALIDOS = [3200, 3201, 3214, 3220, 3227];
+// Ano em que o portal opera hoje. O campo 'mes' das propostas só guarda o nome
+// do mês (sem ano) — sem esse filtro, dados antigos de outro ano (ex: uma
+// proposta de setembro/2025) se misturam com o mesmo mês do ano corrente.
+const ANO_OPERACIONAL = 2026;
 
 const MESES_ORDEM = ['JANEIRO', 'FEVEREIRO', 'MARÇO', 'ABRIL', 'MAIO', 'JUNHO', 'JULHO', 'AGOSTO', 'SETEMBRO', 'OUTUBRO', 'NOVEMBRO', 'DEZEMBRO'];
 const MESES_LABEL = { JANEIRO: 'Jan', FEVEREIRO: 'Fev', MARÇO: 'Mar', ABRIL: 'Abr', MAIO: 'Mai', JUNHO: 'Jun', JULHO: 'Jul', AGOSTO: 'Ago', SETEMBRO: 'Set', OUTUBRO: 'Out', NOVEMBRO: 'Nov', DEZEMBRO: 'Dez' };
@@ -251,7 +255,9 @@ function PortalConteudo({ currentUser, session }) {
     return () => clearInterval(id);
   }, [carregarPropostas]);
 
-  const propostasMes = useMemo(() => propostas.filter(p => p.mes === mesFiltro), [propostas, mesFiltro]);
+  const propostasMes = useMemo(() =>
+    propostas.filter(p => p.mes === mesFiltro && p.data_abertura && new Date(p.data_abertura + 'T00:00:00').getFullYear() === ANO_OPERACIONAL),
+  [propostas, mesFiltro]);
 
   const pendencias = useMemo(() => propostas.filter(p => {
     // Propostas vindas do Sankhya (origem_dados === 'sankhya') são só histórico/informativo —
@@ -332,6 +338,18 @@ function PortalConteudo({ currentUser, session }) {
         .spin { animation: spin 1s linear infinite; }
         .focus-ring:focus-visible { outline: 2px solid ${T.terracotta}; outline-offset: 2px; }
 
+        .info-tip { position: relative; display: inline-flex; }
+        .info-tip .info-tip-bubble {
+          display: none; position: absolute; z-index: 40; bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%);
+          width: 220px; background: ${T.ink}; color: #fff; font-size: 11px; font-weight: 500; line-height: 1.5;
+          padding: 9px 11px; border-radius: 7px; box-shadow: 0 8px 20px rgba(0,0,0,.25); text-align: left; white-space: normal;
+        }
+        .info-tip .info-tip-bubble::after {
+          content: ''; position: absolute; top: 100%; left: 50%; transform: translateX(-50%);
+          border: 5px solid transparent; border-top-color: ${T.ink};
+        }
+        .info-tip:hover .info-tip-bubble, .info-tip:focus-within .info-tip-bubble { display: block; }
+
         /* Responsividade: grids colapsam via auto-fit */
         .grid-kpis-5 { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
         .grid-kpis-7 { display: grid; grid-template-columns: repeat(auto-fit, minmax(145px, 1fr)); gap: 10px; }
@@ -375,7 +393,7 @@ function PortalConteudo({ currentUser, session }) {
         />
 
         <main style={{ flex: 1, overflow: 'auto', padding: '28px 32px' }}>
-          {view === 'dashboard' && <Dashboard stats={stats} propostas={propostasMes} todasPropostas={propostas} mesFiltro={mesFiltro} onNovaProposta={() => setModal('nova')} onNavigate={setView} />}
+          {view === 'dashboard' && <Dashboard stats={stats} propostas={propostasMes} todasPropostas={propostas} mesFiltro={mesFiltro} setMesFiltro={setMesFiltro} onNovaProposta={() => setModal('nova')} onNavigate={setView} />}
           {view === 'propostas' && (
             <PropostasTable propostas={propostas} titulo="Todas as propostas" onRowClick={p => { setSelected(p); setModal('detalhe'); }} />
           )}
@@ -548,7 +566,7 @@ function Topbar({ view, mesFiltro, setMesFiltro, currentUser, userEmail, userMen
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-        {currentUser.papel === 'engenheiro' && (
+        {(currentUser.papel === 'engenheiro' || currentUser.papel === 'gestor') && (
           <button onClick={onNova} className="focus-ring" style={{
             display: 'flex', alignItems: 'center', gap: 7, background: T.terracotta, color: '#fff', border: 'none',
             borderRadius: 6, padding: '9px 16px', fontSize: 13, fontWeight: 600,
@@ -611,7 +629,7 @@ function Topbar({ view, mesFiltro, setMesFiltro, currentUser, userEmail, userMen
 /* ============================================================================
    DASHBOARD — v2 · produtividade + pedidos Sankhya + registro manual
 ============================================================================ */
-function Dashboard({ stats, propostas, todasPropostas, mesFiltro, onNovaProposta, onNavigate }) {
+function Dashboard({ stats, propostas, todasPropostas, mesFiltro, setMesFiltro, onNovaProposta, onNavigate }) {
   const [kpiModal, setKpiModal] = useState(null); // { titulo, itens } | null
 
   // ── grupos reais por proposta do mês (não pela tabela agregada Sankhya) ──
@@ -640,9 +658,11 @@ function Dashboard({ stats, propostas, todasPropostas, mesFiltro, onNovaProposta
 
   const evolucaoMensal = useMemo(() => {
     return MESES_ORDEM.map(mes => {
-      const doMes = todasPropostas.filter(p => p.mes === mes);
+      const doMes = todasPropostas.filter(p =>
+        p.mes === mes && p.data_abertura && new Date(p.data_abertura + 'T00:00:00').getFullYear() === ANO_OPERACIONAL
+      );
       return { mes, count: doMes.length, valor: doMes.reduce((s, p) => s + (p.valor_liquido || 0), 0) };
-    });
+    }).filter(m => m.count > 0); // só mostra meses que já têm proposta cadastrada
   }, [todasPropostas]);
 
   const porAprovador = useMemo(() => {
@@ -740,26 +760,31 @@ function Dashboard({ stats, propostas, todasPropostas, mesFiltro, onNovaProposta
       {/* ── KPI ROW (7 cards) ── */}
       <div className="grid-kpis-7">
         <Kpi label="Propostas no mês" value={stats.total} icon={FileStack}
+          sub="todas as propostas cadastradas no mês"
           onClick={() => setKpiModal({ titulo: `Propostas no mês — todas`, itens: propostas })} />
         <Kpi label="Em andamento" value={stats.ativas} icon={Clock3} tone="amber"
-          sub={fmtMoedaCompacta(valorNaoConfirmadasMes)}
+          sub={`${fmtMoedaCompacta(valorNaoConfirmadasMes)} · ainda não confirmadas`}
           onClick={() => setKpiModal({ titulo: 'Em andamento (ainda não confirmadas)', itens: propostas.filter(p => p.status !== 'concluida') })} />
         <Kpi label="Em atraso" value={stats.atrasadas} icon={AlertTriangle} tone="rust"
+          sub="prazo de entrega já passou"
           onClick={() => setKpiModal({ titulo: 'Propostas em atraso', itens: propostasAtrasadasLista })} />
-        <Kpi label="Valor em fluxo" value={fmtMoedaCompacta(stats.valorMes)} icon={DollarSign}
-          onClick={() => setKpiModal({ titulo: 'Valor em fluxo — todas as propostas do mês', itens: propostas })} />
+        <Kpi label="Valor confirmado no mês" value={fmtMoedaCompacta(stats.valorMes)} icon={DollarSign}
+          sub="soma do valor líquido de todas as propostas do mês"
+          info="Uma proposta só ganha valor em R$ quando vira pedido (confirmada). Antes disso ela conta como R$ 0 — por isso esse número costuma ser igual ao de 'Pedidos confirmados'."
+          onClick={() => setKpiModal({ titulo: 'Valor confirmado no mês — todas as propostas', itens: propostas })} />
         <Kpi
           label="Pedidos confirmados"
           value={propostasConfirmadas.length}
           icon={CheckCircle2} tone="olive"
-          sub={fmtMoedaCompacta(valorConfirmadasMes)}
+          sub={`${fmtMoedaCompacta(valorConfirmadasMes)} · já viraram pedido`}
           onClick={() => setKpiModal({ titulo: 'Pedidos confirmados (viraram pedido)', itens: propostasConfirmadas })}
         />
         <Kpi
           label="Faltam confirmar"
           value={propostasNaoConfirmadas.length}
           icon={Clock3} tone="amber"
-          sub={fmtMoedaCompacta(valorNaoConfirmadasMes)}
+          sub={`${fmtMoedaCompacta(valorNaoConfirmadasMes)} · valor ainda não definido`}
+          info="Quantidade de propostas que ainda não viraram pedido. O valor delas some (R$ 0) até serem confirmadas — por isso o R$ ao lado quase sempre é zero."
           onClick={() => setKpiModal({ titulo: 'Propostas que ainda faltam confirmar', itens: propostasNaoConfirmadas })}
         />
         <OrigemCard percWord={stats.percWord} wordCount={stats.wordCount} sankhyaCount={stats.sankhyaCount} />
@@ -769,17 +794,20 @@ function Dashboard({ stats, propostas, todasPropostas, mesFiltro, onNovaProposta
 
       {/* ── ROW 2: Volume mensal + Produtividade da equipe ── */}
       <div className="grid-2col-wide">
-        <Panel title="Volume de propostas — Jan a Jun" subtitle="Total mensal, planilha histórica completa">
+        <Panel title={`Volume de propostas — ${evolucaoMensal.length ? `Jan a ${MESES_LABEL[evolucaoMensal[evolucaoMensal.length - 1].mes]}` : ANO_OPERACIONAL}`} subtitle="Total mensal · clique numa barra pra ver aquele mês na Visão Geral">
           <div style={{ display: 'flex', alignItems: 'flex-end', gap: 14, height: 150, padding: '8px 4px 0' }}>
             {evolucaoMensal.map(m => {
               const h = Math.max((m.count / maxMensal) * 110, 4);
               const isActive = m.mes === mesFiltro;
               return (
-                <div key={m.mes} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flex: 1 }}>
+                <button key={m.mes} onClick={() => setMesFiltro(m.mes)} title={`Ver propostas de ${MESES_LABEL[m.mes]}`} style={{
+                  display: 'flex', flexDirection: 'column', alignItems: 'center', flex: 1,
+                  background: 'none', border: 'none', cursor: 'pointer', padding: 0,
+                }}>
                   <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6, color: isActive ? T.terracotta : T.inkDim, fontFamily: FONT_DISPLAY }}>{m.count}</div>
                   <div style={{ width: '100%', maxWidth: 40, height: h, background: isActive ? T.terracotta : T.line, borderRadius: '3px 3px 0 0', transition: 'height .4s ease' }} />
                   <div style={{ fontSize: 10.5, color: isActive ? T.terracottaText : T.inkFaint, marginTop: 8, fontWeight: isActive ? 700 : 400 }}>{MESES_LABEL[m.mes]}</div>
-                </div>
+                </button>
               );
             })}
           </div>
@@ -984,7 +1012,19 @@ function Dashboard({ stats, propostas, todasPropostas, mesFiltro, onNovaProposta
   );
 }
 
-function Kpi({ label, value, icon: Icon, tone, sub, onClick }) {
+function InfoTip({ texto }) {
+  return (
+    <span className="info-tip" tabIndex={0} style={{ cursor: 'help' }} onClick={e => e.stopPropagation()}>
+      <span style={{
+        width: 14, height: 14, borderRadius: '50%', background: T.lineSoft, color: T.inkFaint,
+        display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, fontWeight: 700, fontStyle: 'italic', fontFamily: 'Georgia, serif',
+      }}>i</span>
+      <span className="info-tip-bubble">{texto}</span>
+    </span>
+  );
+}
+
+function Kpi({ label, value, icon: Icon, tone, sub, onClick, info }) {
   const toneColor = tone === 'amber' ? T.amberText : tone === 'rust' ? T.rustText : tone === 'olive' ? T.oliveText : tone === 'blue' ? T.blueText : T.ink;
   const toneSoft = tone === 'amber' ? T.amberSoft : tone === 'rust' ? T.rustSoft : tone === 'olive' ? T.oliveSoft : tone === 'blue' ? T.blueSoft : T.terracottaSoft;
   return (
@@ -996,7 +1036,10 @@ function Kpi({ label, value, icon: Icon, tone, sub, onClick }) {
       onMouseLeave={e => { e.currentTarget.style.boxShadow = SHADOW_SM; e.currentTarget.style.transform = 'none'; }}
     >
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-        <span style={{ fontSize: 11.5, color: T.inkFaint, fontWeight: 600, letterSpacing: '0.01em' }}>{label}</span>
+        <span style={{ fontSize: 11.5, color: T.inkFaint, fontWeight: 600, letterSpacing: '0.01em', display: 'flex', alignItems: 'center', gap: 5 }}>
+          {label}
+          {info && <InfoTip texto={info} />}
+        </span>
         <div style={{ width: 28, height: 28, borderRadius: 7, background: toneSoft, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
           <Icon size={14} color={toneColor} strokeWidth={2.2} />
         </div>
@@ -1345,17 +1388,25 @@ function NotificacoesButton({ userEmail }) {
 const CLIENTES_EXCLUIDOS_METRICAS = ['VALE - DISU'];
 
 function Metricas({ propostas: propostasTodas }) {
-  const [periodo, setPeriodo] = useState('90'); // dias
+  const [periodo, setPeriodo] = useState('tudo'); // dias — padrão 'tudo' pra bater com as outras telas por padrão
 
   const propostas = useMemo(() =>
-    propostasTodas.filter(p => !CLIENTES_EXCLUIDOS_METRICAS.includes(p.cliente)),
+    propostasTodas.filter(p =>
+      !CLIENTES_EXCLUIDOS_METRICAS.includes(p.cliente) &&
+      p.data_abertura && new Date(p.data_abertura + 'T00:00:00').getFullYear() === ANO_OPERACIONAL
+    ),
   [propostasTodas]);
 
-  const base = useMemo(() => {
+  const corteData = useMemo(() => {
+    if (periodo === 'tudo') return null;
     const corte = new Date();
     corte.setDate(corte.getDate() - Number(periodo));
-    return periodo === 'tudo' ? propostas : propostas.filter(p => new Date(p.data_abertura) >= corte);
-  }, [propostas, periodo]);
+    return corte;
+  }, [periodo]);
+
+  const base = useMemo(() => {
+    return periodo === 'tudo' ? propostas : propostas.filter(p => new Date(p.data_abertura) >= corteData);
+  }, [propostas, periodo, corteData]);
 
   const rankingClientes = useMemo(() => {
     const map = {};
@@ -1408,7 +1459,9 @@ function Metricas({ propostas: propostasTodas }) {
             color: periodo === v ? '#fff' : T.inkDim,
           }}>{l}</button>
         ))}
-        <span style={{ fontSize: 12, color: T.inkFaint, alignSelf: 'center', marginLeft: 4 }}>{base.length} propostas no período · exclui modelos de automação (VALE - DISU)</span>
+        <span style={{ fontSize: 12, color: T.inkFaint, alignSelf: 'center', marginLeft: 4 }}>
+          {base.length} propostas {periodo === 'tudo' ? `no ano de ${ANO_OPERACIONAL}` : `desde ${fmtData(corteData.toISOString().slice(0,10))}`} · exclui modelos de automação (VALE - DISU)
+        </span>
       </div>
 
       {/* Ranking de clientes */}
@@ -1416,12 +1469,14 @@ function Metricas({ propostas: propostasTodas }) {
         right={<BotaoExportar onClick={() => exportCSV(rankingClientes, 'ranking_clientes.csv', ['nome','propostas','confirmadas','taxa','valorConfirmado'])} small />}
       >
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 10 }}>
-          {rankingClientes.map((c, i) => (
+          {rankingClientes.map((c, i) => {
+            return (
             <div key={c.nome} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
               <span style={{ width: 18, textAlign: 'right', fontSize: 11, color: T.inkFaint, fontFamily: FONT_DISPLAY }}>#{i + 1}</span>
               <span style={{ width: 170, fontSize: 13, color: T.ink, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={c.nome}>{c.nome}</span>
-              <div style={{ flex: 1, background: T.lineSoft, height: 8, borderRadius: 4, overflow: 'hidden' }}>
-                <div style={{ width: `${(c.propostas / maxRankingCli) * 100}%`, height: '100%', background: T.terracotta, borderRadius: 4 }} />
+              <div style={{ flex: 1, background: T.lineSoft, height: 8, borderRadius: 4, overflow: 'hidden', position: 'relative' }} title={`${c.confirmadas} de ${c.propostas} propostas viraram pedido (${c.taxa}%)`}>
+                <div style={{ width: `${(c.propostas / maxRankingCli) * 100}%`, height: '100%', borderRadius: 4, background: T.lineSoft, position: 'absolute', left: 0, top: 0 }} />
+                <div style={{ width: `${(c.confirmadas / maxRankingCli) * 100}%`, height: '100%', background: T.terracotta, borderRadius: 4, position: 'absolute', left: 0, top: 0 }} />
               </div>
               <div style={{ display: 'flex', gap: 8, fontSize: 12, fontFamily: FONT_DISPLAY, width: 190, justifyContent: 'flex-end' }}>
                 <span style={{ color: T.ink, fontWeight: 700 }}>{c.propostas} prop.</span>
@@ -1429,8 +1484,13 @@ function Metricas({ propostas: propostasTodas }) {
                 <span style={{ color: T.inkFaint }}>({c.taxa}%)</span>
               </div>
             </div>
-          ))}
+          );})}
         </div>
+        <p style={{ fontSize: 11, color: T.inkFaint, marginTop: 10, marginBottom: 0 }}>
+          <span style={{ display: 'inline-block', width: 9, height: 9, background: T.terracotta, borderRadius: 2, marginRight: 4, verticalAlign: 'middle' }} /> viraram pedido
+          <span style={{ display: 'inline-block', width: 9, height: 9, background: T.lineSoft, borderRadius: 2, margin: '0 4px 0 14px', verticalAlign: 'middle' }} /> ainda aguardando
+          <span style={{ marginLeft: 10 }}>— barra proporcional ao maior cliente da lista (top 10 por quantidade de propostas)</span>
+        </p>
       </Panel>
 
       {/* Evolução mensal */}
@@ -3614,18 +3674,35 @@ function Faturamento() {
     }
     setConsumoMaterial(Object.entries(matAgg).map(([tipo, d]) => ({ tipo, ...d })));
 
-    // ── Pedidos não faturados: clientes com pedido mas sem (ou menor) nota ───
-    // Agrega nota_venda_itens por cliente_nome (se a coluna existir)
-    const notaCliMap = {};
-    for (const it of notaItensData) {
-      const cli = it.cliente_nome || null;
-      if (cli) notaCliMap[cli] = (notaCliMap[cli] || 0) + (Number(it.valor_bruto) || 0);
+    // ── Pedidos não faturados: por BR específico (não por cliente agregado) ──
+    // Pra cada BR que teve pedido no período, busca quanto já foi faturado
+    // desse MESMO BR (em qualquer data, já que a nota pode sair depois do
+    // período do pedido) na fonte auditada faturamento_resumo. A diferença
+    // (pedido − faturado) é o que falta faturar daquele pedido específico.
+    const brsDoPeriodo = [...new Set(itens.map(it => it.br).filter(Boolean))];
+    let fatPorBr = {};
+    if (brsDoPeriodo.length > 0) {
+      const { data: fatBr } = await supabase
+        .from('faturamento_resumo')
+        .select('br,valor_nota')
+        .eq('tipmov', 'V')
+        .in('br', brsDoPeriodo);
+      (fatBr || []).forEach(f => { fatPorBr[f.br] = (fatPorBr[f.br] || 0) + (Number(f.valor_nota) || 0); });
     }
-    const naoFat = topCli.map(c => ({
-      ...c,
-      faturado:     notaCliMap[c.nome] || 0,
-      nao_faturado: Math.max(c.valor - (notaCliMap[c.nome] || 0), 0),
-    })).filter(c => c.nao_faturado > 100); // filtra ruídos de centavos
+    const pedidoPorBr = {};
+    for (const it of itens) {
+      if (!it.br) continue;
+      if (!pedidoPorBr[it.br]) pedidoPorBr[it.br] = { br: it.br, cliente: it.cliente_nome || '—', vendedor: it.vendedor_nome || '—', valorPedido: 0 };
+      pedidoPorBr[it.br].valorPedido += Number(it.valor_liquido) || 0;
+    }
+    const naoFat = Object.values(pedidoPorBr)
+      .map(p => ({
+        ...p,
+        faturado: fatPorBr[p.br] || 0,
+        nao_faturado: Math.max(0, p.valorPedido - (fatPorBr[p.br] || 0)),
+      }))
+      .filter(p => p.nao_faturado > 100) // filtra ruído de centavos
+      .sort((a, b) => b.nao_faturado - a.nao_faturado);
     setPedidosNaoFat(naoFat);
 
     setLoading(false);
@@ -3825,8 +3902,8 @@ function Faturamento() {
             <KpiClicavel
               label="Não faturado (estimado)" valor={pedidosNaoFat.reduce((s, c) => s + c.nao_faturado, 0)} icon={AlertTriangle} cor={T.amber}
               formatador={fmtValor}
-              sub={`${pedidosNaoFat.length} cliente${pedidosNaoFat.length !== 1 ? 's' : ''} com saldo em aberto`}
-              onClick={pedidosNaoFat.length > 0 ? () => setDrillDown({ titulo: 'Pedidos não faturados — por cliente', itens: pedidosNaoFat, tipo: 'nao_fat' }) : undefined}
+              sub={`${pedidosNaoFat.length} pedido${pedidosNaoFat.length !== 1 ? 's' : ''} com saldo em aberto`}
+              onClick={pedidosNaoFat.length > 0 ? () => setDrillDown({ titulo: 'Pedidos não faturados — por BR', itens: pedidosNaoFat, tipo: 'nao_fat' }) : undefined}
             />
           </div>
 
@@ -3956,7 +4033,9 @@ function Faturamento() {
           {/* ── PEDIDOS FATURADOS vs NÃO FATURADOS ──────────────────────────── */}
           <Panel
             title="Pedidos faturados vs não faturados"
-            subtitle="Comparativo por cliente — pedido de venda confirmado × nota fiscal emitida"
+            subtitle={viewFatTab === 'faturados'
+              ? 'Comparativo por cliente — pedido de venda confirmado × nota fiscal emitida'
+              : 'Por BR específico — pedido de venda que ainda não tem nota fiscal (ou tem só parte faturada)'}
             right={
               <div style={{ display: 'flex', background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 6, padding: 2 }}>
                 {[['faturados', 'Faturados'], ['nao_faturados', 'Não faturados']].map(([key, label]) => (
@@ -3970,7 +4049,52 @@ function Faturamento() {
               </div>
             }
           >
-            {topClientes.length === 0 ? <EmptyStateFat /> : (
+            {viewFatTab === 'nao_faturados' ? (
+              pedidosNaoFat.length === 0 ? <EmptyStateFat texto="Nenhum pedido pendente de faturamento no período." /> : (
+                <div style={{ overflowX: 'auto', marginTop: 10 }}>
+                  <p style={{ fontSize: 11.5, color: T.inkFaint, margin: '0 0 8px' }}>
+                    Falta faturar = valor do pedido − o que já foi faturado desse mesmo BR (em qualquer data). Ordenado do que falta mais.
+                  </p>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+                    <thead>
+                      <tr style={{ borderBottom: `1px solid ${T.line}` }}>
+                        <th style={thFat()}>BR</th>
+                        <th style={thFat()}>Cliente</th>
+                        <th style={thFat()}>Vendedor</th>
+                        <th style={thFat(0, 'right')}>Valor pedido</th>
+                        <th style={thFat(0, 'right')}>Já faturado</th>
+                        <th style={thFat(0, 'right')}>Falta faturar</th>
+                        <th style={thFat(120)}>Cobertura</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {pedidosNaoFat.map(p => {
+                        const cobertura = p.valorPedido > 0 ? Math.min((p.faturado / p.valorPedido) * 100, 100) : 0;
+                        const cor = cobertura >= 80 ? T.oliveText : cobertura >= 40 ? T.amberText : T.rustText;
+                        return (
+                          <tr key={p.br} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                            <td style={{ padding: '10px 12px', fontWeight: 700, fontFamily: FONT_DISPLAY, color: T.blueText }}>{p.br}</td>
+                            <td style={{ padding: '10px 12px', maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={p.cliente}>{p.cliente}</td>
+                            <td style={{ padding: '10px 12px', maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: T.inkDim, fontSize: 11.5 }} title={p.vendedor}>{p.vendedor}</td>
+                            <td style={{ ...tdFat(), color: T.ink, fontWeight: 600 }}>{fmtValorCompacto(p.valorPedido)}</td>
+                            <td style={{ ...tdFat(), color: T.blueText }}>{fmtValorCompacto(p.faturado)}</td>
+                            <td style={{ ...tdFat(), color: T.rustText, fontWeight: 700 }}>{fmtValorCompacto(p.nao_faturado)}</td>
+                            <td style={{ padding: '10px 12px' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                <div style={{ flex: 1, background: T.lineSoft, height: 6, borderRadius: 3, overflow: 'hidden' }}>
+                                  <div style={{ width: `${cobertura}%`, height: '100%', background: cor, borderRadius: 3, transition: 'width .3s' }} />
+                                </div>
+                                <span style={{ fontSize: 11, fontWeight: 700, color: cor, width: 34, textAlign: 'right' }}>{cobertura.toFixed(0)}%</span>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )
+            ) : topClientes.length === 0 ? <EmptyStateFat /> : (
               <div style={{ overflowX: 'auto', marginTop: 10 }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
                   <thead>
@@ -3978,18 +4102,16 @@ function Faturamento() {
                       <th style={thFat()}>Cliente</th>
                       <th style={thFat(0, 'right')}>Pedidos</th>
                       <th style={thFat(0, 'right')}>Valor pedido</th>
-                      {viewFatTab === 'faturados'
-                        ? <th style={thFat(0, 'right')}>Nota emitida</th>
-                        : <th style={thFat(0, 'right')}>Não faturado</th>}
+                      <th style={thFat(0, 'right')}>Nota emitida</th>
                       <th style={thFat(120)}>Cobertura</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {(viewFatTab === 'nao_faturados' ? pedidosNaoFat : topClientes.map(c => ({
+                    {topClientes.map(c => ({
                       ...c,
                       faturado: c.faturado || 0,
                       nao_faturado: Math.max(c.valor - (c.faturado || 0), 0),
-                    }))).map(c => {
+                    })).map(c => {
                       const cobertura = c.valor > 0 ? Math.min((c.faturado / c.valor) * 100, 100) : 0;
                       const cor = cobertura >= 80 ? T.oliveText : cobertura >= 40 ? T.amberText : T.rustText;
                       return (
@@ -3997,9 +4119,7 @@ function Faturamento() {
                           <td style={{ padding: '10px 12px', fontWeight: 600, maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={c.nome}>{c.nome}</td>
                           <td style={tdFat()}>{c.qtd_pedidos}</td>
                           <td style={{ ...tdFat(), color: T.ink, fontWeight: 600 }}>{fmtValorCompacto(c.valor)}</td>
-                          {viewFatTab === 'faturados'
-                            ? <td style={{ ...tdFat(), color: T.blueText, fontWeight: 600 }}>{fmtValorCompacto(c.faturado)}</td>
-                            : <td style={{ ...tdFat(), color: T.rustText, fontWeight: 700 }}>{fmtValorCompacto(c.nao_faturado)}</td>}
+                          <td style={{ ...tdFat(), color: T.blueText, fontWeight: 600 }}>{fmtValorCompacto(c.faturado)}</td>
                           <td style={{ padding: '10px 12px' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                               <div style={{ flex: 1, background: T.lineSoft, height: 6, borderRadius: 3, overflow: 'hidden' }}>
@@ -4013,11 +4133,6 @@ function Faturamento() {
                     })}
                   </tbody>
                 </table>
-                {viewFatTab === 'nao_faturados' && pedidosNaoFat.length === 0 && (
-                  <p style={{ textAlign: 'center', padding: '20px 0', color: T.oliveText, fontSize: 13, fontWeight: 600 }}>
-                    ✓ Todos os pedidos do período já foram faturados.
-                  </p>
-                )}
               </div>
             )}
           </Panel>
@@ -4293,18 +4408,21 @@ function DrillDownPedidos({ titulo, itens, loading, onClose, campoValor = 'valor
 ============================================================================ */
 function DrillDownNaoFaturados({ titulo, clientes, fmtValor, onClose }) {
   const totalNaoFat = clientes.reduce((s, c) => s + c.nao_faturado, 0);
-  const totalPedido = clientes.reduce((s, c) => s + c.valor, 0);
+  const totalPedido = clientes.reduce((s, c) => s + c.valorPedido, 0);
   return (
     <Overlay onClose={onClose}>
       <div className="scale-in" style={{
-        background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, width: '100%', maxWidth: 780,
+        background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, width: '100%', maxWidth: 820,
         maxHeight: '85vh', display: 'flex', flexDirection: 'column', overflow: 'hidden', boxShadow: '0 24px 60px rgba(0,0,0,.18)',
       }}>
         <div style={{ padding: '18px 22px', borderBottom: `1px solid ${T.line}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div>
             <h2 style={{ fontFamily: FONT_DISPLAY, fontSize: 19, fontWeight: 600, margin: 0 }}>{titulo}</h2>
             <p style={{ fontSize: 12, color: T.inkFaint, margin: '3px 0 0' }}>
-              {clientes.length} cliente{clientes.length !== 1 ? 's' : ''} · {fmtValor(totalNaoFat)} em aberto de {fmtValor(totalPedido)} em pedidos
+              {clientes.length} pedido{clientes.length !== 1 ? 's' : ''} · {fmtValor(totalNaoFat)} em aberto de {fmtValor(totalPedido)} em pedidos
+            </p>
+            <p style={{ fontSize: 11.5, color: T.inkFaint, margin: '4px 0 0' }}>
+              Falta faturar = valor do pedido − o que já foi faturado desse mesmo BR (em qualquer data).
             </p>
           </div>
           <button onClick={onClose} style={{ background: 'transparent', border: 'none', color: T.inkFaint }}><X size={20} /></button>
@@ -4314,11 +4432,11 @@ function DrillDownNaoFaturados({ titulo, clientes, fmtValor, onClose }) {
             <thead>
               <tr style={{ borderBottom: `1px solid ${T.line}`, position: 'sticky', top: 0, background: T.panel }}>
                 <th style={thFat()}>#</th>
+                <th style={thFat()}>BR</th>
                 <th style={thFat()}>Cliente</th>
-                <th style={thFat(0, 'right')}>Pedidos</th>
                 <th style={thFat(0, 'right')}>Valor pedido</th>
-                <th style={thFat(0, 'right')}>Nota emitida</th>
-                <th style={thFat(0, 'right')}>Não faturado</th>
+                <th style={thFat(0, 'right')}>Já faturado</th>
+                <th style={thFat(0, 'right')}>Falta faturar</th>
                 <th style={thFat(120)}>Cobertura</th>
               </tr>
             </thead>
@@ -4326,14 +4444,14 @@ function DrillDownNaoFaturados({ titulo, clientes, fmtValor, onClose }) {
               {clientes.length === 0 ? (
                 <tr><td colSpan={7} style={{ padding: 30, textAlign: 'center', color: T.oliveText, fontWeight: 600 }}>✓ Tudo faturado no período.</td></tr>
               ) : clientes.map((c, i) => {
-                const cob = c.valor > 0 ? Math.min((c.faturado / c.valor) * 100, 100) : 0;
+                const cob = c.valorPedido > 0 ? Math.min((c.faturado / c.valorPedido) * 100, 100) : 0;
                 const cor = cob >= 80 ? T.oliveText : cob >= 40 ? T.amberText : T.rustText;
                 return (
-                  <tr key={c.nome} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                  <tr key={c.br} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
                     <td style={{ padding: '10px 12px', color: T.inkFaint, fontFamily: FONT_DISPLAY, fontSize: 11 }}>#{i + 1}</td>
-                    <td style={{ padding: '10px 12px', fontWeight: 600, maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={c.nome}>{c.nome}</td>
-                    <td style={tdFat()}>{c.qtd_pedidos}</td>
-                    <td style={{ ...tdFat(), color: T.ink, fontWeight: 600 }}>{fmtValor(c.valor)}</td>
+                    <td style={{ padding: '10px 12px', fontWeight: 700, fontFamily: FONT_DISPLAY, color: T.blueText }}>{c.br}</td>
+                    <td style={{ padding: '10px 12px', fontWeight: 600, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={c.cliente}>{c.cliente}</td>
+                    <td style={{ ...tdFat(), color: T.ink, fontWeight: 600 }}>{fmtValor(c.valorPedido)}</td>
                     <td style={{ ...tdFat(), color: T.blueText }}>{fmtValor(c.faturado)}</td>
                     <td style={{ ...tdFat(), color: T.rustText, fontWeight: 700 }}>{fmtValor(c.nao_faturado)}</td>
                     <td style={{ padding: '10px 12px' }}>
@@ -5065,8 +5183,8 @@ function SelectMesFat({ value, onChange }) {
   );
 }
 
-function EmptyStateFat() {
-  return <p style={{ fontSize: 12, color: T.inkFaint, textAlign: 'center', padding: '16px 0', margin: 0 }}>Sem dados — clique em "Atualizar do Sankhya".</p>;
+function EmptyStateFat({ texto }) {
+  return <p style={{ fontSize: 12, color: T.inkFaint, textAlign: 'center', padding: '16px 0', margin: 0 }}>{texto || 'Sem dados — clique em "Atualizar do Sankhya".'}</p>;
 }
 
 function selectStyleFat(width) {
