@@ -1519,7 +1519,7 @@ function CicloComercial() {
       const { data: { session } } = await supabase.auth.getSession();
       const r = await fetch(
         `https://sieztnpchjjmrwrmrhoa.supabase.co/functions/v1/sankhya-faturamento-resumo-sync`,
-        { method: 'POST', headers: { Authorization: `Bearer ${session?.access_token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({}) }
+        { method: 'POST', headers: { Authorization: `Bearer ${session?.access_token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ dataIni: '2026-01-01', dataFim: new Date().toISOString().slice(0, 10) }) }
       );
       const j = await r.json();
       if (!j.ok) throw new Error(j.erro || 'Falha na sincronização');
@@ -3812,15 +3812,15 @@ function Faturamento() {
           </div>
 
           {/* Conferência auditada — nível de nota (faturamento_resumo), sem risco de
-              duplicidade por item, com Net Offer Value real (líquido de impostos).
-              Serve para validar os números acima, que ainda vêm por item (produto/segmento). */}
-          <Panel title="Conferência auditada (nível de nota)" subtitle="Fonte: faturamento_resumo — Vlr Nota e Net Offer Value (Vlr Nota − ICMS − IPI − PIS − COFINS), TOPs válidos, STATUSNOTA='L'">
+              duplicidade por item, com Net Offer Value real (líquido de todos os
+              lançamentos de TGFDIN por nota — validado contra planilha real do usuário).
+              Só cobre Nota Fiscal (TIPMOV='V'): pedido não usa STATUSNOTA da mesma forma,
+              por isso o Net Value de pedido continua vindo do card acima (pedidos_itens). */}
+          <Panel title="Conferência auditada — Nota Fiscal (nível de nota)" subtitle="Fonte: faturamento_resumo — Vlr Nota (bruto) e Net Offer Value (líquido), TOPs 3200/3201/3214/3220/3227, STATUSNOTA='L'">
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12, marginTop: 10 }}>
               {[
-                { label: 'Pedido — bruto',    valor: auditado.pedidoBruto,  cor: T.blueText },
-                { label: 'Pedido — líquido',  valor: auditado.pedidoLiquido, cor: T.blueText },
-                { label: 'Nota — bruto',      valor: auditado.notaBruto,    cor: T.oliveText },
-                { label: 'Nota — líquido',    valor: auditado.notaLiquido,  cor: T.oliveText },
+                { label: 'Nota — bruto (Vlr Nota)',        valor: auditado.notaBruto,    cor: T.oliveText },
+                { label: 'Nota — líquido (Net Offer Value)', valor: auditado.notaLiquido,  cor: T.oliveText },
               ].map(k => (
                 <div key={k.label} style={{ background: T.panelAlt, borderRadius: 8, padding: '10px 12px' }}>
                   <div style={{ fontSize: 10.5, color: T.inkFaint, fontWeight: 600 }}>{k.label}</div>
@@ -3828,7 +3828,7 @@ function Faturamento() {
                 </div>
               ))}
             </div>
-            {auditado.notaBruto === 0 && auditado.pedidoBruto === 0 && (
+            {auditado.notaBruto === 0 && (
               <p style={{ fontSize: 11.5, color: T.amberText, marginTop: 10 }}>
                 Ainda sem dados — rode a sincronização "faturamento_resumo" (aba Ciclo Comercial) pra popular esses números.
               </p>
