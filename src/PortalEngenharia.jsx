@@ -1501,14 +1501,20 @@ function CicloComercial() {
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState(null);
 
+  const [notasFiscais, setNotasFiscais] = useState([]); // linhas reais de faturamento_resumo (tipmov='V'), não agregadas por proposta
+
   const carregar = useCallback(() => {
     setLoading(true);
-    supabase.from('v_ciclo_comercial_proposta').select('*').order('data_abertura', { ascending: false })
-      .then(({ data, error }) => {
-        if (error) console.error('Erro ao carregar ciclo comercial:', error.message);
-        setDados(data || []);
-        setLoading(false);
-      });
+    Promise.all([
+      supabase.from('v_ciclo_comercial_proposta').select('*').order('data_abertura', { ascending: false }),
+      supabase.from('faturamento_resumo').select('br,data_faturamento,valor_nota').eq('tipmov', 'V'),
+    ]).then(([{ data, error }, { data: nfs, error: errNfs }]) => {
+      if (error) console.error('Erro ao carregar ciclo comercial:', error.message);
+      if (errNfs) console.error('Erro ao carregar notas fiscais:', errNfs.message);
+      setDados(data || []);
+      setNotasFiscais(nfs || []);
+      setLoading(false);
+    });
   }, []);
 
   useEffect(() => { carregar(); }, [carregar]);
@@ -1573,15 +1579,29 @@ function CicloComercial() {
   };
 
   const faturamentoPorMes = useMemo(() => {
-    const map = {};
+    // mês de origem de cada BR: quando o BR tem mais de uma proposta (revisões),
+    // usa a mais antiga (primeira vez que esse BR apareceu) — explícito por
+    // data_abertura, não depende da ordem em que os dados chegaram da query.
+    const mesOrigemPorBr = {};
+    const dataOrigemPorBr = {};
     dados.forEach(d => {
-      if (!d.data_faturamento) return;
-      const key = d.data_faturamento.slice(0, 7); // YYYY-MM
+      if (!d.br) return;
+      const dt = d.data_abertura;
+      if (!dataOrigemPorBr[d.br] || (dt && dt < dataOrigemPorBr[d.br])) {
+        dataOrigemPorBr[d.br] = dt;
+        mesOrigemPorBr[d.br] = d.mes_proposta;
+      }
+    });
+
+    const map = {};
+    notasFiscais.forEach(nf => {
+      if (!nf.data_faturamento || !nf.br) return;
+      const key = nf.data_faturamento.slice(0, 7); // YYYY-MM
       if (!map[key]) map[key] = { key, count: 0, valor: 0, origem: {} };
-      const v = Number(d.valor_faturado) || 0;
+      const v = Number(nf.valor_nota) || 0;
       map[key].count++;
       map[key].valor += v;
-      const origKey = d.mes_proposta || '—';
+      const origKey = mesOrigemPorBr[nf.br] || '—';
       if (!map[key].origem[origKey]) map[key].origem[origKey] = { count: 0, valor: 0 };
       map[key].origem[origKey].count++;
       map[key].origem[origKey].valor += v;
@@ -1589,7 +1609,7 @@ function CicloComercial() {
     return Object.values(map)
       .map(m => ({ ...m, origem: Object.entries(m.origem).map(([mesOrigem, v]) => ({ mesOrigem, ...v })).sort((a, b) => b.count - a.count) }))
       .sort((a, b) => b.key.localeCompare(a.key));
-  }, [dados]);
+  }, [dados, notasFiscais]);
 
   const filtrados = useMemo(() => {
     return dados.filter(d => {
@@ -1796,57 +1816,53 @@ function PainelComercial() {
     const [anoAte, mAte] = deAte.split('-');
     const fim = new Date(Number(anoAte), Number(mAte), 0).toISOString().slice(0,10);
 
-    // NFs emitidas no período (data real de emissão)
+    // NFs emitidas no período — fonte faturamento_resumo (nível de nota, já
+    // filtrada por TOPs válidos e STATUSNOTA='L' na sincronização). Uma linha
+    // por NUNOTA, sem risco de duplicar somando por item.
     const { data: nfs } = await supabase
-      .from('nota_venda_itens')
-      .select('br,nro_interno_sankhya,numero_pedido,codtipoper,cliente_nome,data_faturamento,valor_bruto')
-      .in('codtipoper', TOPS_FATURAMENTO_VALIDOS)
+      .from('faturamento_resumo')
+      .select('nunota,numero_nota,br,numero_pedido,codtipoper,cliente_nome,data_faturamento,valor_nota,net_offer_value,vendedor_nome,uf')
+      .eq('tipmov', 'V')
       .gte('data_faturamento', inicio)
       .lte('data_faturamento', fim)
       .order('data_faturamento', { ascending: false });
 
     const numPeds = [...new Set((nfs||[]).map(n => n.numero_pedido).filter(Boolean))];
     let pedMap = {};
-    let netValueMap = {}; // soma de valor_liquido por pedido (pode ter vários itens)
     if (numPeds.length > 0) {
+      // Só pra enriquecer com kaleng/data do pedido — não usado pra somar valor.
       const { data: peds } = await supabase
         .from('pedidos_itens')
-        .select('br,numero_pedido,data_neg,data_faturamento,vendedor_nome,produto_kaleng,uf,cliente_nome,valor_liquido')
+        .select('br,numero_pedido,data_neg,data_faturamento,produto_kaleng')
         .in('numero_pedido', numPeds);
       (peds||[]).forEach(p => {
         const k = `${p.br}||${p.numero_pedido}`;
         if (!pedMap[k]) pedMap[k] = p;
-        netValueMap[k] = (netValueMap[k] || 0) + (Number(p.valor_liquido) || 0);
       });
     }
 
-    // Agrupa por NF (br + nro_interno_sankhya) — evita duplicatas por item
-    const nfsMap = {};
-    (nfs||[]).forEach(n => {
-      const k = `${n.br}||${n.nro_interno_sankhya}`;
-      if (!nfsMap[k]) {
-        const chavePedido = `${n.br}||${n.numero_pedido}`;
-        const ped = pedMap[chavePedido];
-        nfsMap[k] = {
-          br: n.br,
-          nf: n.nro_interno_sankhya,
-          numero_pedido: n.numero_pedido,
-          top: n.codtipoper,
-          cliente: n.cliente_nome || ped?.cliente_nome || '—',
-          nf_emitida: n.data_faturamento,        // data real da NF
-          fat_previsto: ped?.data_faturamento || null, // data prometida no pedido
-          pedido_criado: ped?.data_neg || null,
-          valor: 0,
-          netValue: netValueMap[chavePedido] || 0,
-          vendedor: ped?.vendedor_nome || '—',
-          kaleng: ped?.produto_kaleng || '—',
-          uf: ped?.uf || '—',
-        };
-      }
-      nfsMap[k].valor += Number(n.valor_bruto) || 0;
+    // Uma linha por nota (nunota) — já vem deduplicado da faturamento_resumo.
+    const registros = (nfs||[]).map(n => {
+      const chavePedido = `${n.br}||${n.numero_pedido}`;
+      const ped = pedMap[chavePedido];
+      return {
+        br: n.br,
+        nf: n.numero_nota || n.nunota,
+        numero_pedido: n.numero_pedido,
+        top: n.codtipoper,
+        cliente: n.cliente_nome || '—',
+        nf_emitida: n.data_faturamento,
+        fat_previsto: ped?.data_faturamento || null,
+        pedido_criado: ped?.data_neg || null,
+        valor: Number(n.valor_nota) || 0,
+        netValue: Number(n.net_offer_value) || 0,
+        vendedor: n.vendedor_nome || '—',
+        kaleng: ped?.produto_kaleng || '—',
+        uf: n.uf || '—',
+      };
     });
 
-    setRegistros(Object.values(nfsMap));
+    setRegistros(registros);
     setLoading(false);
   }, [deDe, deAte]);
 
@@ -3504,7 +3520,7 @@ function Faturamento() {
     // Net Offer Value real já descontando ICMS/IPI/PIS/COFINS) — fonte
     // sankhya-faturamento-resumo-sync. Mostrados ao lado dos números por
     // item pra conferência; item ainda é usado pros gráficos por produto/segmento.
-    let qResumo = supabase.from('faturamento_resumo').select('tipmov,valor_nota,net_offer_value').gte('data_neg', ini).lte('data_neg', fim);
+    let qResumo = supabase.from('faturamento_resumo').select('tipmov,valor_nota,net_offer_value,data_neg').gte('data_neg', ini).lte('data_neg', fim);
     if (vendNome) qResumo = qResumo.eq('vendedor_nome', vendNome);
 
     const [rItens, rNotaItens, rVend, rSync, rResumo] = await Promise.all([qItens, qNotaItens, qVend, qSync, qResumo]);
@@ -3538,14 +3554,16 @@ function Faturamento() {
       return { ano, mes, valor_liquido: valor };
     });
 
-    // Mesma agregação mensal, só que para a Nota de Venda (bruto).
-    const notaMensalMap = {};
-    for (const it of notaItensData) {
-      const d = new Date(it.data_neg + 'T00:00:00');
+    // Evolução mensal — Nota de Venda (bruto), fonte exata: faturamento_resumo
+    // (nível de nota, TOPs válidos + STATUSNOTA='L' já aplicados na sync).
+    const notaMensalMapExato = {};
+    resumo.forEach(r => {
+      if (r.tipmov !== 'V' || !r.data_neg) return;
+      const d = new Date(r.data_neg + 'T00:00:00');
       const key = `${d.getFullYear()}-${d.getMonth() + 1}`;
-      notaMensalMap[key] = (notaMensalMap[key] || 0) + (Number(it.valor_bruto) || 0);
-    }
-    const notaMensalArr = Object.entries(notaMensalMap).map(([key, valor]) => {
+      notaMensalMapExato[key] = (notaMensalMapExato[key] || 0) + (Number(r.valor_nota) || 0);
+    });
+    const notaMensalArr = Object.entries(notaMensalMapExato).map(([key, valor]) => {
       const [ano, mes] = key.split('-').map(Number);
       return { ano, mes, valor_bruto: valor };
     });
@@ -4423,9 +4441,9 @@ function ConsumoMP() {
     const [rPed, rNf] = await Promise.all([
       supabase.from('pedidos_itens')
         .select('br,cliente_nome,produto_kaleng,valor_liquido,vendedor_nome,numero_pedido,uf'),
-      supabase.from('nota_venda_itens')
-        .select('br,valor_bruto,codtipoper')
-        .in('codtipoper', TOPS_FATURAMENTO_VALIDOS),
+      supabase.from('faturamento_resumo')
+        .select('br,valor_nota,codtipoper')
+        .eq('tipmov', 'V'),
     ]);
 
     // Agrupa pedidos por BR
@@ -4444,11 +4462,11 @@ function ConsumoMP() {
       // Mantém cliente do primeiro item
     });
 
-    // Agrupa NFs por BR (soma direta — cada linha é um item de NF)
+    // Agrupa NFs por BR — fonte faturamento_resumo, já no nível de nota (exato)
     const nfMap = {};
     (rNf.data||[]).forEach(n => {
       if (!n.br) return;
-      nfMap[n.br] = (nfMap[n.br] || 0) + (Number(n.valor_bruto) || 0);
+      nfMap[n.br] = (nfMap[n.br] || 0) + (Number(n.valor_nota) || 0);
     });
 
     const lista = Object.values(pedMap).map(p => {
