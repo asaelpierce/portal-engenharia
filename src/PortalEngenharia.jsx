@@ -270,7 +270,11 @@ function PortalConteudo({ currentUser, session }) {
   }, [carregarPropostas]);
 
   const propostasMes = useMemo(() =>
-    propostas.filter(p => !ehPropostaTemplateAutomacao(p) && p.mes === mesFiltro && p.data_abertura && new Date(p.data_abertura + 'T00:00:00').getFullYear() === ANO_OPERACIONAL),
+    propostas.filter(p =>
+      !ehPropostaTemplateAutomacao(p) &&
+      (mesFiltro === 'ACUMULADO' || p.mes === mesFiltro) &&
+      p.data_abertura && new Date(p.data_abertura + 'T00:00:00').getFullYear() === ANO_OPERACIONAL
+    ),
   [propostas, mesFiltro]);
 
   const pendencias = useMemo(() => propostas.filter(p => {
@@ -572,6 +576,7 @@ function Topbar({ view, mesFiltro, setMesFiltro, currentUser, userEmail, userMen
                 appearance: 'none', background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 5,
                 color: T.inkDim, fontSize: 12.5, padding: '6px 28px 6px 10px', fontWeight: 500,
               }}>
+              <option value="ACUMULADO">Acumulado {ANO_OPERACIONAL}</option>
               {MESES_ORDEM.map(m => <option key={m} value={m}>{MESES_LABEL[m]} 2026</option>)}
             </select>
             <ChevronDown size={13} style={{ position: 'absolute', right: 9, top: 9, color: T.inkFaint, pointerEvents: 'none' }} />
@@ -646,6 +651,8 @@ function Topbar({ view, mesFiltro, setMesFiltro, currentUser, userEmail, userMen
 function Dashboard({ stats, propostas, todasPropostas, mesFiltro, setMesFiltro, onNovaProposta, onNavigate }) {
   const [kpiModal, setKpiModal] = useState(null); // { titulo, itens } | null
 
+  const labelPeriodo = mesFiltro === 'ACUMULADO' ? `no acumulado de ${ANO_OPERACIONAL}` : 'no mês';
+
   // ── grupos reais por proposta do mês (não pela tabela agregada Sankhya) ──
   // conhecimento_pedido = true  → já virou pedido / "confirmada"
   // conhecimento_pedido = false → ainda não confirmou (hoje aparece com status "Aguardando confirmação")
@@ -713,10 +720,11 @@ function Dashboard({ stats, propostas, todasPropostas, mesFiltro, setMesFiltro, 
 
   useEffect(() => {
     // Segue o mês selecionado no topo (mesFiltro): busca o sync mais recente cujo
-    // período (data_ini) caiu dentro do mês/ano selecionado. Se não houver nenhum
-    // sync para esse mês, mostra "sem dados" em vez de puxar um período de outro mês.
+    // período (data_ini) caiu dentro do mês/ano selecionado. No "Acumulado", pega
+    // o sync mais recente que cobre o ano inteiro (data_ini em janeiro do ano
+    // operacional) — geralmente o sync manual "ano inteiro" feito sob demanda.
     setProdLoading(true);
-    const mesIdx = MESES_ORDEM.indexOf(mesFiltro); // 0-based
+    const mesIdx = MESES_ORDEM.indexOf(mesFiltro); // 0-based, -1 se for ACUMULADO
     supabase
       .from('produtividade_orcamentos')
       .select('data_ini, data_fim, sincronizado_em')
@@ -726,7 +734,8 @@ function Dashboard({ stats, propostas, todasPropostas, mesFiltro, setMesFiltro, 
         const candidatos = (periodos || []).filter(p => {
           if (!p.data_ini) return false;
           const d = new Date(p.data_ini + 'T00:00:00');
-          return d.getFullYear() === ANO_OPERACIONAL && d.getMonth() === mesIdx;
+          if (d.getFullYear() !== ANO_OPERACIONAL) return false;
+          return mesFiltro === 'ACUMULADO' ? d.getMonth() === 0 : d.getMonth() === mesIdx;
         });
         const periodo = candidatos[0] || null; // já ordenado por sincronizado_em desc
         if (!periodo) {
@@ -782,16 +791,16 @@ function Dashboard({ stats, propostas, todasPropostas, mesFiltro, setMesFiltro, 
 
       {/* ── KPI ROW (7 cards) ── */}
       <div className="grid-kpis-7">
-        <Kpi label="Propostas total no mês" value={stats.total} icon={FileStack}
-          sub="todas as propostas cadastradas no mês"
-          onClick={() => setKpiModal({ titulo: `Propostas total no mês — todas`, itens: propostas })} />
+        <Kpi label={`Propostas total ${labelPeriodo}`} value={stats.total} icon={FileStack}
+          sub={`todas as propostas cadastradas ${labelPeriodo}`}
+          onClick={() => setKpiModal({ titulo: `Propostas total ${labelPeriodo} — todas`, itens: propostas })} />
         <Kpi label="Propostas em Aberto/Sem pedido" value={propostasNaoConfirmadas.length} icon={Clock3} tone="amber"
           sub={`${fmtMoedaCompacta(valorNaoConfirmadasMes)} · ainda não viraram pedido`}
           onClick={() => setKpiModal({ titulo: 'Propostas em Aberto/Sem pedido — valor de cada proposta', itens: propostasNaoConfirmadas })} />
-        <Kpi label="Valor confirmado no mês" value={fmtMoedaCompacta(valorConfirmadasMes)} icon={DollarSign}
+        <Kpi label={`Valor confirmado ${labelPeriodo}`} value={fmtMoedaCompacta(valorConfirmadasMes)} icon={DollarSign}
           sub="soma do valor líquido das propostas que viraram pedido"
           info="Soma o valor líquido da própria proposta (calculado no orçamento do Sankhya) das propostas que já viraram pedido (conhecimento_pedido = true). Esse valor é independente de faturamento/Nota Fiscal — é o valor líquido da proposta em si, não o Net Offer Value faturado (esse é assunto do Painel Comercial/Faturamento)."
-          onClick={() => setKpiModal({ titulo: 'Valor confirmado no mês — propostas confirmadas', itens: propostasConfirmadas })} />
+          onClick={() => setKpiModal({ titulo: `Valor confirmado ${labelPeriodo} — propostas confirmadas`, itens: propostasConfirmadas })} />
         <Kpi
           label="Pedidos confirmados"
           value={propostasConfirmadas.length}
@@ -836,8 +845,8 @@ function Dashboard({ stats, propostas, todasPropostas, mesFiltro, setMesFiltro, 
           title="Produtividade da equipe"
           subtitle={
             prodLoading ? 'Carregando…'
-            : prodPeriodo ? `Sync de ${MESES_LABEL[mesFiltro]}: ${fmtData(prodPeriodo.data_ini)} → ${fmtData(prodPeriodo.data_fim)}`
-            : `Sem sync para ${MESES_LABEL[mesFiltro]}`
+            : prodPeriodo ? `Sync de ${mesFiltro === 'ACUMULADO' ? `acumulado ${ANO_OPERACIONAL}` : MESES_LABEL[mesFiltro]}: ${fmtData(prodPeriodo.data_ini)} → ${fmtData(prodPeriodo.data_fim)}`
+            : `Sem sync para ${mesFiltro === 'ACUMULADO' ? `o acumulado de ${ANO_OPERACIONAL}` : MESES_LABEL[mesFiltro]}`
           }
           right={
             <button onClick={() => onNavigate('produtividade')} style={{
@@ -852,7 +861,7 @@ function Dashboard({ stats, propostas, todasPropostas, mesFiltro, setMesFiltro, 
             <div style={{ textAlign: 'center', padding: '20px 0', color: T.inkFaint, fontSize: 12.5 }}>Carregando…</div>
           ) : prodOrc.length === 0 && prodPedidos.length === 0 ? (
             <div style={{ textAlign: 'center', padding: '20px 0', color: T.inkFaint, fontSize: 12.5 }}>
-              Sem dados sincronizados para <strong>{MESES_LABEL[mesFiltro]}</strong> — sincronize na aba <strong>Produtividade</strong>.
+              Sem dados sincronizados para <strong>{mesFiltro === 'ACUMULADO' ? `o acumulado de ${ANO_OPERACIONAL}` : MESES_LABEL[mesFiltro]}</strong> — sincronize na aba <strong>Produtividade</strong>.
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 18, marginTop: 6 }}>
@@ -918,7 +927,7 @@ function Dashboard({ stats, propostas, todasPropostas, mesFiltro, setMesFiltro, 
           </div>
         </Panel>
 
-        <Panel title="Clientes com mais propostas" subtitle="Quem mais recebeu propostas no mês selecionado">
+        <Panel title="Clientes com mais propostas" subtitle={`Quem mais recebeu propostas ${labelPeriodo}`}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 4 }}>
             {porCliente.length === 0 ? (
               <div style={{ textAlign: 'center', padding: '14px 0', color: T.inkFaint, fontSize: 12.5 }}>Sem propostas no período.</div>
@@ -959,7 +968,7 @@ function Dashboard({ stats, propostas, todasPropostas, mesFiltro, setMesFiltro, 
 
       {/* ── ROW 4: Origem detalhada + CTA registro manual ── */}
       <div className="grid-2col">
-        <Panel title="Propostas: Manual vs ERP" subtitle="Origem dos dados cadastrados no mês">
+        <Panel title="Propostas: Manual vs ERP" subtitle={`Origem dos dados cadastrados ${labelPeriodo}`}>
           <div style={{ display: 'flex', gap: 20, marginTop: 10, alignItems: 'flex-start' }}>
             <div style={{ flex: 1 }}>
               {[
