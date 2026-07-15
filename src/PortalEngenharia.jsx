@@ -1477,6 +1477,8 @@ function Metricas({ propostas: propostasTodas }) {
     });
   }, [propostas, mesIni, mesFim]);
 
+  const [mesDrill, setMesDrill] = useState(null); // { mes } | null
+
   const maxMensal = Math.max(...mensal.map(m => m.total), 1);
   const maxRanking = Math.max(...ranking.map(r => r.total), 1);
   const maxRankingCli = Math.max(...rankingClientes.map(c => c.propostas), 1);
@@ -1678,18 +1680,49 @@ function CicloComercial() {
     });
   }, [dados, mesIni, mesFim]);
 
+  // Helper: soma valorFaturado/faturamentoLiquido/netValue UMA VEZ por BR — a view
+  // v_ciclo_comercial_proposta anexa o total de faturamento/pedido daquele BR em
+  // TODAS as linhas de proposta daquele BR (ex.: quando um BR tem proposta de
+  // MATERIAL e de SERVIÇO separadas, as duas linhas mostram o mesmo valor faturado
+  // do BR inteiro). Sem esse dedup, somar por linha duplica o valor faturado.
+  const somaPorBrUnico = (lista) => {
+    let valorTotal = 0, valorSemPedido = 0;
+    const porBr = new Map();
+    lista.forEach(d => {
+      valorTotal += Number(d.valor_liquido) || 0;
+      if (d.etapa_atual === 'sem_pedido') valorSemPedido += Number(d.valor_liquido) || 0;
+      if (d.br && !porBr.has(d.br)) {
+        porBr.set(d.br, {
+          netValue: Number(d.net_value) || 0,
+          valorFaturado: Number(d.valor_faturado) || 0,
+          faturamentoLiquido: Number(d.net_offer_value_faturado) || 0,
+          etapa: d.etapa_atual,
+        });
+      }
+    });
+    let valorFaturado = 0, faturamentoLiquido = 0, netValue = 0, valorPedidoSemFatura = 0;
+    porBr.forEach(v => {
+      valorFaturado += v.valorFaturado;
+      faturamentoLiquido += v.faturamentoLiquido;
+      netValue += v.netValue;
+      if (v.etapa === 'pedido_sem_fatura') valorPedidoSemFatura += v.netValue;
+    });
+    return { valorTotal, valorFaturado, faturamentoLiquido, netValue, valorPedidoSemFatura, valorSemPedido };
+  };
+
   const porMes = useMemo(() => {
     return MESES_ORDEM.map(mes => {
       const doMes = dadosFiltrados.filter(d => d.mes_proposta === mes);
+      const soma = somaPorBrUnico(doMes);
       return {
         mes,
         propostas: doMes.length,
         viraramPedido: doMes.filter(d => d.etapa_atual !== 'sem_pedido').length,
         faturadas: doMes.filter(d => d.etapa_atual === 'faturado').length,
-        valorTotal: doMes.reduce((s, d) => s + (Number(d.valor_liquido) || 0), 0),
-        netValue: doMes.reduce((s, d) => s + (Number(d.net_value) || 0), 0),
-        valorFaturado: doMes.reduce((s, d) => s + (Number(d.valor_faturado) || 0), 0),
-        faturamentoLiquido: doMes.reduce((s, d) => s + (Number(d.net_offer_value_faturado) || 0), 0),
+        valorTotal: soma.valorTotal,
+        netValue: soma.netValue,
+        valorFaturado: soma.valorFaturado,
+        faturamentoLiquido: soma.faturamentoLiquido,
       };
     }).filter(m => m.propostas > 0);
   }, [dadosFiltrados]);
@@ -1699,18 +1732,7 @@ function CicloComercial() {
   // net_offer_value_faturado = Net Offer Value = VLRNOTA - ICMS - IPI - PIS - COFINS
   // net_value               = Net Offer Value do lado do PEDIDO (mesma fórmula, TIPMOV='P')
   // Fonte: tabela faturamento_resumo, sincronizada por sankhya-faturamento-resumo-sync.
-  const totais = useMemo(() => {
-    let valorTotal = 0, valorFaturado = 0, faturamentoLiquido = 0, netValue = 0, valorPedidoSemFatura = 0, valorSemPedido = 0;
-    dadosFiltrados.forEach(d => {
-      valorTotal += Number(d.valor_liquido) || 0;
-      valorFaturado += Number(d.valor_faturado) || 0;
-      faturamentoLiquido += Number(d.net_offer_value_faturado) || 0;
-      netValue += Number(d.net_value) || 0;
-      if (d.etapa_atual === 'sem_pedido') valorSemPedido += Number(d.valor_liquido) || 0;
-      if (d.etapa_atual === 'pedido_sem_fatura') valorPedidoSemFatura += Number(d.net_value) || 0;
-    });
-    return { valorTotal, valorFaturado, faturamentoLiquido, netValue, valorPedidoSemFatura, valorSemPedido };
-  }, [dadosFiltrados]);
+  const totais = useMemo(() => somaPorBrUnico(dadosFiltrados), [dadosFiltrados]);
 
   // ── cross-tab: faturamento por mês real (data_faturamento) x mês de origem da proposta ──
   const monthLabel = (ymd) => {
@@ -1769,6 +1791,20 @@ function CicloComercial() {
   }, [notasFiscais]);
   const maxFaturamentoMensal = Math.max(...faturamentoMensalReal.map(m => m.bruto), 1);
 
+  // Total emitido no ano, direto de faturamento_resumo (notasFiscais) — sem depender
+  // de casar o BR com uma proposta cadastrada aqui. Serve pra comparar com o número
+  // "cru" do Sankhya e mostrar a diferença de escopo dos KPIs acima (que só contam
+  // BRs com proposta no Portal, ou seja, a partir de 2026).
+  const faturamentoTotalPeriodo = useMemo(() => {
+    let bruto = 0, liquido = 0, count = 0;
+    notasFiscais.forEach(nf => {
+      bruto += Number(nf.valor_nota) || 0;
+      liquido += Number(nf.net_offer_value) || 0;
+      count++;
+    });
+    return { bruto, liquido, count };
+  }, [notasFiscais]);
+
   const filtrados = useMemo(() => {
     return dadosFiltrados.filter(d => {
       const matchBusca = !busca || (d.br || '').toLowerCase().includes(busca.toLowerCase()) || (d.cliente || '').toLowerCase().includes(busca.toLowerCase());
@@ -1803,13 +1839,18 @@ function CicloComercial() {
       <div className="grid-kpis-7">
         <Kpi label="Valor total em propostas" value={fmtMoedaCompacta(totais.valorTotal)} icon={FileStack} />
         <Kpi label="Net Value (pedido, líquido)" value={fmtMoedaCompacta(totais.netValue)} icon={TrendingUp} tone="blue" />
-        <Kpi label="Faturamento bruto (Vlr Nota)" value={fmtMoedaCompacta(totais.valorFaturado)} icon={CheckCircle2} tone="olive" />
-        <Kpi label="Faturamento líquido (Net Offer Value)" value={fmtMoedaCompacta(totais.faturamentoLiquido)} icon={DollarSign} tone="olive" />
+        <Kpi label="Faturamento bruto (Vlr Nota)" value={fmtMoedaCompacta(totais.valorFaturado)} icon={CheckCircle2} tone="olive"
+          info="Soma o Vlr Nota (bruto) só das notas cujo BR tem uma proposta cadastrada no Portal (a partir de 2026). Notas fiscais de BRs mais antigos (2023-2025), que não têm orçamento sincronizado aqui, não entram nesse número — veja 'Faturamento total emitido no período' logo abaixo pra ver o total real emitido, incluindo BRs antigos." />
+        <Kpi label="Faturamento líquido (Net Offer Value)" value={fmtMoedaCompacta(totais.faturamentoLiquido)} icon={DollarSign} tone="olive"
+          info="Mesmo critério do card de bruto: só BRs com proposta cadastrada no Portal (a partir de 2026). Veja 'Faturamento total emitido no período' pra o valor líquido real, incluindo BRs antigos." />
         <Kpi label="Pedido confirmado, aguarda fatura" value={fmtMoedaCompacta(totais.valorPedidoSemFatura)} icon={Clock3} tone="amber" />
         <Kpi label="Valor ainda sem pedido" value={fmtMoedaCompacta(totais.valorSemPedido)} icon={AlertTriangle} tone="rust" />
       </div>
       <p style={{ fontSize: 11.5, color: T.inkFaint, margin: '-14px 0 0' }}>
         Bruto = Vlr Nota (CAB.VLRNOTA) · Líquido = Net Offer Value (Vlr Nota − ICMS − IPI − PIS − COFINS) · TOPs 3200/3201/3209/3214/3216/3220/3227/3229 · só notas com STATUSNOTA = 'L'
+      </p>
+      <p style={{ fontSize: 11.5, color: T.inkFaint, margin: '-8px 0 0' }}>
+        <strong>Faturamento total emitido no período</strong> (todos os BRs faturados, inclusive os que não têm proposta cadastrada aqui): bruto {fmtMoedaCompacta(faturamentoTotalPeriodo.bruto)} · líquido {fmtMoedaCompacta(faturamentoTotalPeriodo.liquido)} ({faturamentoTotalPeriodo.count} notas)
       </p>
 
       <Panel title="Proposta → Pedido → Faturamento, por mês de origem" subtitle="Quantas propostas de cada mês já viraram pedido e já foram faturadas, com Net Value e valor faturado">
