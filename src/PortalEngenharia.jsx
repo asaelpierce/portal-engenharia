@@ -106,6 +106,33 @@ const TOPS_FATURAMENTO_VALIDOS = [3200, 3201, 3214, 3220, 3227];
 // proposta de setembro/2025) se misturam com o mesmo mês do ano corrente.
 const ANO_OPERACIONAL = 2026;
 
+// Clientes/BRs que na verdade são modelos/templates usados para automação (duplicados
+// manualmente pra gerar outras propostas) — não representam propostas comerciais reais
+// e por isso não devem contar em nenhum KPI, gráfico ou ranking (Visão Geral e Métricas).
+const CLIENTES_EXCLUIDOS_METRICAS = ['VALE - DISU'];
+const ehPropostaTemplateAutomacao = (p) =>
+  CLIENTES_EXCLUIDOS_METRICAS.includes(p.cliente) || (p.br || '').toUpperCase().startsWith('BRV');
+
+// O Sankhya gera um NUREG novo a cada revisão de um orçamento (mesmo BR), e o sync
+// insere uma linha nova em "propostas" pra cada revisão — sem isso, a mesma proposta
+// conta várias vezes em KPIs/valores. Aqui mantemos só a revisão mais recente por BR
+// (maior data_abertura, empate = maior sankhya_referencia/nureg). Propostas sem BR
+// preenchido (raro, geralmente manuais) não são deduplicadas entre si.
+const dedupPorBr = (lista) => {
+  const comBr = lista.filter(p => p.br);
+  const semBr = lista.filter(p => !p.br);
+  const maisRecentePorBr = new Map();
+  comBr.forEach(p => {
+    const atual = maisRecentePorBr.get(p.br);
+    if (!atual) { maisRecentePorBr.set(p.br, p); return; }
+    const dataP = p.data_abertura || '';
+    const dataAtual = atual.data_abertura || '';
+    const pEhMaisNova = dataP > dataAtual || (dataP === dataAtual && Number(p.sankhya_referencia || 0) > Number(atual.sankhya_referencia || 0));
+    if (pEhMaisNova) maisRecentePorBr.set(p.br, p);
+  });
+  return [...maisRecentePorBr.values(), ...semBr];
+};
+
 const MESES_ORDEM = ['JANEIRO', 'FEVEREIRO', 'MARÇO', 'ABRIL', 'MAIO', 'JUNHO', 'JULHO', 'AGOSTO', 'SETEMBRO', 'OUTUBRO', 'NOVEMBRO', 'DEZEMBRO'];
 const MESES_LABEL = { JANEIRO: 'Jan', FEVEREIRO: 'Fev', MARÇO: 'Mar', ABRIL: 'Abr', MAIO: 'Mai', JUNHO: 'Jun', JULHO: 'Jul', AGOSTO: 'Ago', SETEMBRO: 'Set', OUTUBRO: 'Out', NOVEMBRO: 'Nov', DEZEMBRO: 'Dez' };
 
@@ -256,7 +283,7 @@ function PortalConteudo({ currentUser, session }) {
   }, [carregarPropostas]);
 
   const propostasMes = useMemo(() =>
-    propostas.filter(p => p.mes === mesFiltro && p.data_abertura && new Date(p.data_abertura + 'T00:00:00').getFullYear() === ANO_OPERACIONAL),
+    dedupPorBr(propostas.filter(p => !ehPropostaTemplateAutomacao(p) && p.mes === mesFiltro && p.data_abertura && new Date(p.data_abertura + 'T00:00:00').getFullYear() === ANO_OPERACIONAL)),
   [propostas, mesFiltro]);
 
   const pendencias = useMemo(() => propostas.filter(p => {
@@ -654,9 +681,9 @@ function Dashboard({ stats, propostas, todasPropostas, mesFiltro, setMesFiltro, 
 
   const evolucaoMensal = useMemo(() => {
     return MESES_ORDEM.map(mes => {
-      const doMes = todasPropostas.filter(p =>
-        p.mes === mes && p.data_abertura && new Date(p.data_abertura + 'T00:00:00').getFullYear() === ANO_OPERACIONAL
-      );
+      const doMes = dedupPorBr(todasPropostas.filter(p =>
+        !ehPropostaTemplateAutomacao(p) && p.mes === mes && p.data_abertura && new Date(p.data_abertura + 'T00:00:00').getFullYear() === ANO_OPERACIONAL
+      ));
       return { mes, count: doMes.length, valor: doMes.reduce((s, p) => s + (p.valor_liquido || 0), 0) };
     }).filter(m => m.count > 0); // só mostra meses que já têm proposta cadastrada
   }, [todasPropostas]);
@@ -1389,20 +1416,15 @@ function NotificacoesButton({ userEmail }) {
 /* ============================================================================
    MÉTRICAS — funil, ciclo, taxa de conclusão, ranking responsáveis
 ============================================================================ */
-// Clientes que na verdade são modelos/templates usados para automação (duplicados
-// manualmente pra gerar outras propostas) — não representam propostas comerciais
-// reais e por isso não devem contar em nenhum ranking ou métrica.
-const CLIENTES_EXCLUIDOS_METRICAS = ['VALE - DISU'];
 
 function Metricas({ propostas: propostasTodas }) {
   const [periodo, setPeriodo] = useState('tudo'); // dias — padrão 'tudo' pra bater com as outras telas por padrão
 
   const propostas = useMemo(() =>
-    propostasTodas.filter(p =>
-      !CLIENTES_EXCLUIDOS_METRICAS.includes(p.cliente) &&
-      !(p.br || '').toUpperCase().startsWith('BRV') &&
+    dedupPorBr(propostasTodas.filter(p =>
+      !ehPropostaTemplateAutomacao(p) &&
       p.data_abertura && new Date(p.data_abertura + 'T00:00:00').getFullYear() === ANO_OPERACIONAL
-    ),
+    )),
   [propostasTodas]);
 
   const corteData = useMemo(() => {
@@ -1470,7 +1492,7 @@ function Metricas({ propostas: propostasTodas }) {
           }}>{l}</button>
         ))}
         <span style={{ fontSize: 12, color: T.inkFaint, alignSelf: 'center', marginLeft: 4 }}>
-          {base.length} propostas {periodo === 'tudo' ? `no ano de ${ANO_OPERACIONAL}` : `desde ${fmtData(corteData.toISOString().slice(0,10))}`} · exclui modelos de automação (VALE - DISU e propostas BRV)
+          {base.length} propostas {periodo === 'tudo' ? `no ano de ${ANO_OPERACIONAL}` : `desde ${fmtData(corteData.toISOString().slice(0,10))}`} · exclui modelos de automação (VALE - DISU e propostas BRV) · 1 linha por BR (revisões duplicadas do Sankhya já colapsadas na mais recente)
         </span>
       </div>
 
