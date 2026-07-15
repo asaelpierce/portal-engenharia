@@ -1625,7 +1625,9 @@ function CicloComercial() {
   const [loading, setLoading] = useState(true);
   const [busca, setBusca] = useState('');
   const [filtroEtapa, setFiltroEtapa] = useState('todas');
-  const [filtroMes, setFiltroMes] = useState('todos');
+  const mesAtualIdxCC = Math.min(new Date().getMonth(), MESES_ORDEM.length - 1);
+  const [mesIni, setMesIni] = useState('JANEIRO');
+  const [mesFim, setMesFim] = useState(MESES_ORDEM[mesAtualIdxCC]);
   const [mesFaturamentoAberto, setMesFaturamentoAberto] = useState(null);
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState(null);
@@ -1636,7 +1638,7 @@ function CicloComercial() {
     setLoading(true);
     Promise.all([
       supabase.from('v_ciclo_comercial_proposta').select('*').order('data_abertura', { ascending: false }),
-      supabase.from('faturamento_resumo').select('br,data_faturamento,valor_nota').eq('tipmov', 'V'),
+      supabase.from('faturamento_resumo').select('br,data_faturamento,valor_nota,net_offer_value').eq('tipmov', 'V'),
     ]).then(([{ data, error }, { data: nfs, error: errNfs }]) => {
       if (error) console.error('Erro ao carregar ciclo comercial:', error.message);
       if (errNfs) console.error('Erro ao carregar notas fiscais:', errNfs.message);
@@ -1666,9 +1668,19 @@ function CicloComercial() {
     setSyncing(false);
   };
 
+  const dadosFiltrados = useMemo(() => {
+    const idxIni = MESES_ORDEM.indexOf(mesIni);
+    const idxFim = MESES_ORDEM.indexOf(mesFim);
+    const [lo, hi] = idxIni <= idxFim ? [idxIni, idxFim] : [idxFim, idxIni];
+    return dados.filter(d => {
+      const idx = MESES_ORDEM.indexOf(d.mes_proposta);
+      return idx >= lo && idx <= hi;
+    });
+  }, [dados, mesIni, mesFim]);
+
   const porMes = useMemo(() => {
     return MESES_ORDEM.map(mes => {
-      const doMes = dados.filter(d => d.mes_proposta === mes);
+      const doMes = dadosFiltrados.filter(d => d.mes_proposta === mes);
       return {
         mes,
         propostas: doMes.length,
@@ -1680,16 +1692,16 @@ function CicloComercial() {
         faturamentoLiquido: doMes.reduce((s, d) => s + (Number(d.net_offer_value_faturado) || 0), 0),
       };
     }).filter(m => m.propostas > 0);
-  }, [dados]);
+  }, [dadosFiltrados]);
 
   // ── totais de valor por etapa (KPIs) ──
-  // valor_faturado          = Valor da Nota (CAB.VLRNOTA), bruto, TOPs 3200/3201/3214/3220/3227, STATUSNOTA='L'
+  // valor_faturado          = Valor da Nota (CAB.VLRNOTA), bruto, TOPs 3200/3201/3209/3214/3216/3220/3227/3229, STATUSNOTA='L'
   // net_offer_value_faturado = Net Offer Value = VLRNOTA - ICMS - IPI - PIS - COFINS
   // net_value               = Net Offer Value do lado do PEDIDO (mesma fórmula, TIPMOV='P')
   // Fonte: tabela faturamento_resumo, sincronizada por sankhya-faturamento-resumo-sync.
   const totais = useMemo(() => {
     let valorTotal = 0, valorFaturado = 0, faturamentoLiquido = 0, netValue = 0, valorPedidoSemFatura = 0, valorSemPedido = 0;
-    dados.forEach(d => {
+    dadosFiltrados.forEach(d => {
       valorTotal += Number(d.valor_liquido) || 0;
       valorFaturado += Number(d.valor_faturado) || 0;
       faturamentoLiquido += Number(d.net_offer_value_faturado) || 0;
@@ -1698,7 +1710,7 @@ function CicloComercial() {
       if (d.etapa_atual === 'pedido_sem_fatura') valorPedidoSemFatura += Number(d.net_value) || 0;
     });
     return { valorTotal, valorFaturado, faturamentoLiquido, netValue, valorPedidoSemFatura, valorSemPedido };
-  }, [dados]);
+  }, [dadosFiltrados]);
 
   // ── cross-tab: faturamento por mês real (data_faturamento) x mês de origem da proposta ──
   const monthLabel = (ymd) => {
@@ -1740,14 +1752,30 @@ function CicloComercial() {
       .sort((a, b) => b.key.localeCompare(a.key));
   }, [dados, notasFiscais]);
 
+  // ── resumo simples: quanto foi faturado (bruto e líquido) em cada mês real da NF ──
+  // Diferente do cross-tab acima (que cruza com o mês de origem da proposta), aqui é
+  // só "quanto saiu de nota em cada mês", pra bater o olho rápido.
+  const faturamentoMensalReal = useMemo(() => {
+    const map = {};
+    notasFiscais.forEach(nf => {
+      if (!nf.data_faturamento) return;
+      const key = nf.data_faturamento.slice(0, 7); // YYYY-MM
+      if (!map[key]) map[key] = { key, count: 0, bruto: 0, liquido: 0 };
+      map[key].count++;
+      map[key].bruto += Number(nf.valor_nota) || 0;
+      map[key].liquido += Number(nf.net_offer_value) || 0;
+    });
+    return Object.values(map).sort((a, b) => a.key.localeCompare(b.key));
+  }, [notasFiscais]);
+  const maxFaturamentoMensal = Math.max(...faturamentoMensalReal.map(m => m.bruto), 1);
+
   const filtrados = useMemo(() => {
-    return dados.filter(d => {
+    return dadosFiltrados.filter(d => {
       const matchBusca = !busca || (d.br || '').toLowerCase().includes(busca.toLowerCase()) || (d.cliente || '').toLowerCase().includes(busca.toLowerCase());
       const matchEtapa = filtroEtapa === 'todas' || d.etapa_atual === filtroEtapa;
-      const matchMes = filtroMes === 'todos' || d.mes_proposta === filtroMes;
-      return matchBusca && matchEtapa && matchMes;
+      return matchBusca && matchEtapa;
     });
-  }, [dados, busca, filtroEtapa, filtroMes]);
+  }, [dadosFiltrados, busca, filtroEtapa]);
 
   const ETAPA_META = {
     sem_pedido: { label: 'Ainda não virou pedido', color: T.amberText, bg: T.amberSoft },
@@ -1781,7 +1809,7 @@ function CicloComercial() {
         <Kpi label="Valor ainda sem pedido" value={fmtMoedaCompacta(totais.valorSemPedido)} icon={AlertTriangle} tone="rust" />
       </div>
       <p style={{ fontSize: 11.5, color: T.inkFaint, margin: '-14px 0 0' }}>
-        Bruto = Vlr Nota (CAB.VLRNOTA) · Líquido = Net Offer Value (Vlr Nota − ICMS − IPI − PIS − COFINS) · TOPs 3200/3201/3214/3220/3227 · só notas com STATUSNOTA = 'L'
+        Bruto = Vlr Nota (CAB.VLRNOTA) · Líquido = Net Offer Value (Vlr Nota − ICMS − IPI − PIS − COFINS) · TOPs 3200/3201/3209/3214/3216/3220/3227/3229 · só notas com STATUSNOTA = 'L'
       </p>
 
       <Panel title="Proposta → Pedido → Faturamento, por mês de origem" subtitle="Quantas propostas de cada mês já viraram pedido e já foram faturadas, com Net Value e valor faturado">
@@ -1809,6 +1837,36 @@ function CicloComercial() {
               ))}
             </tbody>
           </table>
+        </div>
+      </Panel>
+
+      {/* Faturamento por mês (real, pela data da Nota Fiscal) — bruto vs líquido */}
+      <Panel title="Faturamento por mês" subtitle="Quanto saiu de Nota Fiscal em cada mês — bruto (Vlr Nota) vs líquido (Net Offer Value)">
+        <div style={{ overflowX: 'auto', marginTop: 6 }}>
+          <div style={{ display: 'flex', alignItems: 'flex-end', gap: 16, minHeight: 170, padding: '8px 4px 0' }}>
+            {faturamentoMensalReal.length === 0 ? (
+              <p style={{ fontSize: 13, color: T.inkFaint }}>Nenhuma nota de faturamento encontrada ainda.</p>
+            ) : faturamentoMensalReal.map(m => {
+              const hBruto = Math.max((m.bruto / maxFaturamentoMensal) * 120, 4);
+              const hLiquido = Math.max((m.liquido / maxFaturamentoMensal) * 120, 4);
+              return (
+                <div key={m.key} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', minWidth: 74 }}>
+                  <div style={{ fontSize: 10.5, color: T.inkFaint, marginBottom: 4 }}>{m.count} nota{m.count !== 1 ? 's' : ''}</div>
+                  <div style={{ display: 'flex', gap: 4, alignItems: 'flex-end' }}>
+                    <div title={`Bruto: ${fmtMoeda(m.bruto)}`} style={{ width: 20, height: hBruto, background: T.line, borderRadius: '3px 3px 0 0' }} />
+                    <div title={`Líquido: ${fmtMoeda(m.liquido)}`} style={{ width: 20, height: hLiquido, background: T.oliveText, borderRadius: '3px 3px 0 0' }} />
+                  </div>
+                  <div style={{ fontSize: 11, color: T.ink, fontWeight: 600, marginTop: 6 }}>{monthLabel(m.key)}</div>
+                  <div style={{ fontSize: 10, color: T.inkFaint, marginTop: 2 }}>{fmtMoedaCompacta(m.bruto)}</div>
+                  <div style={{ fontSize: 10, color: T.oliveText, fontWeight: 600 }}>{fmtMoedaCompacta(m.liquido)}</div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: 16, marginTop: 12, fontSize: 11, color: T.inkFaint }}>
+          <span><span style={{ display: 'inline-block', width: 10, height: 10, background: T.line, borderRadius: 2, marginRight: 4 }} />Bruto (Vlr Nota)</span>
+          <span><span style={{ display: 'inline-block', width: 10, height: 10, background: T.oliveText, borderRadius: 2, marginRight: 4 }} />Líquido (Net Offer Value)</span>
         </div>
       </Panel>
 
@@ -1868,17 +1926,31 @@ function CicloComercial() {
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Buscar BR ou cliente…" className="focus-ring"
               style={{ background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 6, padding: '7px 12px', fontSize: 12.5, width: 200 }} />
-            <select value={filtroMes} onChange={e => setFiltroMes(e.target.value)} className="focus-ring"
-              style={{ background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 6, padding: '7px 10px', fontSize: 12.5 }}>
-              <option value="todos">Todos os meses</option>
-              {MESES_ORDEM.map(m => <option key={m} value={m}>{MESES_LABEL[m]}</option>)}
-            </select>
+            <div style={{ position: 'relative' }}>
+              <select value={mesIni} onChange={e => setMesIni(e.target.value)} className="focus-ring"
+                style={{ background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 6, padding: '7px 10px', fontSize: 12.5 }}>
+                {MESES_ORDEM.map(m => <option key={m} value={m}>De {MESES_LABEL[m]}</option>)}
+              </select>
+            </div>
+            <div style={{ position: 'relative' }}>
+              <select value={mesFim} onChange={e => setMesFim(e.target.value)} className="focus-ring"
+                style={{ background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 6, padding: '7px 10px', fontSize: 12.5 }}>
+                {MESES_ORDEM.map(m => <option key={m} value={m}>a {MESES_LABEL[m]}</option>)}
+              </select>
+            </div>
+            <button onClick={() => { setMesIni('JANEIRO'); setMesFim(MESES_ORDEM[MESES_ORDEM.length - 1]); }} style={{
+              padding: '7px 12px', fontSize: 12.5, fontWeight: 600, borderRadius: 6, border: 'none', cursor: 'pointer',
+              background: T.panelAlt, color: T.inkDim,
+            }}>Ano todo</button>
             <select value={filtroEtapa} onChange={e => setFiltroEtapa(e.target.value)} className="focus-ring"
               style={{ background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 6, padding: '7px 10px', fontSize: 12.5 }}>
               <option value="todas">Todas as etapas</option>
               {Object.entries(ETAPA_META).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
             </select>
           </div>
+        </div>
+        <div style={{ padding: '0 18px 12px', fontSize: 11.5, color: T.inkFaint }}>
+          {dadosFiltrados.length} propostas de {MESES_LABEL[mesIni]} a {MESES_LABEL[mesFim]} de {ANO_OPERACIONAL} (KPIs e tabela acima já respeitam esse intervalo)
         </div>
         <div style={{ overflowX: 'auto', maxHeight: 500, overflowY: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
@@ -3981,7 +4053,7 @@ function Faturamento() {
               lançamentos de TGFDIN por nota — validado contra planilha real do usuário).
               Só cobre Nota Fiscal (TIPMOV='V'): pedido não usa STATUSNOTA da mesma forma,
               por isso o Net Value de pedido continua vindo do card acima (pedidos_itens). */}
-          <Panel title="Conferência auditada — Nota Fiscal (nível de nota)" subtitle="Fonte: faturamento_resumo — Vlr Nota (bruto) e Net Offer Value (líquido), TOPs 3200/3201/3214/3220/3227, STATUSNOTA='L'">
+          <Panel title="Conferência auditada — Nota Fiscal (nível de nota)" subtitle="Fonte: faturamento_resumo — Vlr Nota (bruto) e Net Offer Value (líquido), TOPs 3200/3201/3209/3214/3216/3220/3227/3229, STATUSNOTA='L'">
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12, marginTop: 10 }}>
               {[
                 { label: 'Nota — bruto (Vlr Nota)',        valor: auditado.notaBruto,    cor: T.oliveText },
@@ -4860,7 +4932,7 @@ function ConsumoMP() {
           </table>
         </div>
         <div style={{ padding: '10px 16px', borderTop: `1px solid ${T.line}`, fontSize: 11, color: T.inkFaint, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span>{filtrados.length} projeto{filtrados.length !== 1 ? 's' : ''} · Previsto = soma dos pedidos de venda · Faturado = NFs emitidas (TOPs 3200/3201/3214/3220/3227)</span>
+          <span>{filtrados.length} projeto{filtrados.length !== 1 ? 's' : ''} · Previsto = soma dos pedidos de venda · Faturado = NFs emitidas (TOPs 3200/3201/3209/3214/3216/3220/3227/3229)</span>
           <BotaoExportar small onClick={() => exportCSV(filtrados, 'consumo_por_projeto.csv',
             ['br','cliente','kaleng','uf','num_pedidos','previsto','faturado','pendente','pct'])} />
         </div>
