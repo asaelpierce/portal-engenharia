@@ -1741,6 +1741,23 @@ function CicloComercial() {
     return `${['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'][Number(m) - 1]}/${y}`;
   };
 
+  // As Notas Fiscais são filtradas pelo MESMO seletor De/Até do topo da tela — mas
+  // usando o mês/ano da PRÓPRIA nota (data_faturamento), não o mês de origem da
+  // proposta. Sem isso, os painéis de faturamento (que usam notasFiscais) ficavam
+  // sempre mostrando o histórico inteiro, sem respeitar o filtro da tela.
+  const notasFiscaisFiltradas = useMemo(() => {
+    const idxIni = MESES_ORDEM.indexOf(mesIni);
+    const idxFim = MESES_ORDEM.indexOf(mesFim);
+    const [lo, hi] = idxIni <= idxFim ? [idxIni, idxFim] : [idxFim, idxIni];
+    return notasFiscais.filter(nf => {
+      if (!nf.data_faturamento) return false;
+      const d = new Date(nf.data_faturamento + 'T00:00:00');
+      if (d.getFullYear() !== ANO_OPERACIONAL) return false;
+      const idx = d.getMonth();
+      return idx >= lo && idx <= hi;
+    });
+  }, [notasFiscais, mesIni, mesFim]);
+
   const faturamentoPorMes = useMemo(() => {
     // mês de origem de cada BR: quando o BR tem mais de uma proposta (revisões),
     // usa a mais antiga (primeira vez que esse BR apareceu) — explícito por
@@ -1757,7 +1774,7 @@ function CicloComercial() {
     });
 
     const map = {};
-    notasFiscais.forEach(nf => {
+    notasFiscaisFiltradas.forEach(nf => {
       if (!nf.data_faturamento || !nf.br) return;
       const key = nf.data_faturamento.slice(0, 7); // YYYY-MM
       if (!map[key]) map[key] = { key, count: 0, valor: 0, origem: {} };
@@ -1772,14 +1789,14 @@ function CicloComercial() {
     return Object.values(map)
       .map(m => ({ ...m, origem: Object.entries(m.origem).map(([mesOrigem, v]) => ({ mesOrigem, ...v })).sort((a, b) => b.count - a.count) }))
       .sort((a, b) => b.key.localeCompare(a.key));
-  }, [dados, notasFiscais]);
+  }, [dados, notasFiscaisFiltradas]);
 
   // ── resumo simples: quanto foi faturado (bruto e líquido) em cada mês real da NF ──
   // Diferente do cross-tab acima (que cruza com o mês de origem da proposta), aqui é
   // só "quanto saiu de nota em cada mês", pra bater o olho rápido.
   const faturamentoMensalReal = useMemo(() => {
     const map = {};
-    notasFiscais.forEach(nf => {
+    notasFiscaisFiltradas.forEach(nf => {
       if (!nf.data_faturamento) return;
       const key = nf.data_faturamento.slice(0, 7); // YYYY-MM
       if (!map[key]) map[key] = { key, count: 0, bruto: 0, liquido: 0 };
@@ -1788,22 +1805,22 @@ function CicloComercial() {
       map[key].liquido += Number(nf.net_offer_value) || 0;
     });
     return Object.values(map).sort((a, b) => a.key.localeCompare(b.key));
-  }, [notasFiscais]);
+  }, [notasFiscaisFiltradas]);
   const maxFaturamentoMensal = Math.max(...faturamentoMensalReal.map(m => m.bruto), 1);
 
-  // Total emitido no ano, direto de faturamento_resumo (notasFiscais) — sem depender
-  // de casar o BR com uma proposta cadastrada aqui. Serve pra comparar com o número
-  // "cru" do Sankhya e mostrar a diferença de escopo dos KPIs acima (que só contam
-  // BRs com proposta no Portal, ou seja, a partir de 2026).
+  // Total emitido no período selecionado (De/Até), direto de faturamento_resumo —
+  // sem depender de casar o BR com uma proposta cadastrada aqui. Serve pra comparar
+  // com o número "cru" do Sankhya e mostrar a diferença de escopo dos KPIs acima
+  // (que só contam BRs com proposta no Portal, ou seja, a partir de 2026).
   const faturamentoTotalPeriodo = useMemo(() => {
     let bruto = 0, liquido = 0, count = 0;
-    notasFiscais.forEach(nf => {
+    notasFiscaisFiltradas.forEach(nf => {
       bruto += Number(nf.valor_nota) || 0;
       liquido += Number(nf.net_offer_value) || 0;
       count++;
     });
     return { bruto, liquido, count };
-  }, [notasFiscais]);
+  }, [notasFiscaisFiltradas]);
 
   const filtrados = useMemo(() => {
     return dadosFiltrados.filter(d => {
@@ -1840,9 +1857,9 @@ function CicloComercial() {
         <Kpi label="Valor total em propostas" value={fmtMoedaCompacta(totais.valorTotal)} icon={FileStack} />
         <Kpi label="Net Value (pedido, líquido)" value={fmtMoedaCompacta(totais.netValue)} icon={TrendingUp} tone="blue" />
         <Kpi label="Faturamento bruto (Vlr Nota)" value={fmtMoedaCompacta(totais.valorFaturado)} icon={CheckCircle2} tone="olive"
-          info="Soma o Vlr Nota (bruto) só das notas cujo BR tem uma proposta cadastrada no Portal (a partir de 2026). Notas fiscais de BRs mais antigos (2023-2025), que não têm orçamento sincronizado aqui, não entram nesse número — veja 'Faturamento total emitido no período' logo abaixo pra ver o total real emitido, incluindo BRs antigos." />
+          info="Soma o Vlr Nota (bruto) só das notas cujo BR tem uma proposta cadastrada no Portal (a partir de 2026), dentro do intervalo De/Até selecionado acima. Notas fiscais de BRs mais antigos (2023-2025), que não têm orçamento sincronizado aqui, não entram nesse número — veja 'Faturamento total emitido' logo abaixo pra ver o total real emitido no período, incluindo BRs antigos." />
         <Kpi label="Faturamento líquido (Net Offer Value)" value={fmtMoedaCompacta(totais.faturamentoLiquido)} icon={DollarSign} tone="olive"
-          info="Mesmo critério do card de bruto: só BRs com proposta cadastrada no Portal (a partir de 2026). Veja 'Faturamento total emitido no período' pra o valor líquido real, incluindo BRs antigos." />
+          info="Mesmo critério do card de bruto: só BRs com proposta cadastrada no Portal (a partir de 2026), dentro do intervalo De/Até selecionado. Veja 'Faturamento total emitido' pra o valor líquido real do período, incluindo BRs antigos." />
         <Kpi label="Pedido confirmado, aguarda fatura" value={fmtMoedaCompacta(totais.valorPedidoSemFatura)} icon={Clock3} tone="amber" />
         <Kpi label="Valor ainda sem pedido" value={fmtMoedaCompacta(totais.valorSemPedido)} icon={AlertTriangle} tone="rust" />
       </div>
@@ -1850,7 +1867,7 @@ function CicloComercial() {
         Bruto = Vlr Nota (CAB.VLRNOTA) · Líquido = Net Offer Value (Vlr Nota − ICMS − IPI − PIS − COFINS) · TOPs 3200/3201/3209/3214/3216/3220/3227/3229 · só notas com STATUSNOTA = 'L'
       </p>
       <p style={{ fontSize: 11.5, color: T.inkFaint, margin: '-8px 0 0' }}>
-        <strong>Faturamento total emitido no período</strong> (todos os BRs faturados, inclusive os que não têm proposta cadastrada aqui): bruto {fmtMoedaCompacta(faturamentoTotalPeriodo.bruto)} · líquido {fmtMoedaCompacta(faturamentoTotalPeriodo.liquido)} ({faturamentoTotalPeriodo.count} notas)
+        <strong>Faturamento total emitido de {MESES_LABEL[mesIni]} a {MESES_LABEL[mesFim]}</strong> (todos os BRs faturados no período, inclusive os que não têm proposta cadastrada aqui): bruto {fmtMoedaCompacta(faturamentoTotalPeriodo.bruto)} · líquido {fmtMoedaCompacta(faturamentoTotalPeriodo.liquido)} ({faturamentoTotalPeriodo.count} notas)
       </p>
 
       <Panel title="Proposta → Pedido → Faturamento, por mês de origem" subtitle="Quantas propostas de cada mês já viraram pedido e já foram faturadas, com Net Value e valor faturado">
