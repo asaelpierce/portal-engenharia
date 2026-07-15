@@ -113,25 +113,12 @@ const CLIENTES_EXCLUIDOS_METRICAS = ['VALE - DISU'];
 const ehPropostaTemplateAutomacao = (p) =>
   CLIENTES_EXCLUIDOS_METRICAS.includes(p.cliente) || (p.br || '').toUpperCase().startsWith('BRV');
 
-// O Sankhya gera um NUREG novo a cada revisão de um orçamento (mesmo BR), e o sync
-// insere uma linha nova em "propostas" pra cada revisão — sem isso, a mesma proposta
-// conta várias vezes em KPIs/valores. Aqui mantemos só a revisão mais recente por BR
-// (maior data_abertura, empate = maior sankhya_referencia/nureg). Propostas sem BR
-// preenchido (raro, geralmente manuais) não são deduplicadas entre si.
-const dedupPorBr = (lista) => {
-  const comBr = lista.filter(p => p.br);
-  const semBr = lista.filter(p => !p.br);
-  const maisRecentePorBr = new Map();
-  comBr.forEach(p => {
-    const atual = maisRecentePorBr.get(p.br);
-    if (!atual) { maisRecentePorBr.set(p.br, p); return; }
-    const dataP = p.data_abertura || '';
-    const dataAtual = atual.data_abertura || '';
-    const pEhMaisNova = dataP > dataAtual || (dataP === dataAtual && Number(p.sankhya_referencia || 0) > Number(atual.sankhya_referencia || 0));
-    if (pEhMaisNova) maisRecentePorBr.set(p.br, p);
-  });
-  return [...maisRecentePorBr.values(), ...semBr];
-};
+// NOTA: a deduplicação de revisões do Sankhya (mesmo BR revisado várias vezes)
+// agora é feita na ORIGEM (fn_sync_propostas_de_sankhya, no banco), respeitando
+// o agrupamento oficial BR+MATERIAL/SERVIÇO. Por isso NÃO fazemos mais dedup
+// aqui no front — fazer de novo aqui juntaria incorretamente duas propostas
+// legítimas e diferentes (uma de material, outra de serviço) que só coincidem
+// no número do BR.
 
 const MESES_ORDEM = ['JANEIRO', 'FEVEREIRO', 'MARÇO', 'ABRIL', 'MAIO', 'JUNHO', 'JULHO', 'AGOSTO', 'SETEMBRO', 'OUTUBRO', 'NOVEMBRO', 'DEZEMBRO'];
 const MESES_LABEL = { JANEIRO: 'Jan', FEVEREIRO: 'Fev', MARÇO: 'Mar', ABRIL: 'Abr', MAIO: 'Mai', JUNHO: 'Jun', JULHO: 'Jul', AGOSTO: 'Ago', SETEMBRO: 'Set', OUTUBRO: 'Out', NOVEMBRO: 'Nov', DEZEMBRO: 'Dez' };
@@ -283,7 +270,7 @@ function PortalConteudo({ currentUser, session }) {
   }, [carregarPropostas]);
 
   const propostasMes = useMemo(() =>
-    dedupPorBr(propostas.filter(p => !ehPropostaTemplateAutomacao(p) && p.mes === mesFiltro && p.data_abertura && new Date(p.data_abertura + 'T00:00:00').getFullYear() === ANO_OPERACIONAL)),
+    propostas.filter(p => !ehPropostaTemplateAutomacao(p) && p.mes === mesFiltro && p.data_abertura && new Date(p.data_abertura + 'T00:00:00').getFullYear() === ANO_OPERACIONAL),
   [propostas, mesFiltro]);
 
   const pendencias = useMemo(() => propostas.filter(p => {
@@ -681,9 +668,9 @@ function Dashboard({ stats, propostas, todasPropostas, mesFiltro, setMesFiltro, 
 
   const evolucaoMensal = useMemo(() => {
     return MESES_ORDEM.map(mes => {
-      const doMes = dedupPorBr(todasPropostas.filter(p =>
+      const doMes = todasPropostas.filter(p =>
         !ehPropostaTemplateAutomacao(p) && p.mes === mes && p.data_abertura && new Date(p.data_abertura + 'T00:00:00').getFullYear() === ANO_OPERACIONAL
-      ));
+      );
       return { mes, count: doMes.length, valor: doMes.reduce((s, p) => s + (p.valor_liquido || 0), 0) };
     }).filter(m => m.count > 0); // só mostra meses que já têm proposta cadastrada
   }, [todasPropostas]);
@@ -802,8 +789,8 @@ function Dashboard({ stats, propostas, todasPropostas, mesFiltro, setMesFiltro, 
           sub={`${fmtMoedaCompacta(valorNaoConfirmadasMes)} · ainda não viraram pedido`}
           onClick={() => setKpiModal({ titulo: 'Propostas em Aberto/Sem pedido — valor de cada proposta', itens: propostasNaoConfirmadas })} />
         <Kpi label="Valor confirmado no mês" value={fmtMoedaCompacta(valorConfirmadasMes)} icon={DollarSign}
-          sub="soma do Net Offer Value só das propostas que viraram pedido"
-          info="Soma o valor líquido (Net Offer Value) apenas das propostas que já viraram pedido (conhecimento_pedido = true). Propostas em aberto não entram nessa soma."
+          sub="soma do valor líquido das propostas que viraram pedido"
+          info="Soma o valor líquido da própria proposta (calculado no orçamento do Sankhya) das propostas que já viraram pedido (conhecimento_pedido = true). Esse valor é independente de faturamento/Nota Fiscal — é o valor líquido da proposta em si, não o Net Offer Value faturado (esse é assunto do Painel Comercial/Faturamento)."
           onClick={() => setKpiModal({ titulo: 'Valor confirmado no mês — propostas confirmadas', itens: propostasConfirmadas })} />
         <Kpi
           label="Pedidos confirmados"
@@ -1421,10 +1408,10 @@ function Metricas({ propostas: propostasTodas }) {
   const [periodo, setPeriodo] = useState('tudo'); // dias — padrão 'tudo' pra bater com as outras telas por padrão
 
   const propostas = useMemo(() =>
-    dedupPorBr(propostasTodas.filter(p =>
+    propostasTodas.filter(p =>
       !ehPropostaTemplateAutomacao(p) &&
       p.data_abertura && new Date(p.data_abertura + 'T00:00:00').getFullYear() === ANO_OPERACIONAL
-    )),
+    ),
   [propostasTodas]);
 
   const corteData = useMemo(() => {
@@ -1492,7 +1479,7 @@ function Metricas({ propostas: propostasTodas }) {
           }}>{l}</button>
         ))}
         <span style={{ fontSize: 12, color: T.inkFaint, alignSelf: 'center', marginLeft: 4 }}>
-          {base.length} propostas {periodo === 'tudo' ? `no ano de ${ANO_OPERACIONAL}` : `desde ${fmtData(corteData.toISOString().slice(0,10))}`} · exclui modelos de automação (VALE - DISU e propostas BRV) · 1 linha por BR (revisões duplicadas do Sankhya já colapsadas na mais recente)
+          {base.length} propostas {periodo === 'tudo' ? `no ano de ${ANO_OPERACIONAL}` : `desde ${fmtData(corteData.toISOString().slice(0,10))}`} · exclui modelos de automação (VALE - DISU e propostas BRV) · revisões do Sankhya já deduplicadas na origem (fica só a versão vencedora de cada BR/MATERIAL/SERVIÇO)
         </span>
       </div>
 
@@ -1522,7 +1509,7 @@ function Metricas({ propostas: propostasTodas }) {
         <p style={{ fontSize: 11, color: T.inkFaint, marginTop: 10, marginBottom: 0 }}>
           <span style={{ display: 'inline-block', width: 9, height: 9, background: T.terracotta, borderRadius: 2, marginRight: 4, verticalAlign: 'middle' }} /> viraram pedido
           <span style={{ display: 'inline-block', width: 9, height: 9, background: T.amberSoft, borderRadius: 2, margin: '0 4px 0 14px', verticalAlign: 'middle' }} /> ainda aguardando virar pedido (não é faturamento)
-          <span style={{ marginLeft: 10 }}>— valor à direita é o Net Offer Value real já confirmado (carteira), barra proporcional ao maior cliente da lista (top 10 por quantidade de propostas)</span>
+          <span style={{ marginLeft: 10 }}>— valor à direita é o valor líquido real já confirmado da proposta (carteira), barra proporcional ao maior cliente da lista (top 10 por quantidade de propostas)</span>
         </p>
       </Panel>
 
