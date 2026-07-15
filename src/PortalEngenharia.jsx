@@ -98,9 +98,11 @@ const STATUS_META = {
 const FLUXO_ORDEM = ['rascunho', 'em_revisao_tecnica', 'aguardando_aprovacao', 'concluida'];
 
 // TOPs (Tipo de Operação Sankhya) que representam faturamento de venda real.
-// Confirmado com o time comercial: 3200, 3201, 3214, 3220, 3227.
+// Confirmado com o time comercial: 3200, 3201, 3209, 3214, 3216, 3220, 3227, 3229.
+// (3209 = simples faturamento p/ entrega futura, 3216 = exportação, 3229 = venda de
+// serviços padrão nacional — faltavam antes e deixavam de fora faturamento real.)
 // Qualquer outro TOP (ex.: 3213, devoluções, remessas) não deve entrar na conta de faturamento.
-const TOPS_FATURAMENTO_VALIDOS = [3200, 3201, 3214, 3220, 3227];
+const TOPS_FATURAMENTO_VALIDOS = [3200, 3201, 3209, 3214, 3216, 3220, 3227, 3229];
 // Ano em que o portal opera hoje. O campo 'mes' das propostas só guarda o nome
 // do mês (sem ano) — sem esse filtro, dados antigos de outro ano (ex: uma
 // proposta de setembro/2025) se misturam com o mesmo mês do ano corrente.
@@ -1414,7 +1416,9 @@ function NotificacoesButton({ userEmail }) {
 ============================================================================ */
 
 function Metricas({ propostas: propostasTodas }) {
-  const [periodo, setPeriodo] = useState('tudo'); // dias — padrão 'tudo' pra bater com as outras telas por padrão
+  const mesAtualIdx = Math.min(new Date().getMonth(), MESES_ORDEM.length - 1);
+  const [mesIni, setMesIni] = useState('JANEIRO');
+  const [mesFim, setMesFim] = useState(MESES_ORDEM[mesAtualIdx]);
 
   const propostas = useMemo(() =>
     propostasTodas.filter(p =>
@@ -1423,16 +1427,17 @@ function Metricas({ propostas: propostasTodas }) {
     ),
   [propostasTodas]);
 
-  const corteData = useMemo(() => {
-    if (periodo === 'tudo') return null;
-    const corte = new Date();
-    corte.setDate(corte.getDate() - Number(periodo));
-    return corte;
-  }, [periodo]);
+  const corteData = null; // não usamos mais corte por dias — filtro agora é por mês (De/Até)
 
   const base = useMemo(() => {
-    return periodo === 'tudo' ? propostas : propostas.filter(p => new Date(p.data_abertura) >= corteData);
-  }, [propostas, periodo, corteData]);
+    const idxIni = MESES_ORDEM.indexOf(mesIni);
+    const idxFim = MESES_ORDEM.indexOf(mesFim);
+    const [lo, hi] = idxIni <= idxFim ? [idxIni, idxFim] : [idxFim, idxIni];
+    return propostas.filter(p => {
+      const idx = MESES_ORDEM.indexOf(p.mes);
+      return idx >= lo && idx <= hi;
+    });
+  }, [propostas, mesIni, mesFim]);
 
   const rankingClientes = useMemo(() => {
     const map = {};
@@ -1462,14 +1467,15 @@ function Metricas({ propostas: propostasTodas }) {
   }, [base]);
 
   const mensal = useMemo(() => {
-    return MESES_ORDEM.map(mes => {
+    const idxIni = MESES_ORDEM.indexOf(mesIni);
+    const idxFim = MESES_ORDEM.indexOf(mesFim);
+    const [lo, hi] = idxIni <= idxFim ? [idxIni, idxFim] : [idxFim, idxIni];
+    return MESES_ORDEM.filter((_, i) => i >= lo && i <= hi).map(mes => {
       const doMes = propostas.filter(p => p.mes === mes);
       const confirmadasDoMes = doMes.filter(p => p.conhecimento_pedido);
       return { mes, total: doMes.length, confirmadas: confirmadasDoMes.length, itensTotal: doMes, itensConfirmadas: confirmadasDoMes };
     });
-  }, [propostas]);
-
-  const [mesDrill, setMesDrill] = useState(null); // { mes } | null
+  }, [propostas, mesIni, mesFim]);
 
   const maxMensal = Math.max(...mensal.map(m => m.total), 1);
   const maxRanking = Math.max(...ranking.map(r => r.total), 1);
@@ -1478,17 +1484,34 @@ function Metricas({ propostas: propostasTodas }) {
   return (
     <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 22, maxWidth: 1200 }}>
 
-      {/* Filtro período */}
-      <div style={{ display: 'flex', gap: 6 }}>
-        {[['30','30 dias'],['90','90 dias'],['180','6 meses'],['tudo','Tudo']].map(([v, l]) => (
-          <button key={v} onClick={() => setPeriodo(v)} style={{
-            padding: '6px 14px', fontSize: 12.5, fontWeight: 600, borderRadius: 6, border: 'none', cursor: 'pointer',
-            background: periodo === v ? T.terracotta : T.panelAlt,
-            color: periodo === v ? '#fff' : T.inkDim,
-          }}>{l}</button>
-        ))}
+      {/* Filtro período — De/Até por mês, igual ao padrão da Visão Geral */}
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 12.5, color: T.inkDim, fontWeight: 600 }}>De</span>
+        <div style={{ position: 'relative' }}>
+          <select value={mesIni} onChange={e => setMesIni(e.target.value)} className="focus-ring" style={{
+            appearance: 'none', background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 5,
+            color: T.inkDim, fontSize: 12.5, padding: '6px 28px 6px 10px', fontWeight: 500,
+          }}>
+            {MESES_ORDEM.map(m => <option key={m} value={m}>{MESES_LABEL[m]}</option>)}
+          </select>
+          <ChevronDown size={13} style={{ position: 'absolute', right: 9, top: 9, color: T.inkFaint, pointerEvents: 'none' }} />
+        </div>
+        <span style={{ fontSize: 12.5, color: T.inkDim, fontWeight: 600 }}>a</span>
+        <div style={{ position: 'relative' }}>
+          <select value={mesFim} onChange={e => setMesFim(e.target.value)} className="focus-ring" style={{
+            appearance: 'none', background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 5,
+            color: T.inkDim, fontSize: 12.5, padding: '6px 28px 6px 10px', fontWeight: 500,
+          }}>
+            {MESES_ORDEM.map(m => <option key={m} value={m}>{MESES_LABEL[m]}</option>)}
+          </select>
+          <ChevronDown size={13} style={{ position: 'absolute', right: 9, top: 9, color: T.inkFaint, pointerEvents: 'none' }} />
+        </div>
+        <button onClick={() => { setMesIni('JANEIRO'); setMesFim(MESES_ORDEM[MESES_ORDEM.length - 1]); }} style={{
+          padding: '6px 14px', fontSize: 12.5, fontWeight: 600, borderRadius: 6, border: 'none', cursor: 'pointer',
+          background: T.panelAlt, color: T.inkDim,
+        }}>Ano todo</button>
         <span style={{ fontSize: 12, color: T.inkFaint, alignSelf: 'center', marginLeft: 4 }}>
-          {base.length} propostas {periodo === 'tudo' ? `no ano de ${ANO_OPERACIONAL}` : `desde ${fmtData(corteData.toISOString().slice(0,10))}`} · exclui modelos de automação (VALE - DISU e propostas BRV) · revisões do Sankhya já deduplicadas na origem (fica só a versão vencedora de cada BR/MATERIAL/SERVIÇO)
+          {base.length} propostas de {MESES_LABEL[mesIni]} a {MESES_LABEL[mesFim]} de {ANO_OPERACIONAL} · exclui modelos de automação (VALE - DISU e propostas BRV) · revisões do Sankhya já deduplicadas na origem (fica só a versão vencedora de cada BR/MATERIAL/SERVIÇO)
         </span>
       </div>
 
@@ -1523,7 +1546,7 @@ function Metricas({ propostas: propostasTodas }) {
       </Panel>
 
       {/* Evolução mensal */}
-      <Panel title="Evolução mensal" subtitle="Propostas cadastradas vs viraram pedido (confirmadas) · clique num mês pra ver quais propostas são">
+      <Panel title="Evolução mensal" subtitle={`De ${MESES_LABEL[mesIni]} a ${MESES_LABEL[mesFim]} · cadastradas vs viraram pedido (confirmadas) · clique num mês pra ver quais propostas são`}>
         <div style={{ display: 'flex', alignItems: 'flex-end', gap: 18, height: 140, padding: '10px 4px 0', overflowX: 'auto' }}>
           {mensal.map(m => {
             const hT = Math.max((m.total / maxMensal) * 100, m.total > 0 ? 4 : 2);
@@ -1617,7 +1640,7 @@ function CicloComercial() {
     ]).then(([{ data, error }, { data: nfs, error: errNfs }]) => {
       if (error) console.error('Erro ao carregar ciclo comercial:', error.message);
       if (errNfs) console.error('Erro ao carregar notas fiscais:', errNfs.message);
-      setDados(data || []);
+      setDados((data || []).filter(d => !ehPropostaTemplateAutomacao(d)));
       setNotasFiscais(nfs || []);
       setLoading(false);
     });
