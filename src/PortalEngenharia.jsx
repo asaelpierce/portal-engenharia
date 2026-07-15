@@ -639,10 +639,6 @@ function Dashboard({ stats, propostas, todasPropostas, mesFiltro, setMesFiltro, 
   const propostasNaoConfirmadas = useMemo(() => propostas.filter(p => !p.conhecimento_pedido), [propostas]);
   const valorConfirmadasMes = propostasConfirmadas.reduce((s, p) => s + (Number(p.valor_liquido) || 0), 0);
   const valorNaoConfirmadasMes = propostasNaoConfirmadas.reduce((s, p) => s + (Number(p.valor_liquido) || 0), 0);
-  const propostasAtrasadasLista = useMemo(() =>
-    propostas.filter(p => p.status !== 'concluida' && calcularAtraso(p.data_entrega_prevista, p.data_conclusao) > 0),
-  [propostas]);
-
   /* ── dados derivados das propostas ── */
   const porEscopo = useMemo(() => {
     const map = {};
@@ -665,6 +661,27 @@ function Dashboard({ stats, propostas, todasPropostas, mesFiltro, setMesFiltro, 
     }).filter(m => m.count > 0); // só mostra meses que já têm proposta cadastrada
   }, [todasPropostas]);
 
+  const porCliente = useMemo(() => {
+    const map = {};
+    propostas.forEach(p => {
+      const c = p.cliente || '—';
+      if (!map[c]) map[c] = { nome: c, count: 0, valor: 0 };
+      map[c].count++;
+      map[c].valor += Number(p.valor_liquido) || 0;
+    });
+    return Object.values(map).sort((a, b) => b.count - a.count).slice(0, 7);
+  }, [propostas]);
+
+  const evolucaoComVariacao = useMemo(() => {
+    return evolucaoMensal.map((m, i) => {
+      const anterior = evolucaoMensal[i - 1];
+      const ticketMedio = m.count ? m.valor / m.count : 0;
+      const varCount = anterior && anterior.count ? ((m.count - anterior.count) / anterior.count) * 100 : null;
+      const varTicket = anterior && anterior.count ? ((ticketMedio - (anterior.valor / (anterior.count || 1))) / (anterior.valor / (anterior.count || 1) || 1)) * 100 : null;
+      return { ...m, ticketMedio, varCount, varTicket };
+    });
+  }, [evolucaoMensal]);
+
   const porAprovador = useMemo(() => {
     const map = {};
     APROVADORES_POOL.forEach(a => map[a] = 0);
@@ -681,30 +698,23 @@ function Dashboard({ stats, propostas, todasPropostas, mesFiltro, setMesFiltro, 
   const [prodLoading, setProdLoading] = useState(true);
 
   useEffect(() => {
-    // Passo 1: descobre qual foi o ÚLTIMO SYNC DE VERDADE (sincronizado_em), não a
-    // data_fim mais "no futuro" — um sync antigo de teste com data_fim distante
-    // pode ter poucos registros e não deve vencer um sync completo mais recente.
+    // Segue o mês selecionado no topo (mesFiltro): busca o sync mais recente cujo
+    // período (data_ini) caiu dentro do mês/ano selecionado. Se não houver nenhum
+    // sync para esse mês, mostra "sem dados" em vez de puxar um período de outro mês.
     setProdLoading(true);
+    const mesIdx = MESES_ORDEM.indexOf(mesFiltro); // 0-based
     supabase
       .from('produtividade_orcamentos')
       .select('data_ini, data_fim, sincronizado_em')
       .order('sincronizado_em', { ascending: false })
-      .limit(1)
-      .maybeSingle()
-      .then(({ data: latest }) => {
-        if (!latest) {
-          // Tenta fallback na tabela de pedidos
-          return supabase
-            .from('produtividade_pedidos')
-            .select('data_ini, data_fim, sincronizado_em')
-            .order('sincronizado_em', { ascending: false })
-            .limit(1)
-            .maybeSingle()
-            .then(({ data }) => data);
-        }
-        return latest;
-      })
-      .then(async (periodo) => {
+      .limit(200)
+      .then(async ({ data: periodos }) => {
+        const candidatos = (periodos || []).filter(p => {
+          if (!p.data_ini) return false;
+          const d = new Date(p.data_ini + 'T00:00:00');
+          return d.getFullYear() === ANO_OPERACIONAL && d.getMonth() === mesIdx;
+        });
+        const periodo = candidatos[0] || null; // já ordenado por sincronizado_em desc
         if (!periodo) {
           setProdPedidos([]);
           setProdOrc([]);
@@ -712,7 +722,6 @@ function Dashboard({ stats, propostas, todasPropostas, mesFiltro, setMesFiltro, 
           setProdLoading(false);
           return;
         }
-        // Passo 2: usa eq exato no período encontrado — evita somar syncs diferentes
         const [r1, r2] = await Promise.all([
           supabase.from('produtividade_pedidos').select('*')
             .eq('data_ini', periodo.data_ini).eq('data_fim', periodo.data_fim)
@@ -726,7 +735,7 @@ function Dashboard({ stats, propostas, todasPropostas, mesFiltro, setMesFiltro, 
         setProdPeriodo(periodo);
         setProdLoading(false);
       });
-  }, []); // roda uma vez — produtividade é independente do mesFiltro de propostas
+  }, [mesFiltro]); // agora acompanha o filtro de mês lá de cima
 
   const maxEscopo = Math.max(...porEscopo.map(([, v]) => v), 1);
   const maxMensal = Math.max(...evolucaoMensal.map(m => m.count), 1);
@@ -759,33 +768,22 @@ function Dashboard({ stats, propostas, todasPropostas, mesFiltro, setMesFiltro, 
 
       {/* ── KPI ROW (7 cards) ── */}
       <div className="grid-kpis-7">
-        <Kpi label="Propostas no mês" value={stats.total} icon={FileStack}
+        <Kpi label="Propostas total no mês" value={stats.total} icon={FileStack}
           sub="todas as propostas cadastradas no mês"
-          onClick={() => setKpiModal({ titulo: `Propostas no mês — todas`, itens: propostas })} />
-        <Kpi label="Em andamento" value={stats.ativas} icon={Clock3} tone="amber"
-          sub={`${fmtMoedaCompacta(valorNaoConfirmadasMes)} · ainda não confirmadas`}
-          onClick={() => setKpiModal({ titulo: 'Em andamento (ainda não confirmadas)', itens: propostas.filter(p => p.status !== 'concluida') })} />
-        <Kpi label="Em atraso" value={stats.atrasadas} icon={AlertTriangle} tone="rust"
-          sub="prazo de entrega já passou"
-          onClick={() => setKpiModal({ titulo: 'Propostas em atraso', itens: propostasAtrasadasLista })} />
-        <Kpi label="Valor confirmado no mês" value={fmtMoedaCompacta(stats.valorMes)} icon={DollarSign}
-          sub="soma do valor líquido de todas as propostas do mês"
-          info="Uma proposta só ganha valor em R$ quando vira pedido (confirmada). Antes disso ela conta como R$ 0 — por isso esse número costuma ser igual ao de 'Pedidos confirmados'."
-          onClick={() => setKpiModal({ titulo: 'Valor confirmado no mês — todas as propostas', itens: propostas })} />
+          onClick={() => setKpiModal({ titulo: `Propostas total no mês — todas`, itens: propostas })} />
+        <Kpi label="Propostas em Aberto/Sem pedido" value={propostasNaoConfirmadas.length} icon={Clock3} tone="amber"
+          sub={`${fmtMoedaCompacta(valorNaoConfirmadasMes)} · ainda não viraram pedido`}
+          onClick={() => setKpiModal({ titulo: 'Propostas em Aberto/Sem pedido — valor de cada proposta', itens: propostasNaoConfirmadas })} />
+        <Kpi label="Valor confirmado no mês" value={fmtMoedaCompacta(valorConfirmadasMes)} icon={DollarSign}
+          sub="soma do Net Offer Value só das propostas que viraram pedido"
+          info="Soma o valor líquido (Net Offer Value) apenas das propostas que já viraram pedido (conhecimento_pedido = true). Propostas em aberto não entram nessa soma."
+          onClick={() => setKpiModal({ titulo: 'Valor confirmado no mês — propostas confirmadas', itens: propostasConfirmadas })} />
         <Kpi
           label="Pedidos confirmados"
           value={propostasConfirmadas.length}
           icon={CheckCircle2} tone="olive"
           sub={`${fmtMoedaCompacta(valorConfirmadasMes)} · já viraram pedido`}
           onClick={() => setKpiModal({ titulo: 'Pedidos confirmados (viraram pedido)', itens: propostasConfirmadas })}
-        />
-        <Kpi
-          label="Faltam confirmar"
-          value={propostasNaoConfirmadas.length}
-          icon={Clock3} tone="amber"
-          sub={`${fmtMoedaCompacta(valorNaoConfirmadasMes)} · valor ainda não definido`}
-          info="Quantidade de propostas que ainda não viraram pedido. O valor delas some (R$ 0) até serem confirmadas — por isso o R$ ao lado quase sempre é zero."
-          onClick={() => setKpiModal({ titulo: 'Propostas que ainda faltam confirmar', itens: propostasNaoConfirmadas })}
         />
         <OrigemCard percWord={stats.percWord} wordCount={stats.wordCount} sankhyaCount={stats.sankhyaCount} />
       </div>
@@ -794,31 +792,38 @@ function Dashboard({ stats, propostas, todasPropostas, mesFiltro, setMesFiltro, 
 
       {/* ── ROW 2: Volume mensal + Produtividade da equipe ── */}
       <div className="grid-2col-wide">
-        <Panel title={`Volume de propostas — ${evolucaoMensal.length ? `Jan a ${MESES_LABEL[evolucaoMensal[evolucaoMensal.length - 1].mes]}` : ANO_OPERACIONAL}`} subtitle="Total mensal · clique numa barra pra ver aquele mês na Visão Geral">
-          <div style={{ display: 'flex', alignItems: 'flex-end', gap: 14, height: 150, padding: '8px 4px 0' }}>
-            {evolucaoMensal.map(m => {
+        <Panel title={`Volume de propostas — ${evolucaoMensal.length ? `Jan a ${MESES_LABEL[evolucaoMensal[evolucaoMensal.length - 1].mes]}` : ANO_OPERACIONAL}`} subtitle="Quantidade e ticket médio por mês · clique numa barra pra ver aquele mês na Visão Geral">
+          <div style={{ display: 'flex', alignItems: 'flex-end', gap: 14, height: 170, padding: '8px 4px 0' }}>
+            {evolucaoComVariacao.map(m => {
               const h = Math.max((m.count / maxMensal) * 110, 4);
               const isActive = m.mes === mesFiltro;
               return (
-                <button key={m.mes} onClick={() => setMesFiltro(m.mes)} title={`Ver propostas de ${MESES_LABEL[m.mes]}`} style={{
+                <button key={m.mes} onClick={() => setMesFiltro(m.mes)} title={`Ver propostas de ${MESES_LABEL[m.mes]} · ticket médio ${fmtMoedaCompacta(m.ticketMedio)}`} style={{
                   display: 'flex', flexDirection: 'column', alignItems: 'center', flex: 1,
                   background: 'none', border: 'none', cursor: 'pointer', padding: 0,
                 }}>
-                  <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6, color: isActive ? T.terracotta : T.inkDim, fontFamily: FONT_DISPLAY }}>{m.count}</div>
+                  <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 2, color: isActive ? T.terracotta : T.inkDim, fontFamily: FONT_DISPLAY }}>{m.count}</div>
+                  <div style={{ fontSize: 9.5, fontWeight: 600, marginBottom: 6, color: m.varCount == null ? T.inkFaint : m.varCount >= 0 ? T.oliveText : T.rustText }}>
+                    {m.varCount == null ? '—' : `${m.varCount >= 0 ? '▲' : '▼'} ${Math.abs(Math.round(m.varCount))}%`}
+                  </div>
                   <div style={{ width: '100%', maxWidth: 40, height: h, background: isActive ? T.terracotta : T.line, borderRadius: '3px 3px 0 0', transition: 'height .4s ease' }} />
                   <div style={{ fontSize: 10.5, color: isActive ? T.terracottaText : T.inkFaint, marginTop: 8, fontWeight: isActive ? 700 : 400 }}>{MESES_LABEL[m.mes]}</div>
+                  <div style={{ fontSize: 9, color: T.inkFaint, marginTop: 2 }}>{fmtMoedaCompacta(m.ticketMedio)}/prop.</div>
                 </button>
               );
             })}
           </div>
+          <p style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 8, marginBottom: 0 }}>
+            % em cada barra = variação da quantidade de propostas vs mês anterior. Abaixo do mês: ticket médio (valor líquido ÷ nº de propostas) daquele mês.
+          </p>
         </Panel>
 
         <Panel
           title="Produtividade da equipe"
           subtitle={
             prodLoading ? 'Carregando…'
-            : prodPeriodo ? `Último sync: ${fmtData(prodPeriodo.data_ini)} → ${fmtData(prodPeriodo.data_fim)}`
-            : 'Sem dados sincronizados'
+            : prodPeriodo ? `Sync de ${MESES_LABEL[mesFiltro]}: ${fmtData(prodPeriodo.data_ini)} → ${fmtData(prodPeriodo.data_fim)}`
+            : `Sem sync para ${MESES_LABEL[mesFiltro]}`
           }
           right={
             <button onClick={() => onNavigate('produtividade')} style={{
@@ -833,7 +838,7 @@ function Dashboard({ stats, propostas, todasPropostas, mesFiltro, setMesFiltro, 
             <div style={{ textAlign: 'center', padding: '20px 0', color: T.inkFaint, fontSize: 12.5 }}>Carregando…</div>
           ) : prodOrc.length === 0 && prodPedidos.length === 0 ? (
             <div style={{ textAlign: 'center', padding: '20px 0', color: T.inkFaint, fontSize: 12.5 }}>
-              Sem dados — sincronize na aba <strong>Produtividade</strong>.
+              Sem dados sincronizados para <strong>{MESES_LABEL[mesFiltro]}</strong> — sincronize na aba <strong>Produtividade</strong>.
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 18, marginTop: 6 }}>
@@ -899,15 +904,17 @@ function Dashboard({ stats, propostas, todasPropostas, mesFiltro, setMesFiltro, 
           </div>
         </Panel>
 
-        <Panel title="Volume por escopo" subtitle="Itens cadastrados no mês selecionado">
+        <Panel title="Clientes com mais propostas" subtitle="Quem mais recebeu propostas no mês selecionado">
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 4 }}>
-            {porEscopo.map(([escopo, count]) => (
-              <div key={escopo} style={{ display: 'flex', alignItems: 'center', fontSize: 12, gap: 10 }}>
-                <span style={{ width: 120, color: T.inkDim, flexShrink: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontSize: 11.5 }} title={escopo}>{escopo}</span>
+            {porCliente.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '14px 0', color: T.inkFaint, fontSize: 12.5 }}>Sem propostas no período.</div>
+            ) : porCliente.map(c => (
+              <div key={c.nome} style={{ display: 'flex', alignItems: 'center', fontSize: 12, gap: 10 }}>
+                <span style={{ width: 120, color: T.inkDim, flexShrink: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontSize: 11.5 }} title={c.nome}>{c.nome}</span>
                 <div style={{ flex: 1, background: T.lineSoft, height: 6, borderRadius: 3, overflow: 'hidden' }}>
-                  <div style={{ width: `${(count / maxEscopo) * 100}%`, height: '100%', background: T.terracotta, borderRadius: 3 }} />
+                  <div style={{ width: `${(c.count / (porCliente[0]?.count || 1)) * 100}%`, height: '100%', background: T.terracotta, borderRadius: 3 }} />
                 </div>
-                <span style={{ width: 20, textAlign: 'right', fontWeight: 700, color: T.ink, fontFamily: FONT_DISPLAY, fontSize: 13 }}>{count}</span>
+                <span style={{ width: 20, textAlign: 'right', fontWeight: 700, color: T.ink, fontFamily: FONT_DISPLAY, fontSize: 13 }}>{c.count}</span>
               </div>
             ))}
           </div>
@@ -1393,6 +1400,7 @@ function Metricas({ propostas: propostasTodas }) {
   const propostas = useMemo(() =>
     propostasTodas.filter(p =>
       !CLIENTES_EXCLUIDOS_METRICAS.includes(p.cliente) &&
+      !(p.br || '').toUpperCase().startsWith('BRV') &&
       p.data_abertura && new Date(p.data_abertura + 'T00:00:00').getFullYear() === ANO_OPERACIONAL
     ),
   [propostasTodas]);
@@ -1436,12 +1444,14 @@ function Metricas({ propostas: propostasTodas }) {
   }, [base]);
 
   const mensal = useMemo(() => {
-    return MESES_ORDEM.map(mes => ({
-      mes,
-      total: propostas.filter(p => p.mes === mes).length,
-      confirmadas: propostas.filter(p => p.mes === mes && p.conhecimento_pedido).length,
-    }));
+    return MESES_ORDEM.map(mes => {
+      const doMes = propostas.filter(p => p.mes === mes);
+      const confirmadasDoMes = doMes.filter(p => p.conhecimento_pedido);
+      return { mes, total: doMes.length, confirmadas: confirmadasDoMes.length, itensTotal: doMes, itensConfirmadas: confirmadasDoMes };
+    });
   }, [propostas]);
+
+  const [mesDrill, setMesDrill] = useState(null); // { mes } | null
 
   const maxMensal = Math.max(...mensal.map(m => m.total), 1);
   const maxRanking = Math.max(...ranking.map(r => r.total), 1);
@@ -1460,12 +1470,12 @@ function Metricas({ propostas: propostasTodas }) {
           }}>{l}</button>
         ))}
         <span style={{ fontSize: 12, color: T.inkFaint, alignSelf: 'center', marginLeft: 4 }}>
-          {base.length} propostas {periodo === 'tudo' ? `no ano de ${ANO_OPERACIONAL}` : `desde ${fmtData(corteData.toISOString().slice(0,10))}`} · exclui modelos de automação (VALE - DISU)
+          {base.length} propostas {periodo === 'tudo' ? `no ano de ${ANO_OPERACIONAL}` : `desde ${fmtData(corteData.toISOString().slice(0,10))}`} · exclui modelos de automação (VALE - DISU e propostas BRV)
         </span>
       </div>
 
       {/* Ranking de clientes */}
-      <Panel title="Ranking por cliente" subtitle="Propostas feitas × viraram pedido × taxa de atendimento"
+      <Panel title="Ranking por cliente" subtitle="Propostas feitas × viraram pedido × valor real confirmado (carteira)"
         right={<BotaoExportar onClick={() => exportCSV(rankingClientes, 'ranking_clientes.csv', ['nome','propostas','confirmadas','taxa','valorConfirmado'])} small />}
       >
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 10 }}>
@@ -1474,40 +1484,47 @@ function Metricas({ propostas: propostasTodas }) {
             <div key={c.nome} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
               <span style={{ width: 18, textAlign: 'right', fontSize: 11, color: T.inkFaint, fontFamily: FONT_DISPLAY }}>#{i + 1}</span>
               <span style={{ width: 170, fontSize: 13, color: T.ink, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={c.nome}>{c.nome}</span>
-              <div style={{ flex: 1, background: T.lineSoft, height: 8, borderRadius: 4, overflow: 'hidden', position: 'relative' }} title={`${c.confirmadas} de ${c.propostas} propostas viraram pedido (${c.taxa}%)`}>
-                <div style={{ width: `${(c.propostas / maxRankingCli) * 100}%`, height: '100%', borderRadius: 4, background: T.lineSoft, position: 'absolute', left: 0, top: 0 }} />
+              <div style={{ flex: 1, background: T.amberSoft, height: 8, borderRadius: 4, overflow: 'hidden', position: 'relative' }} title={`${c.confirmadas} de ${c.propostas} propostas viraram pedido (${c.taxa}%) · ${c.propostas - c.confirmadas} ainda aguardando virar pedido`}>
+                <div style={{ width: `${(c.propostas / maxRankingCli) * 100}%`, height: '100%', borderRadius: 4, background: T.amberSoft, position: 'absolute', left: 0, top: 0 }} />
                 <div style={{ width: `${(c.confirmadas / maxRankingCli) * 100}%`, height: '100%', background: T.terracotta, borderRadius: 4, position: 'absolute', left: 0, top: 0 }} />
               </div>
-              <div style={{ display: 'flex', gap: 8, fontSize: 12, fontFamily: FONT_DISPLAY, width: 190, justifyContent: 'flex-end' }}>
+              <div style={{ display: 'flex', gap: 8, fontSize: 12, fontFamily: FONT_DISPLAY, width: 250, justifyContent: 'flex-end' }}>
                 <span style={{ color: T.ink, fontWeight: 700 }}>{c.propostas} prop.</span>
                 <span style={{ color: T.oliveText }}>{c.confirmadas} pedido{c.confirmadas !== 1 ? 's' : ''}</span>
                 <span style={{ color: T.inkFaint }}>({c.taxa}%)</span>
+                <span style={{ color: T.oliveText, fontWeight: 700 }}>{fmtMoedaCompacta(c.valorConfirmado)}</span>
               </div>
             </div>
           );})}
         </div>
         <p style={{ fontSize: 11, color: T.inkFaint, marginTop: 10, marginBottom: 0 }}>
           <span style={{ display: 'inline-block', width: 9, height: 9, background: T.terracotta, borderRadius: 2, marginRight: 4, verticalAlign: 'middle' }} /> viraram pedido
-          <span style={{ display: 'inline-block', width: 9, height: 9, background: T.lineSoft, borderRadius: 2, margin: '0 4px 0 14px', verticalAlign: 'middle' }} /> ainda aguardando
-          <span style={{ marginLeft: 10 }}>— barra proporcional ao maior cliente da lista (top 10 por quantidade de propostas)</span>
+          <span style={{ display: 'inline-block', width: 9, height: 9, background: T.amberSoft, borderRadius: 2, margin: '0 4px 0 14px', verticalAlign: 'middle' }} /> ainda aguardando virar pedido (não é faturamento)
+          <span style={{ marginLeft: 10 }}>— valor à direita é o Net Offer Value real já confirmado (carteira), barra proporcional ao maior cliente da lista (top 10 por quantidade de propostas)</span>
         </p>
       </Panel>
 
       {/* Evolução mensal */}
-      <Panel title="Evolução mensal" subtitle="Propostas cadastradas vs viraram pedido (confirmadas)">
+      <Panel title="Evolução mensal" subtitle="Propostas cadastradas vs viraram pedido (confirmadas) · clique num mês pra ver quais propostas são">
         <div style={{ display: 'flex', alignItems: 'flex-end', gap: 18, height: 140, padding: '10px 4px 0', overflowX: 'auto' }}>
           {mensal.map(m => {
             const hT = Math.max((m.total / maxMensal) * 100, m.total > 0 ? 4 : 2);
             const hC = Math.max((m.confirmadas / maxMensal) * 100, m.confirmadas > 0 ? 4 : 2);
+            const suspeito = m.confirmadas > m.total; // não deveria acontecer — sinal de dado inconsistente
             return (
-              <div key={m.mes} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flex: 1, minWidth: 60 }}>
-                <div style={{ fontSize: 10, color: T.inkFaint, marginBottom: 4 }}>{m.confirmadas}/{m.total}</div>
+              <button key={m.mes} onClick={() => setMesDrill(m)} title="Ver quais propostas compõem esse mês" style={{
+                display: 'flex', flexDirection: 'column', alignItems: 'center', flex: 1, minWidth: 60,
+                background: 'none', border: 'none', cursor: m.total > 0 ? 'pointer' : 'default', padding: 0,
+              }}>
+                <div style={{ fontSize: 10, color: suspeito ? T.rustText : T.inkFaint, fontWeight: suspeito ? 700 : 400, marginBottom: 4 }}>
+                  {m.confirmadas}/{m.total}{suspeito ? ' ⚠' : ''}
+                </div>
                 <div style={{ display: 'flex', gap: 3, alignItems: 'flex-end' }}>
                   <div style={{ width: 16, height: hT, background: T.line, borderRadius: '2px 2px 0 0' }} />
                   <div style={{ width: 16, height: hC, background: T.terracotta, borderRadius: '2px 2px 0 0' }} />
                 </div>
                 <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 6 }}>{MESES_LABEL[m.mes]}</div>
-              </div>
+              </button>
             );
           })}
         </div>
@@ -1515,7 +1532,18 @@ function Metricas({ propostas: propostasTodas }) {
           <span><span style={{ display: 'inline-block', width: 10, height: 10, background: T.line, borderRadius: 2, marginRight: 4 }} />Cadastradas</span>
           <span><span style={{ display: 'inline-block', width: 10, height: 10, background: T.terracotta, borderRadius: 2, marginRight: 4 }} />Confirmadas (viraram pedido)</span>
         </div>
+        <p style={{ fontSize: 11, color: T.inkFaint, marginTop: 8, marginBottom: 0 }}>
+          "Confirmadas" conta pelo <strong>mês de abertura</strong> da proposta (campo "mes"), não pelo mês em que ela virou pedido. Se algum mês aparecer com ⚠, o nº de confirmadas ultrapassou o de cadastradas naquele mês — clique na barra pra ver a lista exata de propostas e identificar qual registro está com o mês trocado.
+        </p>
       </Panel>
+
+      {mesDrill && (
+        <KpiDetalheModal
+          titulo={`${MESES_LABEL[mesDrill.mes]} — ${mesDrill.total} cadastradas · ${mesDrill.confirmadas} confirmadas`}
+          itens={mesDrill.itensTotal}
+          onClose={() => setMesDrill(null)}
+        />
+      )}
 
       {/* Ranking responsáveis */}
       <Panel title="Ranking por responsável" subtitle="Total de propostas · confirmadas (viraram pedido) · ainda aguardando"
