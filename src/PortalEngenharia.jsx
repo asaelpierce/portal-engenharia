@@ -1856,10 +1856,10 @@ function CicloComercial() {
       <div className="grid-kpis-7">
         <Kpi label="Valor total em propostas" value={fmtMoedaCompacta(totais.valorTotal)} icon={FileStack} />
         <Kpi label="Net Value (pedido, líquido)" value={fmtMoedaCompacta(totais.netValue)} icon={TrendingUp} tone="blue" />
-        <Kpi label="Faturamento bruto (Vlr Nota)" value={fmtMoedaCompacta(totais.valorFaturado)} icon={CheckCircle2} tone="olive"
-          info="Soma o Vlr Nota (bruto) só das notas cujo BR tem uma proposta cadastrada no Portal (a partir de 2026), dentro do intervalo De/Até selecionado acima. Notas fiscais de BRs mais antigos (2023-2025), que não têm orçamento sincronizado aqui, não entram nesse número — veja 'Faturamento total emitido' logo abaixo pra ver o total real emitido no período, incluindo BRs antigos." />
-        <Kpi label="Faturamento líquido (Net Offer Value)" value={fmtMoedaCompacta(totais.faturamentoLiquido)} icon={DollarSign} tone="olive"
-          info="Mesmo critério do card de bruto: só BRs com proposta cadastrada no Portal (a partir de 2026), dentro do intervalo De/Até selecionado. Veja 'Faturamento total emitido' pra o valor líquido real do período, incluindo BRs antigos." />
+        <Kpi label="Faturamento bruto (Vlr Nota)" value={fmtMoedaCompacta(faturamentoTotalPeriodo.bruto)} icon={CheckCircle2} tone="olive"
+          info={`Total real de Vlr Nota (bruto) faturado de ${MESES_LABEL[mesIni]} a ${MESES_LABEL[mesFim]}/${ANO_OPERACIONAL} — todas as notas fiscais do período (${faturamentoTotalPeriodo.count}), tenham ou não uma proposta cadastrada no Portal. Filtra pela data da própria Nota Fiscal, não pelo mês de origem da proposta.`} />
+        <Kpi label="Faturamento líquido (Net Offer Value)" value={fmtMoedaCompacta(faturamentoTotalPeriodo.liquido)} icon={DollarSign} tone="olive"
+          info={`Mesmo critério do card de bruto: Net Offer Value real de todas as notas fiscais de ${MESES_LABEL[mesIni]} a ${MESES_LABEL[mesFim]}/${ANO_OPERACIONAL}, filtrado pela data da Nota Fiscal.`} />
         <Kpi label="Pedido confirmado, aguarda fatura" value={fmtMoedaCompacta(totais.valorPedidoSemFatura)} icon={Clock3} tone="amber" />
         <Kpi label="Valor ainda sem pedido" value={fmtMoedaCompacta(totais.valorSemPedido)} icon={AlertTriangle} tone="rust" />
       </div>
@@ -1867,7 +1867,7 @@ function CicloComercial() {
         Bruto = Vlr Nota (CAB.VLRNOTA) · Líquido = Net Offer Value (Vlr Nota − ICMS − IPI − PIS − COFINS) · TOPs 3200/3201/3209/3214/3216/3220/3227/3229 · só notas com STATUSNOTA = 'L'
       </p>
       <p style={{ fontSize: 11.5, color: T.inkFaint, margin: '-8px 0 0' }}>
-        <strong>Faturamento total emitido de {MESES_LABEL[mesIni]} a {MESES_LABEL[mesFim]}</strong> (todos os BRs faturados no período, inclusive os que não têm proposta cadastrada aqui): bruto {fmtMoedaCompacta(faturamentoTotalPeriodo.bruto)} · líquido {fmtMoedaCompacta(faturamentoTotalPeriodo.liquido)} ({faturamentoTotalPeriodo.count} notas)
+        Desse total, {fmtMoedaCompacta(totais.valorFaturado)} bruto / {fmtMoedaCompacta(totais.faturamentoLiquido)} líquido está vinculado a BRs com <strong>proposta cadastrada no Portal</strong> — o restante são notas de BRs antigos (2023-2025) sem orçamento sincronizado aqui.
       </p>
 
       <Panel title="Proposta → Pedido → Faturamento, por mês de origem" subtitle="Quantas propostas de cada mês já viraram pedido e já foram faturadas, com Net Value e valor faturado">
