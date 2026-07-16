@@ -1427,8 +1427,6 @@ function Metricas({ propostas: propostasTodas }) {
     ),
   [propostasTodas]);
 
-  const corteData = null; // não usamos mais corte por dias — filtro agora é por mês (De/Até)
-
   const base = useMemo(() => {
     const idxIni = MESES_ORDEM.indexOf(mesIni);
     const idxFim = MESES_ORDEM.indexOf(mesFim);
@@ -1854,28 +1852,28 @@ function CicloComercial() {
 
       {/* KPIs de valor por etapa */}
       <div className="grid-kpis-7">
-        <Kpi label="Valor total em propostas" value={fmtMoedaCompacta(totais.valorTotal)} icon={FileStack} />
-        <Kpi label="Net Value (pedido, líquido)" value={fmtMoedaCompacta(totais.netValue)} icon={TrendingUp} tone="blue" />
-        <Kpi label="Faturamento bruto (Vlr Nota)" value={fmtMoedaCompacta(faturamentoTotalPeriodo.bruto)} icon={CheckCircle2} tone="olive"
+        <Kpi label="Valor total em propostas" value={fmtMoeda(totais.valorTotal)} icon={FileStack} />
+        <Kpi label="Net Value (pedido, líquido)" value={fmtMoeda(totais.netValue)} icon={TrendingUp} tone="blue" />
+        <Kpi label="Faturamento bruto (Vlr Nota)" value={fmtMoeda(faturamentoTotalPeriodo.bruto)} icon={CheckCircle2} tone="olive"
           info={`Total real de Vlr Nota (bruto) faturado de ${MESES_LABEL[mesIni]} a ${MESES_LABEL[mesFim]}/${ANO_OPERACIONAL} — todas as notas fiscais do período (${faturamentoTotalPeriodo.count}), tenham ou não uma proposta cadastrada no Portal. Filtra pela data da própria Nota Fiscal, não pelo mês de origem da proposta.`} />
-        <Kpi label="Faturamento líquido (Net Offer Value)" value={fmtMoedaCompacta(faturamentoTotalPeriodo.liquido)} icon={DollarSign} tone="olive"
+        <Kpi label="Faturamento líquido (Net Offer Value)" value={fmtMoeda(faturamentoTotalPeriodo.liquido)} icon={DollarSign} tone="olive"
           info={`Mesmo critério do card de bruto: Net Offer Value real de todas as notas fiscais de ${MESES_LABEL[mesIni]} a ${MESES_LABEL[mesFim]}/${ANO_OPERACIONAL}, filtrado pela data da Nota Fiscal.`} />
-        <Kpi label="Pedido confirmado, aguarda fatura" value={fmtMoedaCompacta(totais.valorPedidoSemFatura)} icon={Clock3} tone="amber" />
-        <Kpi label="Valor ainda sem pedido" value={fmtMoedaCompacta(totais.valorSemPedido)} icon={AlertTriangle} tone="rust" />
+        <Kpi label="Pedido confirmado, aguarda fatura" value={fmtMoeda(totais.valorPedidoSemFatura)} icon={Clock3} tone="amber" />
+        <Kpi label="Valor ainda sem pedido" value={fmtMoeda(totais.valorSemPedido)} icon={AlertTriangle} tone="rust" />
       </div>
       <p style={{ fontSize: 11.5, color: T.inkFaint, margin: '-14px 0 0' }}>
         Bruto = Vlr Nota (CAB.VLRNOTA) · Líquido = Net Offer Value (Vlr Nota − ICMS − IPI − PIS − COFINS) · TOPs 3200/3201/3209/3214/3216/3220/3227/3229 · só notas com STATUSNOTA = 'L'
       </p>
       <p style={{ fontSize: 11.5, color: T.inkFaint, margin: '-8px 0 0' }}>
-        Desse total, {fmtMoedaCompacta(totais.valorFaturado)} bruto / {fmtMoedaCompacta(totais.faturamentoLiquido)} líquido está vinculado a BRs com <strong>proposta cadastrada no Portal</strong> — o restante são notas de BRs antigos (2023-2025) sem orçamento sincronizado aqui.
+        Desse total, {fmtMoeda(totais.valorFaturado)} bruto / {fmtMoeda(totais.faturamentoLiquido)} líquido está vinculado a BRs com <strong>proposta cadastrada no Portal</strong> — o restante são notas de BRs antigos (2023-2025) sem orçamento sincronizado aqui.
       </p>
 
-      <Panel title="Proposta → Pedido → Faturamento, por mês de origem" subtitle="Quantas propostas de cada mês já viraram pedido e já foram faturadas, com Net Value e valor faturado">
+      <Panel title="Proposta → Pedido → Faturamento, por mês de ORIGEM DA PROPOSTA" subtitle="Fat. bruto/líquido aqui = de tudo que foi PROPOSTO nesse mês, quanto já foi faturado até hoje (não importa em que mês saiu a nota) — por isso não bate com o gráfico 'Faturamento por mês' abaixo, que agrupa pelo mês da NOTA FISCAL, não da proposta">
         <div style={{ overflowX: 'auto', marginTop: 10 }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
             <thead>
               <tr style={{ borderBottom: `1px solid ${T.line}` }}>
-                {['Mês da proposta', 'Propostas', 'Viraram pedido', 'Faturadas', 'Valor total', 'Net Value', 'Fat. bruto', 'Fat. líquido'].map(h => (
+                {['Mês da proposta', 'Propostas', 'Viraram pedido', 'Faturadas', 'Valor total', 'Net Value', 'Fat. bruto (dessas propostas)', 'Fat. líquido (dessas propostas)'].map(h => (
                   <th key={h} style={{ padding: '8px 12px', textAlign: 'left', fontSize: 10.5, fontWeight: 600, color: T.inkFaint, textTransform: 'uppercase' }}>{h}</th>
                 ))}
               </tr>
@@ -1887,19 +1885,22 @@ function CicloComercial() {
                   <td style={{ padding: '10px 12px', fontFamily: FONT_DISPLAY }}>{m.propostas}</td>
                   <td style={{ padding: '10px 12px', fontFamily: FONT_DISPLAY, color: T.blueText }}>{m.viraramPedido} <span style={{ color: T.inkFaint, fontSize: 11 }}>({m.propostas ? Math.round(m.viraramPedido/m.propostas*100) : 0}%)</span></td>
                   <td style={{ padding: '10px 12px', fontFamily: FONT_DISPLAY, color: T.oliveText }}>{m.faturadas} <span style={{ color: T.inkFaint, fontSize: 11 }}>({m.propostas ? Math.round(m.faturadas/m.propostas*100) : 0}%)</span></td>
-                  <td style={{ padding: '10px 12px', fontFamily: FONT_DISPLAY, color: T.inkDim }}>{fmtMoedaCompacta(m.valorTotal)}</td>
-                  <td style={{ padding: '10px 12px', fontFamily: FONT_DISPLAY, color: T.blueText, fontWeight: 600 }}>{fmtMoedaCompacta(m.netValue)}</td>
-                  <td style={{ padding: '10px 12px', fontFamily: FONT_DISPLAY, color: T.oliveText, fontWeight: 600 }}>{fmtMoedaCompacta(m.valorFaturado)}</td>
-                  <td style={{ padding: '10px 12px', fontFamily: FONT_DISPLAY, color: T.oliveText }}>{fmtMoedaCompacta(m.faturamentoLiquido)}</td>
+                  <td style={{ padding: '10px 12px', fontFamily: FONT_DISPLAY, color: T.inkDim }}>{fmtMoeda(m.valorTotal)}</td>
+                  <td style={{ padding: '10px 12px', fontFamily: FONT_DISPLAY, color: T.blueText, fontWeight: 600 }}>{fmtMoeda(m.netValue)}</td>
+                  <td style={{ padding: '10px 12px', fontFamily: FONT_DISPLAY, color: T.oliveText, fontWeight: 600 }}>{fmtMoeda(m.valorFaturado)}</td>
+                  <td style={{ padding: '10px 12px', fontFamily: FONT_DISPLAY, color: T.oliveText }}>{fmtMoeda(m.faturamentoLiquido)}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
+        <p style={{ fontSize: 11, color: T.inkFaint, marginTop: 10, marginBottom: 0 }}>
+          <strong>Por que os totais desta tabela não batem com o gráfico "Faturamento por mês" logo abaixo:</strong> aqui, "Fat. bruto/líquido" de um mês é a soma de tudo que já foi faturado das propostas <em>nascidas</em> naquele mês — não importa quando a nota saiu (pode ter sido faturada meses depois). Já o gráfico abaixo agrupa pelo mês em que a <em>nota fiscal</em> foi emitida, não importa de quando é a proposta. É o mesmo dinheiro, só que organizado por dois calendários diferentes (data da proposta × data da nota).
+        </p>
       </Panel>
 
       {/* Faturamento por mês (real, pela data da Nota Fiscal) — bruto vs líquido */}
-      <Panel title="Faturamento por mês" subtitle="Quanto saiu de Nota Fiscal em cada mês — bruto (Vlr Nota) vs líquido (Net Offer Value)">
+      <Panel title="Faturamento por mês" subtitle="Agrupado pelo mês em que a NOTA FISCAL saiu (não pelo mês da proposta) — bruto (Vlr Nota) vs líquido (Net Offer Value)">
         <div style={{ overflowX: 'auto', marginTop: 6 }}>
           <div style={{ display: 'flex', alignItems: 'flex-end', gap: 16, minHeight: 170, padding: '8px 4px 0' }}>
             {faturamentoMensalReal.length === 0 ? (
@@ -1915,8 +1916,8 @@ function CicloComercial() {
                     <div title={`Líquido: ${fmtMoeda(m.liquido)}`} style={{ width: 20, height: hLiquido, background: T.oliveText, borderRadius: '3px 3px 0 0' }} />
                   </div>
                   <div style={{ fontSize: 11, color: T.ink, fontWeight: 600, marginTop: 6 }}>{monthLabel(m.key)}</div>
-                  <div style={{ fontSize: 10, color: T.inkFaint, marginTop: 2 }}>{fmtMoedaCompacta(m.bruto)}</div>
-                  <div style={{ fontSize: 10, color: T.oliveText, fontWeight: 600 }}>{fmtMoedaCompacta(m.liquido)}</div>
+                  <div style={{ fontSize: 10, color: T.inkFaint, marginTop: 2 }}>{fmtMoeda(m.bruto)}</div>
+                  <div style={{ fontSize: 10, color: T.oliveText, fontWeight: 600 }}>{fmtMoeda(m.liquido)}</div>
                 </div>
               );
             })}
@@ -1946,7 +1947,7 @@ function CicloComercial() {
                   </span>
                   <span style={{ display: 'flex', gap: 16, fontSize: 12.5 }}>
                     <span style={{ color: T.inkDim }}>{f.count} nota{f.count !== 1 ? 's' : ''}</span>
-                    <span style={{ color: T.oliveText, fontWeight: 700, fontFamily: FONT_DISPLAY }}>{fmtMoedaCompacta(f.valor)}</span>
+                    <span style={{ color: T.oliveText, fontWeight: 700, fontFamily: FONT_DISPLAY }}>{fmtMoeda(f.valor)}</span>
                   </span>
                 </button>
                 {aberto && (
@@ -1965,7 +1966,7 @@ function CicloComercial() {
                             <td style={{ padding: '6px 10px', fontWeight: 600 }}>{MESES_LABEL[o.mesOrigem] || o.mesOrigem}</td>
                             <td style={{ padding: '6px 10px', fontFamily: FONT_DISPLAY }}>{o.count}</td>
                             <td style={{ padding: '6px 10px', color: T.inkFaint }}>{f.count ? Math.round(o.count / f.count * 100) : 0}%</td>
-                            <td style={{ padding: '6px 10px', fontFamily: FONT_DISPLAY, color: T.oliveText }}>{fmtMoedaCompacta(o.valor)}</td>
+                            <td style={{ padding: '6px 10px', fontFamily: FONT_DISPLAY, color: T.oliveText }}>{fmtMoeda(o.valor)}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -2541,7 +2542,7 @@ function EquipamentosTerceiros() {
       if (brs.length > 0) {
         const { data: notas } = await supabase
           .from('nota_venda_itens')
-          .select('br, nro_interno_sankhya, codtipoper, numero_pedido, data_faturamento, cliente_nome, produto_descricao, valor_bruto')
+          .select('br, nro_interno_sankhya, codtipoper, numero_pedido, data_faturamento, cliente_nome, produto_descricao, valor_bruto, quantidade')
           .in('br', brs)
           .in('codtipoper', TOPS_FATURAMENTO_VALIDOS)
           .order('data_faturamento', { ascending: false });
@@ -2618,10 +2619,49 @@ function EquipamentosTerceiros() {
       .sort(),
   [dados, brsComPedido, brsComNf]);
 
-  // ALERTA: NF de itens emitida mas sem nota de retorno → NF de serviço bloqueada
+  // Compara itens do PEDIDO (pedidos_itens) com itens já FATURADOS (nota_venda_itens)
+  // por BR — pra saber se o faturamento está completo ou só parcial. Sem essa
+  // comparação, "BR tem NF" era tratado como sim/não, o que presumia faturamento
+  // completo mesmo quando só parte dos itens tinha sido faturada (ex.: 2 de 4).
+  const faturamentoPorBr = useMemo(() => {
+    const map = {};
+    pedidosVenda.forEach(p => {
+      if (!p.br) return;
+      if (!map[p.br]) map[p.br] = { totalItens: 0, totalQtd: 0, itensFaturados: 0, qtdFaturada: 0 };
+      map[p.br].totalItens++;
+      map[p.br].totalQtd += Number(p.quantidade) || 0;
+    });
+    Object.entries(notaVendaMap).forEach(([br, v]) => {
+      if (!map[br]) map[br] = { totalItens: 0, totalQtd: 0, itensFaturados: 0, qtdFaturada: 0 };
+      map[br].itensFaturados = v.itens.length;
+      map[br].qtdFaturada = v.itens.reduce((s, i) => s + (Number(i.quantidade) || 0), 0);
+    });
+    return map;
+  }, [pedidosVenda, notaVendaMap]);
+
+  // Status de faturamento de um BR, sem presumir quando é duvidoso:
+  // - 'sem_pedido_sincronizado': não dá pra comparar (pedido fora do range de sync) — não afirma nada
+  // - 'completo': todos os itens do pedido já têm NF (ou não temos como contar itens, mas a qtd bate)
+  // - 'parcial': só PARTE dos itens/quantidade foi faturada — AMBÍGUO, precisa o usuário confirmar
+  // - 'nenhum': nenhum item faturado ainda
+  const statusFaturamentoBr = (br) => {
+    const f = faturamentoPorBr[br];
+    if (!f || f.totalItens === 0) return 'sem_pedido_sincronizado';
+    if (f.itensFaturados === 0) return 'nenhum';
+    if (f.itensFaturados >= f.totalItens && f.qtdFaturada >= f.totalQtd - 0.001) return 'completo';
+    return 'parcial';
+  };
+
+  // ALERTA (confiável): NF de TODOS os itens emitida mas sem nota de retorno
   const alertasBR = useMemo(() =>
-    [...brsComNf].filter(br => !brsComRetorno.has(br)).sort(),
-  [brsComNf, brsComRetorno]);
+    [...brsComNf].filter(br => !brsComRetorno.has(br) && statusFaturamentoBr(br) === 'completo').sort(),
+  [brsComNf, brsComRetorno, faturamentoPorBr]);
+
+  // AMBÍGUO: faturamento PARCIAL (só parte dos itens do pedido tem NF) e sem retorno —
+  // não dá pra presumir "pendente" nem "ok", empurra pro usuário decidir com os números na mão
+  const parciaisBR = useMemo(() =>
+    [...brsComNf].filter(br => !brsComRetorno.has(br) && statusFaturamentoBr(br) === 'parcial').sort(),
+  [brsComNf, brsComRetorno, faturamentoPorBr]);
 
   // Filtros por coluna na tabela de pedidos
   const [colFilters, setColFilters] = useState({
@@ -3004,6 +3044,42 @@ function EquipamentosTerceiros() {
             </div>
             <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 6 }}>
               NF de serviço só emite quando equipamento retornar (TOPs 2409/2410 no Portal de Compras).
+            </div>
+          </div>
+        )}
+
+        {/* ⚠️ AMBÍGUO: faturamento parcial — não presume, pede confirmação do usuário */}
+        {parciaisBR.length > 0 && (
+          <div style={{ marginBottom: 14 }}>
+            <div style={{ fontSize: 11.5, fontWeight: 700, color: T.amberText, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
+              <AlertTriangle size={13} color={T.amber} />
+              {parciaisBR.length} BR{parciaisBR.length !== 1 ? 's' : ''} com faturamento PARCIAL — confira antes de decidir
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 8 }}>
+              {parciaisBR.map(br => {
+                const equip = dados.find(d => d.br_referencia === br);
+                const f = faturamentoPorBr[br];
+                const ativo = brFiltro === br;
+                return (
+                  <button key={br} onClick={() => setBrFiltro(ativo ? 'Todos' : br)} style={{
+                    textAlign: 'left', background: ativo ? T.amber : '#fff',
+                    border: `1.5px solid ${T.amber}66`, borderRadius: 8, padding: '10px 12px',
+                    cursor: 'pointer', transition: 'all .15s',
+                  }}>
+                    <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 13, color: ativo ? '#fff' : T.amberText, marginBottom: 3 }}>{br}</div>
+                    {equip && <div style={{ fontSize: 11, color: ativo ? '#fff' : T.inkDim, opacity: 0.85 }}>{equip.fornecedor}</div>}
+                    <div style={{ fontSize: 11.5, fontWeight: 700, marginTop: 5, color: ativo ? '#fff' : T.amberText }}>
+                      {f?.itensFaturados ?? 0} de {f?.totalItens ?? '?'} itens faturados
+                    </div>
+                    <div style={{ fontSize: 10.5, color: ativo ? '#fff' : T.inkFaint, marginTop: 2 }}>
+                      Quantidade: {f?.qtdFaturada ?? 0} de {f?.totalQtd ?? '?'} faturada
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+            <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 6 }}>
+              Não deu pra confirmar automaticamente se esses BRs estão realmente pendentes de retorno: só parte dos itens do pedido foi faturada até agora. Pode ser faturamento em etapas (normal) ou pode faltar sincronizar — clique no BR pra ver os itens exatos na tabela de pedidos abaixo e decidir.
             </div>
           </div>
         )}
