@@ -3907,18 +3907,20 @@ function Faturamento() {
       return { ano, mes, valor_liquido: valor };
     });
 
-    // Evolução mensal — Nota de Venda (bruto), fonte exata: faturamento_resumo
+    // Evolução mensal — Nota de Venda (bruto E líquido), fonte exata: faturamento_resumo
     // (nível de nota, TOPs válidos + STATUSNOTA='L' já aplicados na sync).
     const notaMensalMapExato = {};
     resumo.forEach(r => {
       if (r.tipmov !== 'V' || !r.data_neg) return;
       const d = new Date(r.data_neg + 'T00:00:00');
       const key = `${d.getFullYear()}-${d.getMonth() + 1}`;
-      notaMensalMapExato[key] = (notaMensalMapExato[key] || 0) + (Number(r.valor_nota) || 0);
+      if (!notaMensalMapExato[key]) notaMensalMapExato[key] = { bruto: 0, liquido: 0 };
+      notaMensalMapExato[key].bruto += (Number(r.valor_nota) || 0);
+      notaMensalMapExato[key].liquido += (Number(r.net_offer_value) || 0);
     });
-    const notaMensalArr = Object.entries(notaMensalMapExato).map(([key, valor]) => {
+    const notaMensalArr = Object.entries(notaMensalMapExato).map(([key, v]) => {
       const [ano, mes] = key.split('-').map(Number);
-      return { ano, mes, valor_bruto: valor };
+      return { ano, mes, valor_bruto: v.bruto, valor_liquido: v.liquido };
     });
 
     setNetMensal(netMensalArr);
@@ -3967,35 +3969,42 @@ function Faturamento() {
     }
     setConsumoMaterial(Object.entries(matAgg).map(([tipo, d]) => ({ tipo, ...d })));
 
-    // ── Pedidos não faturados: por BR específico (não por cliente agregado) ──
-    // Pra cada BR que teve pedido no período, busca quanto já foi faturado
-    // desse MESMO BR (em qualquer data, já que a nota pode sair depois do
-    // período do pedido) na fonte auditada faturamento_resumo. A diferença
-    // (pedido − faturado) é o que falta faturar daquele pedido específico.
-    const brsDoPeriodo = [...new Set(itens.map(it => it.br).filter(Boolean))];
-    let fatPorBr = {};
-    if (brsDoPeriodo.length > 0) {
-      const { data: fatBr } = await supabase
-        .from('faturamento_resumo')
-        .select('br,valor_nota')
-        .eq('tipmov', 'V')
-        .in('br', brsDoPeriodo);
-      (fatBr || []).forEach(f => { fatPorBr[f.br] = (fatPorBr[f.br] || 0) + (Number(f.valor_nota) || 0); });
-    }
-    const pedidoPorBr = {};
+    // ── Pedidos não faturados: por PEDIDO ÚNICO (NUNOTA), não por BR ──────────
+    // NUMPEDIDO é o número de CONTRATO do cliente (se repete entre vários
+    // pedidos/entregas do mesmo contrato — ex.: ArcelorMittal) — não serve como
+    // identificador único. NUNOTA é o pedido de venda de verdade no Sankhya.
+    // Quando o Sankhya vai entregando aos poucos o MESMO pedido (parcial), o
+    // item mantém o mesmo NUNOTA e só QTDENTREGUE vai subindo — por isso a
+    // pendência certa é por ITEM: quantidade − qtd_entregue, não por comparação
+    // solta com nota_venda_itens. Se surge um NUNOTA novo pro mesmo BR (outro
+    // equipamento/ordem), é tratado como pedido separado, não somado junto.
+    const pedidoPorNunota = {};
     for (const it of itens) {
-      if (!it.br) continue;
-      if (!pedidoPorBr[it.br]) pedidoPorBr[it.br] = { br: it.br, cliente: it.cliente_nome || '—', vendedor: it.vendedor_nome || '—', valorPedido: 0 };
-      pedidoPorBr[it.br].valorPedido += Number(it.valor_liquido) || 0;
+      if (!it.nunota) continue;
+      if (!pedidoPorNunota[it.nunota]) {
+        pedidoPorNunota[it.nunota] = {
+          nunota: it.nunota, br: it.br || '—', cliente: it.cliente_nome || '—',
+          vendedor: it.vendedor_nome || '—', numero_pedido: it.numero_pedido || '—',
+          nro_interno: it.nro_interno_sankhya || it.nunota,
+          valorPedido: 0, valorPendente: 0, itensPendentes: 0, itensTotal: 0,
+        };
+      }
+      const p = pedidoPorNunota[it.nunota];
+      const valor = Number(it.valor_liquido) || 0;
+      const qtd = Number(it.quantidade) || 0;
+      const entregue = Number(it.qtd_entregue) || 0;
+      const pendente = Math.max(0, qtd - entregue);
+      p.valorPedido += valor;
+      p.itensTotal += 1;
+      if (pendente > 0.001) {
+        p.itensPendentes += 1;
+        // valor pendente proporcional à quantidade que ainda falta entregar
+        p.valorPendente += qtd > 0 ? valor * (pendente / qtd) : valor;
+      }
     }
-    const naoFat = Object.values(pedidoPorBr)
-      .map(p => ({
-        ...p,
-        faturado: fatPorBr[p.br] || 0,
-        nao_faturado: Math.max(0, p.valorPedido - (fatPorBr[p.br] || 0)),
-      }))
-      .filter(p => p.nao_faturado > 100) // filtra ruído de centavos
-      .sort((a, b) => b.nao_faturado - a.nao_faturado);
+    const naoFat = Object.values(pedidoPorNunota)
+      .filter(p => p.valorPendente > 100) // filtra ruído de centavos
+      .sort((a, b) => b.valorPendente - a.valorPendente);
     setPedidosNaoFat(naoFat);
 
     setLoading(false);
@@ -4039,10 +4048,17 @@ function Faturamento() {
     }
   };
 
-  const abrirDrillDown = useCallback(async (titulo, filtro) => {
+  const abrirDrillDown = useCallback(async (titulo, filtro, mesInfo) => {
     setDrillDown({ titulo, itens: [] });
     setDrillLoading(true);
-    const { ini, fim } = rangeDatas();
+    let ini, fim;
+    if (mesInfo) {
+      ini = `${mesInfo.ano}-${String(mesInfo.mes).padStart(2, '0')}-01`;
+      const ultimoDia = new Date(mesInfo.ano, mesInfo.mes, 0).getDate();
+      fim = `${mesInfo.ano}-${String(mesInfo.mes).padStart(2, '0')}-${String(ultimoDia).padStart(2, '0')}`;
+    } else {
+      ({ ini, fim } = rangeDatas());
+    }
     let q = supabase.from('pedidos_itens').select('*').gte('data_neg', ini).lte('data_neg', fim).order('data_neg', { ascending: false });
     if (filtro?.coluna && filtro?.valor) q = q.eq(filtro.coluna, filtro.valor);
     const { data } = await q;
@@ -4050,10 +4066,17 @@ function Faturamento() {
     setDrillLoading(false);
   }, [filtros]);
 
-  const abrirDrillDownNota = useCallback(async (titulo, filtro) => {
+  const abrirDrillDownNota = useCallback(async (titulo, filtro, mesInfo) => {
     setDrillDown({ titulo, itens: [], campoValor: 'valor_bruto' });
     setDrillLoading(true);
-    const { ini, fim } = rangeDatas();
+    let ini, fim;
+    if (mesInfo) {
+      ini = `${mesInfo.ano}-${String(mesInfo.mes).padStart(2, '0')}-01`;
+      const ultimoDia = new Date(mesInfo.ano, mesInfo.mes, 0).getDate();
+      fim = `${mesInfo.ano}-${String(mesInfo.mes).padStart(2, '0')}-${String(ultimoDia).padStart(2, '0')}`;
+    } else {
+      ({ ini, fim } = rangeDatas());
+    }
     let q = supabase.from('nota_venda_itens').select('*').in('codtipoper', TOPS_FATURAMENTO_VALIDOS).gte('data_neg', ini).lte('data_neg', fim).order('data_neg', { ascending: false });
     if (filtro?.coluna && filtro?.valor) q = q.eq(filtro.coluna, filtro.valor);
     const { data } = await q;
@@ -4079,12 +4102,15 @@ function Faturamento() {
 
   const evolucaoMensalNota = useMemo(() => {
     const map = {};
-    notaVenda.forEach(m => { map[`${m.ano}-${m.mes}`] = m.valor_bruto; });
+    notaVenda.forEach(m => { map[`${m.ano}-${m.mes}`] = { bruto: m.valor_bruto, liquido: m.valor_liquido || 0 }; });
     const out = [];
     for (let ano = filtros.anoIni; ano <= filtros.anoFim; ano++) {
       const mIni = ano === filtros.anoIni ? filtros.mesIni : 1;
       const mFim = ano === filtros.anoFim ? filtros.mesFim : 12;
-      for (let mes = mIni; mes <= mFim; mes++) out.push({ ano, mes, valor: map[`${ano}-${mes}`] || 0 });
+      for (let mes = mIni; mes <= mFim; mes++) {
+        const v = map[`${ano}-${mes}`] || { bruto: 0, liquido: 0 };
+        out.push({ ano, mes, valor: v.bruto, valorLiquido: v.liquido });
+      }
     }
     return out;
   }, [notaVenda, filtros]);
@@ -4225,12 +4251,12 @@ function Faturamento() {
           </Panel>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-            <Panel title="Evolução mensal — Net Value" subtitle={filtros.anoIni === filtros.anoFim ? `${filtros.anoIni}` : `${filtros.anoIni}–${filtros.anoFim}`}>
+            <Panel title="Evolução mensal — Net Value (Pedidos)" subtitle={`${filtros.anoIni === filtros.anoFim ? `${filtros.anoIni}` : `${filtros.anoIni}–${filtros.anoFim}`} · soma de pedidos_itens (TIPMOV='P'), não é valor de propostas`}>
               <div style={{ display: 'flex', alignItems: 'flex-end', gap: 10, height: 210, padding: '14px 4px 0', overflowX: 'auto' }}>
                 {evolucaoMensal.map((m, i) => {
                   const h = Math.max((m.valor / maxMensal) * 160, m.valor > 0 ? 4 : 2);
                   return (
-                    <button key={i} onClick={() => abrirDrillDown(`Net Value — ${MESES_FAT[m.mes - 1]}/${m.ano}`, null)}
+                    <button key={i} onClick={() => abrirDrillDown(`Net Value (Pedidos) — ${MESES_FAT[m.mes - 1]}/${m.ano}`, null, { ano: m.ano, mes: m.mes })}
                       style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flex: '0 0 auto', minWidth: 52, background: 'transparent', border: 'none', cursor: 'pointer', padding: 0 }}>
                       <div style={{ fontSize: 10, fontWeight: 700, marginBottom: 6, color: T.terracottaText, fontFamily: FONT_DISPLAY, whiteSpace: 'nowrap' }}>{fmtValorCompacto(m.valor)}</div>
                       <div style={{
@@ -4247,25 +4273,36 @@ function Faturamento() {
               </div>
             </Panel>
 
-            <Panel title="Evolução mensal — Nota de Venda" subtitle={filtros.anoIni === filtros.anoFim ? `${filtros.anoIni}` : `${filtros.anoIni}–${filtros.anoFim}`}>
-              <div style={{ display: 'flex', alignItems: 'flex-end', gap: 10, height: 210, padding: '14px 4px 0', overflowX: 'auto' }}>
+            <Panel title="Evolução mensal — Nota de Venda" subtitle={`${filtros.anoIni === filtros.anoFim ? `${filtros.anoIni}` : `${filtros.anoIni}–${filtros.anoFim}`} · bruto (Vlr Nota) vs líquido (Net Offer Value)`}>
+              <div style={{ display: 'flex', alignItems: 'flex-end', gap: 14, height: 210, padding: '14px 4px 0', overflowX: 'auto' }}>
                 {evolucaoMensalNota.map((m, i) => {
-                  const h = Math.max((m.valor / maxMensalNota) * 160, m.valor > 0 ? 4 : 2);
+                  const hBruto = Math.max((m.valor / maxMensalNota) * 160, m.valor > 0 ? 4 : 2);
+                  const hLiquido = Math.max((m.valorLiquido / maxMensalNota) * 160, m.valorLiquido > 0 ? 4 : 2);
                   return (
-                    <button key={i} onClick={() => abrirDrillDownNota(`Nota de Venda — ${MESES_FAT[m.mes - 1]}/${m.ano}`, null)}
-                      style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flex: '0 0 auto', minWidth: 52, background: 'transparent', border: 'none', cursor: 'pointer', padding: 0 }}>
-                      <div style={{ fontSize: 10, fontWeight: 700, marginBottom: 6, color: T.blueText, fontFamily: FONT_DISPLAY, whiteSpace: 'nowrap' }}>{fmtValorCompacto(m.valor)}</div>
-                      <div style={{
-                        width: 34, height: h, borderRadius: '5px 5px 2px 2px', transition: 'height .35s ease, filter .15s',
-                        background: `linear-gradient(180deg, ${T.blue} 0%, ${T.blueText} 100%)`,
-                      }}
-                        onMouseEnter={e => e.currentTarget.style.filter = 'brightness(1.12)'}
-                        onMouseLeave={e => e.currentTarget.style.filter = 'none'}
-                      />
-                      <div style={{ fontSize: 10, color: T.inkFaint, marginTop: 9, fontWeight: 500 }}>{MESES_FAT[m.mes - 1]}/{String(m.ano).slice(2)}</div>
+                    <button key={i} onClick={() => abrirDrillDownNota(`Nota de Venda — ${MESES_FAT[m.mes - 1]}/${m.ano}`, null, { ano: m.ano, mes: m.mes })}
+                      style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flex: '0 0 auto', minWidth: 66, background: 'transparent', border: 'none', cursor: 'pointer', padding: 0 }}>
+                      <div style={{ fontSize: 9.5, fontWeight: 700, marginBottom: 6, color: T.blueText, fontFamily: FONT_DISPLAY, whiteSpace: 'nowrap' }}>{fmtValorCompacto(m.valor)}</div>
+                      <div style={{ display: 'flex', gap: 4, alignItems: 'flex-end' }}>
+                        <div title={`Bruto: ${fmtValor(m.valor)}`} style={{
+                          width: 22, height: hBruto, borderRadius: '4px 4px 2px 2px', transition: 'height .35s ease, filter .15s',
+                          background: `linear-gradient(180deg, ${T.blue} 0%, ${T.blueText} 100%)`,
+                        }}
+                          onMouseEnter={e => e.currentTarget.style.filter = 'brightness(1.12)'}
+                          onMouseLeave={e => e.currentTarget.style.filter = 'none'}
+                        />
+                        <div title={`Líquido: ${fmtValor(m.valorLiquido)}`} style={{
+                          width: 22, height: hLiquido, borderRadius: '4px 4px 2px 2px', background: T.oliveText,
+                        }} />
+                      </div>
+                      <div style={{ fontSize: 9.5, fontWeight: 600, color: T.oliveText, marginTop: 4, whiteSpace: 'nowrap' }}>{fmtValorCompacto(m.valorLiquido)}</div>
+                      <div style={{ fontSize: 10, color: T.inkFaint, marginTop: 6, fontWeight: 500 }}>{MESES_FAT[m.mes - 1]}/{String(m.ano).slice(2)}</div>
                     </button>
                   );
                 })}
+              </div>
+              <div style={{ display: 'flex', gap: 14, marginTop: 10, fontSize: 11, color: T.inkFaint }}>
+                <span><span style={{ display: 'inline-block', width: 10, height: 10, background: T.blueText, borderRadius: 2, marginRight: 4 }} />Bruto (Vlr Nota)</span>
+                <span><span style={{ display: 'inline-block', width: 10, height: 10, background: T.oliveText, borderRadius: 2, marginRight: 4 }} />Líquido (Net Offer Value)</span>
               </div>
             </Panel>
           </div>
@@ -4325,10 +4362,10 @@ function Faturamento() {
 
           {/* ── PEDIDOS FATURADOS vs NÃO FATURADOS ──────────────────────────── */}
           <Panel
-            title="Pedidos faturados vs não faturados"
+            title="Pedidos: entregues vs pendentes"
             subtitle={viewFatTab === 'faturados'
               ? 'Comparativo por cliente — pedido de venda confirmado × nota fiscal emitida'
-              : 'Por BR específico — pedido de venda que ainda não tem nota fiscal (ou tem só parte faturada)'}
+              : 'Por pedido único (NUNOTA) — quantidade ainda não entregue, item a item'}
             right={
               <div style={{ display: 'flex', background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 6, padding: 2 }}>
                 {[['faturados', 'Faturados'], ['nao_faturados', 'Não faturados']].map(([key, label]) => (
@@ -4343,41 +4380,43 @@ function Faturamento() {
             }
           >
             {viewFatTab === 'nao_faturados' ? (
-              pedidosNaoFat.length === 0 ? <EmptyStateFat texto="Nenhum pedido pendente de faturamento no período." /> : (
+              pedidosNaoFat.length === 0 ? <EmptyStateFat texto="Nenhum pedido pendente de entrega no período." /> : (
                 <div style={{ overflowX: 'auto', marginTop: 10 }}>
                   <p style={{ fontSize: 11.5, color: T.inkFaint, margin: '0 0 8px' }}>
-                    Falta faturar = valor do pedido − o que já foi faturado desse mesmo BR (em qualquer data). Ordenado do que falta mais.
+                    Cada linha é um PEDIDO ÚNICO (NUNOTA do Sankhya, não o número de contrato — que pode se repetir em vários pedidos do mesmo cliente, ex.: ArcelorMittal). "Falta entregar" soma, item a item, (quantidade − qtd. já entregue) × valor unitário — não depende de casar com nota fiscal. Ordenado do que falta mais.
                   </p>
                   <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
                     <thead>
                       <tr style={{ borderBottom: `1px solid ${T.line}` }}>
                         <th style={thFat()}>BR</th>
+                        <th style={thFat()}>Pedido (NUNOTA)</th>
+                        <th style={thFat()}>Contrato</th>
                         <th style={thFat()}>Cliente</th>
                         <th style={thFat()}>Vendedor</th>
                         <th style={thFat(0, 'right')}>Valor pedido</th>
-                        <th style={thFat(0, 'right')}>Já faturado</th>
-                        <th style={thFat(0, 'right')}>Falta faturar</th>
-                        <th style={thFat(120)}>Cobertura</th>
+                        <th style={thFat(0, 'right')}>Falta entregar</th>
+                        <th style={thFat(120)}>Itens pendentes</th>
                       </tr>
                     </thead>
                     <tbody>
                       {pedidosNaoFat.map(p => {
-                        const cobertura = p.valorPedido > 0 ? Math.min((p.faturado / p.valorPedido) * 100, 100) : 0;
+                        const cobertura = p.itensTotal > 0 ? Math.min(((p.itensTotal - p.itensPendentes) / p.itensTotal) * 100, 100) : 0;
                         const cor = cobertura >= 80 ? T.oliveText : cobertura >= 40 ? T.amberText : T.rustText;
                         return (
-                          <tr key={p.br} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                          <tr key={p.nunota} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
                             <td style={{ padding: '10px 12px', fontWeight: 700, fontFamily: FONT_DISPLAY, color: T.blueText }}>{p.br}</td>
+                            <td style={{ padding: '10px 12px', fontFamily: FONT_DISPLAY, color: T.inkDim }}>{p.nro_interno}</td>
+                            <td style={{ padding: '10px 12px', fontFamily: FONT_DISPLAY, color: T.inkFaint, fontSize: 11.5 }}>{p.numero_pedido}</td>
                             <td style={{ padding: '10px 12px', maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={p.cliente}>{p.cliente}</td>
                             <td style={{ padding: '10px 12px', maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: T.inkDim, fontSize: 11.5 }} title={p.vendedor}>{p.vendedor}</td>
                             <td style={{ ...tdFat(), color: T.ink, fontWeight: 600 }}>{fmtValorCompacto(p.valorPedido)}</td>
-                            <td style={{ ...tdFat(), color: T.blueText }}>{fmtValorCompacto(p.faturado)}</td>
-                            <td style={{ ...tdFat(), color: T.rustText, fontWeight: 700 }}>{fmtValorCompacto(p.nao_faturado)}</td>
+                            <td style={{ ...tdFat(), color: T.rustText, fontWeight: 700 }}>{fmtValorCompacto(p.valorPendente)}</td>
                             <td style={{ padding: '10px 12px' }}>
                               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                                 <div style={{ flex: 1, background: T.lineSoft, height: 6, borderRadius: 3, overflow: 'hidden' }}>
                                   <div style={{ width: `${cobertura}%`, height: '100%', background: cor, borderRadius: 3, transition: 'width .3s' }} />
                                 </div>
-                                <span style={{ fontSize: 11, fontWeight: 700, color: cor, width: 34, textAlign: 'right' }}>{cobertura.toFixed(0)}%</span>
+                                <span style={{ fontSize: 11, fontWeight: 700, color: cor, width: 42, textAlign: 'right' }}>{p.itensTotal - p.itensPendentes}/{p.itensTotal}</span>
                               </div>
                             </td>
                           </tr>
