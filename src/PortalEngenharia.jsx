@@ -1859,7 +1859,6 @@ function CicloComercial() {
         <Kpi label="Faturamento líquido (Net Offer Value)" value={fmtMoeda(faturamentoTotalPeriodo.liquido)} icon={DollarSign} tone="olive"
           info={`Mesmo critério do card de bruto: Net Offer Value real de todas as notas fiscais de ${MESES_LABEL[mesIni]} a ${MESES_LABEL[mesFim]}/${ANO_OPERACIONAL}, filtrado pela data da Nota Fiscal.`} />
         <Kpi label="Pedido confirmado, aguarda fatura" value={fmtMoeda(totais.valorPedidoSemFatura)} icon={Clock3} tone="amber" />
-        <Kpi label="Valor ainda sem pedido" value={fmtMoeda(totais.valorSemPedido)} icon={AlertTriangle} tone="rust" />
       </div>
       <p style={{ fontSize: 11.5, color: T.inkFaint, margin: '-14px 0 0' }}>
         Bruto = Vlr Nota (CAB.VLRNOTA) · Líquido = Net Offer Value (Vlr Nota − ICMS − IPI − PIS − COFINS) · TOPs 3200/3201/3209/3214/3216/3220/3227/3229 · só notas com STATUSNOTA = 'L'
@@ -2010,6 +2009,7 @@ function CicloComercial() {
         </div>
         <div style={{ padding: '0 18px 12px', fontSize: 11.5, color: T.inkFaint }}>
           {dadosFiltrados.length} propostas de {MESES_LABEL[mesIni]} a {MESES_LABEL[mesFim]} de {ANO_OPERACIONAL} (KPIs e tabela acima já respeitam esse intervalo)
+          {' · '}<AlertTriangle size={11} color={T.rust} style={{ verticalAlign: -1 }} /> na coluna "Proposta em" = BR antigo (2025 ou antes) sem a revisão original sincronizada; a data mostrada não é confiável, não afirmamos nada sobre ela
         </div>
         <div style={{ overflowX: 'auto', maxHeight: 500, overflowY: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
@@ -2023,11 +2023,19 @@ function CicloComercial() {
             <tbody>
               {filtrados.slice(0, 300).map(d => {
                 const meta = ETAPA_META[d.etapa_atual];
+                const dataInconsistente = d.data_pedido && d.data_abertura && d.data_pedido < d.data_abertura;
                 return (
                   <tr key={d.id} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
                     <td style={{ padding: '10px 16px', fontWeight: 600, fontFamily: FONT_DISPLAY }}>{d.br}</td>
                     <td style={{ padding: '10px 16px', color: T.inkDim, maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.cliente}</td>
-                    <td style={{ padding: '10px 16px', fontSize: 12.5 }}>{fmtData(d.data_abertura)}</td>
+                    <td style={{ padding: '10px 16px', fontSize: 12.5 }}>
+                      {fmtData(d.data_abertura)}
+                      {dataInconsistente && (
+                        <span title="Esse BR só tem 1 registro de orçamento sincronizado (provavelmente uma revisão/reemissão tardia) — a proposta original é de antes do início do sync (jan/2026) e não temos a data real. Não confie nessa data pra esse BR." style={{ marginLeft: 5, cursor: 'help' }}>
+                          <AlertTriangle size={11} color={T.rust} style={{ verticalAlign: -1 }} />
+                        </span>
+                      )}
+                    </td>
                     <td style={{ padding: '10px 16px', fontSize: 12.5 }}>{d.data_pedido ? fmtData(d.data_pedido) : '—'}</td>
                     <td style={{ padding: '10px 16px', fontSize: 12.5 }}>{d.data_faturamento ? fmtData(d.data_faturamento) : '—'}</td>
                     <td style={{ padding: '10px 16px', fontSize: 12.5, fontFamily: FONT_DISPLAY, color: T.inkDim }}>{fmtMoeda(d.valor_liquido)}</td>
@@ -3232,25 +3240,35 @@ function EquipamentosTerceiros() {
                       <td style={{ padding: '8px 10px', maxWidth: 130, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 11.5 }}>{p.vendedor_nome}</td>
                       <td style={{ padding: '8px 10px', textAlign: 'center', fontSize: 11, fontWeight: 600, color: T.inkDim }}>{p.uf}</td>
                       <td style={{ padding: '8px 10px', whiteSpace: 'nowrap' }}>
-                        {mesmoNfAnterior ? (
-                          <span style={{ fontSize: 11, color: T.oliveText, paddingLeft: 4 }}>↳</span>
-                        ) : nfInfo ? (() => {
+                        {!nfInfo ? (
+                          <span style={{ fontSize: 10.5, fontWeight: 700, background: T.amberSoft, color: T.amberText, padding: '2px 7px', borderRadius: 4 }}>✗ Sem NF</span>
+                        ) : (() => {
+                          // Checa se ESTE item específico (não o BR inteiro) já foi faturado —
+                          // casa pela descrição do produto, o campo em comum entre pedidos_itens
+                          // e nota_venda_itens. Sem isso, um pedido com faturamento parcial
+                          // mostrava "✓ NF" ou "↳" em todos os itens, mesmo nos que ainda não
+                          // saíram na nota.
                           const itens = nfInfo.itens || [];
                           const doPedido = itens.filter(n => n.numero_pedido === p.numero_pedido);
                           const lista = doPedido.length > 0 ? doPedido : itens;
-                          const nfs = [...new Set(lista.map(n => n.nro_interno_sankhya).filter(Boolean))];
-                          const dataStr = nfInfo.data ? fmtData(nfInfo.data) : '';
+                          const itemFaturado = lista.find(n => n.produto_descricao === p.produto_descricao);
+                          if (itemFaturado) {
+                            return (
+                              <div>
+                                <span style={{ fontSize: 10.5, fontWeight: 700, background: T.oliveSoft, color: T.oliveText, padding: '2px 7px', borderRadius: 4 }}>
+                                  ✓ NF {itemFaturado.nro_interno_sankhya || '—'}
+                                </span>
+                                {itemFaturado.data_faturamento && <div style={{ fontSize: 10, color: T.inkFaint, marginTop: 2 }}>{fmtData(itemFaturado.data_faturamento)}</div>}
+                              </div>
+                            );
+                          }
+                          // O BR tem NF, mas ESTE item específico ainda não saiu nela
                           return (
-                            <div>
-                              <span style={{ fontSize: 10.5, fontWeight: 700, background: T.oliveSoft, color: T.oliveText, padding: '2px 7px', borderRadius: 4 }}>
-                                ✓ NF {nfs.join(', ') || '—'}
-                              </span>
-                              {dataStr && <div style={{ fontSize: 10, color: T.inkFaint, marginTop: 2 }}>{dataStr}</div>}
-                            </div>
+                            <span style={{ fontSize: 10.5, fontWeight: 700, background: T.amberSoft, color: T.amberText, padding: '2px 7px', borderRadius: 4 }} title="Outros itens deste BR já têm NF, mas este item específico ainda não">
+                              ⏳ Pendente
+                            </span>
                           );
-                        })() : (
-                          <span style={{ fontSize: 10.5, fontWeight: 700, background: T.amberSoft, color: T.amberText, padding: '2px 7px', borderRadius: 4 }}>✗ Sem NF</span>
-                        )}
+                        })()}
                       </td>
                     </tr>
                   );
