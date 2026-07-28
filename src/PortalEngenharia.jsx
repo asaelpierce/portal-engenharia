@@ -4881,62 +4881,63 @@ function categoriaMP(descricao) {
 }
 
 function ConsumoMP() {
-  const [projetos, setProjetos] = useState([]);
+  const [linhas, setLinhas] = useState([]);
+  const [semComposicao, setSemComposicao] = useState([]); // produtos usados em OP mas sem cadastro em `produtos`
   const [loading, setLoading] = useState(true);
+  const [erro, setErro] = useState(null);
   const [busca, setBusca] = useState('');
-  const [kalengFiltro, setKalengFiltro] = useState('Todos');
-  const [statusFiltro, setStatusFiltro] = useState('Todos');
-  const [sortCol, setSortCol] = useState('previsto');
+  const [categoriaFiltro, setCategoriaFiltro] = useState('Todos');
+  const [sortCol, setSortCol] = useState('consumido');
   const [sortDir, setSortDir] = useState('desc');
+  const [drillMP, setDrillMP] = useState(null); // { codigo, descricao, detalhes: [...] }
 
+  // Toda a lógica de cálculo (composição x quantidade produzida) já vive no banco,
+  // nas views v_consumo_mp / v_consumo_mp_detalhe / v_produtos_sem_composicao.
+  // Elas se atualizam sozinhas conforme novas remessas (ordens de produção) entram —
+  // não é preciso recalcular nada aqui no front.
   const carregar = useCallback(async () => {
     setLoading(true);
+    setErro(null);
 
-    const [rPed, rNf] = await Promise.all([
-      supabase.from('pedidos_itens')
-        .select('br,cliente_nome,produto_kaleng,valor_liquido,vendedor_nome,numero_pedido,uf'),
-      supabase.from('faturamento_resumo')
-        .select('br,valor_nota,codtipoper')
-        .eq('tipmov', 'V'),
+    const [rConsumo, rFaltantes] = await Promise.all([
+      supabaseSGQ.from('v_consumo_mp')
+        .select('codigo_mp,descricao,unidade,estoque_minimo,qtd_consumida,saldo_disponivel,qtd_remessas,cobertura_pct,abaixo_minimo'),
+      supabaseSGQ.from('v_produtos_sem_composicao')
+        .select('produto,descricao_produto,projeto'),
     ]);
 
-    // Agrupa pedidos por BR
-    const pedMap = {};
-    (rPed.data||[]).forEach(p => {
-      if (!p.br) return;
-      if (!pedMap[p.br]) pedMap[p.br] = {
-        br: p.br, cliente: p.cliente_nome || '—',
-        vendedor: p.vendedor_nome || '—', uf: p.uf || '—',
-        kalengSet: new Set(), pedidosSet: new Set(),
-        previsto: 0,
-      };
-      pedMap[p.br].previsto += Number(p.valor_liquido) || 0;
-      if (p.produto_kaleng) pedMap[p.br].kalengSet.add(p.produto_kaleng);
-      if (p.numero_pedido)  pedMap[p.br].pedidosSet.add(p.numero_pedido);
-      // Mantém cliente do primeiro item
-    });
+    if (rConsumo.error) {
+      setErro(`Erro SGQ: ${rConsumo.error.message}`);
+      setLoading(false);
+      return;
+    }
 
-    // Agrupa NFs por BR — fonte faturamento_resumo, já no nível de nota (exato)
-    const nfMap = {};
-    (rNf.data||[]).forEach(n => {
-      if (!n.br) return;
-      nfMap[n.br] = (nfMap[n.br] || 0) + (Number(n.valor_nota) || 0);
-    });
+    const lista = (rConsumo.data || []).map(r => ({
+      codigo_mp: r.codigo_mp,
+      descricao: r.descricao,
+      categoria: categoriaMP(r.descricao || ''),
+      unidade: r.unidade || '—',
+      consumido: Number(r.qtd_consumida) || 0,
+      saldo: r.saldo_disponivel != null ? Number(r.saldo_disponivel) : null,
+      estoqueMinimo: Number(r.estoque_minimo) || 0,
+      abaixoMinimo: !!r.abaixo_minimo,
+      coberturaPct: r.cobertura_pct != null ? Number(r.cobertura_pct) : null,
+      numRemessas: r.qtd_remessas,
+    }));
 
-    const lista = Object.values(pedMap).map(p => {
-      const faturado  = nfMap[p.br] || 0;
-      const pendente  = Math.max(0, p.previsto - faturado);
-      const pct       = p.previsto > 0 ? Math.round(faturado / p.previsto * 100) : 0;
-      return {
-        br: p.br, cliente: p.cliente, vendedor: p.vendedor, uf: p.uf,
-        kaleng: [...p.kalengSet].filter(Boolean).join(', '),
-        num_pedidos: p.pedidosSet.size,
-        previsto: p.previsto, faturado, pendente, pct,
-      };
-    });
-
-    setProjetos(lista);
+    setLinhas(lista);
+    setSemComposicao(rFaltantes.data || []);
     setLoading(false);
+  }, []);
+
+  // Carrega o detalhe (drill-down) de uma MP sob demanda, direto da view.
+  const carregarDetalhe = useCallback(async (codigoMp) => {
+    const { data, error } = await supabaseSGQ.from('v_consumo_mp_detalhe')
+      .select('produto,descricao_produto,projeto,quantidade_op,consumo_calculado,um')
+      .eq('codigo_mp', codigoMp)
+      .order('consumo_calculado', { ascending: false });
+    if (error) return [];
+    return data || [];
   }, []);
 
   useEffect(() => { carregar(); }, [carregar]);
@@ -4947,29 +4948,19 @@ function ConsumoMP() {
     return () => clearInterval(id);
   }, [carregar]);
 
-  const statusDo = (r) =>
-    r.pct >= 100 ? 'faturado' : r.pct > 0 ? 'parcial' : 'pendente';
-
-  const statusMeta = (s) => ({
-    faturado: { cor: T.oliveText, bg: T.oliveSoft,  label: '✓ Faturado' },
-    parcial:  { cor: T.amberText, bg: T.amberSoft,  label: '◑ Parcial' },
-    pendente: { cor: T.rustText,  bg: T.rustSoft,   label: '○ Pendente' },
-  }[s] || { cor: T.inkFaint, bg: T.lineSoft, label: '—' });
-
-  const kalengs = useMemo(() => {
-    const s = new Set(projetos.flatMap(p => p.kaleng.split(', ').filter(Boolean)));
+  const categorias = useMemo(() => {
+    const s = new Set(linhas.map(l => l.categoria));
     return ['Todos', ...[...s].sort()];
-  }, [projetos]);
+  }, [linhas]);
 
   const filtrados = useMemo(() => {
-    return projetos
+    return linhas
       .filter(r => {
-        const st = statusDo(r);
-        const matchBusca  = !busca || r.br.toLowerCase().includes(busca.toLowerCase()) ||
-                            r.cliente.toLowerCase().includes(busca.toLowerCase());
-        const matchKaleng = kalengFiltro === 'Todos' || r.kaleng.includes(kalengFiltro);
-        const matchStatus = statusFiltro === 'Todos' || st === statusFiltro;
-        return matchBusca && matchKaleng && matchStatus;
+        const matchBusca = !busca ||
+          r.codigo_mp.toLowerCase().includes(busca.toLowerCase()) ||
+          r.descricao.toLowerCase().includes(busca.toLowerCase());
+        const matchCategoria = categoriaFiltro === 'Todos' || r.categoria === categoriaFiltro;
+        return matchBusca && matchCategoria;
       })
       .sort((a, b) => {
         let va = a[sortCol] ?? 0;
@@ -4980,26 +4971,20 @@ function ConsumoMP() {
         if (va > vb) return sortDir === 'asc' ? 1 : -1;
         return 0;
       });
-  }, [projetos, busca, kalengFiltro, statusFiltro, sortCol, sortDir]);
+  }, [linhas, busca, categoriaFiltro, sortCol, sortDir]);
 
-  const kpis = useMemo(() => {
-    const previsto  = filtrados.reduce((s,r) => s + r.previsto, 0);
-    const faturado  = filtrados.reduce((s,r) => s + r.faturado, 0);
-    const pendente  = filtrados.reduce((s,r) => s + r.pendente, 0);
-    const pctMedio  = previsto > 0 ? Math.round(faturado / previsto * 100) : 0;
-    return { previsto, faturado, pendente, pctMedio,
-      nFaturado: filtrados.filter(r => statusDo(r) === 'faturado').length,
-      nParcial:  filtrados.filter(r => statusDo(r) === 'parcial').length,
-      nPendente: filtrados.filter(r => statusDo(r) === 'pendente').length,
-    };
-  }, [filtrados]);
+  const kpis = useMemo(() => ({
+    totalMPs: filtrados.length,
+    abaixoMinimo: filtrados.filter(l => l.abaixoMinimo).length,
+    semComposicao: semComposicao.length,
+  }), [filtrados, semComposicao]);
 
   const handleSort = (col) => {
     if (sortCol === col) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
     else { setSortCol(col); setSortDir('desc'); }
   };
 
-  const SortTh = ({ label, col, right }) => {
+  const LocalSortTh = ({ label, col, right }) => {
     const active = sortCol === col;
     return (
       <th onClick={() => handleSort(col)} style={{ ...thFat(0, right ? 'right' : 'left'), cursor: 'pointer', whiteSpace: 'nowrap' }}>
@@ -5008,21 +4993,23 @@ function ConsumoMP() {
     );
   };
 
-  const fmtR = (v) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL', notation: 'compact', maximumFractionDigits: 1 }).format(v);
+  const fmtQtd = (v) => v == null ? '—' : new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 2 }).format(v);
 
   return (
     <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
 
+      {erro && (
+        <div style={{ background: T.rustSoft, color: T.rustText, borderRadius: 8, padding: '10px 14px', fontSize: 12.5, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <AlertTriangle size={14} /> {erro}
+        </div>
+      )}
+
       {/* KPIs */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(155px,1fr))', gap: 12 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 12 }}>
         {[
-          { label: 'Total em pedido',  value: fmtR(kpis.previsto),  color: T.ink,       desc: 'Valor total dos pedidos de venda' },
-          { label: 'Total faturado',   value: fmtR(kpis.faturado),  color: T.oliveText, desc: 'NFs já emitidas' },
-          { label: 'Pendente faturar', value: fmtR(kpis.pendente),  color: kpis.pendente > 0 ? T.amberText : T.oliveText, desc: 'Pedido - Faturado' },
-          { label: '% faturado',       value: `${kpis.pctMedio}%`,  color: kpis.pctMedio >= 80 ? T.oliveText : kpis.pctMedio >= 40 ? T.amberText : T.rustText },
-          { label: '✓ Faturados',      value: kpis.nFaturado,       color: T.oliveText },
-          { label: '◑ Parciais',       value: kpis.nParcial,        color: T.amberText },
-          { label: '○ Pendentes',      value: kpis.nPendente,       color: T.rustText },
+          { label: 'Matérias-primas consumidas', value: kpis.totalMPs, color: T.ink, desc: 'Itens distintos com consumo calculado' },
+          { label: 'Abaixo do estoque mínimo', value: kpis.abaixoMinimo, color: kpis.abaixoMinimo > 0 ? T.rustText : T.oliveText, desc: 'MPs com saldo abaixo do mínimo definido' },
+          { label: 'Produtos sem composição', value: kpis.semComposicao, color: kpis.semComposicao > 0 ? T.amberText : T.oliveText, desc: 'Sem cadastro em `produtos` — consumo não calculado' },
         ].map(k => (
           <div key={k.label} style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '12px 14px', boxShadow: SHADOW_SM }}>
             <div style={{ fontSize: 10.5, color: T.inkFaint, fontWeight: 600 }}>{k.label}</div>
@@ -5035,34 +5022,23 @@ function ConsumoMP() {
       {/* Filtros */}
       <Panel>
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-          <FiltroCampoFat label="Buscar BR ou cliente">
+          <FiltroCampoFat label="Buscar código ou descrição">
             <div style={{ position: 'relative' }}>
               <Search size={13} style={{ position: 'absolute', left: 9, top: 9, color: T.inkFaint }} />
-              <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Ex: Vale, BR13582, Ternium…"
+              <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Ex: 4941, CHEMITAC…"
                 style={{ ...selectStyleFat(240), paddingLeft: 28 }} />
             </div>
           </FiltroCampoFat>
-          <FiltroCampoFat label="Kaleng">
+          <FiltroCampoFat label="Categoria">
             <div style={{ position: 'relative' }}>
-              <select value={kalengFiltro} onChange={e => setKalengFiltro(e.target.value)} style={selectStyleFat(140)}>
-                {kalengs.map(k => <option key={k} value={k}>{k}</option>)}
+              <select value={categoriaFiltro} onChange={e => setCategoriaFiltro(e.target.value)} style={selectStyleFat(160)}>
+                {categorias.map(c => <option key={c} value={c}>{c}</option>)}
               </select>
               <ChevronDown size={13} style={chevronStyleFat} />
             </div>
           </FiltroCampoFat>
-          <FiltroCampoFat label="Status">
-            <div style={{ position: 'relative' }}>
-              <select value={statusFiltro} onChange={e => setStatusFiltro(e.target.value)} style={selectStyleFat(140)}>
-                <option value="Todos">Todos</option>
-                <option value="faturado">✓ Faturado</option>
-                <option value="parcial">◑ Parcial</option>
-                <option value="pendente">○ Pendente</option>
-              </select>
-              <ChevronDown size={13} style={chevronStyleFat} />
-            </div>
-          </FiltroCampoFat>
-          {(busca || kalengFiltro !== 'Todos' || statusFiltro !== 'Todos') && (
-            <button onClick={() => { setBusca(''); setKalengFiltro('Todos'); setStatusFiltro('Todos'); }}
+          {(busca || categoriaFiltro !== 'Todos') && (
+            <button onClick={() => { setBusca(''); setCategoriaFiltro('Todos'); }}
               style={{ fontSize: 12, color: T.amberText, background: T.amberSoft, border: 'none', borderRadius: 5, padding: '6px 12px', cursor: 'pointer', fontWeight: 600 }}>
               ✕ Limpar
             </button>
@@ -5076,62 +5052,117 @@ function ConsumoMP() {
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
             <thead>
               <tr style={{ background: T.panelAlt, borderBottom: `1px solid ${T.line}` }}>
-                <SortTh label="BR"           col="br" />
-                <SortTh label="Cliente"      col="cliente" />
-                <SortTh label="Kaleng"       col="kaleng" />
-                <SortTh label="UF"           col="uf" />
-                <SortTh label="Pedidos"      col="num_pedidos" />
-                <SortTh label="Previsto"     col="previsto"  right />
-                <SortTh label="Faturado"     col="faturado"  right />
-                <SortTh label="Pendente"     col="pendente"  right />
-                <th style={{ ...thFat(90), textAlign: 'center' }}>% Fat.</th>
-                <th style={{ ...thFat(110), textAlign: 'center' }}>Status</th>
+                <LocalSortTh label="Código"      col="codigo_mp" />
+                <LocalSortTh label="Matéria-prima" col="descricao" />
+                <LocalSortTh label="Categoria"   col="categoria" />
+                <th style={{ ...thFat(70), textAlign: 'center' }}>UM</th>
+                <LocalSortTh label="Consumido (composição × OP)" col="consumido" right />
+                <LocalSortTh label="Saldo disponível" col="saldo" right />
+                <th style={{ ...thFat(90), textAlign: 'center' }}>Detalhe</th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={10} style={{ padding: 40, textAlign: 'center', color: T.inkFaint }}>Carregando…</td></tr>
+                <tr><td colSpan={7} style={{ padding: 40, textAlign: 'center', color: T.inkFaint }}>Carregando…</td></tr>
               ) : filtrados.length === 0 ? (
-                <tr><td colSpan={10} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Nenhum projeto encontrado.</td></tr>
-              ) : filtrados.map((r, i) => {
-                const st = statusDo(r);
-                const { cor, bg, label: stLabel } = statusMeta(st);
-                const rowBg = st === 'faturado' ? `${T.oliveSoft}33` : st === 'pendente' && r.pct === 0 ? `${T.rustSoft}22` : 'transparent';
-                return (
-                  <tr key={i} style={{ borderBottom: `1px solid ${T.lineSoft}`, background: rowBg }}
-                    onMouseEnter={e => e.currentTarget.style.background = T.panelAlt}
-                    onMouseLeave={e => e.currentTarget.style.background = rowBg}>
-                    <td style={{ padding: '9px 12px', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText, whiteSpace: 'nowrap' }}>{r.br}</td>
-                    <td style={{ padding: '9px 12px', maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.cliente}>{r.cliente}</td>
-                    <td style={{ padding: '9px 12px', color: T.blueText, fontWeight: 600, fontSize: 11 }}>{r.kaleng || '—'}</td>
-                    <td style={{ padding: '9px 12px', textAlign: 'center', fontSize: 11, color: T.inkFaint }}>{r.uf}</td>
-                    <td style={{ padding: '9px 12px', textAlign: 'center', fontSize: 11, color: T.inkFaint }}>{r.num_pedidos}</td>
-                    <td style={{ padding: '9px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 600, color: T.ink }}>{fmtR(r.previsto)}</td>
-                    <td style={{ padding: '9px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.oliveText }}>{r.faturado > 0 ? fmtR(r.faturado) : '—'}</td>
-                    <td style={{ padding: '9px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 600, color: r.pendente > 0 ? T.amberText : T.inkFaint }}>{r.pendente > 0 ? fmtR(r.pendente) : '—'}</td>
-                    <td style={{ padding: '9px 12px', textAlign: 'center' }}>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 2, alignItems: 'center' }}>
-                        <span style={{ fontSize: 11.5, fontWeight: 700, color: cor }}>{r.pct}%</span>
-                        <div style={{ width: 60, height: 5, background: T.lineSoft, borderRadius: 3, overflow: 'hidden' }}>
-                          <div style={{ width: `${Math.min(r.pct, 100)}%`, height: '100%', background: cor, borderRadius: 3 }} />
-                        </div>
-                      </div>
-                    </td>
-                    <td style={{ padding: '9px 12px', textAlign: 'center' }}>
-                      <span style={{ fontSize: 10.5, fontWeight: 700, color: cor, background: bg, padding: '3px 8px', borderRadius: 4, whiteSpace: 'nowrap' }}>{stLabel}</span>
-                    </td>
-                  </tr>
-                );
-              })}
+                <tr><td colSpan={7} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Nenhuma matéria-prima encontrada.</td></tr>
+              ) : filtrados.map((r) => (
+                <tr key={r.codigo_mp} style={{ borderBottom: `1px solid ${T.lineSoft}` }}
+                  onMouseEnter={e => e.currentTarget.style.background = T.panelAlt}
+                  onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                  <td style={{ padding: '9px 12px', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText, whiteSpace: 'nowrap' }}>{r.codigo_mp}</td>
+                  <td style={{ padding: '9px 12px', maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.descricao}>{r.descricao}</td>
+                  <td style={{ padding: '9px 12px', fontSize: 11, color: T.inkDim }}>{r.categoria}</td>
+                  <td style={{ padding: '9px 12px', textAlign: 'center', fontSize: 11, color: T.inkFaint }}>{r.unidade}</td>
+                  <td style={{ padding: '9px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.ink }}>{fmtQtd(r.consumido)}</td>
+                  <td style={{ padding: '9px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 600, color: r.saldo == null ? T.inkFaint : (r.saldo < r.consumido ? T.rustText : T.oliveText) }}>{fmtQtd(r.saldo)}</td>
+                  <td style={{ padding: '9px 12px', textAlign: 'center' }}>
+                    <button onClick={async () => {
+                      setDrillMP({ ...r, itens: null }); // abre o modal já, com loading
+                      const detalhe = await carregarDetalhe(r.codigo_mp);
+                      setDrillMP(prev => prev && prev.codigo_mp === r.codigo_mp ? { ...prev, itens: detalhe } : prev);
+                    }}
+                      style={{ fontSize: 11, color: T.blueText, background: T.blueSoft, border: 'none', borderRadius: 5, padding: '4px 10px', cursor: 'pointer', fontWeight: 600 }}>
+                      Ver produtos
+                    </button>
+                  </td>
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>
         <div style={{ padding: '10px 16px', borderTop: `1px solid ${T.line}`, fontSize: 11, color: T.inkFaint, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span>{filtrados.length} projeto{filtrados.length !== 1 ? 's' : ''} · Previsto = soma dos pedidos de venda · Faturado = NFs emitidas (TOPs 3200/3201/3209/3214/3216/3220/3227/3229)</span>
-          <BotaoExportar small onClick={() => exportCSV(filtrados, 'consumo_por_projeto.csv',
-            ['br','cliente','kaleng','uf','num_pedidos','previsto','faturado','pendente','pct'])} />
+          <span>{filtrados.length} matéria{filtrados.length !== 1 ? 's' : ''}-prima · Consumido = Σ (quantidade da composição do produto × quantidade_op de cada ordem de produção)</span>
+          <BotaoExportar small onClick={() => exportCSV(filtrados, 'consumo_mp.csv',
+            ['codigo_mp','descricao','categoria','unidade','consumido','saldo'])} />
         </div>
       </div>
+
+      {semComposicao.length > 0 && (
+        <Panel title="Produtos sem composição cadastrada" subtitle="Essas ordens de produção não entraram no cálculo acima porque o produto não tem registro em `produtos` (composição)">
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+              <thead>
+                <tr style={{ background: T.panelAlt, borderBottom: `1px solid ${T.line}` }}>
+                  <th style={thFat(100)}>Produto</th>
+                  <th style={thFat(0)}>Descrição</th>
+                  <th style={thFat(120)}>Projeto</th>
+                </tr>
+              </thead>
+              <tbody>
+                {semComposicao.map((f, i) => (
+                  <tr key={i} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                    <td style={{ padding: '8px 12px', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.amberText }}>{f.produto}</td>
+                    <td style={{ padding: '8px 12px' }}>{f.descricao_produto}</td>
+                    <td style={{ padding: '8px 12px', color: T.inkFaint }}>{f.projeto}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Panel>
+      )}
+
+      {drillMP && (
+        <Overlay onClose={() => setDrillMP(null)}>
+          <div style={{ padding: 20, minWidth: 480, maxWidth: 640 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 14 }}>
+              <div>
+                <div style={{ fontFamily: FONT_DISPLAY, fontSize: 18, fontWeight: 700, color: T.ink }}>{drillMP.codigo_mp} — {drillMP.descricao}</div>
+                <div style={{ fontSize: 11.5, color: T.inkFaint, marginTop: 2 }}>Consumido: {fmtQtd(drillMP.consumido)} {drillMP.unidade}</div>
+              </div>
+              <button onClick={() => setDrillMP(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.inkFaint }}><X size={18} /></button>
+            </div>
+            <div style={{ maxHeight: 420, overflowY: 'auto' }}>
+              {drillMP.itens === null ? (
+                <div style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Carregando…</div>
+              ) : (
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                  <thead>
+                    <tr style={{ background: T.panelAlt, borderBottom: `1px solid ${T.line}` }}>
+                      <th style={thFat(0)}>Produto / Projeto</th>
+                      <th style={{ ...thFat(70), textAlign: 'right' }}>Qtd OP</th>
+                      <th style={{ ...thFat(90), textAlign: 'right' }}>Consumo</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {drillMP.itens.map((it, i) => (
+                      <tr key={i} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                        <td style={{ padding: '8px 12px' }}>
+                          <div style={{ fontWeight: 600 }}>{it.descricao_produto}</div>
+                          <div style={{ fontSize: 10.5, color: T.inkFaint }}>{it.produto} · {it.projeto}</div>
+                        </td>
+                        <td style={{ padding: '8px 12px', textAlign: 'right' }}>{fmtQtd(it.quantidade_op)}</td>
+                        <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 700 }}>{fmtQtd(it.consumo_calculado)} {it.um}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
+        </Overlay>
+      )}
     </div>
   );
 }
