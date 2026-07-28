@@ -4880,94 +4880,57 @@ function categoriaMP(descricao) {
   return 'Outros';
 }
 
-// Extrai o "BR + número" de uma string, ignorando sufixos como "/25" ou "/26"
-// e variações de formatação. Ex: "BR13719/25" -> "BR13719", "BR 14206" -> "BR14206".
-// Se não achar padrão BR, usa a string normalizada como fallback (ex: "OP7818").
-function normalizarBR(txt) {
-  if (!txt) return '';
-  const limpo = String(txt).toUpperCase().replace(/\s+/g, '');
-  const m = limpo.match(/BR\d+/);
-  return m ? m[0] : limpo;
-}
-
 function ConsumoMP() {
-  const [linhas, setLinhas] = useState([]);
-  const [semComposicao, setSemComposicao] = useState([]);
+  const anoAtual = new Date().getFullYear();
+  const [filtros, setFiltros] = useState({ anoIni: 2026, anoFim: anoAtual, mesIni: 1, mesFim: 12 });
+  const [itens, setItens] = useState([]);
+  const [semComposicao, setSemComposicao] = useState(new Set());
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState(null);
   const [busca, setBusca] = useState('');
-  const [sortCol, setSortCol] = useState('data');
+  const [sortCol, setSortCol] = useState('data_neg');
   const [sortDir, setSortDir] = useState('desc');
-  const [drillRemessa, setDrillRemessa] = useState(null); // { produto, descricao_produto, projeto, itens: [...] | null }
-  const [syncing, setSyncing] = useState(false);
-  const [syncStatus, setSyncStatus] = useState(null);
+  const [drillItem, setDrillItem] = useState(null); // { ...item, composicao: [...] | null }
 
-  // Carrega ordens de produção (SGQ) e cruza com cliente/valor do pedido (portal-engenharia),
-  // casando pelo BR normalizado (o "projeto" do SGQ nem sempre tem o mesmo formato do BR do pedido).
-  // A composição (matéria-prima por produto) vem de `composicao_produtos`, sincronizada direto do
-  // Sankhya (VIEW_ARVORE_FORMULA) — não é mais o cadastro manual do Sistema de Industrialização.
+  const rangeDatas = () => {
+    const ini = `${filtros.anoIni}-${String(filtros.mesIni).padStart(2, '0')}-01`;
+    const ultimoDia = new Date(filtros.anoFim, filtros.mesFim, 0).getDate();
+    const fim = `${filtros.anoFim}-${String(filtros.mesFim).padStart(2, '0')}-${String(ultimoDia).padStart(2, '0')}`;
+    return { ini, fim };
+  };
+
+  // Fonte: exatamente a mesma usada em Faturamento → Nota de Venda (nota_venda_itens,
+  // filtrado pelos TOPs de venda validados) — o que já saiu, faturado de verdade.
+  // Atualiza sozinho conforme o sync do Sankhya roda (mesmo sync que alimenta o Faturamento).
   const carregar = useCallback(async () => {
     setLoading(true);
     setErro(null);
+    const { ini, fim } = rangeDatas();
 
-    const [rRemessas, rPedidos, rComposicaoProdutos] = await Promise.all([
-      supabaseSGQ.from('remessas')
-        .select('id,produto_acabado,descricao_produto,quantidade_op,projeto,status,data_criacao'),
-      supabase.from('pedidos_itens')
-        .select('br,cliente_nome,valor_liquido'),
-      supabase.from('composicao_produtos')
-        .select('cod_prod_pai'),
+    const [rNotas, rComposicao] = await Promise.all([
+      supabase.from('nota_venda_itens')
+        .select('nunota,sequencia,br,cliente_nome,data_neg,data_faturamento,numero_pedido,valor_bruto,unidade,quantidade,produto_descricao,cod_produto')
+        .in('codtipoper', TOPS_FATURAMENTO_VALIDOS)
+        .gte('data_neg', ini).lte('data_neg', fim)
+        .order('data_neg', { ascending: false }),
+      supabase.from('composicao_produtos').select('cod_prod_pai'),
     ]);
 
-    if (rRemessas.error) { setErro(`Erro SGQ: ${rRemessas.error.message}`); setLoading(false); return; }
-    if (rPedidos.error)  { setErro(`Erro portal: ${rPedidos.error.message}`); setLoading(false); return; }
-    if (rComposicaoProdutos.error) { setErro(`Erro composição: ${rComposicaoProdutos.error.message}`); setLoading(false); return; }
+    if (rNotas.error) { setErro(`Erro: ${rNotas.error.message}`); setLoading(false); return; }
+    if (rComposicao.error) { setErro(`Erro composição: ${rComposicao.error.message}`); setLoading(false); return; }
 
-    // Agrega valor e cliente por BR normalizado
-    const pedidoPorBR = {};
-    (rPedidos.data || []).forEach(p => {
-      const key = normalizarBR(p.br);
-      if (!key) return;
-      if (!pedidoPorBR[key]) pedidoPorBR[key] = { cliente: p.cliente_nome || '—', valor: 0 };
-      pedidoPorBR[key].valor += Number(p.valor_liquido) || 0;
-    });
+    const produtosComComposicao = new Set((rComposicao.data || []).map(c => c.cod_prod_pai));
 
-    // Produtos que têm composição cadastrada (sincronizada do Sankhya)
-    const produtosComComposicao = new Set((rComposicaoProdutos.data || []).map(c => c.cod_prod_pai));
-
-    const lista = [];
-    const faltantes = new Map();
-    (rRemessas.data || []).forEach(r => {
-      const key = normalizarBR(r.projeto);
-      const pedido = pedidoPorBR[key];
-      const produto = r.produto_acabado || '—';
-      if (!produtosComComposicao.has(produto)) {
-        faltantes.set(produto, { produto, descricao_produto: r.descricao_produto || '—', projeto: r.projeto || '—' });
-      }
-      lista.push({
-        remessa_id: r.id,
-        br: r.projeto || '—',
-        cliente: pedido?.cliente || '—',
-        produto,
-        descricao: r.descricao_produto || '—',
-        data: r.data_criacao,
-        quantidadeOp: Number(r.quantidade_op) || 0,
-        valorProjeto: pedido?.valor ?? null,
-        status: r.status,
-      });
-    });
-
-    setLinhas(lista);
-    setSemComposicao([...faltantes.values()]);
+    setItens(rNotas.data || []);
+    setSemComposicao(produtosComComposicao);
     setLoading(false);
-  }, []);
+  }, [filtros]);
 
-  // Carrega a composição (itens/quantidade) de um produto, direto da tabela sincronizada do Sankhya,
-  // e calcula o consumo multiplicando pela quantidade produzida naquela ordem específica.
-  const carregarComposicao = useCallback(async (codProdPai, quantidadeOp) => {
+  // Carrega a composição de um produto específico e calcula o consumo pela quantidade daquele item faturado.
+  const carregarComposicao = useCallback(async (codProduto, quantidade) => {
     const { data, error } = await supabase.from('composicao_produtos')
       .select('cod_prod_mp,descr_prod_mp,unidade,quantidade,disponivel_producao')
-      .eq('cod_prod_pai', codProdPai)
+      .eq('cod_prod_pai', codProduto)
       .order('quantidade', { ascending: false });
     if (error) return [];
     return (data || []).map(m => ({
@@ -4975,49 +4938,26 @@ function ConsumoMP() {
       descricao_mp: m.descr_prod_mp,
       um: m.unidade,
       quantidade_unitaria: Number(m.quantidade) || 0,
-      consumo_calculado: (Number(m.quantidade) || 0) * quantidadeOp,
+      consumo_calculado: (Number(m.quantidade) || 0) * quantidade,
       disponivel_producao: m.disponivel_producao,
     }));
   }, []);
 
-  // Dispara a sincronização da composição direto do Sankhya (mesmo padrão dos outros syncs do portal).
-  const handleAtualizarComposicao = async () => {
-    setSyncing(true);
-    setSyncStatus(null);
-    try {
-      const res = await fetch(`${SUPABASE_URL}/functions/v1/sankhya-composicao-sync`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-      });
-      const data = await res.json();
-      if (data.ok) {
-        setSyncStatus({ ok: true, message: `Composição sincronizada: ${data.inseridos} itens.` });
-        await carregar();
-      } else {
-        setSyncStatus({ ok: false, message: data.error || 'Erro desconhecido na sincronização.' });
-      }
-    } catch (err) {
-      setSyncStatus({ ok: false, message: String(err) });
-    } finally {
-      setSyncing(false);
-    }
-  };
-
   useEffect(() => { carregar(); }, [carregar]);
 
-  // Auto-refresh a cada 30 minutos — conforme novas ordens de produção saem, a lista já aparece atualizada sozinha.
+  // Auto-refresh a cada 30 minutos.
   useEffect(() => {
     const id = setInterval(carregar, 30 * 60 * 1000);
     return () => clearInterval(id);
   }, [carregar]);
 
   const filtrados = useMemo(() => {
-    return linhas
-      .filter(r => !busca ||
-        r.br.toLowerCase().includes(busca.toLowerCase()) ||
-        r.cliente.toLowerCase().includes(busca.toLowerCase()) ||
-        r.produto.toLowerCase().includes(busca.toLowerCase()) ||
-        r.descricao.toLowerCase().includes(busca.toLowerCase()))
+    return itens
+      .filter(it => !busca ||
+        (it.br || '').toLowerCase().includes(busca.toLowerCase()) ||
+        (it.cliente_nome || '').toLowerCase().includes(busca.toLowerCase()) ||
+        (it.cod_produto || '').toLowerCase().includes(busca.toLowerCase()) ||
+        (it.produto_descricao || '').toLowerCase().includes(busca.toLowerCase()))
       .sort((a, b) => {
         let va = a[sortCol] ?? 0;
         let vb = b[sortCol] ?? 0;
@@ -5027,17 +4967,18 @@ function ConsumoMP() {
         if (va > vb) return sortDir === 'asc' ? 1 : -1;
         return 0;
       });
-  }, [linhas, busca, sortCol, sortDir]);
+  }, [itens, busca, sortCol, sortDir]);
 
-  const kpis = useMemo(() => ({
-    totalOrdens: filtrados.length,
-    semCliente: filtrados.filter(l => l.cliente === '—').length,
-    semComposicao: semComposicao.length,
-  }), [filtrados, semComposicao]);
+  const kpis = useMemo(() => {
+    const totalFaturado = filtrados.reduce((s, it) => s + (Number(it.valor_bruto) || 0), 0);
+    const semCod = filtrados.filter(it => !it.cod_produto).length;
+    const semComp = filtrados.filter(it => it.cod_produto && !semComposicao.has(it.cod_produto)).length;
+    return { totalItens: filtrados.length, totalFaturado, semCod, semComp };
+  }, [filtrados, semComposicao]);
 
   const handleSort = (col) => {
     if (sortCol === col) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
-    else { setSortCol(col); setSortDir(col === 'data' ? 'desc' : 'asc'); }
+    else { setSortCol(col); setSortDir(col === 'data_neg' ? 'desc' : 'asc'); }
   };
 
   const LocalSortTh = ({ label, col, right }) => {
@@ -5051,12 +4992,13 @@ function ConsumoMP() {
 
   const fmtQtd = (v) => v == null ? '—' : new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 2 }).format(v);
   const fmtR = (v) => v == null ? '—' : new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL', notation: 'compact', maximumFractionDigits: 1 }).format(v);
-  const fmtDataHora = (iso) => !iso ? '—' : new Date(iso).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: '2-digit' });
+  const fmtRCheia = (v) => v == null ? '—' : new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(v);
+  const fmtDataCurta = (iso) => !iso ? '—' : new Date(iso + 'T00:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: '2-digit' });
 
-  const abrirComposicao = async (r) => {
-    setDrillRemessa({ ...r, itens: null }); // abre já, com loading
-    const itens = await carregarComposicao(r.produto, r.quantidadeOp);
-    setDrillRemessa(prev => prev && prev.remessa_id === r.remessa_id ? { ...prev, itens } : prev);
+  const abrirComposicao = async (it) => {
+    setDrillItem({ ...it, composicao: null });
+    const composicao = await carregarComposicao(it.cod_produto, Number(it.quantidade) || 0);
+    setDrillItem(prev => prev && prev.nunota === it.nunota && prev.sequencia === it.sequencia ? { ...prev, composicao } : prev);
   };
 
   return (
@@ -5068,28 +5010,12 @@ function ConsumoMP() {
         </div>
       )}
 
-      {syncStatus && (
-        <div style={{ background: syncStatus.ok ? T.oliveSoft : T.rustSoft, color: syncStatus.ok ? T.oliveText : T.rustText, borderRadius: 8, padding: '10px 14px', fontSize: 12.5 }}>
-          {syncStatus.message}
-        </div>
-      )}
-
-      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-        <button onClick={handleAtualizarComposicao} disabled={syncing} style={{
-          display: 'flex', alignItems: 'center', gap: 8, background: T.terracotta, color: '#fff', border: 'none',
-          borderRadius: 8, padding: '9px 16px', fontSize: 12.5, fontWeight: 700, opacity: syncing ? 0.7 : 1,
-        }}>
-          <RefreshCw size={14} className={syncing ? 'spin' : ''} />
-          {syncing ? 'Atualizando composição do Sankhya…' : 'Atualizar composição do Sankhya'}
-        </button>
-      </div>
-
       {/* KPIs */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 12 }}>
         {[
-          { label: 'Ordens de produção', value: kpis.totalOrdens, color: T.ink, desc: 'Produtos produzidos por projeto' },
-          { label: 'Sem cliente identificado', value: kpis.semCliente, color: kpis.semCliente > 0 ? T.amberText : T.oliveText, desc: 'BR do projeto não bateu com nenhum pedido' },
-          { label: 'Produtos sem composição', value: kpis.semComposicao, color: kpis.semComposicao > 0 ? T.amberText : T.oliveText, desc: 'Sem registro em `composicao_produtos` (Sankhya) — sem detalhe de itens' },
+          { label: 'Itens faturados', value: kpis.totalItens, color: T.ink, desc: 'No período selecionado' },
+          { label: 'Total faturado', value: fmtR(kpis.totalFaturado), color: T.oliveText, desc: 'Soma do valor bruto' },
+          { label: 'Sem composição', value: kpis.semComp, color: kpis.semComp > 0 ? T.amberText : T.oliveText, desc: 'Produto não está em `composicao_produtos`' },
         ].map(k => (
           <div key={k.label} style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '12px 14px', boxShadow: SHADOW_SM }}>
             <div style={{ fontSize: 10.5, color: T.inkFaint, fontWeight: 600 }}>{k.label}</div>
@@ -5102,11 +5028,23 @@ function ConsumoMP() {
       {/* Filtros */}
       <Panel>
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+          <FiltroCampoFat label="Ano início">
+            <SelectAnoFat value={filtros.anoIni} onChange={v => setFiltros(f => ({ ...f, anoIni: v }))} />
+          </FiltroCampoFat>
+          <FiltroCampoFat label="Mês início">
+            <SelectMesFat value={filtros.mesIni} onChange={v => setFiltros(f => ({ ...f, mesIni: v }))} />
+          </FiltroCampoFat>
+          <FiltroCampoFat label="Ano fim">
+            <SelectAnoFat value={filtros.anoFim} onChange={v => setFiltros(f => ({ ...f, anoFim: v }))} />
+          </FiltroCampoFat>
+          <FiltroCampoFat label="Mês fim">
+            <SelectMesFat value={filtros.mesFim} onChange={v => setFiltros(f => ({ ...f, mesFim: v }))} />
+          </FiltroCampoFat>
           <FiltroCampoFat label="Buscar BR, cliente ou produto">
             <div style={{ position: 'relative' }}>
               <Search size={13} style={{ position: 'absolute', left: 9, top: 9, color: T.inkFaint }} />
               <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Ex: BR14206, Vale, 17988…"
-                style={{ ...selectStyleFat(260), paddingLeft: 28 }} />
+                style={{ ...selectStyleFat(240), paddingLeft: 28 }} />
             </div>
           </FiltroCampoFat>
           {busca && (
@@ -5118,90 +5056,75 @@ function ConsumoMP() {
         </div>
       </Panel>
 
-      {/* Tabela — por projeto */}
+      {/* Tabela — itens faturados */}
       <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
             <thead>
               <tr style={{ background: T.panelAlt, borderBottom: `1px solid ${T.line}` }}>
-                <LocalSortTh label="BR"         col="br" />
-                <LocalSortTh label="Cliente"    col="cliente" />
-                <LocalSortTh label="Produto"    col="produto" />
+                <LocalSortTh label="Data"    col="data_neg" />
+                <LocalSortTh label="BR"      col="br" />
+                <LocalSortTh label="Cliente" col="cliente_nome" />
+                <LocalSortTh label="Produto" col="cod_produto" />
                 <th style={thFat(0)}>Descrição</th>
-                <LocalSortTh label="Data"       col="data" />
-                <LocalSortTh label="Valor do projeto" col="valorProjeto" right />
+                <LocalSortTh label="Qtd"     col="quantidade" right />
+                <LocalSortTh label="Valor"   col="valor_bruto" right />
               </tr>
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={6} style={{ padding: 40, textAlign: 'center', color: T.inkFaint }}>Carregando…</td></tr>
+                <tr><td colSpan={7} style={{ padding: 40, textAlign: 'center', color: T.inkFaint }}>Carregando…</td></tr>
               ) : filtrados.length === 0 ? (
-                <tr><td colSpan={6} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Nenhuma ordem de produção encontrada.</td></tr>
-              ) : filtrados.map((r) => (
-                <tr key={r.remessa_id} style={{ borderBottom: `1px solid ${T.lineSoft}`, cursor: 'pointer' }}
-                  onClick={() => abrirComposicao(r)}
-                  onMouseEnter={e => e.currentTarget.style.background = T.panelAlt}
-                  onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
-                  <td style={{ padding: '9px 12px', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText, whiteSpace: 'nowrap' }}>{r.br}</td>
-                  <td style={{ padding: '9px 12px', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.cliente}>{r.cliente}</td>
-                  <td style={{ padding: '9px 12px', fontWeight: 600, whiteSpace: 'nowrap' }}>{r.produto}</td>
-                  <td style={{ padding: '9px 12px', maxWidth: 340, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.descricao}>{r.descricao}</td>
-                  <td style={{ padding: '9px 12px', fontSize: 11, color: T.inkFaint, whiteSpace: 'nowrap' }}>{fmtDataHora(r.data)}</td>
-                  <td style={{ padding: '9px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.ink }}>{fmtR(r.valorProjeto)}</td>
-                </tr>
-              ))}
+                <tr><td colSpan={7} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Nenhum item faturado no período.</td></tr>
+              ) : filtrados.map((it) => {
+                const temComposicao = it.cod_produto && semComposicao.has(it.cod_produto);
+                return (
+                  <tr key={`${it.nunota}-${it.sequencia}`} style={{ borderBottom: `1px solid ${T.lineSoft}`, cursor: 'pointer' }}
+                    onClick={() => abrirComposicao(it)}
+                    onMouseEnter={e => e.currentTarget.style.background = T.panelAlt}
+                    onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                    <td style={{ padding: '9px 12px', fontSize: 11, color: T.inkFaint, whiteSpace: 'nowrap' }}>{fmtDataCurta(it.data_neg)}</td>
+                    <td style={{ padding: '9px 12px', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText, whiteSpace: 'nowrap' }}>{it.br || '—'}</td>
+                    <td style={{ padding: '9px 12px', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={it.cliente_nome}>{it.cliente_nome || '—'}</td>
+                    <td style={{ padding: '9px 12px', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                      {it.cod_produto || '—'}
+                      {!temComposicao && <span title="Sem composição cadastrada" style={{ marginLeft: 4, color: T.amberText }}>⚠</span>}
+                    </td>
+                    <td style={{ padding: '9px 12px', maxWidth: 340, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={it.produto_descricao}>{it.produto_descricao}</td>
+                    <td style={{ padding: '9px 12px', textAlign: 'right', fontSize: 11.5 }}>{fmtQtd(it.quantidade)} {it.unidade}</td>
+                    <td style={{ padding: '9px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.ink }}>{fmtR(it.valor_bruto)}</td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
         <div style={{ padding: '10px 16px', borderTop: `1px solid ${T.line}`, fontSize: 11, color: T.inkFaint, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span>{filtrados.length} ordem{filtrados.length !== 1 ? 'ns' : ''} de produção · Clique numa linha para ver os itens e a composição consumida</span>
-          <BotaoExportar small onClick={() => exportCSV(filtrados, 'consumo_mp_por_projeto.csv',
-            ['br','cliente','produto','descricao','data','quantidadeOp','valorProjeto'])} />
+          <span>{filtrados.length} ite{filtrados.length !== 1 ? 'ns' : 'm'} faturado{filtrados.length !== 1 ? 's' : ''} · Fonte: Nota de Venda (mesmos TOPs validados do Faturamento) · Clique numa linha para ver a composição consumida</span>
+          <BotaoExportar small onClick={() => exportCSV(filtrados, 'consumo_mp_faturado.csv',
+            ['data_neg','br','cliente_nome','cod_produto','produto_descricao','quantidade','valor_bruto'])} />
         </div>
       </div>
 
-      {semComposicao.length > 0 && (
-        <Panel title="Produtos sem composição cadastrada" subtitle="Esses produtos não têm registro em `composicao_produtos` — rode 'Atualizar composição do Sankhya' se acabaram de ser cadastrados, ou verifique se o código está na lista de produtos sincronizados">
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-              <thead>
-                <tr style={{ background: T.panelAlt, borderBottom: `1px solid ${T.line}` }}>
-                  <th style={thFat(100)}>Produto</th>
-                  <th style={thFat(0)}>Descrição</th>
-                  <th style={thFat(120)}>Projeto</th>
-                </tr>
-              </thead>
-              <tbody>
-                {semComposicao.map((f, i) => (
-                  <tr key={i} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
-                    <td style={{ padding: '8px 12px', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.amberText }}>{f.produto}</td>
-                    <td style={{ padding: '8px 12px' }}>{f.descricao_produto}</td>
-                    <td style={{ padding: '8px 12px', color: T.inkFaint }}>{f.projeto}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </Panel>
-      )}
-
-      {/* Modal: composição/itens consumidos naquela ordem de produção */}
-      {drillRemessa && (
-        <Overlay onClose={() => setDrillRemessa(null)}>
+      {/* Modal: composição do produto, calculada pela quantidade daquele item faturado */}
+      {drillItem && (
+        <Overlay onClose={() => setDrillItem(null)}>
           <div style={{ padding: 20, minWidth: 480, maxWidth: 640 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4 }}>
               <div>
-                <div style={{ fontFamily: FONT_DISPLAY, fontSize: 18, fontWeight: 700, color: T.ink }}>{drillRemessa.produto} — {drillRemessa.descricao}</div>
-                <div style={{ fontSize: 11.5, color: T.inkFaint, marginTop: 2 }}>{drillRemessa.br} · {drillRemessa.cliente} · Qtd produzida: {fmtQtd(drillRemessa.quantidadeOp)}</div>
+                <div style={{ fontFamily: FONT_DISPLAY, fontSize: 18, fontWeight: 700, color: T.ink }}>{drillItem.cod_produto || '—'} — {drillItem.produto_descricao}</div>
+                <div style={{ fontSize: 11.5, color: T.inkFaint, marginTop: 2 }}>{drillItem.br || '—'} · {drillItem.cliente_nome} · Qtd faturada: {fmtQtd(drillItem.quantidade)} {drillItem.unidade} · {fmtRCheia(drillItem.valor_bruto)}</div>
               </div>
-              <button onClick={() => setDrillRemessa(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.inkFaint }}><X size={18} /></button>
+              <button onClick={() => setDrillItem(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.inkFaint }}><X size={18} /></button>
             </div>
-            <div style={{ fontSize: 11, color: T.inkFaint, marginBottom: 12 }}>Composição do produto — itens e quantidade consumida</div>
+            <div style={{ fontSize: 11, color: T.inkFaint, marginBottom: 12 }}>Composição do produto (Sankhya) — itens e quantidade consumida nessa quantidade faturada</div>
             <div style={{ maxHeight: 420, overflowY: 'auto' }}>
-              {drillRemessa.itens === null ? (
+              {!drillItem.cod_produto ? (
+                <div style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Item sem código de produto sincronizado — clique em "Atualizar do Sankhya" na aba Faturamento para completar esse dado.</div>
+              ) : drillItem.composicao === null ? (
                 <div style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Carregando…</div>
-              ) : drillRemessa.itens.length === 0 ? (
-                <div style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Sem composição cadastrada para este produto.</div>
+              ) : drillItem.composicao.length === 0 ? (
+                <div style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Sem composição cadastrada para este produto em `composicao_produtos`.</div>
               ) : (
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                   <thead>
@@ -5212,7 +5135,7 @@ function ConsumoMP() {
                     </tr>
                   </thead>
                   <tbody>
-                    {drillRemessa.itens.map((it, i) => (
+                    {drillItem.composicao.map((it, i) => (
                       <tr key={i} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
                         <td style={{ padding: '8px 12px' }}>
                           <div style={{ fontWeight: 600 }}>{it.descricao_mp || `MP ${it.codigo_mp}`}</div>
@@ -5232,6 +5155,7 @@ function ConsumoMP() {
     </div>
   );
 }
+
 
 function Almoxarifado() {
   const [dados, setDados] = useState([]);
