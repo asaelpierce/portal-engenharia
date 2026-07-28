@@ -5109,26 +5109,39 @@ function ConsumoMP() {
       {/* Modal: composição do produto, calculada pela quantidade daquele item faturado */}
       {drillItem && (
         <Overlay onClose={() => setDrillItem(null)}>
-          <div style={{ padding: 20, minWidth: 480, maxWidth: 640 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4 }}>
-              <div>
-                <div style={{ fontFamily: FONT_DISPLAY, fontSize: 18, fontWeight: 700, color: T.ink }}>{drillItem.cod_produto || '—'} — {drillItem.produto_descricao}</div>
-                <div style={{ fontSize: 11.5, color: T.inkFaint, marginTop: 2 }}>{drillItem.br || '—'} · {drillItem.cliente_nome} · Qtd faturada: {fmtQtd(drillItem.quantidade)} {drillItem.unidade} · {fmtRCheia(drillItem.valor_bruto)}</div>
+          <div className="scale-in" data-consumo-modal="1" style={{
+            background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, width: '100%', maxWidth: 640,
+            maxHeight: '85vh', display: 'flex', flexDirection: 'column', overflow: 'hidden', boxShadow: '0 24px 60px rgba(0,0,0,.18)',
+          }}>
+            <div style={{ padding: '18px 22px', borderBottom: `1px solid ${T.line}`, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontFamily: FONT_DISPLAY, fontSize: 17, fontWeight: 700, color: T.ink, lineHeight: 1.25 }}>{drillItem.cod_produto || '—'} — {drillItem.produto_descricao}</div>
+                <div style={{ fontSize: 11.5, color: T.inkFaint, marginTop: 4 }}>{drillItem.br || '—'} · {drillItem.cliente_nome} · Qtd faturada: {fmtQtd(drillItem.quantidade)} {drillItem.unidade} · {fmtRCheia(drillItem.valor_bruto)}</div>
               </div>
-              <button onClick={() => setDrillItem(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.inkFaint }}><X size={18} /></button>
+              <button onClick={() => setDrillItem(null)} style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: T.inkFaint, flexShrink: 0 }}><X size={20} /></button>
             </div>
-            <div style={{ fontSize: 11, color: T.inkFaint, marginBottom: 12 }}>Composição do produto (Sankhya) — itens e quantidade consumida nessa quantidade faturada</div>
-            <div style={{ maxHeight: 420, overflowY: 'auto' }}>
+            <div style={{ padding: '10px 22px', fontSize: 11, color: T.inkFaint, borderBottom: `1px solid ${T.lineSoft}`, background: T.panelAlt }}>
+              Composição do produto (Sankhya) — itens e quantidade consumida nessa quantidade faturada
+            </div>
+            <div style={{ overflow: 'auto', flex: 1 }}>
               {!drillItem.cod_produto ? (
-                <div style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Item sem código de produto sincronizado — clique em "Atualizar do Sankhya" na aba Faturamento para completar esse dado.</div>
+                <div style={{ padding: '40px 30px', textAlign: 'center' }}>
+                  <AlertTriangle size={22} color={T.amberText} style={{ marginBottom: 10 }} />
+                  <div style={{ fontSize: 13, color: T.ink, fontWeight: 600, marginBottom: 4 }}>Item sem código de produto sincronizado</div>
+                  <div style={{ fontSize: 12, color: T.inkFaint }}>Clique em "Atualizar do Sankhya" na aba Faturamento para completar esse dado.</div>
+                </div>
               ) : drillItem.composicao === null ? (
-                <div style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Carregando…</div>
+                <div style={{ padding: 40, textAlign: 'center', color: T.inkFaint, fontSize: 12.5 }}>Carregando…</div>
               ) : drillItem.composicao.length === 0 ? (
-                <div style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Sem composição cadastrada para este produto em `composicao_produtos`.</div>
+                <div style={{ padding: '40px 30px', textAlign: 'center' }}>
+                  <FileWarning size={22} color={T.inkFaint} style={{ marginBottom: 10 }} />
+                  <div style={{ fontSize: 13, color: T.ink, fontWeight: 600, marginBottom: 4 }}>Sem composição cadastrada</div>
+                  <div style={{ fontSize: 12, color: T.inkFaint }}>Esse produto ainda não está em `composicao_produtos` — pode ser preciso incluir o código na lista sincronizada do Sankhya.</div>
+                </div>
               ) : (
-                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
                   <thead>
-                    <tr style={{ background: T.panelAlt, borderBottom: `1px solid ${T.line}` }}>
+                    <tr style={{ borderBottom: `1px solid ${T.line}`, position: 'sticky', top: 0, background: T.panel }}>
                       <th style={thFat(0)}>Matéria-prima</th>
                       <th style={{ ...thFat(90), textAlign: 'right' }}>Qtd unitária</th>
                       <th style={{ ...thFat(100), textAlign: 'right' }}>Consumido</th>
@@ -5137,12 +5150,12 @@ function ConsumoMP() {
                   <tbody>
                     {drillItem.composicao.map((it, i) => (
                       <tr key={i} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
-                        <td style={{ padding: '8px 12px' }}>
+                        <td style={{ padding: '10px 12px' }}>
                           <div style={{ fontWeight: 600 }}>{it.descricao_mp || `MP ${it.codigo_mp}`}</div>
-                          <div style={{ fontSize: 10.5, color: T.inkFaint }}>{it.codigo_mp}</div>
+                          <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 2 }}>{it.codigo_mp}</div>
                         </td>
-                        <td style={{ padding: '8px 12px', textAlign: 'right' }}>{fmtQtd(it.quantidade_unitaria)} {it.um}</td>
-                        <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 700 }}>{fmtQtd(it.consumo_calculado)} {it.um}</td>
+                        <td style={{ padding: '10px 12px', textAlign: 'right', color: T.inkDim }}>{fmtQtd(it.quantidade_unitaria)} {it.um}</td>
+                        <td style={{ padding: '10px 12px', textAlign: 'right', fontWeight: 700, fontFamily: FONT_DISPLAY }}>{fmtQtd(it.consumo_calculado)} {it.um}</td>
                       </tr>
                     ))}
                   </tbody>
