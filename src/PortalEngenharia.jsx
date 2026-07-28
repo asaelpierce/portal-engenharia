@@ -4880,61 +4880,79 @@ function categoriaMP(descricao) {
   return 'Outros';
 }
 
+// Extrai o "BR + número" de uma string, ignorando sufixos como "/25" ou "/26"
+// e variações de formatação. Ex: "BR13719/25" -> "BR13719", "BR 14206" -> "BR14206".
+// Se não achar padrão BR, usa a string normalizada como fallback (ex: "OP7818").
+function normalizarBR(txt) {
+  if (!txt) return '';
+  const limpo = String(txt).toUpperCase().replace(/\s+/g, '');
+  const m = limpo.match(/BR\d+/);
+  return m ? m[0] : limpo;
+}
+
 function ConsumoMP() {
   const [linhas, setLinhas] = useState([]);
-  const [semComposicao, setSemComposicao] = useState([]); // produtos usados em OP mas sem cadastro em `produtos`
+  const [semComposicao, setSemComposicao] = useState([]);
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState(null);
   const [busca, setBusca] = useState('');
-  const [categoriaFiltro, setCategoriaFiltro] = useState('Todos');
-  const [sortCol, setSortCol] = useState('consumido');
+  const [sortCol, setSortCol] = useState('data');
   const [sortDir, setSortDir] = useState('desc');
-  const [drillMP, setDrillMP] = useState(null); // { codigo, descricao, detalhes: [...] }
+  const [drillRemessa, setDrillRemessa] = useState(null); // { produto, descricao_produto, projeto, itens: [...] | null }
 
-  // Toda a lógica de cálculo (composição x quantidade produzida) já vive no banco,
-  // nas views v_consumo_mp / v_consumo_mp_detalhe / v_produtos_sem_composicao.
-  // Elas se atualizam sozinhas conforme novas remessas (ordens de produção) entram —
-  // não é preciso recalcular nada aqui no front.
+  // Carrega ordens de produção (SGQ) e cruza com cliente/valor do pedido (portal-engenharia),
+  // casando pelo BR normalizado (o "projeto" do SGQ nem sempre tem o mesmo formato do BR do pedido).
   const carregar = useCallback(async () => {
     setLoading(true);
     setErro(null);
 
-    const [rConsumo, rFaltantes] = await Promise.all([
-      supabaseSGQ.from('v_consumo_mp')
-        .select('codigo_mp,descricao,unidade,estoque_minimo,qtd_consumida,saldo_disponivel,qtd_remessas,cobertura_pct,abaixo_minimo'),
+    const [rRemessas, rPedidos, rFaltantes] = await Promise.all([
+      supabaseSGQ.from('remessas')
+        .select('id,produto_acabado,descricao_produto,quantidade_op,projeto,status,data_criacao'),
+      supabase.from('pedidos_itens')
+        .select('br,cliente_nome,valor_liquido'),
       supabaseSGQ.from('v_produtos_sem_composicao')
         .select('produto,descricao_produto,projeto'),
     ]);
 
-    if (rConsumo.error) {
-      setErro(`Erro SGQ: ${rConsumo.error.message}`);
-      setLoading(false);
-      return;
-    }
+    if (rRemessas.error) { setErro(`Erro SGQ: ${rRemessas.error.message}`); setLoading(false); return; }
+    if (rPedidos.error)  { setErro(`Erro portal: ${rPedidos.error.message}`); setLoading(false); return; }
 
-    const lista = (rConsumo.data || []).map(r => ({
-      codigo_mp: r.codigo_mp,
-      descricao: r.descricao,
-      categoria: categoriaMP(r.descricao || ''),
-      unidade: r.unidade || '—',
-      consumido: Number(r.qtd_consumida) || 0,
-      saldo: r.saldo_disponivel != null ? Number(r.saldo_disponivel) : null,
-      estoqueMinimo: Number(r.estoque_minimo) || 0,
-      abaixoMinimo: !!r.abaixo_minimo,
-      coberturaPct: r.cobertura_pct != null ? Number(r.cobertura_pct) : null,
-      numRemessas: r.qtd_remessas,
-    }));
+    // Agrega valor e cliente por BR normalizado
+    const pedidoPorBR = {};
+    (rPedidos.data || []).forEach(p => {
+      const key = normalizarBR(p.br);
+      if (!key) return;
+      if (!pedidoPorBR[key]) pedidoPorBR[key] = { cliente: p.cliente_nome || '—', valor: 0 };
+      pedidoPorBR[key].valor += Number(p.valor_liquido) || 0;
+    });
+
+    const lista = (rRemessas.data || []).map(r => {
+      const key = normalizarBR(r.projeto);
+      const pedido = pedidoPorBR[key];
+      return {
+        remessa_id: r.id,
+        br: r.projeto || '—',
+        cliente: pedido?.cliente || '—',
+        produto: r.produto_acabado || '—',
+        descricao: r.descricao_produto || '—',
+        data: r.data_criacao,
+        quantidadeOp: Number(r.quantidade_op) || 0,
+        valorProjeto: pedido?.valor ?? null,
+        status: r.status,
+      };
+    });
 
     setLinhas(lista);
     setSemComposicao(rFaltantes.data || []);
     setLoading(false);
   }, []);
 
-  // Carrega o detalhe (drill-down) de uma MP sob demanda, direto da view.
-  const carregarDetalhe = useCallback(async (codigoMp) => {
+  // Carrega a composição (itens/quantidade) de uma ordem de produção específica, sob demanda.
+  const carregarComposicao = useCallback(async (remessaId) => {
     const { data, error } = await supabaseSGQ.from('v_consumo_mp_detalhe')
-      .select('produto,descricao_produto,projeto,quantidade_op,consumo_calculado,um')
-      .eq('codigo_mp', codigoMp)
+      .select('codigo_mp,descricao_mp,um,quantidade_unitaria,consumo_calculado')
+      .eq('remessa_id', remessaId)
       .order('consumo_calculado', { ascending: false });
     if (error) return [];
     return data || [];
@@ -4942,26 +4960,19 @@ function ConsumoMP() {
 
   useEffect(() => { carregar(); }, [carregar]);
 
-  // Auto-refresh a cada 30 minutos.
+  // Auto-refresh a cada 30 minutos — conforme novas ordens de produção saem, a lista já aparece atualizada sozinha.
   useEffect(() => {
     const id = setInterval(carregar, 30 * 60 * 1000);
     return () => clearInterval(id);
   }, [carregar]);
 
-  const categorias = useMemo(() => {
-    const s = new Set(linhas.map(l => l.categoria));
-    return ['Todos', ...[...s].sort()];
-  }, [linhas]);
-
   const filtrados = useMemo(() => {
     return linhas
-      .filter(r => {
-        const matchBusca = !busca ||
-          r.codigo_mp.toLowerCase().includes(busca.toLowerCase()) ||
-          r.descricao.toLowerCase().includes(busca.toLowerCase());
-        const matchCategoria = categoriaFiltro === 'Todos' || r.categoria === categoriaFiltro;
-        return matchBusca && matchCategoria;
-      })
+      .filter(r => !busca ||
+        r.br.toLowerCase().includes(busca.toLowerCase()) ||
+        r.cliente.toLowerCase().includes(busca.toLowerCase()) ||
+        r.produto.toLowerCase().includes(busca.toLowerCase()) ||
+        r.descricao.toLowerCase().includes(busca.toLowerCase()))
       .sort((a, b) => {
         let va = a[sortCol] ?? 0;
         let vb = b[sortCol] ?? 0;
@@ -4971,17 +4982,17 @@ function ConsumoMP() {
         if (va > vb) return sortDir === 'asc' ? 1 : -1;
         return 0;
       });
-  }, [linhas, busca, categoriaFiltro, sortCol, sortDir]);
+  }, [linhas, busca, sortCol, sortDir]);
 
   const kpis = useMemo(() => ({
-    totalMPs: filtrados.length,
-    abaixoMinimo: filtrados.filter(l => l.abaixoMinimo).length,
+    totalOrdens: filtrados.length,
+    semCliente: filtrados.filter(l => l.cliente === '—').length,
     semComposicao: semComposicao.length,
   }), [filtrados, semComposicao]);
 
   const handleSort = (col) => {
     if (sortCol === col) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
-    else { setSortCol(col); setSortDir('desc'); }
+    else { setSortCol(col); setSortDir(col === 'data' ? 'desc' : 'asc'); }
   };
 
   const LocalSortTh = ({ label, col, right }) => {
@@ -4994,6 +5005,14 @@ function ConsumoMP() {
   };
 
   const fmtQtd = (v) => v == null ? '—' : new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 2 }).format(v);
+  const fmtR = (v) => v == null ? '—' : new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL', notation: 'compact', maximumFractionDigits: 1 }).format(v);
+  const fmtDataHora = (iso) => !iso ? '—' : new Date(iso).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: '2-digit' });
+
+  const abrirComposicao = async (r) => {
+    setDrillRemessa({ ...r, itens: null }); // abre já, com loading
+    const itens = await carregarComposicao(r.remessa_id);
+    setDrillRemessa(prev => prev && prev.remessa_id === r.remessa_id ? { ...prev, itens } : prev);
+  };
 
   return (
     <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
@@ -5007,9 +5026,9 @@ function ConsumoMP() {
       {/* KPIs */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 12 }}>
         {[
-          { label: 'Matérias-primas consumidas', value: kpis.totalMPs, color: T.ink, desc: 'Itens distintos com consumo calculado' },
-          { label: 'Abaixo do estoque mínimo', value: kpis.abaixoMinimo, color: kpis.abaixoMinimo > 0 ? T.rustText : T.oliveText, desc: 'MPs com saldo abaixo do mínimo definido' },
-          { label: 'Produtos sem composição', value: kpis.semComposicao, color: kpis.semComposicao > 0 ? T.amberText : T.oliveText, desc: 'Sem cadastro em `produtos` — consumo não calculado' },
+          { label: 'Ordens de produção', value: kpis.totalOrdens, color: T.ink, desc: 'Produtos produzidos por projeto' },
+          { label: 'Sem cliente identificado', value: kpis.semCliente, color: kpis.semCliente > 0 ? T.amberText : T.oliveText, desc: 'BR do projeto não bateu com nenhum pedido' },
+          { label: 'Produtos sem composição', value: kpis.semComposicao, color: kpis.semComposicao > 0 ? T.amberText : T.oliveText, desc: 'Sem cadastro em `produtos` — sem detalhe de itens' },
         ].map(k => (
           <div key={k.label} style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '12px 14px', boxShadow: SHADOW_SM }}>
             <div style={{ fontSize: 10.5, color: T.inkFaint, fontWeight: 600 }}>{k.label}</div>
@@ -5022,23 +5041,15 @@ function ConsumoMP() {
       {/* Filtros */}
       <Panel>
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-          <FiltroCampoFat label="Buscar código ou descrição">
+          <FiltroCampoFat label="Buscar BR, cliente ou produto">
             <div style={{ position: 'relative' }}>
               <Search size={13} style={{ position: 'absolute', left: 9, top: 9, color: T.inkFaint }} />
-              <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Ex: 4941, CHEMITAC…"
-                style={{ ...selectStyleFat(240), paddingLeft: 28 }} />
+              <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Ex: BR14206, Vale, 17988…"
+                style={{ ...selectStyleFat(260), paddingLeft: 28 }} />
             </div>
           </FiltroCampoFat>
-          <FiltroCampoFat label="Categoria">
-            <div style={{ position: 'relative' }}>
-              <select value={categoriaFiltro} onChange={e => setCategoriaFiltro(e.target.value)} style={selectStyleFat(160)}>
-                {categorias.map(c => <option key={c} value={c}>{c}</option>)}
-              </select>
-              <ChevronDown size={13} style={chevronStyleFat} />
-            </div>
-          </FiltroCampoFat>
-          {(busca || categoriaFiltro !== 'Todos') && (
-            <button onClick={() => { setBusca(''); setCategoriaFiltro('Todos'); }}
+          {busca && (
+            <button onClick={() => setBusca('')}
               style={{ fontSize: 12, color: T.amberText, background: T.amberSoft, border: 'none', borderRadius: 5, padding: '6px 12px', cursor: 'pointer', fontWeight: 600 }}>
               ✕ Limpar
             </button>
@@ -5046,60 +5057,50 @@ function ConsumoMP() {
         </div>
       </Panel>
 
-      {/* Tabela */}
+      {/* Tabela — por projeto */}
       <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
             <thead>
               <tr style={{ background: T.panelAlt, borderBottom: `1px solid ${T.line}` }}>
-                <LocalSortTh label="Código"      col="codigo_mp" />
-                <LocalSortTh label="Matéria-prima" col="descricao" />
-                <LocalSortTh label="Categoria"   col="categoria" />
-                <th style={{ ...thFat(70), textAlign: 'center' }}>UM</th>
-                <LocalSortTh label="Consumido (composição × OP)" col="consumido" right />
-                <LocalSortTh label="Saldo disponível" col="saldo" right />
-                <th style={{ ...thFat(90), textAlign: 'center' }}>Detalhe</th>
+                <LocalSortTh label="BR"         col="br" />
+                <LocalSortTh label="Cliente"    col="cliente" />
+                <LocalSortTh label="Produto"    col="produto" />
+                <th style={thFat(0)}>Descrição</th>
+                <LocalSortTh label="Data"       col="data" />
+                <LocalSortTh label="Valor do projeto" col="valorProjeto" right />
               </tr>
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={7} style={{ padding: 40, textAlign: 'center', color: T.inkFaint }}>Carregando…</td></tr>
+                <tr><td colSpan={6} style={{ padding: 40, textAlign: 'center', color: T.inkFaint }}>Carregando…</td></tr>
               ) : filtrados.length === 0 ? (
-                <tr><td colSpan={7} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Nenhuma matéria-prima encontrada.</td></tr>
+                <tr><td colSpan={6} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Nenhuma ordem de produção encontrada.</td></tr>
               ) : filtrados.map((r) => (
-                <tr key={r.codigo_mp} style={{ borderBottom: `1px solid ${T.lineSoft}` }}
+                <tr key={r.remessa_id} style={{ borderBottom: `1px solid ${T.lineSoft}`, cursor: 'pointer' }}
+                  onClick={() => abrirComposicao(r)}
                   onMouseEnter={e => e.currentTarget.style.background = T.panelAlt}
                   onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
-                  <td style={{ padding: '9px 12px', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText, whiteSpace: 'nowrap' }}>{r.codigo_mp}</td>
-                  <td style={{ padding: '9px 12px', maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.descricao}>{r.descricao}</td>
-                  <td style={{ padding: '9px 12px', fontSize: 11, color: T.inkDim }}>{r.categoria}</td>
-                  <td style={{ padding: '9px 12px', textAlign: 'center', fontSize: 11, color: T.inkFaint }}>{r.unidade}</td>
-                  <td style={{ padding: '9px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.ink }}>{fmtQtd(r.consumido)}</td>
-                  <td style={{ padding: '9px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 600, color: r.saldo == null ? T.inkFaint : (r.saldo < r.consumido ? T.rustText : T.oliveText) }}>{fmtQtd(r.saldo)}</td>
-                  <td style={{ padding: '9px 12px', textAlign: 'center' }}>
-                    <button onClick={async () => {
-                      setDrillMP({ ...r, itens: null }); // abre o modal já, com loading
-                      const detalhe = await carregarDetalhe(r.codigo_mp);
-                      setDrillMP(prev => prev && prev.codigo_mp === r.codigo_mp ? { ...prev, itens: detalhe } : prev);
-                    }}
-                      style={{ fontSize: 11, color: T.blueText, background: T.blueSoft, border: 'none', borderRadius: 5, padding: '4px 10px', cursor: 'pointer', fontWeight: 600 }}>
-                      Ver produtos
-                    </button>
-                  </td>
+                  <td style={{ padding: '9px 12px', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText, whiteSpace: 'nowrap' }}>{r.br}</td>
+                  <td style={{ padding: '9px 12px', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.cliente}>{r.cliente}</td>
+                  <td style={{ padding: '9px 12px', fontWeight: 600, whiteSpace: 'nowrap' }}>{r.produto}</td>
+                  <td style={{ padding: '9px 12px', maxWidth: 340, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.descricao}>{r.descricao}</td>
+                  <td style={{ padding: '9px 12px', fontSize: 11, color: T.inkFaint, whiteSpace: 'nowrap' }}>{fmtDataHora(r.data)}</td>
+                  <td style={{ padding: '9px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.ink }}>{fmtR(r.valorProjeto)}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
         <div style={{ padding: '10px 16px', borderTop: `1px solid ${T.line}`, fontSize: 11, color: T.inkFaint, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span>{filtrados.length} matéria{filtrados.length !== 1 ? 's' : ''}-prima · Consumido = Σ (quantidade da composição do produto × quantidade_op de cada ordem de produção)</span>
-          <BotaoExportar small onClick={() => exportCSV(filtrados, 'consumo_mp.csv',
-            ['codigo_mp','descricao','categoria','unidade','consumido','saldo'])} />
+          <span>{filtrados.length} ordem{filtrados.length !== 1 ? 'ns' : ''} de produção · Clique numa linha para ver os itens e a composição consumida</span>
+          <BotaoExportar small onClick={() => exportCSV(filtrados, 'consumo_mp_por_projeto.csv',
+            ['br','cliente','produto','descricao','data','quantidadeOp','valorProjeto'])} />
         </div>
       </div>
 
       {semComposicao.length > 0 && (
-        <Panel title="Produtos sem composição cadastrada" subtitle="Essas ordens de produção não entraram no cálculo acima porque o produto não tem registro em `produtos` (composição)">
+        <Panel title="Produtos sem composição cadastrada" subtitle="Essas ordens de produção não têm o item de composição (não é possível ver detalhe/itens ao clicar)">
           <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
               <thead>
@@ -5123,36 +5124,40 @@ function ConsumoMP() {
         </Panel>
       )}
 
-      {drillMP && (
-        <Overlay onClose={() => setDrillMP(null)}>
+      {/* Modal: composição/itens consumidos naquela ordem de produção */}
+      {drillRemessa && (
+        <Overlay onClose={() => setDrillRemessa(null)}>
           <div style={{ padding: 20, minWidth: 480, maxWidth: 640 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 14 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4 }}>
               <div>
-                <div style={{ fontFamily: FONT_DISPLAY, fontSize: 18, fontWeight: 700, color: T.ink }}>{drillMP.codigo_mp} — {drillMP.descricao}</div>
-                <div style={{ fontSize: 11.5, color: T.inkFaint, marginTop: 2 }}>Consumido: {fmtQtd(drillMP.consumido)} {drillMP.unidade}</div>
+                <div style={{ fontFamily: FONT_DISPLAY, fontSize: 18, fontWeight: 700, color: T.ink }}>{drillRemessa.produto} — {drillRemessa.descricao}</div>
+                <div style={{ fontSize: 11.5, color: T.inkFaint, marginTop: 2 }}>{drillRemessa.br} · {drillRemessa.cliente} · Qtd produzida: {fmtQtd(drillRemessa.quantidadeOp)}</div>
               </div>
-              <button onClick={() => setDrillMP(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.inkFaint }}><X size={18} /></button>
+              <button onClick={() => setDrillRemessa(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.inkFaint }}><X size={18} /></button>
             </div>
+            <div style={{ fontSize: 11, color: T.inkFaint, marginBottom: 12 }}>Composição do produto — itens e quantidade consumida</div>
             <div style={{ maxHeight: 420, overflowY: 'auto' }}>
-              {drillMP.itens === null ? (
+              {drillRemessa.itens === null ? (
                 <div style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Carregando…</div>
+              ) : drillRemessa.itens.length === 0 ? (
+                <div style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Sem composição cadastrada para este produto.</div>
               ) : (
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                   <thead>
                     <tr style={{ background: T.panelAlt, borderBottom: `1px solid ${T.line}` }}>
-                      <th style={thFat(0)}>Produto / Projeto</th>
-                      <th style={{ ...thFat(70), textAlign: 'right' }}>Qtd OP</th>
-                      <th style={{ ...thFat(90), textAlign: 'right' }}>Consumo</th>
+                      <th style={thFat(0)}>Matéria-prima</th>
+                      <th style={{ ...thFat(90), textAlign: 'right' }}>Qtd unitária</th>
+                      <th style={{ ...thFat(100), textAlign: 'right' }}>Consumido</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {drillMP.itens.map((it, i) => (
+                    {drillRemessa.itens.map((it, i) => (
                       <tr key={i} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
                         <td style={{ padding: '8px 12px' }}>
-                          <div style={{ fontWeight: 600 }}>{it.descricao_produto}</div>
-                          <div style={{ fontSize: 10.5, color: T.inkFaint }}>{it.produto} · {it.projeto}</div>
+                          <div style={{ fontWeight: 600 }}>{it.descricao_mp || `MP ${it.codigo_mp}`}</div>
+                          <div style={{ fontSize: 10.5, color: T.inkFaint }}>{it.codigo_mp}</div>
                         </td>
-                        <td style={{ padding: '8px 12px', textAlign: 'right' }}>{fmtQtd(it.quantidade_op)}</td>
+                        <td style={{ padding: '8px 12px', textAlign: 'right' }}>{fmtQtd(it.quantidade_unitaria)} {it.um}</td>
                         <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 700 }}>{fmtQtd(it.consumo_calculado)} {it.um}</td>
                       </tr>
                     ))}
