@@ -86,6 +86,10 @@ const USUARIOS = [
 
 const ESCOPOS_TOP = ['KALIMPACT KALOCER', 'TUBO REVESTIDO - KALOCER', 'TUBO REVESTIDO - ABRESIST', 'EQUIPAMENTO REVESTIDO - KALOCER', 'KALOCER', 'KALFIX'];
 
+// Grupos de material a destacar no topo do filtro do Almoxarifado (Consolidado SGQ).
+// Vazio = sem destaque, lista simplesmente em ordem alfabética.
+const GRUPOS_DESTAQUE = [];
+
 const STATUS_META = {
   rascunho: { label: 'Aguardando confirmação', color: T.slate, bg: T.lineSoft },
   em_revisao_tecnica: { label: 'Revisão técnica', color: T.amberText, bg: T.amberSoft },
