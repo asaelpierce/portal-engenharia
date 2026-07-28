@@ -4899,24 +4899,29 @@ function ConsumoMP() {
   const [sortCol, setSortCol] = useState('data');
   const [sortDir, setSortDir] = useState('desc');
   const [drillRemessa, setDrillRemessa] = useState(null); // { produto, descricao_produto, projeto, itens: [...] | null }
+  const [syncing, setSyncing] = useState(false);
+  const [syncStatus, setSyncStatus] = useState(null);
 
   // Carrega ordens de produção (SGQ) e cruza com cliente/valor do pedido (portal-engenharia),
   // casando pelo BR normalizado (o "projeto" do SGQ nem sempre tem o mesmo formato do BR do pedido).
+  // A composição (matéria-prima por produto) vem de `composicao_produtos`, sincronizada direto do
+  // Sankhya (VIEW_ARVORE_FORMULA) — não é mais o cadastro manual do Sistema de Industrialização.
   const carregar = useCallback(async () => {
     setLoading(true);
     setErro(null);
 
-    const [rRemessas, rPedidos, rFaltantes] = await Promise.all([
+    const [rRemessas, rPedidos, rComposicaoProdutos] = await Promise.all([
       supabaseSGQ.from('remessas')
         .select('id,produto_acabado,descricao_produto,quantidade_op,projeto,status,data_criacao'),
       supabase.from('pedidos_itens')
         .select('br,cliente_nome,valor_liquido'),
-      supabaseSGQ.from('v_produtos_sem_composicao')
-        .select('produto,descricao_produto,projeto'),
+      supabase.from('composicao_produtos')
+        .select('cod_prod_pai'),
     ]);
 
     if (rRemessas.error) { setErro(`Erro SGQ: ${rRemessas.error.message}`); setLoading(false); return; }
     if (rPedidos.error)  { setErro(`Erro portal: ${rPedidos.error.message}`); setLoading(false); return; }
+    if (rComposicaoProdutos.error) { setErro(`Erro composição: ${rComposicaoProdutos.error.message}`); setLoading(false); return; }
 
     // Agrega valor e cliente por BR normalizado
     const pedidoPorBR = {};
@@ -4927,36 +4932,76 @@ function ConsumoMP() {
       pedidoPorBR[key].valor += Number(p.valor_liquido) || 0;
     });
 
-    const lista = (rRemessas.data || []).map(r => {
+    // Produtos que têm composição cadastrada (sincronizada do Sankhya)
+    const produtosComComposicao = new Set((rComposicaoProdutos.data || []).map(c => c.cod_prod_pai));
+
+    const lista = [];
+    const faltantes = new Map();
+    (rRemessas.data || []).forEach(r => {
       const key = normalizarBR(r.projeto);
       const pedido = pedidoPorBR[key];
-      return {
+      const produto = r.produto_acabado || '—';
+      if (!produtosComComposicao.has(produto)) {
+        faltantes.set(produto, { produto, descricao_produto: r.descricao_produto || '—', projeto: r.projeto || '—' });
+      }
+      lista.push({
         remessa_id: r.id,
         br: r.projeto || '—',
         cliente: pedido?.cliente || '—',
-        produto: r.produto_acabado || '—',
+        produto,
         descricao: r.descricao_produto || '—',
         data: r.data_criacao,
         quantidadeOp: Number(r.quantidade_op) || 0,
         valorProjeto: pedido?.valor ?? null,
         status: r.status,
-      };
+      });
     });
 
     setLinhas(lista);
-    setSemComposicao(rFaltantes.data || []);
+    setSemComposicao([...faltantes.values()]);
     setLoading(false);
   }, []);
 
-  // Carrega a composição (itens/quantidade) de uma ordem de produção específica, sob demanda.
-  const carregarComposicao = useCallback(async (remessaId) => {
-    const { data, error } = await supabaseSGQ.from('v_consumo_mp_detalhe')
-      .select('codigo_mp,descricao_mp,um,quantidade_unitaria,consumo_calculado')
-      .eq('remessa_id', remessaId)
-      .order('consumo_calculado', { ascending: false });
+  // Carrega a composição (itens/quantidade) de um produto, direto da tabela sincronizada do Sankhya,
+  // e calcula o consumo multiplicando pela quantidade produzida naquela ordem específica.
+  const carregarComposicao = useCallback(async (codProdPai, quantidadeOp) => {
+    const { data, error } = await supabase.from('composicao_produtos')
+      .select('cod_prod_mp,descr_prod_mp,unidade,quantidade,disponivel_producao')
+      .eq('cod_prod_pai', codProdPai)
+      .order('quantidade', { ascending: false });
     if (error) return [];
-    return data || [];
+    return (data || []).map(m => ({
+      codigo_mp: m.cod_prod_mp,
+      descricao_mp: m.descr_prod_mp,
+      um: m.unidade,
+      quantidade_unitaria: Number(m.quantidade) || 0,
+      consumo_calculado: (Number(m.quantidade) || 0) * quantidadeOp,
+      disponivel_producao: m.disponivel_producao,
+    }));
   }, []);
+
+  // Dispara a sincronização da composição direto do Sankhya (mesmo padrão dos outros syncs do portal).
+  const handleAtualizarComposicao = async () => {
+    setSyncing(true);
+    setSyncStatus(null);
+    try {
+      const res = await fetch(`${SUPABASE_URL}/functions/v1/sankhya-composicao-sync`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const data = await res.json();
+      if (data.ok) {
+        setSyncStatus({ ok: true, message: `Composição sincronizada: ${data.inseridos} itens.` });
+        await carregar();
+      } else {
+        setSyncStatus({ ok: false, message: data.error || 'Erro desconhecido na sincronização.' });
+      }
+    } catch (err) {
+      setSyncStatus({ ok: false, message: String(err) });
+    } finally {
+      setSyncing(false);
+    }
+  };
 
   useEffect(() => { carregar(); }, [carregar]);
 
@@ -5010,7 +5055,7 @@ function ConsumoMP() {
 
   const abrirComposicao = async (r) => {
     setDrillRemessa({ ...r, itens: null }); // abre já, com loading
-    const itens = await carregarComposicao(r.remessa_id);
+    const itens = await carregarComposicao(r.produto, r.quantidadeOp);
     setDrillRemessa(prev => prev && prev.remessa_id === r.remessa_id ? { ...prev, itens } : prev);
   };
 
@@ -5023,12 +5068,28 @@ function ConsumoMP() {
         </div>
       )}
 
+      {syncStatus && (
+        <div style={{ background: syncStatus.ok ? T.oliveSoft : T.rustSoft, color: syncStatus.ok ? T.oliveText : T.rustText, borderRadius: 8, padding: '10px 14px', fontSize: 12.5 }}>
+          {syncStatus.message}
+        </div>
+      )}
+
+      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+        <button onClick={handleAtualizarComposicao} disabled={syncing} style={{
+          display: 'flex', alignItems: 'center', gap: 8, background: T.terracotta, color: '#fff', border: 'none',
+          borderRadius: 8, padding: '9px 16px', fontSize: 12.5, fontWeight: 700, opacity: syncing ? 0.7 : 1,
+        }}>
+          <RefreshCw size={14} className={syncing ? 'spin' : ''} />
+          {syncing ? 'Atualizando composição do Sankhya…' : 'Atualizar composição do Sankhya'}
+        </button>
+      </div>
+
       {/* KPIs */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 12 }}>
         {[
           { label: 'Ordens de produção', value: kpis.totalOrdens, color: T.ink, desc: 'Produtos produzidos por projeto' },
           { label: 'Sem cliente identificado', value: kpis.semCliente, color: kpis.semCliente > 0 ? T.amberText : T.oliveText, desc: 'BR do projeto não bateu com nenhum pedido' },
-          { label: 'Produtos sem composição', value: kpis.semComposicao, color: kpis.semComposicao > 0 ? T.amberText : T.oliveText, desc: 'Sem cadastro em `produtos` — sem detalhe de itens' },
+          { label: 'Produtos sem composição', value: kpis.semComposicao, color: kpis.semComposicao > 0 ? T.amberText : T.oliveText, desc: 'Sem registro em `composicao_produtos` (Sankhya) — sem detalhe de itens' },
         ].map(k => (
           <div key={k.label} style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '12px 14px', boxShadow: SHADOW_SM }}>
             <div style={{ fontSize: 10.5, color: T.inkFaint, fontWeight: 600 }}>{k.label}</div>
@@ -5100,7 +5161,7 @@ function ConsumoMP() {
       </div>
 
       {semComposicao.length > 0 && (
-        <Panel title="Produtos sem composição cadastrada" subtitle="Essas ordens de produção não têm o item de composição (não é possível ver detalhe/itens ao clicar)">
+        <Panel title="Produtos sem composição cadastrada" subtitle="Esses produtos não têm registro em `composicao_produtos` — rode 'Atualizar composição do Sankhya' se acabaram de ser cadastrados, ou verifique se o código está na lista de produtos sincronizados">
           <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
               <thead>
