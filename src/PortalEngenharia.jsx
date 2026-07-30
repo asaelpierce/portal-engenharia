@@ -4674,21 +4674,25 @@ function KpiClicavel({ label, valor, icon: Icon, cor, sub, onClick, formatador }
   const fmt = formatador || fmtMoeda;
   return (
     <Tag onClick={onClick} style={{
-      textAlign: 'left', border: `1px solid ${T.line}`, background: T.panel, borderRadius: 10, padding: '18px 20px',
-      cursor: onClick ? 'pointer' : 'default', transition: 'border-color .15s, box-shadow .15s', width: '100%',
+      position: 'relative', textAlign: 'left', border: `1px solid ${T.line}`, background: T.panel, borderRadius: 12,
+      padding: '20px 20px 18px', boxShadow: SHADOW_SM, cursor: onClick ? 'pointer' : 'default',
+      transition: 'box-shadow .25s ease, transform .25s ease, border-color .25s ease', width: '100%', overflow: 'hidden',
     }}
-      onMouseEnter={onClick ? (e => { e.currentTarget.style.borderColor = cor; e.currentTarget.style.boxShadow = `0 4px 14px ${cor}22`; }) : undefined}
-      onMouseLeave={onClick ? (e => { e.currentTarget.style.borderColor = T.line; e.currentTarget.style.boxShadow = 'none'; }) : undefined}
+      onMouseEnter={onClick ? (e => { e.currentTarget.style.boxShadow = SHADOW_LG; e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.borderColor = `${cor}33`; }) : undefined}
+      onMouseLeave={onClick ? (e => { e.currentTarget.style.boxShadow = SHADOW_SM; e.currentTarget.style.transform = 'none'; e.currentTarget.style.borderColor = T.line; }) : undefined}
     >
+      <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 3, background: cor, opacity: 0.85 }} />
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-        <span style={{ fontSize: 12, color: T.inkFaint, fontWeight: 600 }}>{label}</span>
-        <Icon size={16} color={cor} />
+        <span style={{ fontSize: 11, color: T.inkFaint, fontWeight: 700, letterSpacing: '0.03em', textTransform: 'uppercase' }}>{label}</span>
+        <div style={{ width: 30, height: 30, borderRadius: 8, background: `${cor}18`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+          <Icon size={15} color={cor} strokeWidth={2.2} />
+        </div>
       </div>
-      <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.ink, marginTop: 12, fontSize: 30, letterSpacing: '-0.01em' }}>{fmt(valor)}</div>
+      <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.ink, marginTop: 15, fontSize: 32, letterSpacing: '-0.015em', lineHeight: 1 }}>{fmt(valor)}</div>
       {onClick ? (
-        <div style={{ fontSize: 11, color: cor, marginTop: 6, fontWeight: 600 }}>Ver itens do período →</div>
+        <div style={{ fontSize: 10, color: cor, marginTop: 8, fontWeight: 700, letterSpacing: '0.01em' }}>Ver itens do período →</div>
       ) : sub ? (
-        <div style={{ fontSize: 11, color: T.inkFaint, marginTop: 6 }}>{sub}</div>
+        <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 6, lineHeight: 1.4 }}>{sub}</div>
       ) : null}
     </Tag>
   );
