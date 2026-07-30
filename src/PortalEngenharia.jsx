@@ -5574,6 +5574,23 @@ function ConsumoPlacasKalocer() {
     }
   };
 
+  const [diagOP, setDiagOP] = useState(null);
+  const [diagnosticandoOP, setDiagnosticandoOP] = useState(false);
+  const handleDiagnosticarOP = async () => {
+    setDiagnosticandoOP(true);
+    setDiagOP(null);
+    try {
+      const res = await fetch(`${SUPABASE_URL}/functions/v1/sankhya-diagnostico-op`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+      }).then(r => r.json());
+      setDiagOP(res);
+    } catch (err) {
+      setDiagOP({ ok: false, error: String(err) });
+    } finally {
+      setDiagnosticandoOP(false);
+    }
+  };
+
   useEffect(() => { carregar(); }, [carregar]);
 
   // Auto-refresh a cada 30 minutos.
@@ -5754,6 +5771,19 @@ function ConsumoPlacasKalocer() {
           <div style={{ marginTop: 10, fontSize: 12.5, color: statusRelatorio.ok ? T.oliveText : T.rustText }}>
             {statusRelatorio.message}
           </div>
+        )}
+      </Panel>
+
+      {/* TEMPORÁRIO — diagnóstico do campo real de "Nro Ordem Produção" */}
+      <Panel title="🔍 Diagnóstico: Nro Ordem Produção (temporário)" subtitle="Um clique — descobre de onde vem o número real da OP que aparece na tela do Sankhya">
+        <button onClick={handleDiagnosticarOP} disabled={diagnosticandoOP}
+          style={{ background: T.blueText, color: '#fff', border: 'none', borderRadius: 6, padding: '9px 16px', fontSize: 12.5, fontWeight: 700, cursor: 'pointer', marginBottom: 12 }}>
+          {diagnosticandoOP ? 'Diagnosticando…' : 'Rodar diagnóstico'}
+        </button>
+        {diagOP && (
+          <pre style={{ fontSize: 11, background: T.panelAlt, padding: 12, borderRadius: 8, overflow: 'auto', maxHeight: 400 }}>
+            {JSON.stringify(diagOP, null, 2)}
+          </pre>
         )}
       </Panel>
 
