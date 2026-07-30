@@ -5300,6 +5300,10 @@ function ConsumoPlacasKalocer() {
   const [drillMP, setDrillMP] = useState(null); // { codigo_mp, descricao, itens: [...] }
   const [syncing, setSyncing] = useState(false);
   const [syncStatus, setSyncStatus] = useState(null);
+  const [tabelaDebug, setTabelaDebug] = useState('TGFCAB');
+  const [filtroDebug, setFiltroDebug] = useState('APO');
+  const [colunasDebug, setColunasDebug] = useState(null);
+  const [descobrindo, setDescobrindo] = useState(false);
 
   const rangeDatas = () => {
     const ini = `${filtros.anoIni}-${String(filtros.mesIni).padStart(2, '0')}-01`;
@@ -5380,6 +5384,23 @@ function ConsumoPlacasKalocer() {
       setSyncStatus({ ok: false, message: String(err) });
     } finally {
       setSyncing(false);
+    }
+  };
+
+  // Temporário — descobre colunas filtradas de uma tabela, pra achar o campo que liga OP à nota interna.
+  const handleDescobrirColunas = async () => {
+    setDescobrindo(true);
+    setColunasDebug(null);
+    try {
+      const res = await fetch(`${SUPABASE_URL}/functions/v1/sankhya-descobrir-colunas`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tabela: tabelaDebug, filtro: filtroDebug }),
+      }).then(r => r.json());
+      setColunasDebug(res.ok ? res.colunas : [{ nome: 'ERRO', tipo: res.error }]);
+    } catch (err) {
+      setColunasDebug([{ nome: 'ERRO', tipo: String(err) }]);
+    } finally {
+      setDescobrindo(false);
     }
   };
 
@@ -5552,6 +5573,33 @@ function ConsumoPlacasKalocer() {
           {syncStatus.message}
         </div>
       )}
+
+      {/* TEMPORÁRIO — descobrir campo de ligação OP -> nota interna (custo exato). */}
+      <Panel title="🔧 Descobrir colunas (temporário)" subtitle="Tabela + filtro (parte do nome da coluna) — ex: TGFCAB + APO">
+        <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+          <FiltroCampoFat label="Tabela">
+            <input value={tabelaDebug} onChange={e => setTabelaDebug(e.target.value)} style={selectStyleFat(140)} />
+          </FiltroCampoFat>
+          <FiltroCampoFat label="Filtro no nome da coluna">
+            <input value={filtroDebug} onChange={e => setFiltroDebug(e.target.value)} style={selectStyleFat(180)} />
+          </FiltroCampoFat>
+          <button onClick={handleDescobrirColunas} disabled={descobrindo}
+            style={{ background: T.blueText, color: '#fff', border: 'none', borderRadius: 6, padding: '9px 16px', fontSize: 12.5, fontWeight: 700, cursor: 'pointer' }}>
+            {descobrindo ? 'Consultando…' : 'Buscar colunas'}
+          </button>
+        </div>
+        {colunasDebug && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {colunasDebug.length === 0 ? (
+              <span style={{ fontSize: 12, color: T.inkFaint }}>Nenhuma coluna encontrada com esse filtro.</span>
+            ) : colunasDebug.map((c, i) => (
+              <span key={i} style={{ fontSize: 11.5, fontFamily: FONT_DISPLAY, fontWeight: 600, background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 5, padding: '4px 8px' }}>
+                {c.nome} <span style={{ color: T.inkFaint, fontWeight: 400 }}>({c.tipo})</span>
+              </span>
+            ))}
+          </div>
+        )}
+      </Panel>
 
       {/* Modal: produtos que consumiram essa placa */}
       {drillMP && (
