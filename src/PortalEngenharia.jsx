@@ -5053,10 +5053,12 @@ function AnaliticoMP() {
     const itens = rApontamentos.data || [];
 
     const produtosAcabadosDistintos = new Set(itens.map(i => i.cod_prod_acabado).filter(Boolean));
-    // "Projetos atendidos" = BRs de ordens JÁ FINALIZADAS (situacao_op = 'C').
-    const projetosAtendidos = new Set(itens.filter(i => i.situacao_op === 'C' && i.br && i.br !== '<SEM PROJETO>').map(i => i.br));
-    // "Projetos em andamento" = BRs de ordens AINDA EM PRODUÇÃO (situacao_op = 'P').
-    const projetosEmAndamento = new Set(itens.filter(i => i.situacao_op === 'P' && i.br && i.br !== '<SEM PROJETO>').map(i => i.br));
+    const itensFinalizados = itens.filter(i => i.situacao_op === 'C');
+    const itensAndamento = itens.filter(i => i.situacao_op === 'P');
+    // "Projetos atendidos" = BRs distintos de ordens JÁ FINALIZADAS (situacao_op = 'C').
+    const projetosAtendidos = new Set(itensFinalizados.filter(i => i.br && i.br !== '<SEM PROJETO>').map(i => i.br));
+    // "Projetos em andamento" = BRs distintos de ordens AINDA EM PRODUÇÃO (situacao_op = 'P').
+    const projetosEmAndamento = new Set(itensAndamento.filter(i => i.br && i.br !== '<SEM PROJETO>').map(i => i.br));
     const custoTotalGeral = itens.reduce((s, i) => s + (Number(i.custo_total) || 0), 0);
     const qtdTotal = itens.reduce((s, i) => s + (Number(i.qtd_mp) || 0), 0);
     const maisRecente = itens[0]; // já vem ordenado por data_ref desc
@@ -5077,6 +5079,8 @@ function AnaliticoMP() {
         produtosAcabados: produtosAcabadosDistintos.size,
         projetosAtendidos: projetosAtendidos.size,
         projetosEmAndamento: projetosEmAndamento.size,
+        opsFinalizadas: itensFinalizados.length,
+        opsAndamento: itensAndamento.length,
         estoqueFisico: maisRecente?.saldo_fisico_mp ?? null,
         estoqueReservado: maisRecente?.saldo_reservado_mp ?? null,
         estoqueDisponivel: maisRecente?.saldo_disponivel_mp ?? null,
@@ -5369,9 +5373,13 @@ function AnaliticoMP() {
             <Kpi label="Produtos acabados distintos" value={dados.kpis.produtosAcabados} icon={Package}
               sub="quantos produtos diferentes usam essa MP" />
             <Kpi label="Projetos atendidos" value={dados.kpis.projetosAtendidos} icon={CheckCircle2} tone="olive"
-              sub="BRs com OP Finalizada (situação = C)" />
+              sub={dados.kpis.opsFinalizadas > 0 && dados.kpis.projetosAtendidos === 0
+                ? `${dados.kpis.opsFinalizadas} OP${dados.kpis.opsFinalizadas !== 1 ? 's' : ''} finalizada${dados.kpis.opsFinalizadas !== 1 ? 's' : ''}, mas sem BR vinculado (produção pra estoque)`
+                : `de ${dados.kpis.opsFinalizadas} OP${dados.kpis.opsFinalizadas !== 1 ? 's' : ''} finalizada${dados.kpis.opsFinalizadas !== 1 ? 's' : ''}`} />
             <Kpi label="Projetos em andamento" value={dados.kpis.projetosEmAndamento} icon={Clock3} tone="amber"
-              sub="BRs com OP ainda em produção (situação = P)" />
+              sub={dados.kpis.opsAndamento > 0 && dados.kpis.projetosEmAndamento === 0
+                ? `${dados.kpis.opsAndamento} OP${dados.kpis.opsAndamento !== 1 ? 's' : ''} em produção, mas sem BR vinculado ainda`
+                : `de ${dados.kpis.opsAndamento} OP${dados.kpis.opsAndamento !== 1 ? 's' : ''} em produção`} />
             <Kpi label="Estoque disponível" value={fmtQtd(dados.kpis.estoqueDisponivel)} icon={Layers} tone="blue"
               sub={`${dados.unidade || ''} · Físico: ${fmtQtd(dados.kpis.estoqueFisico)} · Reservado: ${fmtQtd(dados.kpis.estoqueReservado)}`} />
             <Kpi label="Custo total consumido" value={fmtRCompacta(dados.kpis.custoTotal)} icon={DollarSign} tone="rust"
