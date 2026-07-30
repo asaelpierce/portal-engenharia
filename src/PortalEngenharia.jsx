@@ -5545,6 +5545,23 @@ function ConsumoPlacasKalocer() {
     }
   };
 
+  const [gerandoRelatorio, setGerandoRelatorio] = useState(false);
+  const [statusRelatorio, setStatusRelatorio] = useState(null);
+  const handleGerarRelatorioEstoque = async () => {
+    setGerandoRelatorio(true);
+    setStatusRelatorio(null);
+    try {
+      const res = await fetch(`${SUPABASE_URL}/functions/v1/gerar-relatorio-estoque-temp`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+      }).then(r => r.json());
+      setStatusRelatorio(res.ok ? { ok: true, message: `Pronto: ${res.total} códigos processados.` } : { ok: false, message: res.error });
+    } catch (err) {
+      setStatusRelatorio({ ok: false, message: String(err) });
+    } finally {
+      setGerandoRelatorio(false);
+    }
+  };
+
   useEffect(() => { carregar(); }, [carregar]);
 
   // Auto-refresh a cada 30 minutos.
@@ -5714,6 +5731,19 @@ function ConsumoPlacasKalocer() {
           {syncStatus.message}
         </div>
       )}
+
+      {/* TEMPORÁRIO — favor pontual: gerar relatório de estoque/consumo pra Excel */}
+      <Panel title="📋 Gerar relatório de estoque (favor pontual)" subtitle="Busca consumo (OP) + estoque atual direto do Sankhya pros 126 códigos pedidos">
+        <button onClick={handleGerarRelatorioEstoque} disabled={gerandoRelatorio}
+          style={{ background: T.terracotta, color: '#fff', border: 'none', borderRadius: 6, padding: '9px 16px', fontSize: 12.5, fontWeight: 700, cursor: 'pointer' }}>
+          {gerandoRelatorio ? 'Gerando…' : 'Gerar relatório'}
+        </button>
+        {statusRelatorio && (
+          <div style={{ marginTop: 10, fontSize: 12.5, color: statusRelatorio.ok ? T.oliveText : T.rustText }}>
+            {statusRelatorio.message}
+          </div>
+        )}
+      </Panel>
 
       {/* Modal: produtos que consumiram essa placa */}
       {drillMP && (
