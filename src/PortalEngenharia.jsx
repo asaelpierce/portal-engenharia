@@ -5387,20 +5387,40 @@ function ConsumoPlacasKalocer() {
     }
   };
 
-  // Temporário — descobre colunas filtradas de uma tabela, pra achar o campo que liga OP à nota interna.
-  const handleDescobrirColunas = async () => {
+  // Temporário — descobre colunas ou nomes de tabela filtrados, pra achar a estrutura certa.
+  const handleDescobrirColunas = async (modo) => {
     setDescobrindo(true);
     setColunasDebug(null);
     try {
       const res = await fetch(`${SUPABASE_URL}/functions/v1/sankhya-descobrir-colunas`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tabela: tabelaDebug, filtro: filtroDebug }),
+        body: JSON.stringify({ modo, tabela: tabelaDebug, filtro: filtroDebug }),
       }).then(r => r.json());
-      setColunasDebug(res.ok ? res.colunas : [{ nome: 'ERRO', tipo: res.error }]);
+      if (!res.ok) { setColunasDebug([{ nome: 'ERRO', tipo: res.error }]); return; }
+      setColunasDebug(modo === 'tabelas'
+        ? res.tabelas.map(t => ({ nome: t, tipo: 'tabela' }))
+        : res.colunas);
     } catch (err) {
       setColunasDebug([{ nome: 'ERRO', tipo: String(err) }]);
     } finally {
       setDescobrindo(false);
+    }
+  };
+
+  const [diagCusto, setDiagCusto] = useState(null);
+  const [diagnosticando, setDiagnosticando] = useState(false);
+  const handleDiagnosticarCusto = async () => {
+    setDiagnosticando(true);
+    setDiagCusto(null);
+    try {
+      const res = await fetch(`${SUPABASE_URL}/functions/v1/sankhya-diagnostico-custo`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+      }).then(r => r.json());
+      setDiagCusto(res);
+    } catch (err) {
+      setDiagCusto({ ok: false, error: String(err) });
+    } finally {
+      setDiagnosticando(false);
     }
   };
 
@@ -5575,29 +5595,46 @@ function ConsumoPlacasKalocer() {
       )}
 
       {/* TEMPORÁRIO — descobrir campo de ligação OP -> nota interna (custo exato). */}
-      <Panel title="🔧 Descobrir colunas (temporário)" subtitle="Tabela + filtro (parte do nome da coluna) — ex: TGFCAB + APO">
+      <Panel title="🔧 Descobrir estrutura (temporário)" subtitle="Buscar Tabelas: usa o campo Filtro pra achar nomes de tabela (ex: IPROC). Buscar Colunas: usa Tabela + Filtro pra achar colunas.">
         <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
           <FiltroCampoFat label="Tabela">
             <input value={tabelaDebug} onChange={e => setTabelaDebug(e.target.value)} style={selectStyleFat(140)} />
           </FiltroCampoFat>
-          <FiltroCampoFat label="Filtro no nome da coluna">
+          <FiltroCampoFat label="Filtro">
             <input value={filtroDebug} onChange={e => setFiltroDebug(e.target.value)} style={selectStyleFat(180)} />
           </FiltroCampoFat>
-          <button onClick={handleDescobrirColunas} disabled={descobrindo}
+          <button onClick={() => handleDescobrirColunas('tabelas')} disabled={descobrindo}
+            style={{ background: T.terracotta, color: '#fff', border: 'none', borderRadius: 6, padding: '9px 16px', fontSize: 12.5, fontWeight: 700, cursor: 'pointer' }}>
+            {descobrindo ? 'Consultando…' : 'Buscar Tabelas'}
+          </button>
+          <button onClick={() => handleDescobrirColunas('colunas')} disabled={descobrindo}
             style={{ background: T.blueText, color: '#fff', border: 'none', borderRadius: 6, padding: '9px 16px', fontSize: 12.5, fontWeight: 700, cursor: 'pointer' }}>
-            {descobrindo ? 'Consultando…' : 'Buscar colunas'}
+            {descobrindo ? 'Consultando…' : 'Buscar Colunas'}
           </button>
         </div>
         {colunasDebug && (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
             {colunasDebug.length === 0 ? (
-              <span style={{ fontSize: 12, color: T.inkFaint }}>Nenhuma coluna encontrada com esse filtro.</span>
+              <span style={{ fontSize: 12, color: T.inkFaint }}>Nada encontrado com esse filtro.</span>
             ) : colunasDebug.map((c, i) => (
               <span key={i} style={{ fontSize: 11.5, fontFamily: FONT_DISPLAY, fontWeight: 600, background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 5, padding: '4px 8px' }}>
                 {c.nome} <span style={{ color: T.inkFaint, fontWeight: 400 }}>({c.tipo})</span>
               </span>
             ))}
           </div>
+        )}
+      </Panel>
+
+      {/* TEMPORÁRIO — diagnóstico automático do porquê o custo não está vindo */}
+      <Panel title="🔬 Diagnóstico de custo (temporário)" subtitle="Um clique só — mostra tudo que preciso pra corrigir o cálculo de custo">
+        <button onClick={handleDiagnosticarCusto} disabled={diagnosticando}
+          style={{ background: T.rustText, color: '#fff', border: 'none', borderRadius: 6, padding: '9px 16px', fontSize: 12.5, fontWeight: 700, cursor: 'pointer', marginBottom: 12 }}>
+          {diagnosticando ? 'Diagnosticando…' : 'Rodar diagnóstico completo'}
+        </button>
+        {diagCusto && (
+          <pre style={{ fontSize: 11, background: T.panelAlt, padding: 12, borderRadius: 8, overflow: 'auto', maxHeight: 400 }}>
+            {JSON.stringify(diagCusto, null, 2)}
+          </pre>
         )}
       </Panel>
 
