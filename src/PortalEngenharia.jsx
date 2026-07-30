@@ -5056,49 +5056,52 @@ function ConsumoMP() {
         </div>
       </Panel>
 
-      {/* Tabela — itens faturados */}
+      {/* Lista — itens faturados, com o produto acabado em destaque */}
       <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
-        <div style={{ overflowX: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-            <thead>
-              <tr style={{ background: T.panelAlt, borderBottom: `1px solid ${T.line}` }}>
-                <LocalSortTh label="Data"    col="data_neg" />
-                <LocalSortTh label="BR"      col="br" />
-                <LocalSortTh label="Cliente" col="cliente_nome" />
-                <LocalSortTh label="Produto" col="cod_produto" />
-                <th style={thFat(0)}>Descrição</th>
-                <LocalSortTh label="Qtd"     col="quantidade" right />
-                <LocalSortTh label="Valor"   col="valor_bruto" right />
-              </tr>
-            </thead>
-            <tbody>
-              {loading ? (
-                <tr><td colSpan={7} style={{ padding: 40, textAlign: 'center', color: T.inkFaint }}>Carregando…</td></tr>
-              ) : filtrados.length === 0 ? (
-                <tr><td colSpan={7} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Nenhum item faturado no período.</td></tr>
-              ) : filtrados.map((it) => {
-                const temComposicao = it.cod_produto && semComposicao.has(it.cod_produto);
-                return (
-                  <tr key={`${it.nunota}-${it.sequencia}`} style={{ borderBottom: `1px solid ${T.lineSoft}`, cursor: 'pointer' }}
-                    onClick={() => abrirComposicao(it)}
-                    onMouseEnter={e => e.currentTarget.style.background = T.panelAlt}
-                    onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
-                    <td style={{ padding: '9px 12px', fontSize: 11, color: T.inkFaint, whiteSpace: 'nowrap' }}>{fmtDataCurta(it.data_neg)}</td>
-                    <td style={{ padding: '9px 12px', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText, whiteSpace: 'nowrap' }}>{it.br || '—'}</td>
-                    <td style={{ padding: '9px 12px', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={it.cliente_nome}>{it.cliente_nome || '—'}</td>
-                    <td style={{ padding: '9px 12px', fontWeight: 600, whiteSpace: 'nowrap' }}>
-                      {it.cod_produto || '—'}
-                      {!temComposicao && <span title="Sem composição cadastrada" style={{ marginLeft: 4, color: T.amberText }}>⚠</span>}
-                    </td>
-                    <td style={{ padding: '9px 12px', maxWidth: 340, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={it.produto_descricao}>{it.produto_descricao}</td>
-                    <td style={{ padding: '9px 12px', textAlign: 'right', fontSize: 11.5 }}>{fmtQtd(it.quantidade)} {it.unidade}</td>
-                    <td style={{ padding: '9px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.ink }}>{fmtR(it.valor_bruto)}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+        <div style={{ padding: '8px 16px', borderBottom: `1px solid ${T.line}`, background: T.panelAlt, display: 'flex', gap: 16, alignItems: 'center' }}>
+          {[
+            { label: 'Data', col: 'data_neg' },
+            { label: 'Produto', col: 'cod_produto' },
+            { label: 'Valor', col: 'valor_bruto' },
+          ].map(o => (
+            <button key={o.col} onClick={() => handleSort(o.col)} style={{
+              background: 'none', border: 'none', cursor: 'pointer', fontSize: 10.5, fontWeight: 700,
+              textTransform: 'uppercase', letterSpacing: '0.04em', padding: 0,
+              color: sortCol === o.col ? T.terracotta : T.inkFaint,
+            }}>
+              {o.label}{sortCol === o.col ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''}
+            </button>
+          ))}
         </div>
+        {loading ? (
+          <div style={{ padding: 40, textAlign: 'center', color: T.inkFaint, fontSize: 12.5 }}>Carregando…</div>
+        ) : filtrados.length === 0 ? (
+          <div style={{ padding: 30, textAlign: 'center', color: T.inkFaint, fontSize: 12.5 }}>Nenhum item faturado no período.</div>
+        ) : filtrados.map((it) => {
+          const temComposicao = it.cod_produto && semComposicao.has(it.cod_produto);
+          return (
+            <div key={`${it.nunota}-${it.sequencia}`}
+              onClick={() => abrirComposicao(it)}
+              style={{ padding: '14px 16px', borderBottom: `1px solid ${T.lineSoft}`, cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16 }}
+              onMouseEnter={e => e.currentTarget.style.background = T.panelAlt}
+              onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ fontFamily: FONT_DISPLAY, fontSize: 15, fontWeight: 700, color: T.ink, display: 'flex', alignItems: 'baseline', gap: 6 }}>
+                  <span style={{ color: T.blueText }}>{it.cod_produto || '—'}</span>
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>— {it.produto_descricao}</span>
+                  {!temComposicao && <span title="Sem composição cadastrada" style={{ color: T.amberText, fontSize: 13, flexShrink: 0 }}>⚠</span>}
+                </div>
+                <div style={{ fontSize: 11.5, color: T.inkFaint, marginTop: 3 }}>
+                  {it.br || '—'} · {it.cliente_nome || '—'} · {fmtDataCurta(it.data_neg)} · Qtd: {fmtQtd(it.quantidade)} {it.unidade}
+                </div>
+              </div>
+              <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                <div style={{ fontFamily: FONT_DISPLAY, fontSize: 15, fontWeight: 700, color: T.ink }}>{fmtR(it.valor_bruto)}</div>
+                <div style={{ fontSize: 10.5, color: T.blueText, marginTop: 2 }}>Ver composição →</div>
+              </div>
+            </div>
+          );
+        })}
         <div style={{ padding: '10px 16px', borderTop: `1px solid ${T.line}`, fontSize: 11, color: T.inkFaint, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <span>{filtrados.length} ite{filtrados.length !== 1 ? 'ns' : 'm'} faturado{filtrados.length !== 1 ? 's' : ''} · Fonte: Nota de Venda (mesmos TOPs validados do Faturamento) · Clique numa linha para ver a composição consumida</span>
           <BotaoExportar small onClick={() => exportCSV(filtrados, 'consumo_mp_faturado.csv',
