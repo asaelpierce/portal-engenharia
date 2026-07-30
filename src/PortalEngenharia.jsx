@@ -4894,8 +4894,6 @@ function ConsumoPlacasKalocer() {
   const [drillMP, setDrillMP] = useState(null); // { codigo_mp, descricao, itens: [...] }
   const [syncing, setSyncing] = useState(false);
   const [syncStatus, setSyncStatus] = useState(null);
-  const [colunasTPRAPO, setColunasTPRAPO] = useState(null); // temporário — descoberta de campo de projeto
-  const [descobrindo, setDescobrindo] = useState(false);
 
   const rangeDatas = () => {
     const ini = `${filtros.anoIni}-${String(filtros.mesIni).padStart(2, '0')}-01`;
@@ -4915,7 +4913,7 @@ function ConsumoPlacasKalocer() {
     const [rLista, rApontamentos] = await Promise.all([
       supabase.from('mp_placas_kalocer').select('codigo_mp,descricao,unidade'),
       supabase.from('producao_mp_apontamentos')
-        .select('nuapo,seq_pa,data_ref,cod_prod_acabado,desc_prod_acabado,qtd_lote_pa,cod_materia_prima,qtd_mp,unidade_mp')
+        .select('nuapo,seq_pa,data_ref,cod_prod_acabado,desc_prod_acabado,qtd_lote_pa,cod_materia_prima,qtd_mp,unidade_mp,br,cliente_nome')
         .gte('data_ref', ini).lte('data_ref', fim),
     ]);
 
@@ -4937,6 +4935,7 @@ function ConsumoPlacasKalocer() {
         produto: ap.cod_prod_acabado, descricao_produto: ap.desc_prod_acabado,
         data_ref: ap.data_ref, qtd_lote_pa: Number(ap.qtd_lote_pa) || 0,
         qtd_mp: qtd, unidade_mp: ap.unidade_mp,
+        br: ap.br, cliente_nome: ap.cliente_nome,
       });
     });
 
@@ -4978,23 +4977,6 @@ function ConsumoPlacasKalocer() {
     }
   };
 
-  // Temporário — descobre as colunas de uma tabela pra achar o campo de projeto/BR.
-  const handleDescobrirColunas = async (tabela) => {
-    setDescobrindo(true);
-    setColunasTPRAPO(null);
-    try {
-      const res = await fetch(`${SUPABASE_URL}/functions/v1/sankhya-descobrir-colunas`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tabela }),
-      }).then(r => r.json());
-      setColunasTPRAPO(res.ok ? { tabela: res.tabela, colunas: res.colunas } : { tabela, colunas: [{ nome: 'ERRO', tipo: res.error }] });
-    } catch (err) {
-      setColunasTPRAPO({ tabela, colunas: [{ nome: 'ERRO', tipo: String(err) }] });
-    } finally {
-      setDescobrindo(false);
-    }
-  };
-
   useEffect(() => { carregar(); }, [carregar]);
 
   // Auto-refresh a cada 30 minutos.
@@ -5007,7 +4989,8 @@ function ConsumoPlacasKalocer() {
     return linhas
       .filter(l => !busca ||
         l.codigo_mp.toLowerCase().includes(busca.toLowerCase()) ||
-        (l.descricao || '').toLowerCase().includes(busca.toLowerCase()))
+        (l.descricao || '').toLowerCase().includes(busca.toLowerCase()) ||
+        l.itens.some(it => (it.br || '').toLowerCase().includes(busca.toLowerCase())))
       .sort((a, b) => {
         let va = a[sortCol] ?? 0;
         let vb = b[sortCol] ?? 0;
@@ -5081,10 +5064,10 @@ function ConsumoPlacasKalocer() {
           <FiltroCampoFat label="Mês fim">
             <SelectMesFat value={filtros.mesFim} onChange={v => setFiltros(f => ({ ...f, mesFim: v }))} />
           </FiltroCampoFat>
-          <FiltroCampoFat label="Buscar código ou descrição">
+          <FiltroCampoFat label="Buscar código, descrição ou BR">
             <div style={{ position: 'relative' }}>
               <Search size={13} style={{ position: 'absolute', left: 9, top: 9, color: T.inkFaint }} />
-              <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Ex: 10988, PLACA-RETANGULAR…"
+              <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Ex: 10988, PLACA-RETANGULAR, BR14206…"
                 style={{ ...selectStyleFat(260), paddingLeft: 28 }} />
             </div>
           </FiltroCampoFat>
@@ -5164,30 +5147,6 @@ function ConsumoPlacasKalocer() {
         </div>
       )}
 
-      {/* TEMPORÁRIO — descobrir campo de projeto na TPRAPO. Remover depois de identificar o campo. */}
-      <Panel title="🔧 Descobrir campo de projeto (temporário)" subtitle="Lista as colunas de uma tabela do Sankhya pra identificar o campo de BR/projeto">
-        <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
-          {['TPRAPO', 'TPRAPA', 'TPRAMP', 'TPRAPF'].map(tab => (
-            <button key={tab} onClick={() => handleDescobrirColunas(tab)} disabled={descobrindo}
-              style={{ background: T.blueText, color: '#fff', border: 'none', borderRadius: 6, padding: '8px 14px', fontSize: 12.5, fontWeight: 700, cursor: 'pointer' }}>
-              {descobrindo ? 'Consultando…' : `Ver colunas de ${tab}`}
-            </button>
-          ))}
-        </div>
-        {colunasTPRAPO && (
-          <div>
-            <div style={{ fontSize: 11, fontWeight: 700, color: T.inkFaint, marginBottom: 8, textTransform: 'uppercase' }}>{colunasTPRAPO.tabela}</div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-              {colunasTPRAPO.colunas.map((c, i) => (
-                <span key={i} style={{ fontSize: 11.5, fontFamily: FONT_DISPLAY, fontWeight: 600, background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 5, padding: '4px 8px' }}>
-                  {c.nome} <span style={{ color: T.inkFaint, fontWeight: 400 }}>({c.tipo})</span>
-                </span>
-              ))}
-            </div>
-          </div>
-        )}
-      </Panel>
-
       {/* Modal: produtos que consumiram essa placa */}
       {drillMP && (
         <Overlay onClose={() => setDrillMP(null)}>
@@ -5219,7 +5178,7 @@ function ConsumoPlacasKalocer() {
                     <tr key={i} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
                       <td style={{ padding: '10px 12px' }}>
                         <div style={{ fontWeight: 600 }}>{it.produto} — {it.descricao_produto}</div>
-                        <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 2 }}>OP {it.nuapo} · {fmtDataCurta(it.data_ref)}</div>
+                        <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 2 }}>OP {it.nuapo} · {fmtDataCurta(it.data_ref)}{it.br ? ` · ${it.br}` : ''}{it.cliente_nome ? ` · ${it.cliente_nome}` : ''}</div>
                       </td>
                       <td style={{ padding: '10px 12px', textAlign: 'right', color: T.inkDim }}>{fmtQtd(it.qtd_lote_pa)}</td>
                       <td style={{ padding: '10px 12px', textAlign: 'right', fontWeight: 700, fontFamily: FONT_DISPLAY }}>{fmtQtd(it.qtd_mp)} {it.unidade_mp}</td>
