@@ -4904,69 +4904,96 @@ function categoriaMP(descricao) {
   return 'Outros';
 }
 
+// Situação real do apontamento de produção no Sankhya: C = Concluído (Finalizado), P = Pendente (Em andamento).
+const SITUACAO_OP_LABEL = { C: 'Finalizado', P: 'Em andamento' };
+
 function AnaliticoMP() {
-  const anoAtual = new Date().getFullYear();
-  const [filtros, setFiltros] = useState({ anoIni: 2025, anoFim: anoAtual, mesIni: 1, mesFim: 12 });
+  const hoje = new Date();
+  const anoAtual = hoje.getFullYear();
+  const mesAtual = hoje.getMonth() + 1;
+  const [filtros, setFiltros] = useState({ anoIni: anoAtual, anoFim: anoAtual, mesIni: mesAtual, mesFim: mesAtual });
   const [linhasGeral, setLinhasGeral] = useState([]);
   const [loadingGeral, setLoadingGeral] = useState(true);
   const [erroGeral, setErroGeral] = useState(null);
 
   const [busca, setBusca] = useState('');
   const [sugestoes, setSugestoes] = useState([]);
-  const [dados, setDados] = useState(null); // { descricao, unidade, itens, kpis } — detalhe da MP selecionada
+  const [codigoAtual, setCodigoAtual] = useState(null); // código da MP selecionada — refaz a busca se o período mudar
+  const [dados, setDados] = useState(null);
   const [loadingDetalhe, setLoadingDetalhe] = useState(false);
   const [erroDetalhe, setErroDetalhe] = useState(null);
   const [sortCol, setSortCol] = useState('data_ref');
   const [sortDir, setSortDir] = useState('desc');
   const detalheRef = useRef(null);
 
-  const rangeDatas = () => {
+  const rangeDatas = useCallback(() => {
     const ini = `${filtros.anoIni}-${String(filtros.mesIni).padStart(2, '0')}-01`;
     const ultimoDia = new Date(filtros.anoFim, filtros.mesFim, 0).getDate();
     const fim = `${filtros.anoFim}-${String(filtros.mesFim).padStart(2, '0')}-${String(ultimoDia).padStart(2, '0')}`;
     return { ini, fim };
-  };
+  }, [filtros]);
 
   // Visão geral: carrega todos os apontamentos do período pra montar os rankings e KPIs consolidados.
   const carregarGeral = useCallback(async () => {
     setLoadingGeral(true);
     setErroGeral(null);
     const { ini, fim } = rangeDatas();
-    const { data, error } = await supabase.from('producao_mp_apontamentos')
-      .select('nuapo,cod_materia_prima,desc_materia_prima,unidade_mp,cod_prod_acabado,desc_prod_acabado,br,qtd_mp,custo_total,data_ref')
-      .gte('data_ref', ini).lte('data_ref', fim)
-      .range(0, 49999);
-    if (error) { setErroGeral(error.message); setLoadingGeral(false); return; }
-    setLinhasGeral(data || []);
+
+    // O Supabase limita cada resposta a ~1000 linhas, mesmo pedindo mais via .range() —
+    // por isso buscamos em lotes de 1000 até não vir mais nada.
+    const TAMANHO_LOTE = 1000;
+    let todasLinhas = [];
+    let pagina = 0;
+    while (true) {
+      const { data, error } = await supabase.from('producao_mp_apontamentos')
+        .select('nuapo,cod_materia_prima,desc_materia_prima,unidade_mp,cod_prod_acabado,desc_prod_acabado,br,qtd_mp,custo_total,data_ref,situacao_op')
+        .gte('data_ref', ini).lte('data_ref', fim)
+        .range(pagina * TAMANHO_LOTE, (pagina + 1) * TAMANHO_LOTE - 1);
+      if (error) { setErroGeral(error.message); setLoadingGeral(false); return; }
+      todasLinhas = todasLinhas.concat(data || []);
+      if (!data || data.length < TAMANHO_LOTE) break;
+      pagina += 1;
+      if (pagina > 100) break; // teto de segurança (100k linhas)
+    }
+
+    setLinhasGeral(todasLinhas);
     setLoadingGeral(false);
-  }, [filtros]);
+  }, [rangeDatas]);
 
   useEffect(() => { carregarGeral(); }, [carregarGeral]);
 
   const overview = useMemo(() => {
-    const mpMap = {}, prodMap = {}, brMap = {};
+    const mpMap = {}, prodMap = {}, brMap = {}, mesMap = {};
     const opsSet = new Set(), mpSet = new Set(), prodSet = new Set(), brSet = new Set();
-    let custoTotalGeral = 0;
+    let custoTotalGeral = 0, custoFinalizado = 0, custoAndamento = 0;
 
     linhasGeral.forEach(l => {
       opsSet.add(l.nuapo);
-      custoTotalGeral += Number(l.custo_total) || 0;
+      const custo = Number(l.custo_total) || 0;
+      custoTotalGeral += custo;
+      if (l.situacao_op === 'C') custoFinalizado += custo;
+      else if (l.situacao_op === 'P') custoAndamento += custo;
 
       if (l.cod_materia_prima) {
         mpSet.add(l.cod_materia_prima);
         if (!mpMap[l.cod_materia_prima]) mpMap[l.cod_materia_prima] = { codigo: l.cod_materia_prima, descricao: l.desc_materia_prima, custo: 0, qtd: 0, unidade: l.unidade_mp };
-        mpMap[l.cod_materia_prima].custo += Number(l.custo_total) || 0;
+        mpMap[l.cod_materia_prima].custo += custo;
         mpMap[l.cod_materia_prima].qtd += Number(l.qtd_mp) || 0;
       }
       if (l.cod_prod_acabado) {
         prodSet.add(l.cod_prod_acabado);
         if (!prodMap[l.cod_prod_acabado]) prodMap[l.cod_prod_acabado] = { codigo: l.cod_prod_acabado, descricao: l.desc_prod_acabado, custo: 0 };
-        prodMap[l.cod_prod_acabado].custo += Number(l.custo_total) || 0;
+        prodMap[l.cod_prod_acabado].custo += custo;
       }
       if (l.br && l.br !== '<SEM PROJETO>') {
         brSet.add(l.br);
         if (!brMap[l.br]) brMap[l.br] = { br: l.br, custo: 0 };
-        brMap[l.br].custo += Number(l.custo_total) || 0;
+        brMap[l.br].custo += custo;
+      }
+      if (l.data_ref) {
+        const mesKey = l.data_ref.slice(0, 7); // YYYY-MM
+        if (!mesMap[mesKey]) mesMap[mesKey] = { mes: mesKey, custo: 0 };
+        mesMap[mesKey].custo += custo;
       }
     });
 
@@ -4975,10 +5002,11 @@ function AnaliticoMP() {
       totalMPs: mpSet.size,
       totalProdutos: prodSet.size,
       totalProjetos: brSet.size,
-      custoTotalGeral,
+      custoTotalGeral, custoFinalizado, custoAndamento,
       topMPs: Object.values(mpMap).sort((a, b) => b.custo - a.custo).slice(0, 8),
       topProdutos: Object.values(prodMap).sort((a, b) => b.custo - a.custo).slice(0, 8),
       topProjetos: Object.values(brMap).sort((a, b) => b.custo - a.custo).slice(0, 8),
+      custoPorMes: Object.values(mesMap).sort((a, b) => a.mes.localeCompare(b.mes)),
     };
   }, [linhasGeral]);
 
@@ -5000,16 +5028,18 @@ function AnaliticoMP() {
     return () => clearTimeout(t);
   }, [busca]);
 
-  const selecionar = useCallback(async (codigo) => {
-    setSugestoes([]);
+  // Carrega o detalhe de uma matéria-prima específica, respeitando o MESMO período do filtro geral
+  // (antes, essa busca ignorava o período e trazia o histórico inteiro — causava datas fora do filtro).
+  const carregarDetalhe = useCallback(async (codigo) => {
     setLoadingDetalhe(true);
     setErroDetalhe(null);
-    setTimeout(() => detalheRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100);
+    const { ini, fim } = rangeDatas();
 
     const [rApontamentos, rComposicao] = await Promise.all([
       supabase.from('producao_mp_apontamentos')
-        .select('nuapo,seq_pa,data_ref,cod_prod_acabado,desc_prod_acabado,qtd_lote_pa,qtd_mp,unidade_mp,custo_unitario,custo_total,saldo_disponivel_mp,br,cliente_nome,desc_materia_prima')
+        .select('nuapo,seq_pa,data_ref,cod_prod_acabado,desc_prod_acabado,qtd_lote_pa,qtd_mp,unidade_mp,custo_unitario,custo_total,saldo_fisico_mp,saldo_reservado_mp,saldo_disponivel_mp,br,cliente_nome,desc_materia_prima,situacao_op')
         .eq('cod_materia_prima', codigo)
+        .gte('data_ref', ini).lte('data_ref', fim)
         .order('data_ref', { ascending: false }),
       supabase.from('composicao_produtos').select('cod_prod_pai').eq('cod_prod_mp', codigo),
     ]);
@@ -5017,40 +5047,54 @@ function AnaliticoMP() {
     if (rApontamentos.error) { setErroDetalhe(rApontamentos.error.message); setLoadingDetalhe(false); return; }
 
     const itens = rApontamentos.data || [];
-    const produtosQueUsam = new Set((rComposicao.data || []).map(c => c.cod_prod_pai));
-
-    let carteira = [];
-    if (produtosQueUsam.size > 0) {
-      const codigos = [...produtosQueUsam];
-      const { data } = await supabase.from('pedidos_itens')
-        .select('br,cliente_nome,cod_produto,numero_pedido,data_prevista_entrega')
-        .in('cod_produto', codigos.slice(0, 500));
-      carteira = data || [];
-    }
 
     const produtosAcabadosDistintos = new Set(itens.map(i => i.cod_prod_acabado).filter(Boolean));
-    const projetosAtendidos = new Set(itens.map(i => i.br).filter(b => b && b !== '<SEM PROJETO>'));
-    const projetosCarteira = new Set(carteira.map(c => c.br).filter(Boolean));
+    // "Projetos atendidos" = BRs de ordens JÁ FINALIZADAS (situacao_op = 'C').
+    const projetosAtendidos = new Set(itens.filter(i => i.situacao_op === 'C' && i.br && i.br !== '<SEM PROJETO>').map(i => i.br));
+    // "Projetos em andamento" = BRs de ordens AINDA EM PRODUÇÃO (situacao_op = 'P').
+    const projetosEmAndamento = new Set(itens.filter(i => i.situacao_op === 'P' && i.br && i.br !== '<SEM PROJETO>').map(i => i.br));
     const custoTotalGeral = itens.reduce((s, i) => s + (Number(i.custo_total) || 0), 0);
     const qtdTotal = itens.reduce((s, i) => s + (Number(i.qtd_mp) || 0), 0);
-    const ultimoSaldo = itens.length ? itens[0].saldo_disponivel_mp : null;
-    const descricao = itens[0]?.desc_materia_prima || '';
-    const unidade = itens[0]?.unidade_mp || '';
+    const maisRecente = itens[0]; // já vem ordenado por data_ref desc
+    const descricao = maisRecente?.desc_materia_prima || '';
+    const unidade = maisRecente?.unidade_mp || '';
+
+    // Série histórica de custo unitário (ordem cronológica) — pra ver a variação de preço da MP.
+    const historicoCusto = [...itens]
+      .filter(i => i.custo_unitario != null)
+      .sort((a, b) => a.data_ref.localeCompare(b.data_ref))
+      .map(i => ({ data: i.data_ref, valor: Number(i.custo_unitario) }));
 
     setDados({
       codigo, descricao, unidade,
       itens,
+      historicoCusto,
       kpis: {
         produtosAcabados: produtosAcabadosDistintos.size,
         projetosAtendidos: projetosAtendidos.size,
-        estoqueDisponivel: ultimoSaldo,
-        projetosCarteira: projetosCarteira.size,
+        projetosEmAndamento: projetosEmAndamento.size,
+        estoqueFisico: maisRecente?.saldo_fisico_mp ?? null,
+        estoqueReservado: maisRecente?.saldo_reservado_mp ?? null,
+        estoqueDisponivel: maisRecente?.saldo_disponivel_mp ?? null,
         custoTotal: custoTotalGeral,
         qtdTotal,
       },
     });
     setLoadingDetalhe(false);
-  }, []);
+  }, [rangeDatas]);
+
+  const selecionar = useCallback((codigo) => {
+    setSugestoes([]);
+    setCodigoAtual(codigo);
+    setTimeout(() => detalheRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100);
+    carregarDetalhe(codigo);
+  }, [carregarDetalhe]);
+
+  // Se o período mudar com uma MP já selecionada, refaz a busca pro novo período automaticamente.
+  useEffect(() => {
+    if (codigoAtual) carregarDetalhe(codigoAtual);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filtros]);
 
   const itensOrdenados = useMemo(() => {
     if (!dados) return [];
@@ -5082,6 +5126,7 @@ function AnaliticoMP() {
   const fmtR = (v) => v == null ? '—' : new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(v);
   const fmtRCompacta = (v) => v == null ? '—' : new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL', notation: 'compact', maximumFractionDigits: 1 }).format(v);
   const fmtDataCurta = (iso) => !iso ? '—' : new Date(iso + 'T00:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: '2-digit' });
+  const fmtMesLabel = (iso) => { const [y, m] = iso.split('-'); return `${MESES_LABEL[MESES_ORDEM[Number(m) - 1]]}/${y.slice(2)}`; };
 
   const RankingBar = ({ label, sub, valor, max, onClick }) => (
     <button onClick={onClick} style={{
@@ -5101,6 +5146,88 @@ function AnaliticoMP() {
       <span style={{ fontSize: 11.5, fontWeight: 700, color: T.rustText, fontFamily: FONT_DISPLAY, width: 60, textAlign: 'right', flexShrink: 0 }}>{fmtRCompacta(valor)}</span>
     </button>
   );
+
+  // Gráfico de barras verticais simples (custo consumido por mês) — SVG puro, sem lib externa.
+  const BarChartMensal = ({ dadosMes }) => {
+    if (dadosMes.length === 0) return <div style={{ textAlign: 'center', padding: 20, color: T.inkFaint, fontSize: 12.5 }}>Sem dados no período.</div>;
+    const W = 900, H = 220, PAD_L = 60, PAD_B = 30, PAD_T = 10;
+    const max = Math.max(...dadosMes.map(d => d.custo), 1);
+    const larguraBarra = Math.min(60, (W - PAD_L - 20) / dadosMes.length - 10);
+    const passo = (W - PAD_L - 20) / dadosMes.length;
+    return (
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 'auto', overflow: 'visible' }}>
+        {[0.25, 0.5, 0.75, 1].map(f => (
+          <line key={f} x1={PAD_L} x2={W - 10} y1={PAD_T + (H - PAD_B - PAD_T) * (1 - f)} y2={PAD_T + (H - PAD_B - PAD_T) * (1 - f)} stroke={T.lineSoft} strokeWidth={1} />
+        ))}
+        {dadosMes.map((d, i) => {
+          const alturaBarra = (d.custo / max) * (H - PAD_B - PAD_T);
+          const x = PAD_L + i * passo + (passo - larguraBarra) / 2;
+          const y = H - PAD_B - alturaBarra;
+          return (
+            <g key={d.mes}>
+              <rect x={x} y={y} width={larguraBarra} height={alturaBarra} rx={3} fill={T.terracotta} opacity={0.9}>
+                <title>{fmtMesLabel(d.mes)}: {fmtR(d.custo)}</title>
+              </rect>
+              <text x={x + larguraBarra / 2} y={H - PAD_B + 16} textAnchor="middle" fontSize={10} fill={T.inkFaint}>{fmtMesLabel(d.mes)}</text>
+              <text x={x + larguraBarra / 2} y={y - 6} textAnchor="middle" fontSize={9.5} fontWeight={700} fill={T.rustText}>{fmtRCompacta(d.custo)}</text>
+            </g>
+          );
+        })}
+        <line x1={PAD_L} x2={PAD_L} y1={PAD_T} y2={H - PAD_B} stroke={T.line} strokeWidth={1} />
+        <line x1={PAD_L} x2={W - 10} y1={H - PAD_B} y2={H - PAD_B} stroke={T.line} strokeWidth={1} />
+      </svg>
+    );
+  };
+
+  // Gráfico de linha — variação do custo unitário da MP ao longo do tempo.
+  const LineChartCusto = ({ pontos }) => {
+    if (pontos.length === 0) return <div style={{ textAlign: 'center', padding: 20, color: T.inkFaint, fontSize: 12.5 }}>Sem histórico de custo suficiente.</div>;
+    if (pontos.length === 1) {
+      return <div style={{ padding: 16, fontSize: 13 }}>Único valor no período: <strong>{fmtR(pontos[0].valor)}</strong> em {fmtDataCurta(pontos[0].data)}</div>;
+    }
+    const W = 900, H = 200, PAD_L = 70, PAD_R = 20, PAD_T = 20, PAD_B = 30;
+    const valores = pontos.map(p => p.valor);
+    const min = Math.min(...valores), max = Math.max(...valores);
+    const span = max - min || 1;
+    const passo = (W - PAD_L - PAD_R) / (pontos.length - 1);
+    const coordX = (i) => PAD_L + i * passo;
+    const coordY = (v) => PAD_T + (H - PAD_T - PAD_B) * (1 - (v - min) / span);
+    const linha = pontos.map((p, i) => `${coordX(i)},${coordY(p.valor)}`).join(' ');
+    const primeiro = pontos[0].valor, ultimo = pontos[pontos.length - 1].valor;
+    const variacaoPct = primeiro !== 0 ? ((ultimo - primeiro) / primeiro) * 100 : 0;
+    const subiu = variacaoPct > 0.5, desceu = variacaoPct < -0.5;
+    return (
+      <div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+          {subiu && <ArrowUpRight size={16} color={T.rustText} />}
+          {desceu && <ArrowDownRight size={16} color={T.oliveText} />}
+          {!subiu && !desceu && <Minus size={16} color={T.inkFaint} />}
+          <span style={{ fontSize: 13, fontWeight: 700, color: subiu ? T.rustText : desceu ? T.oliveText : T.inkFaint }}>
+            {variacaoPct > 0 ? '+' : ''}{variacaoPct.toFixed(1)}% no período
+          </span>
+          <span style={{ fontSize: 11.5, color: T.inkFaint }}>({fmtR(primeiro)} → {fmtR(ultimo)})</span>
+        </div>
+        <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 'auto', overflow: 'visible' }}>
+          {[0, 0.5, 1].map(f => (
+            <g key={f}>
+              <line x1={PAD_L} x2={W - PAD_R} y1={PAD_T + (H - PAD_T - PAD_B) * f} y2={PAD_T + (H - PAD_T - PAD_B) * f} stroke={T.lineSoft} strokeWidth={1} />
+              <text x={PAD_L - 8} y={PAD_T + (H - PAD_T - PAD_B) * f + 4} textAnchor="end" fontSize={9.5} fill={T.inkFaint}>{fmtR(max - span * f)}</text>
+            </g>
+          ))}
+          <polyline points={linha} fill="none" stroke={T.terracotta} strokeWidth={2.5} />
+          {pontos.map((p, i) => (
+            <circle key={i} cx={coordX(i)} cy={coordY(p.valor)} r={4} fill={T.panel} stroke={T.terracotta} strokeWidth={2}>
+              <title>{fmtDataCurta(p.data)}: {fmtR(p.valor)}</title>
+            </circle>
+          ))}
+          {pontos.filter((_, i) => i === 0 || i === pontos.length - 1 || i === Math.floor(pontos.length / 2)).map((p) => {
+            const i = pontos.indexOf(p);
+            return <text key={i} x={coordX(i)} y={H - PAD_B + 16} textAnchor="middle" fontSize={9.5} fill={T.inkFaint}>{fmtDataCurta(p.data)}</text>;
+          })}
+        </svg>
+      </div>
+    );
+  };
 
   const maxMP = Math.max(...overview.topMPs.map(m => m.custo), 1);
   const maxProd = Math.max(...overview.topProdutos.map(p => p.custo), 1);
@@ -5144,8 +5271,17 @@ function AnaliticoMP() {
         <Kpi label="Projetos atendidos" value={loadingGeral ? '…' : overview.totalProjetos} icon={CheckCircle2} tone="amber"
           sub="BRs com produção no período" />
         <Kpi label="Custo total de MP" value={loadingGeral ? '…' : fmtRCompacta(overview.custoTotalGeral)} icon={DollarSign} tone="rust"
-          sub="soma do custo médio (TGFCUS) consumido" />
+          sub={`${String(filtros.mesIni).padStart(2, '0')}/${filtros.anoIni} até ${String(filtros.mesFim).padStart(2, '0')}/${filtros.anoFim} · Finalizado: ${fmtRCompacta(overview.custoFinalizado)} · Em andamento: ${fmtRCompacta(overview.custoAndamento)}`} />
       </div>
+
+      {/* Gráfico comparativo — custo consumido por mês */}
+      <Panel title="Custo de MP consumido por mês" subtitle="Comparativo mensal — ajuda a ver picos e sazonalidade de consumo">
+        {loadingGeral ? (
+          <div style={{ textAlign: 'center', padding: 30, color: T.inkFaint, fontSize: 12.5 }}>Carregando…</div>
+        ) : (
+          <BarChartMensal dadosMes={overview.custoPorMes} />
+        )}
+      </Panel>
 
       {/* Rankings — clique numa matéria-prima pra ver o detalhe completo */}
       <div className="grid-3col">
@@ -5183,13 +5319,13 @@ function AnaliticoMP() {
 
       {/* Busca detalhada por matéria-prima específica */}
       <div ref={detalheRef}>
-        <Panel title="Analisar uma matéria-prima específica" subtitle="Digite o código ou a descrição — ou clique num item do ranking acima">
+        <Panel title="Analisar uma matéria-prima específica" subtitle="Digite o código ou a descrição — ou clique num item do ranking acima. O detalhe respeita o mesmo período do filtro.">
           <div style={{ position: 'relative', maxWidth: 460 }}>
             <div style={{ position: 'relative' }}>
               <Search size={14} style={{ position: 'absolute', left: 10, top: 11, color: T.inkFaint }} />
               <input
                 value={busca}
-                onChange={e => { setBusca(e.target.value); setDados(null); }}
+                onChange={e => { setBusca(e.target.value); }}
                 placeholder="Ex: 10988, SM-PLACA-RETANGULAR…"
                 style={{ ...selectStyleFat(460), paddingLeft: 32, fontSize: 13.5 }}
               />
@@ -5229,14 +5365,19 @@ function AnaliticoMP() {
             <Kpi label="Produtos acabados distintos" value={dados.kpis.produtosAcabados} icon={Package}
               sub="quantos produtos diferentes usam essa MP" />
             <Kpi label="Projetos atendidos" value={dados.kpis.projetosAtendidos} icon={CheckCircle2} tone="olive"
-              sub="BRs que já consumiram essa MP em produção" />
+              sub="BRs com OP Finalizada (situação = C)" />
+            <Kpi label="Projetos em andamento" value={dados.kpis.projetosEmAndamento} icon={Clock3} tone="amber"
+              sub="BRs com OP ainda em produção (situação = P)" />
             <Kpi label="Estoque disponível" value={fmtQtd(dados.kpis.estoqueDisponivel)} icon={Layers} tone="blue"
-              sub={`${dados.unidade || ''} · saldo físico − reservado (Sankhya)`} />
-            <Kpi label="Projetos em carteira" value={dados.kpis.projetosCarteira} icon={Clock3} tone="amber"
-              sub="BRs em pedido que ainda vão usar essa MP" />
+              sub={`${dados.unidade || ''} · Físico: ${fmtQtd(dados.kpis.estoqueFisico)} · Reservado: ${fmtQtd(dados.kpis.estoqueReservado)}`} />
             <Kpi label="Custo total consumido" value={fmtRCompacta(dados.kpis.custoTotal)} icon={DollarSign} tone="rust"
               sub={`${fmtQtd(dados.kpis.qtdTotal)} ${dados.unidade || ''} ao custo médio (TGFCUS)`} />
           </div>
+
+          {/* Variação de custo unitário no tempo */}
+          <Panel title="Variação de custo unitário" subtitle="Como o custo médio (TGFCUS) dessa matéria-prima mudou ao longo do período">
+            <LineChartCusto pontos={dados.historicoCusto} />
+          </Panel>
 
           <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
             <div style={{ overflowX: 'auto' }}>
@@ -5245,6 +5386,7 @@ function AnaliticoMP() {
                   <tr style={{ background: T.panelAlt, borderBottom: `1px solid ${T.line}` }}>
                     <LocalSortTh label="Data" col="data_ref" />
                     <th style={thFat(0)}>Produto acabado / OP</th>
+                    <th style={thFat(90)}>Status OP</th>
                     <th style={thFat(140)}>Projeto / Cliente</th>
                     <LocalSortTh label="Qtd consumida" col="qtd_mp" right />
                     <LocalSortTh label="Vlr. unitário" col="custo_unitario" right />
@@ -5253,32 +5395,52 @@ function AnaliticoMP() {
                 </thead>
                 <tbody>
                   {itensOrdenados.length === 0 ? (
-                    <tr><td colSpan={6} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Nenhum apontamento de produção encontrado para essa MP.</td></tr>
-                  ) : itensOrdenados.map((it, i) => (
-                    <tr key={i} style={{ borderBottom: `1px solid ${T.lineSoft}` }}
-                      onMouseEnter={e => e.currentTarget.style.background = T.panelAlt}
-                      onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
-                      <td style={{ padding: '9px 12px', fontSize: 11, color: T.inkFaint, whiteSpace: 'nowrap' }}>{fmtDataCurta(it.data_ref)}</td>
-                      <td style={{ padding: '9px 12px' }}>
-                        <div style={{ fontWeight: 600 }}>{it.cod_prod_acabado} — {it.desc_prod_acabado}</div>
-                        <div style={{ fontSize: 10.5, color: T.inkFaint }}>OP {it.nuapo}</div>
-                      </td>
-                      <td style={{ padding: '9px 12px', fontSize: 11.5 }}>
-                        <div>{it.br && it.br !== '<SEM PROJETO>' ? it.br : '—'}</div>
-                        <div style={{ color: T.inkFaint }}>{it.cliente_nome && it.cliente_nome !== '<SEM PARCEIRO>' ? it.cliente_nome : '—'}</div>
-                      </td>
-                      <td style={{ padding: '9px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 700 }}>{fmtQtd(it.qtd_mp)} {it.unidade_mp}</td>
-                      <td style={{ padding: '9px 12px', textAlign: 'right', color: T.inkDim }}>{fmtR(it.custo_unitario)}</td>
-                      <td style={{ padding: '9px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.rustText }}>{fmtR(it.custo_total)}</td>
-                    </tr>
-                  ))}
+                    <tr><td colSpan={7} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Nenhum apontamento de produção encontrado para essa MP no período.</td></tr>
+                  ) : itensOrdenados.map((it, i) => {
+                    const temProjeto = it.br && it.br !== '<SEM PROJETO>';
+                    return (
+                      <tr key={i} style={{ borderBottom: `1px solid ${T.lineSoft}` }}
+                        onMouseEnter={e => e.currentTarget.style.background = T.panelAlt}
+                        onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                        <td style={{ padding: '9px 12px', fontSize: 11, color: T.inkFaint, whiteSpace: 'nowrap' }}>{fmtDataCurta(it.data_ref)}</td>
+                        <td style={{ padding: '9px 12px' }}>
+                          <div style={{ fontWeight: 600 }}>{it.cod_prod_acabado} — {it.desc_prod_acabado}</div>
+                          <div style={{ fontSize: 10.5, color: T.inkFaint }}>OP {it.nuapo}</div>
+                        </td>
+                        <td style={{ padding: '9px 12px' }}>
+                          <span style={{
+                            fontSize: 10.5, fontWeight: 700, padding: '3px 8px', borderRadius: 4,
+                            color: it.situacao_op === 'C' ? T.oliveText : T.amberText,
+                            background: it.situacao_op === 'C' ? T.oliveSoft : T.amberSoft,
+                          }}>
+                            {SITUACAO_OP_LABEL[it.situacao_op] || it.situacao_op || '—'}
+                          </span>
+                        </td>
+                        <td style={{ padding: '9px 12px', fontSize: 11.5 }}>
+                          {temProjeto ? (
+                            <>
+                              <div>{it.br}</div>
+                              <div style={{ color: T.inkFaint }}>{it.cliente_nome && it.cliente_nome !== '<SEM PARCEIRO>' ? it.cliente_nome : '—'}</div>
+                            </>
+                          ) : (
+                            <span style={{ color: T.inkFaint, fontStyle: 'italic' }} title="Ordem de produção sem nota de venda vinculada no momento do apontamento (ex: produção pra estoque)">
+                              Sem venda vinculada
+                            </span>
+                          )}
+                        </td>
+                        <td style={{ padding: '9px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 700 }}>{fmtQtd(it.qtd_mp)} {it.unidade_mp}</td>
+                        <td style={{ padding: '9px 12px', textAlign: 'right', color: T.inkDim }}>{fmtR(it.custo_unitario)}</td>
+                        <td style={{ padding: '9px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.rustText }}>{fmtR(it.custo_total)}</td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
             <div style={{ padding: '10px 16px', borderTop: `1px solid ${T.line}`, fontSize: 11, color: T.inkFaint, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <span>{itensOrdenados.length} apontamento{itensOrdenados.length !== 1 ? 's' : ''} de produção · Custo = custo médio (TGFCUS) na data do apontamento × quantidade consumida</span>
               <BotaoExportar small onClick={() => exportCSV(itensOrdenados, `analitico_${dados.codigo}.csv`,
-                ['data_ref','cod_prod_acabado','desc_prod_acabado','nuapo','br','cliente_nome','qtd_mp','custo_unitario','custo_total'])} />
+                ['data_ref','situacao_op','cod_prod_acabado','desc_prod_acabado','nuapo','br','cliente_nome','qtd_mp','custo_unitario','custo_total'])} />
             </div>
           </div>
         </>
