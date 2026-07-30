@@ -4890,7 +4890,8 @@ function ConsumoMP() {
   const [busca, setBusca] = useState('');
   const [sortCol, setSortCol] = useState('data_neg');
   const [sortDir, setSortDir] = useState('desc');
-  const [drillItem, setDrillItem] = useState(null); // { ...item, composicao: [...] | null }
+  const [drillGrupo, setDrillGrupo] = useState(null);   // { nunota, br, cliente_nome, data_neg, valor_total, itens: [...] } — nível 1 → 2
+  const [drillItem, setDrillItem] = useState(null);     // { ...item, composicao: [...] | null } — nível 2 → 3
 
   const rangeDatas = () => {
     const ini = `${filtros.anoIni}-${String(filtros.mesIni).padStart(2, '0')}-01`;
@@ -4951,13 +4952,32 @@ function ConsumoMP() {
     return () => clearInterval(id);
   }, [carregar]);
 
+  // Nível 1: agrupa os itens por nota fiscal (nunota) — um pedido/nota pode ter vários produtos dentro.
+  const grupos = useMemo(() => {
+    const mapa = new Map();
+    itens.forEach(it => {
+      if (!mapa.has(it.nunota)) {
+        mapa.set(it.nunota, {
+          nunota: it.nunota, br: it.br, cliente_nome: it.cliente_nome,
+          data_neg: it.data_neg, numero_pedido: it.numero_pedido,
+          valor_total: 0, qtd_produtos: 0, itens: [],
+        });
+      }
+      const g = mapa.get(it.nunota);
+      g.valor_total += Number(it.valor_bruto) || 0;
+      g.qtd_produtos += 1;
+      g.itens.push(it);
+    });
+    return [...mapa.values()];
+  }, [itens]);
+
   const filtrados = useMemo(() => {
-    return itens
-      .filter(it => !busca ||
-        (it.br || '').toLowerCase().includes(busca.toLowerCase()) ||
-        (it.cliente_nome || '').toLowerCase().includes(busca.toLowerCase()) ||
-        (it.cod_produto || '').toLowerCase().includes(busca.toLowerCase()) ||
-        (it.produto_descricao || '').toLowerCase().includes(busca.toLowerCase()))
+    return grupos
+      .filter(g => !busca ||
+        (g.br || '').toLowerCase().includes(busca.toLowerCase()) ||
+        (g.cliente_nome || '').toLowerCase().includes(busca.toLowerCase()) ||
+        g.itens.some(it => (it.cod_produto || '').toLowerCase().includes(busca.toLowerCase()) ||
+                            (it.produto_descricao || '').toLowerCase().includes(busca.toLowerCase())))
       .sort((a, b) => {
         let va = a[sortCol] ?? 0;
         let vb = b[sortCol] ?? 0;
@@ -4967,13 +4987,14 @@ function ConsumoMP() {
         if (va > vb) return sortDir === 'asc' ? 1 : -1;
         return 0;
       });
-  }, [itens, busca, sortCol, sortDir]);
+  }, [grupos, busca, sortCol, sortDir]);
 
   const kpis = useMemo(() => {
-    const totalFaturado = filtrados.reduce((s, it) => s + (Number(it.valor_bruto) || 0), 0);
-    const semCod = filtrados.filter(it => !it.cod_produto).length;
-    const semComp = filtrados.filter(it => it.cod_produto && !semComposicao.has(it.cod_produto)).length;
-    return { totalItens: filtrados.length, totalFaturado, semCod, semComp };
+    const totalFaturado = filtrados.reduce((s, g) => s + g.valor_total, 0);
+    const totalItens = filtrados.reduce((s, g) => s + g.qtd_produtos, 0);
+    const todosItens = filtrados.flatMap(g => g.itens);
+    const semComp = todosItens.filter(it => it.cod_produto && !semComposicao.has(it.cod_produto)).length;
+    return { totalGrupos: filtrados.length, totalItens, totalFaturado, semComp };
   }, [filtrados, semComposicao]);
 
   const handleSort = (col) => {
@@ -4981,20 +5002,12 @@ function ConsumoMP() {
     else { setSortCol(col); setSortDir(col === 'data_neg' ? 'desc' : 'asc'); }
   };
 
-  const LocalSortTh = ({ label, col, right }) => {
-    const active = sortCol === col;
-    return (
-      <th onClick={() => handleSort(col)} style={{ ...thFat(0, right ? 'right' : 'left'), cursor: 'pointer', whiteSpace: 'nowrap' }}>
-        <span style={{ color: active ? T.terracotta : T.inkFaint }}>{label}{active ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''}</span>
-      </th>
-    );
-  };
-
   const fmtQtd = (v) => v == null ? '—' : new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 2 }).format(v);
   const fmtR = (v) => v == null ? '—' : new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL', notation: 'compact', maximumFractionDigits: 1 }).format(v);
   const fmtRCheia = (v) => v == null ? '—' : new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(v);
   const fmtDataCurta = (iso) => !iso ? '—' : new Date(iso + 'T00:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: '2-digit' });
 
+  // Nível 2 → 3: abre a composição de um produto específico dentro do grupo.
   const abrirComposicao = async (it) => {
     setDrillItem({ ...it, composicao: null });
     const composicao = await carregarComposicao(it.cod_produto, Number(it.quantidade) || 0);
@@ -5013,9 +5026,9 @@ function ConsumoMP() {
       {/* KPIs */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 12 }}>
         {[
-          { label: 'Itens faturados', value: kpis.totalItens, color: T.ink, desc: 'No período selecionado' },
+          { label: 'Notas faturadas', value: kpis.totalGrupos, color: T.ink, desc: `${kpis.totalItens} produtos no período` },
           { label: 'Total faturado', value: fmtR(kpis.totalFaturado), color: T.oliveText, desc: 'Soma do valor bruto' },
-          { label: 'Sem composição', value: kpis.semComp, color: kpis.semComp > 0 ? T.amberText : T.oliveText, desc: 'Produto não está em `composicao_produtos`' },
+          { label: 'Produtos sem composição', value: kpis.semComp, color: kpis.semComp > 0 ? T.amberText : T.oliveText, desc: 'Não está em `composicao_produtos`' },
         ].map(k => (
           <div key={k.label} style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '12px 14px', boxShadow: SHADOW_SM }}>
             <div style={{ fontSize: 10.5, color: T.inkFaint, fontWeight: 600 }}>{k.label}</div>
@@ -5056,72 +5069,113 @@ function ConsumoMP() {
         </div>
       </Panel>
 
-      {/* Lista — itens faturados, com o produto acabado em destaque */}
+      {/* Nível 1 — grupos por nota fiscal: BR, Cliente, Data, Qtd de produtos, Valor */}
       <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
-        <div style={{ padding: '8px 16px', borderBottom: `1px solid ${T.line}`, background: T.panelAlt, display: 'flex', gap: 16, alignItems: 'center' }}>
-          {[
-            { label: 'Data', col: 'data_neg' },
-            { label: 'Produto', col: 'cod_produto' },
-            { label: 'Valor', col: 'valor_bruto' },
-          ].map(o => (
-            <button key={o.col} onClick={() => handleSort(o.col)} style={{
-              background: 'none', border: 'none', cursor: 'pointer', fontSize: 10.5, fontWeight: 700,
-              textTransform: 'uppercase', letterSpacing: '0.04em', padding: 0,
-              color: sortCol === o.col ? T.terracotta : T.inkFaint,
-            }}>
-              {o.label}{sortCol === o.col ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''}
-            </button>
-          ))}
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+            <thead>
+              <tr style={{ background: T.panelAlt, borderBottom: `1px solid ${T.line}` }}>
+                <th onClick={() => handleSort('data_neg')} style={{ ...thFat(0), cursor: 'pointer' }}>
+                  <span style={{ color: sortCol === 'data_neg' ? T.terracotta : T.inkFaint }}>Data{sortCol === 'data_neg' ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''}</span>
+                </th>
+                <th onClick={() => handleSort('br')} style={{ ...thFat(0), cursor: 'pointer' }}>
+                  <span style={{ color: sortCol === 'br' ? T.terracotta : T.inkFaint }}>BR{sortCol === 'br' ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''}</span>
+                </th>
+                <th onClick={() => handleSort('cliente_nome')} style={{ ...thFat(0), cursor: 'pointer' }}>
+                  <span style={{ color: sortCol === 'cliente_nome' ? T.terracotta : T.inkFaint }}>Cliente{sortCol === 'cliente_nome' ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''}</span>
+                </th>
+                <th style={{ ...thFat(90), textAlign: 'center' }}>Qtd produtos</th>
+                <th onClick={() => handleSort('valor_total')} style={{ ...thFat(0, 'right'), cursor: 'pointer' }}>
+                  <span style={{ color: sortCol === 'valor_total' ? T.terracotta : T.inkFaint }}>Valor{sortCol === 'valor_total' ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''}</span>
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {loading ? (
+                <tr><td colSpan={5} style={{ padding: 40, textAlign: 'center', color: T.inkFaint }}>Carregando…</td></tr>
+              ) : filtrados.length === 0 ? (
+                <tr><td colSpan={5} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Nenhuma nota faturada no período.</td></tr>
+              ) : filtrados.map((g) => (
+                <tr key={g.nunota} style={{ borderBottom: `1px solid ${T.lineSoft}`, cursor: 'pointer' }}
+                  onClick={() => setDrillGrupo(g)}
+                  onMouseEnter={e => e.currentTarget.style.background = T.panelAlt}
+                  onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                  <td style={{ padding: '10px 12px', fontSize: 11.5, color: T.inkFaint, whiteSpace: 'nowrap' }}>{fmtDataCurta(g.data_neg)}</td>
+                  <td style={{ padding: '10px 12px', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText, whiteSpace: 'nowrap' }}>{g.br || '—'}</td>
+                  <td style={{ padding: '10px 12px', maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={g.cliente_nome}>{g.cliente_nome || '—'}</td>
+                  <td style={{ padding: '10px 12px', textAlign: 'center', color: T.inkDim }}>{g.qtd_produtos}</td>
+                  <td style={{ padding: '10px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.ink }}>{fmtR(g.valor_total)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
-        {loading ? (
-          <div style={{ padding: 40, textAlign: 'center', color: T.inkFaint, fontSize: 12.5 }}>Carregando…</div>
-        ) : filtrados.length === 0 ? (
-          <div style={{ padding: 30, textAlign: 'center', color: T.inkFaint, fontSize: 12.5 }}>Nenhum item faturado no período.</div>
-        ) : filtrados.map((it) => {
-          const temComposicao = it.cod_produto && semComposicao.has(it.cod_produto);
-          return (
-            <div key={`${it.nunota}-${it.sequencia}`}
-              onClick={() => abrirComposicao(it)}
-              style={{ padding: '14px 16px', borderBottom: `1px solid ${T.lineSoft}`, cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16 }}
-              onMouseEnter={e => e.currentTarget.style.background = T.panelAlt}
-              onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
-              <div style={{ minWidth: 0, flex: 1 }}>
-                <div style={{ fontFamily: FONT_DISPLAY, fontSize: 15, fontWeight: 700, color: T.ink, display: 'flex', alignItems: 'baseline', gap: 6 }}>
-                  <span style={{ color: T.blueText }}>{it.cod_produto || '—'}</span>
-                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>— {it.produto_descricao}</span>
-                  {!temComposicao && <span title="Sem composição cadastrada" style={{ color: T.amberText, fontSize: 13, flexShrink: 0 }}>⚠</span>}
-                </div>
-                <div style={{ fontSize: 11.5, color: T.inkFaint, marginTop: 3 }}>
-                  {it.br || '—'} · {it.cliente_nome || '—'} · {fmtDataCurta(it.data_neg)} · Qtd: {fmtQtd(it.quantidade)} {it.unidade}
-                </div>
-              </div>
-              <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                <div style={{ fontFamily: FONT_DISPLAY, fontSize: 15, fontWeight: 700, color: T.ink }}>{fmtR(it.valor_bruto)}</div>
-                <div style={{ fontSize: 10.5, color: T.blueText, marginTop: 2 }}>Ver composição →</div>
-              </div>
-            </div>
-          );
-        })}
         <div style={{ padding: '10px 16px', borderTop: `1px solid ${T.line}`, fontSize: 11, color: T.inkFaint, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span>{filtrados.length} ite{filtrados.length !== 1 ? 'ns' : 'm'} faturado{filtrados.length !== 1 ? 's' : ''} · Fonte: Nota de Venda (mesmos TOPs validados do Faturamento) · Clique numa linha para ver a composição consumida</span>
-          <BotaoExportar small onClick={() => exportCSV(filtrados, 'consumo_mp_faturado.csv',
-            ['data_neg','br','cliente_nome','cod_produto','produto_descricao','quantidade','valor_bruto'])} />
+          <span>{filtrados.length} nota{filtrados.length !== 1 ? 's' : ''} faturada{filtrados.length !== 1 ? 's' : ''} · Fonte: Nota de Venda (mesmos TOPs validados do Faturamento) · Clique numa linha para ver os produtos</span>
+          <BotaoExportar small onClick={() => exportCSV(filtrados.map(g => ({ data_neg: g.data_neg, br: g.br, cliente_nome: g.cliente_nome, qtd_produtos: g.qtd_produtos, valor_total: g.valor_total })), 'consumo_mp_faturado.csv',
+            ['data_neg','br','cliente_nome','qtd_produtos','valor_total'])} />
         </div>
       </div>
 
-      {/* Modal: composição do produto, calculada pela quantidade daquele item faturado */}
-      {drillItem && (
-        <Overlay onClose={() => setDrillItem(null)}>
-          <div className="scale-in" data-consumo-modal="1" style={{
+      {/* Nível 2 — produtos dentro da nota selecionada */}
+      {drillGrupo && !drillItem && (
+        <Overlay onClose={() => setDrillGrupo(null)}>
+          <div className="scale-in" style={{
             background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, width: '100%', maxWidth: 640,
             maxHeight: '85vh', display: 'flex', flexDirection: 'column', overflow: 'hidden', boxShadow: '0 24px 60px rgba(0,0,0,.18)',
           }}>
             <div style={{ padding: '18px 22px', borderBottom: `1px solid ${T.line}`, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
               <div style={{ minWidth: 0 }}>
+                <div style={{ fontFamily: FONT_DISPLAY, fontSize: 17, fontWeight: 700, color: T.ink }}>{drillGrupo.br || '—'} — {drillGrupo.cliente_nome}</div>
+                <div style={{ fontSize: 11.5, color: T.inkFaint, marginTop: 4 }}>{fmtDataCurta(drillGrupo.data_neg)} · {drillGrupo.qtd_produtos} produto{drillGrupo.qtd_produtos !== 1 ? 's' : ''} · {fmtRCheia(drillGrupo.valor_total)}</div>
+              </div>
+              <button onClick={() => setDrillGrupo(null)} style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: T.inkFaint, flexShrink: 0 }}><X size={20} /></button>
+            </div>
+            <div style={{ padding: '10px 22px', fontSize: 11, color: T.inkFaint, borderBottom: `1px solid ${T.lineSoft}`, background: T.panelAlt }}>
+              Produtos faturados nessa nota — clique num produto para ver a composição
+            </div>
+            <div style={{ overflow: 'auto', flex: 1 }}>
+              {drillGrupo.itens.map((it, i) => {
+                const temComposicao = it.cod_produto && semComposicao.has(it.cod_produto);
+                return (
+                  <div key={i} onClick={() => abrirComposicao(it)}
+                    style={{ padding: '14px 22px', borderBottom: `1px solid ${T.lineSoft}`, cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16 }}
+                    onMouseEnter={e => e.currentTarget.style.background = T.panelAlt}
+                    onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <div style={{ fontFamily: FONT_DISPLAY, fontSize: 14, fontWeight: 700, color: T.ink, display: 'flex', alignItems: 'baseline', gap: 6 }}>
+                        <span style={{ color: T.blueText }}>{it.cod_produto || '—'}</span>
+                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>— {it.produto_descricao}</span>
+                        {!temComposicao && <span title="Sem composição cadastrada" style={{ color: T.amberText, fontSize: 12, flexShrink: 0 }}>⚠</span>}
+                      </div>
+                      <div style={{ fontSize: 11, color: T.inkFaint, marginTop: 2 }}>Qtd: {fmtQtd(it.quantidade)} {it.unidade}</div>
+                    </div>
+                    <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                      <div style={{ fontFamily: FONT_DISPLAY, fontSize: 13.5, fontWeight: 700, color: T.ink }}>{fmtR(it.valor_bruto)}</div>
+                      <div style={{ fontSize: 10, color: T.blueText, marginTop: 2 }}>Ver composição →</div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </Overlay>
+      )}
+
+      {/* Nível 3 — composição do produto, calculada pela quantidade daquele item faturado */}
+      {drillItem && (
+        <Overlay onClose={() => setDrillItem(null)}>
+          <div className="scale-in" style={{
+            background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, width: '100%', maxWidth: 640,
+            maxHeight: '85vh', display: 'flex', flexDirection: 'column', overflow: 'hidden', boxShadow: '0 24px 60px rgba(0,0,0,.18)',
+          }}>
+            <div style={{ padding: '18px 22px', borderBottom: `1px solid ${T.line}`, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
+              <div style={{ minWidth: 0 }}>
+                <button onClick={() => setDrillItem(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.blueText, fontSize: 11, padding: 0, marginBottom: 6 }}>← Voltar aos produtos</button>
                 <div style={{ fontFamily: FONT_DISPLAY, fontSize: 17, fontWeight: 700, color: T.ink, lineHeight: 1.25 }}>{drillItem.cod_produto || '—'} — {drillItem.produto_descricao}</div>
                 <div style={{ fontSize: 11.5, color: T.inkFaint, marginTop: 4 }}>{drillItem.br || '—'} · {drillItem.cliente_nome} · Qtd faturada: {fmtQtd(drillItem.quantidade)} {drillItem.unidade} · {fmtRCheia(drillItem.valor_bruto)}</div>
               </div>
-              <button onClick={() => setDrillItem(null)} style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: T.inkFaint, flexShrink: 0 }}><X size={20} /></button>
+              <button onClick={() => { setDrillItem(null); setDrillGrupo(null); }} style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: T.inkFaint, flexShrink: 0 }}><X size={20} /></button>
             </div>
             <div style={{ padding: '10px 22px', fontSize: 11, color: T.inkFaint, borderBottom: `1px solid ${T.lineSoft}`, background: T.panelAlt }}>
               Composição do produto (Sankhya) — itens e quantidade consumida nessa quantidade faturada
@@ -5171,6 +5225,7 @@ function ConsumoMP() {
     </div>
   );
 }
+
 
 
 function Almoxarifado() {
