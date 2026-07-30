@@ -510,18 +510,18 @@ function Sidebar({ view, setView, pendCount, papel, telasPermitidas }) {
             <button key={it.id} onClick={() => setView(it.id)} className="focus-ring sidebar-item" title={it.label}
               style={{
                 display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10,
-                padding: '10px 12px', borderRadius: 6, border: 'none', textAlign: 'left',
+                padding: '10px 12px', borderRadius: 8, border: 'none', textAlign: 'left',
                 background: active ? T.terracottaSoft : 'transparent',
                 color: active ? T.terracottaText : T.inkDim,
-                borderLeft: active ? `2px solid ${T.terracotta}` : '2px solid transparent',
-                transition: 'background .15s, color .15s',
+                borderLeft: active ? `2.5px solid ${T.terracotta}` : '2.5px solid transparent',
+                transition: 'background .18s ease, color .18s ease, border-color .18s ease',
               }}
               onMouseEnter={e => { if (!active) e.currentTarget.style.background = T.panelAlt; }}
               onMouseLeave={e => { if (!active) e.currentTarget.style.background = 'transparent'; }}
             >
               <span style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <Icon size={17} strokeWidth={2} style={{ flexShrink: 0 }} />
-                <span className="sidebar-item-label" style={{ fontSize: 13.5, fontWeight: 500, whiteSpace: 'nowrap' }}>{it.label}</span>
+                <Icon size={17} strokeWidth={active ? 2.3 : 2} style={{ flexShrink: 0 }} />
+                <span className="sidebar-item-label" style={{ fontSize: 13.5, fontWeight: active ? 700 : 500, whiteSpace: 'nowrap' }}>{it.label}</span>
               </span>
               {!!it.badge && (
                 <span className="sidebar-item-label" style={{ background: T.terracotta, color: '#fff', fontSize: 11, fontWeight: 700, borderRadius: 10, padding: '1px 7px', minWidth: 18, textAlign: 'center' }}>
@@ -773,7 +773,7 @@ function Dashboard({ stats, propostas, todasPropostas, mesFiltro, setMesFiltro, 
   const maxProd = Math.max(...prodOrc.map(o => o.total_geral || 0), ...prodPedidos.map(p => p.total_pedidos || 0), 1);
 
   return (
-    <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 22, maxWidth: 1400 }}>
+    <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 28, maxWidth: 1400 }}>
 
       {/* ── BANNER: propostas manuais sem registro formal ── */}
       {manuaisAbertas.length > 0 && (
@@ -797,26 +797,33 @@ function Dashboard({ stats, propostas, todasPropostas, mesFiltro, setMesFiltro, 
         </div>
       )}
 
-      {/* ── KPI ROW (7 cards) ── */}
-      <div className="grid-kpis-7">
-        <Kpi label={`Propostas total ${labelPeriodo}`} value={stats.total} icon={FileStack}
-          sub={`todas as propostas cadastradas ${labelPeriodo}`}
-          onClick={() => setKpiModal({ titulo: `Propostas total ${labelPeriodo} — todas`, itens: propostas })} />
-        <Kpi label="Propostas em Aberto/Sem pedido" value={propostasNaoConfirmadas.length} icon={Clock3} tone="amber"
-          sub={`${fmtMoedaCompacta(valorNaoConfirmadasMes)} · ainda não viraram pedido`}
-          onClick={() => setKpiModal({ titulo: 'Propostas em Aberto/Sem pedido — valor de cada proposta', itens: propostasNaoConfirmadas })} />
-        <Kpi label={`Valor confirmado ${labelPeriodo}`} value={fmtMoedaCompacta(valorConfirmadasMes)} icon={DollarSign}
-          sub="soma do valor líquido das propostas que viraram pedido"
-          info="Soma o valor líquido da própria proposta (calculado no orçamento do Sankhya) das propostas que já viraram pedido (conhecimento_pedido = true). Esse valor é independente de faturamento/Nota Fiscal — é o valor líquido da proposta em si, não o Net Offer Value faturado (esse é assunto do Painel Comercial/Faturamento)."
-          onClick={() => setKpiModal({ titulo: `Valor confirmado ${labelPeriodo} — propostas confirmadas`, itens: propostasConfirmadas })} />
-        <Kpi
-          label="Pedidos confirmados"
-          value={propostasConfirmadas.length}
-          icon={CheckCircle2} tone="olive"
-          sub={`${fmtMoedaCompacta(valorConfirmadasMes)} · já viraram pedido`}
-          onClick={() => setKpiModal({ titulo: 'Pedidos confirmados (viraram pedido)', itens: propostasConfirmadas })}
-        />
-        <OrigemCard percWord={stats.percWord} wordCount={stats.wordCount} sankhyaCount={stats.sankhyaCount} />
+      {/* ── SEÇÃO: COMERCIAL ── */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: T.terracottaText, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+          Comercial {mesFiltro !== 'ACUMULADO' ? `· ${MESES_LABEL[mesFiltro]} ${ANO_OPERACIONAL}` : `· Acumulado ${ANO_OPERACIONAL}`}
+        </div>
+
+        {/* ── KPI ROW (7 cards) ── */}
+        <div className="grid-kpis-7">
+          <Kpi label={`Propostas total ${labelPeriodo}`} value={stats.total} icon={FileStack}
+            sub={`todas as propostas cadastradas ${labelPeriodo}`}
+            onClick={() => setKpiModal({ titulo: `Propostas total ${labelPeriodo} — todas`, itens: propostas })} />
+          <Kpi label="Propostas em Aberto/Sem pedido" value={propostasNaoConfirmadas.length} icon={Clock3} tone="amber"
+            sub={`${fmtMoedaCompacta(valorNaoConfirmadasMes)} · ainda não viraram pedido`}
+            onClick={() => setKpiModal({ titulo: 'Propostas em Aberto/Sem pedido — valor de cada proposta', itens: propostasNaoConfirmadas })} />
+          <Kpi label={`Valor confirmado ${labelPeriodo}`} value={fmtMoedaCompacta(valorConfirmadasMes)} icon={DollarSign}
+            sub="soma do valor líquido das propostas que viraram pedido"
+            info="Soma o valor líquido da própria proposta (calculado no orçamento do Sankhya) das propostas que já viraram pedido (conhecimento_pedido = true). Esse valor é independente de faturamento/Nota Fiscal — é o valor líquido da proposta em si, não o Net Offer Value faturado (esse é assunto do Painel Comercial/Faturamento)."
+            onClick={() => setKpiModal({ titulo: `Valor confirmado ${labelPeriodo} — propostas confirmadas`, itens: propostasConfirmadas })} />
+          <Kpi
+            label="Pedidos confirmados"
+            value={propostasConfirmadas.length}
+            icon={CheckCircle2} tone="olive"
+            sub={`${fmtMoedaCompacta(valorConfirmadasMes)} · já viraram pedido`}
+            onClick={() => setKpiModal({ titulo: 'Pedidos confirmados (viraram pedido)', itens: propostasConfirmadas })}
+          />
+          <OrigemCard percWord={stats.percWord} wordCount={stats.wordCount} sankhyaCount={stats.sankhyaCount} />
+        </div>
       </div>
 
       {kpiModal && <KpiDetalheModal titulo={kpiModal.titulo} itens={kpiModal.itens} onClose={() => setKpiModal(null)} />}
@@ -916,6 +923,11 @@ function Dashboard({ stats, propostas, todasPropostas, mesFiltro, setMesFiltro, 
         </Panel>
       </div>
 
+      {/* ── SEÇÃO: EQUIPE E CARTEIRA ── */}
+      <div style={{ fontSize: 11, fontWeight: 700, color: T.blueText, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: -12 }}>
+        Equipe e carteira
+      </div>
+
       {/* ── ROW 3: Status fluxo + Escopo + Aprovadores ── */}
       <div className="grid-3col">
         <Panel title="Status do fluxo" subtitle="Propostas do mês selecionado, por etapa">
@@ -972,6 +984,11 @@ function Dashboard({ stats, propostas, todasPropostas, mesFiltro, setMesFiltro, 
             })}
           </div>
         </Panel>
+      </div>
+
+      {/* ── SEÇÃO: ORIGEM E AÇÕES ── */}
+      <div style={{ fontSize: 11, fontWeight: 700, color: T.amberText, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: -12 }}>
+        Origem dos dados e ações
       </div>
 
       {/* ── ROW 4: Origem detalhada + CTA registro manual ── */}
@@ -1065,26 +1082,29 @@ function InfoTip({ texto }) {
 function Kpi({ label, value, icon: Icon, tone, sub, onClick, info }) {
   const toneColor = tone === 'amber' ? T.amberText : tone === 'rust' ? T.rustText : tone === 'olive' ? T.oliveText : tone === 'blue' ? T.blueText : T.ink;
   const toneSoft = tone === 'amber' ? T.amberSoft : tone === 'rust' ? T.rustSoft : tone === 'olive' ? T.oliveSoft : tone === 'blue' ? T.blueSoft : T.terracottaSoft;
+  const toneAccent = tone === 'amber' ? T.amber : tone === 'rust' ? T.rust : tone === 'olive' ? T.olive : tone === 'blue' ? T.blue : T.terracotta;
   return (
     <div onClick={onClick} style={{
-      background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, padding: '18px 20px',
-      boxShadow: SHADOW_SM, transition: 'box-shadow .2s, transform .2s', cursor: onClick ? 'pointer' : 'default',
+      position: 'relative', background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, padding: '20px 20px 18px',
+      boxShadow: SHADOW_SM, transition: 'box-shadow .25s ease, transform .25s ease, border-color .25s ease',
+      cursor: onClick ? 'pointer' : 'default', overflow: 'hidden',
     }}
-      onMouseEnter={e => { e.currentTarget.style.boxShadow = SHADOW_MD; e.currentTarget.style.transform = 'translateY(-1px)'; }}
-      onMouseLeave={e => { e.currentTarget.style.boxShadow = SHADOW_SM; e.currentTarget.style.transform = 'none'; }}
+      onMouseEnter={e => { e.currentTarget.style.boxShadow = SHADOW_LG; e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.borderColor = `${toneAccent}33`; }}
+      onMouseLeave={e => { e.currentTarget.style.boxShadow = SHADOW_SM; e.currentTarget.style.transform = 'none'; e.currentTarget.style.borderColor = T.line; }}
     >
+      <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 3, background: toneAccent, opacity: 0.85 }} />
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-        <span style={{ fontSize: 11.5, color: T.inkFaint, fontWeight: 600, letterSpacing: '0.01em', display: 'flex', alignItems: 'center', gap: 5 }}>
+        <span style={{ fontSize: 11, color: T.inkFaint, fontWeight: 700, letterSpacing: '0.03em', textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: 5 }}>
           {label}
           {info && <InfoTip texto={info} />}
         </span>
-        <div style={{ width: 28, height: 28, borderRadius: 7, background: toneSoft, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-          <Icon size={14} color={toneColor} strokeWidth={2.2} />
+        <div style={{ width: 30, height: 30, borderRadius: 8, background: toneSoft, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+          <Icon size={15} color={toneColor} strokeWidth={2.2} />
         </div>
       </div>
-      <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, color: toneColor, marginTop: 14, fontSize: 28, letterSpacing: '-0.01em' }}>{value}</div>
-      {sub && <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 3 }}>{sub}</div>}
-      {onClick && <div style={{ fontSize: 10, color: T.terracottaText, marginTop: 6, fontWeight: 600 }}>Ver detalhamento →</div>}
+      <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, color: toneColor, marginTop: 15, fontSize: 32, letterSpacing: '-0.015em', lineHeight: 1 }}>{value}</div>
+      {sub && <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 6, lineHeight: 1.4 }}>{sub}</div>}
+      {onClick && <div style={{ fontSize: 10, color: T.terracottaText, marginTop: 8, fontWeight: 700, letterSpacing: '0.01em' }}>Ver detalhamento →</div>}
     </div>
   );
 }
@@ -1147,11 +1167,11 @@ function OrigemCard({ percWord, wordCount, sankhyaCount }) {
 
 function Panel({ title, subtitle, children, right }) {
   return (
-    <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, padding: 22, boxShadow: SHADOW_SM }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: title ? 16 : 0 }}>
+    <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, padding: 24, boxShadow: SHADOW_SM }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: title ? 18 : 0 }}>
         <div>
-          {title && <h3 style={{ fontSize: 14.5, fontWeight: 700, margin: 0, color: T.ink, letterSpacing: '-0.005em' }}>{title}</h3>}
-          {subtitle && <p style={{ fontSize: 11.5, color: T.inkFaint, margin: '4px 0 0', lineHeight: 1.5 }}>{subtitle}</p>}
+          {title && <h3 style={{ fontSize: 15, fontWeight: 700, margin: 0, color: T.ink, letterSpacing: '-0.01em' }}>{title}</h3>}
+          {subtitle && <p style={{ fontSize: 11.5, color: T.inkFaint, margin: '5px 0 0', lineHeight: 1.5 }}>{subtitle}</p>}
         </div>
         {right}
       </div>
