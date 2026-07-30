@@ -4978,18 +4978,18 @@ function ConsumoPlacasKalocer() {
     }
   };
 
-  // Temporário — descobre as colunas da TPRAPO pra achar o campo de projeto/BR.
-  const handleDescobrirColunas = async () => {
+  // Temporário — descobre as colunas de uma tabela pra achar o campo de projeto/BR.
+  const handleDescobrirColunas = async (tabela) => {
     setDescobrindo(true);
     setColunasTPRAPO(null);
     try {
       const res = await fetch(`${SUPABASE_URL}/functions/v1/sankhya-descobrir-colunas`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tabela: 'TPRAPO' }),
+        body: JSON.stringify({ tabela }),
       }).then(r => r.json());
-      setColunasTPRAPO(res.ok ? res.colunas : [{ nome: 'ERRO', tipo: res.error }]);
+      setColunasTPRAPO(res.ok ? { tabela: res.tabela, colunas: res.colunas } : { tabela, colunas: [{ nome: 'ERRO', tipo: res.error }] });
     } catch (err) {
-      setColunasTPRAPO([{ nome: 'ERRO', tipo: String(err) }]);
+      setColunasTPRAPO({ tabela, colunas: [{ nome: 'ERRO', tipo: String(err) }] });
     } finally {
       setDescobrindo(false);
     }
@@ -5165,18 +5165,25 @@ function ConsumoPlacasKalocer() {
       )}
 
       {/* TEMPORÁRIO — descobrir campo de projeto na TPRAPO. Remover depois de identificar o campo. */}
-      <Panel title="🔧 Descobrir campo de projeto (temporário)" subtitle="Lista as colunas da TPRAPO no Sankhya pra identificar o campo de BR/projeto">
-        <button onClick={handleDescobrirColunas} disabled={descobrindo}
-          style={{ background: T.blueText, color: '#fff', border: 'none', borderRadius: 6, padding: '8px 14px', fontSize: 12.5, fontWeight: 700, cursor: 'pointer', marginBottom: 12 }}>
-          {descobrindo ? 'Consultando…' : 'Descobrir colunas da TPRAPO'}
-        </button>
+      <Panel title="🔧 Descobrir campo de projeto (temporário)" subtitle="Lista as colunas de uma tabela do Sankhya pra identificar o campo de BR/projeto">
+        <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+          {['TPRAPO', 'TPRAPA', 'TPRAMP', 'TPRAPF'].map(tab => (
+            <button key={tab} onClick={() => handleDescobrirColunas(tab)} disabled={descobrindo}
+              style={{ background: T.blueText, color: '#fff', border: 'none', borderRadius: 6, padding: '8px 14px', fontSize: 12.5, fontWeight: 700, cursor: 'pointer' }}>
+              {descobrindo ? 'Consultando…' : `Ver colunas de ${tab}`}
+            </button>
+          ))}
+        </div>
         {colunasTPRAPO && (
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-            {colunasTPRAPO.map((c, i) => (
-              <span key={i} style={{ fontSize: 11.5, fontFamily: FONT_DISPLAY, fontWeight: 600, background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 5, padding: '4px 8px' }}>
-                {c.nome} <span style={{ color: T.inkFaint, fontWeight: 400 }}>({c.tipo})</span>
-              </span>
-            ))}
+          <div>
+            <div style={{ fontSize: 11, fontWeight: 700, color: T.inkFaint, marginBottom: 8, textTransform: 'uppercase' }}>{colunasTPRAPO.tabela}</div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+              {colunasTPRAPO.colunas.map((c, i) => (
+                <span key={i} style={{ fontSize: 11.5, fontFamily: FONT_DISPLAY, fontWeight: 600, background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 5, padding: '4px 8px' }}>
+                  {c.nome} <span style={{ color: T.inkFaint, fontWeight: 400 }}>({c.tipo})</span>
+                </span>
+              ))}
+            </div>
           </div>
         )}
       </Panel>
