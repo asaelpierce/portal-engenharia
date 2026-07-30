@@ -4892,6 +4892,10 @@ function ConsumoPlacasKalocer() {
   const [sortCol, setSortCol] = useState('consumido');
   const [sortDir, setSortDir] = useState('desc');
   const [drillMP, setDrillMP] = useState(null); // { codigo_mp, descricao, itens: [...] }
+  const [syncing, setSyncing] = useState(false);
+  const [syncStatus, setSyncStatus] = useState(null);
+  const [colunasTPRAPO, setColunasTPRAPO] = useState(null); // temporário — descoberta de campo de projeto
+  const [descobrindo, setDescobrindo] = useState(false);
 
   const rangeDatas = () => {
     const ini = `${filtros.anoIni}-${String(filtros.mesIni).padStart(2, '0')}-01`;
@@ -4900,68 +4904,39 @@ function ConsumoPlacasKalocer() {
     return { ini, fim };
   };
 
-  // Cruza a lista de códigos de MP (mp_placas_kalocer) com a composição real dos produtos
-  // (composicao_produtos, sincronizada do Sankhya) e com o que foi de fato faturado no período
-  // (nota_venda_itens, mesma fonte da aba Consumo de MP). Tudo automático — atualiza sozinho
-  // conforme o sync do Sankhya roda.
+  // Cruza a lista de códigos de MP (mp_placas_kalocer) com o consumo REAL por ordem de produção
+  // (producao_mp_apontamentos, sincronizada do Sankhya via TPRAPO/TPRAPA/TPRAMP — apontamento de
+  // produção de verdade, não estimativa via composição x faturamento).
   const carregar = useCallback(async () => {
     setLoading(true);
     setErro(null);
     const { ini, fim } = rangeDatas();
 
-    const [rLista, rNotas] = await Promise.all([
+    const [rLista, rApontamentos] = await Promise.all([
       supabase.from('mp_placas_kalocer').select('codigo_mp,descricao,unidade'),
-      supabase.from('nota_venda_itens')
-        .select('nunota,br,cliente_nome,data_neg,cod_produto,produto_descricao,quantidade')
-        .in('codtipoper', TOPS_FATURAMENTO_VALIDOS)
-        .gte('data_neg', ini).lte('data_neg', fim),
+      supabase.from('producao_mp_apontamentos')
+        .select('nuapo,seq_pa,data_ref,cod_prod_acabado,desc_prod_acabado,qtd_lote_pa,cod_materia_prima,qtd_mp,unidade_mp')
+        .gte('data_ref', ini).lte('data_ref', fim),
     ]);
 
     if (rLista.error) { setErro(`Erro lista de placas: ${rLista.error.message}`); setLoading(false); return; }
-    if (rNotas.error) { setErro(`Erro faturamento: ${rNotas.error.message}`); setLoading(false); return; }
+    if (rApontamentos.error) { setErro(`Erro apontamentos: ${rApontamentos.error.message}`); setLoading(false); return; }
 
     const listaCodigos = rLista.data || [];
-    const codigosSet = new Set(listaCodigos.map(l => l.codigo_mp));
 
-    // Só busca composição dos produtos que realmente foram faturados no período — evita puxar a tabela inteira.
-    const produtosFaturados = [...new Set((rNotas.data || []).map(n => n.cod_produto).filter(Boolean))];
-
-    let composicaoRelevante = [];
-    if (produtosFaturados.length > 0) {
-      // Busca em lotes de 300 pra não estourar limite de URL do .in()
-      for (let i = 0; i < produtosFaturados.length; i += 300) {
-        const lote = produtosFaturados.slice(i, i + 300);
-        const { data, error } = await supabase.from('composicao_produtos')
-          .select('cod_prod_pai,cod_prod_mp,quantidade')
-          .in('cod_prod_pai', lote)
-          .in('cod_prod_mp', listaCodigos.map(l => l.codigo_mp));
-        if (error) { setErro(`Erro composição: ${error.message}`); setLoading(false); return; }
-        composicaoRelevante = composicaoRelevante.concat(data || []);
-      }
-    }
-
-    // Mapa: produto_pai -> [{codigo_mp, quantidade_unitaria}] (só das MPs da lista)
-    const composicaoPorProduto = {};
-    composicaoRelevante.forEach(c => {
-      if (!composicaoPorProduto[c.cod_prod_pai]) composicaoPorProduto[c.cod_prod_pai] = [];
-      composicaoPorProduto[c.cod_prod_pai].push({ codigo_mp: c.cod_prod_mp, quantidade_unitaria: Number(c.quantidade) || 0 });
-    });
-
-    // Agrega consumo por código de MP da lista
+    // Agrega consumo real por código de MP da lista
     const consumoPorMP = {}; // codigo_mp -> { total, itens: [...] }
-    (rNotas.data || []).forEach(item => {
-      const composicao = composicaoPorProduto[item.cod_produto];
-      if (!composicao) return;
-      composicao.forEach(c => {
-        if (!codigosSet.has(c.codigo_mp)) return;
-        const consumo = c.quantidade_unitaria * (Number(item.quantidade) || 0);
-        if (!consumoPorMP[c.codigo_mp]) consumoPorMP[c.codigo_mp] = { total: 0, itens: [] };
-        consumoPorMP[c.codigo_mp].total += consumo;
-        consumoPorMP[c.codigo_mp].itens.push({
-          produto: item.cod_produto, descricao_produto: item.produto_descricao,
-          br: item.br, cliente_nome: item.cliente_nome, data_neg: item.data_neg,
-          quantidade_produto: Number(item.quantidade) || 0, quantidade_unitaria: c.quantidade_unitaria, consumo,
-        });
+    (rApontamentos.data || []).forEach(ap => {
+      const codigo = ap.cod_materia_prima;
+      if (!codigo) return;
+      if (!consumoPorMP[codigo]) consumoPorMP[codigo] = { total: 0, itens: [] };
+      const qtd = Number(ap.qtd_mp) || 0;
+      consumoPorMP[codigo].total += qtd;
+      consumoPorMP[codigo].itens.push({
+        nuapo: ap.nuapo, seq_pa: ap.seq_pa,
+        produto: ap.cod_prod_acabado, descricao_produto: ap.desc_prod_acabado,
+        data_ref: ap.data_ref, qtd_lote_pa: Number(ap.qtd_lote_pa) || 0,
+        qtd_mp: qtd, unidade_mp: ap.unidade_mp,
       });
     });
 
@@ -4973,13 +4948,52 @@ function ConsumoPlacasKalocer() {
         unidade: l.unidade,
         apareceu: !!agr,
         consumido: agr ? agr.total : 0,
-        itens: agr ? agr.itens.sort((a, b) => b.consumo - a.consumo) : [],
+        itens: agr ? agr.itens.sort((a, b) => b.qtd_mp - a.qtd_mp) : [],
       };
     });
 
     setLinhas(lista);
     setLoading(false);
   }, [filtros]);
+
+  // Dispara a sincronização do consumo real de MP por OP direto do Sankhya.
+  const handleAtualizarProducao = async () => {
+    setSyncing(true);
+    setSyncStatus(null);
+    try {
+      const res = await fetch(`${SUPABASE_URL}/functions/v1/sankhya-producao-mp-sync`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dataIni: '2025-01-01' }),
+      }).then(r => r.json());
+      if (res.ok) {
+        setSyncStatus({ ok: true, message: `Sincronizado: ${res.gravados} apontamentos de produção.` });
+        await carregar();
+      } else {
+        setSyncStatus({ ok: false, message: res.error || 'Erro desconhecido na sincronização.' });
+      }
+    } catch (err) {
+      setSyncStatus({ ok: false, message: String(err) });
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  // Temporário — descobre as colunas da TPRAPO pra achar o campo de projeto/BR.
+  const handleDescobrirColunas = async () => {
+    setDescobrindo(true);
+    setColunasTPRAPO(null);
+    try {
+      const res = await fetch(`${SUPABASE_URL}/functions/v1/sankhya-descobrir-colunas`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tabela: 'TPRAPO' }),
+      }).then(r => r.json());
+      setColunasTPRAPO(res.ok ? res.colunas : [{ nome: 'ERRO', tipo: res.error }]);
+    } catch (err) {
+      setColunasTPRAPO([{ nome: 'ERRO', tipo: String(err) }]);
+    } finally {
+      setDescobrindo(false);
+    }
+  };
 
   useEffect(() => { carregar(); }, [carregar]);
 
@@ -5041,8 +5055,8 @@ function ConsumoPlacasKalocer() {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 12 }}>
         {[
           { label: 'Placas na lista', value: kpis.totalNaLista, color: T.ink, desc: 'Códigos fornecidos (Kalocer)' },
-          { label: 'Consumidas no período', value: kpis.apareceram, color: T.oliveText, desc: 'Apareceram em algum item faturado' },
-          { label: 'Sem consumo no período', value: kpis.naoApareceram, color: kpis.naoApareceram > 0 ? T.amberText : T.oliveText, desc: 'Não apareceram em nenhuma composição faturada' },
+          { label: 'Consumidas no período', value: kpis.apareceram, color: T.oliveText, desc: 'Apareceram em alguma ordem de produção' },
+          { label: 'Sem consumo no período', value: kpis.naoApareceram, color: kpis.naoApareceram > 0 ? T.amberText : T.oliveText, desc: 'Não apareceram em nenhum apontamento de produção' },
         ].map(k => (
           <div key={k.label} style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '12px 14px', boxShadow: SHADOW_SM }}>
             <div style={{ fontSize: 10.5, color: T.inkFaint, fontWeight: 600 }}>{k.label}</div>
@@ -5128,12 +5142,44 @@ function ConsumoPlacasKalocer() {
             </tbody>
           </table>
         </div>
-        <div style={{ padding: '10px 16px', borderTop: `1px solid ${T.line}`, fontSize: 11, color: T.inkFaint, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span>{filtrados.length} código{filtrados.length !== 1 ? 's' : ''} · Consumido = Σ (quantidade da composição × quantidade faturada de cada item, no período)</span>
-          <BotaoExportar small onClick={() => exportCSV(filtrados, 'consumo_placas_kalocer.csv',
-            ['codigo_mp','descricao','unidade','consumido','apareceu'])} />
+        <div style={{ padding: '10px 16px', borderTop: `1px solid ${T.line}`, fontSize: 11, color: T.inkFaint, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+          <span>{filtrados.length} código{filtrados.length !== 1 ? 's' : ''} · Consumido = soma real do apontamento de produção (OP) no período — Sankhya (TPRAPO/TPRAPA/TPRAMP)</span>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <button onClick={handleAtualizarProducao} disabled={syncing} style={{
+              display: 'flex', alignItems: 'center', gap: 6, background: T.terracotta, color: '#fff', border: 'none',
+              borderRadius: 6, padding: '6px 12px', fontSize: 11, fontWeight: 700, opacity: syncing ? 0.7 : 1,
+            }}>
+              <RefreshCw size={12} className={syncing ? 'spin' : ''} />
+              {syncing ? 'Atualizando…' : 'Atualizar produção do Sankhya'}
+            </button>
+            <BotaoExportar small onClick={() => exportCSV(filtrados, 'consumo_placas_kalocer.csv',
+              ['codigo_mp','descricao','unidade','consumido','apareceu'])} />
+          </div>
         </div>
       </div>
+
+      {syncStatus && (
+        <div style={{ background: syncStatus.ok ? T.oliveSoft : T.rustSoft, color: syncStatus.ok ? T.oliveText : T.rustText, borderRadius: 8, padding: '10px 14px', fontSize: 12.5 }}>
+          {syncStatus.message}
+        </div>
+      )}
+
+      {/* TEMPORÁRIO — descobrir campo de projeto na TPRAPO. Remover depois de identificar o campo. */}
+      <Panel title="🔧 Descobrir campo de projeto (temporário)" subtitle="Lista as colunas da TPRAPO no Sankhya pra identificar o campo de BR/projeto">
+        <button onClick={handleDescobrirColunas} disabled={descobrindo}
+          style={{ background: T.blueText, color: '#fff', border: 'none', borderRadius: 6, padding: '8px 14px', fontSize: 12.5, fontWeight: 700, cursor: 'pointer', marginBottom: 12 }}>
+          {descobrindo ? 'Consultando…' : 'Descobrir colunas da TPRAPO'}
+        </button>
+        {colunasTPRAPO && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {colunasTPRAPO.map((c, i) => (
+              <span key={i} style={{ fontSize: 11.5, fontFamily: FONT_DISPLAY, fontWeight: 600, background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 5, padding: '4px 8px' }}>
+                {c.nome} <span style={{ color: T.inkFaint, fontWeight: 400 }}>({c.tipo})</span>
+              </span>
+            ))}
+          </div>
+        )}
+      </Panel>
 
       {/* Modal: produtos que consumiram essa placa */}
       {drillMP && (
@@ -5150,15 +5196,15 @@ function ConsumoPlacasKalocer() {
               <button onClick={() => setDrillMP(null)} style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: T.inkFaint, flexShrink: 0 }}><X size={20} /></button>
             </div>
             <div style={{ padding: '10px 22px', fontSize: 11, color: T.inkFaint, borderBottom: `1px solid ${T.lineSoft}`, background: T.panelAlt }}>
-              Produtos faturados que usaram essa placa na composição
+              Ordens de produção que consumiram essa placa
             </div>
             <div style={{ overflow: 'auto', flex: 1 }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
                 <thead>
                   <tr style={{ borderBottom: `1px solid ${T.line}`, position: 'sticky', top: 0, background: T.panel }}>
-                    <th style={thFat(0)}>Produto / Projeto</th>
-                    <th style={{ ...thFat(70), textAlign: 'right' }}>Qtd faturada</th>
-                    <th style={{ ...thFat(90), textAlign: 'right' }}>Consumo</th>
+                    <th style={thFat(0)}>Produto acabado / OP</th>
+                    <th style={{ ...thFat(80), textAlign: 'right' }}>Qtd lote (PA)</th>
+                    <th style={{ ...thFat(90), textAlign: 'right' }}>Consumo MP</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -5166,10 +5212,10 @@ function ConsumoPlacasKalocer() {
                     <tr key={i} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
                       <td style={{ padding: '10px 12px' }}>
                         <div style={{ fontWeight: 600 }}>{it.produto} — {it.descricao_produto}</div>
-                        <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 2 }}>{it.br || '—'} · {it.cliente_nome || '—'} · {fmtDataCurta(it.data_neg)}</div>
+                        <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 2 }}>OP {it.nuapo} · {fmtDataCurta(it.data_ref)}</div>
                       </td>
-                      <td style={{ padding: '10px 12px', textAlign: 'right', color: T.inkDim }}>{fmtQtd(it.quantidade_produto)}</td>
-                      <td style={{ padding: '10px 12px', textAlign: 'right', fontWeight: 700, fontFamily: FONT_DISPLAY }}>{fmtQtd(it.consumo)}</td>
+                      <td style={{ padding: '10px 12px', textAlign: 'right', color: T.inkDim }}>{fmtQtd(it.qtd_lote_pa)}</td>
+                      <td style={{ padding: '10px 12px', textAlign: 'right', fontWeight: 700, fontFamily: FONT_DISPLAY }}>{fmtQtd(it.qtd_mp)} {it.unidade_mp}</td>
                     </tr>
                   ))}
                 </tbody>
