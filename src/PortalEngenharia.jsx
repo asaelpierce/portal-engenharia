@@ -4914,6 +4914,8 @@ function ConsumoPlacasKalocer() {
   const [drillMP, setDrillMP] = useState(null); // { codigo_mp, descricao, itens: [...] }
   const [syncing, setSyncing] = useState(false);
   const [syncStatus, setSyncStatus] = useState(null);
+  const [colunasDebug, setColunasDebug] = useState(null); // temporário — descoberta de campo de custo
+  const [descobrindo, setDescobrindo] = useState(false);
 
   const rangeDatas = () => {
     const ini = `${filtros.anoIni}-${String(filtros.mesIni).padStart(2, '0')}-01`;
@@ -4994,6 +4996,23 @@ function ConsumoPlacasKalocer() {
       setSyncStatus({ ok: false, message: String(err) });
     } finally {
       setSyncing(false);
+    }
+  };
+
+  // Temporário — descobre colunas de tabelas candidatas a ter o custo da MP.
+  const handleDescobrirColunas = async (tabela) => {
+    setDescobrindo(true);
+    setColunasDebug(null);
+    try {
+      const res = await fetch(`${SUPABASE_URL}/functions/v1/sankhya-descobrir-colunas`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tabela }),
+      }).then(r => r.json());
+      setColunasDebug(res.ok ? { tabela: res.tabela, colunas: res.colunas } : { tabela, colunas: [{ nome: 'ERRO', tipo: res.error }] });
+    } catch (err) {
+      setColunasDebug({ tabela, colunas: [{ nome: 'ERRO', tipo: String(err) }] });
+    } finally {
+      setDescobrindo(false);
     }
   };
 
@@ -5166,6 +5185,30 @@ function ConsumoPlacasKalocer() {
           {syncStatus.message}
         </div>
       )}
+
+      {/* TEMPORÁRIO — descobrir campo de custo (Vlr. unitário / Custo Total) pra montar a aba Analítica. */}
+      <Panel title="🔧 Descobrir campo de custo (temporário)" subtitle="Lista as colunas de uma tabela do Sankhya pra identificar onde fica o custo da MP consumida">
+        <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+          {['TGFPRO', 'TGFMOV', 'TGFCUS', 'TPRAMP'].map(tab => (
+            <button key={tab} onClick={() => handleDescobrirColunas(tab)} disabled={descobrindo}
+              style={{ background: T.blueText, color: '#fff', border: 'none', borderRadius: 6, padding: '8px 14px', fontSize: 12.5, fontWeight: 700, cursor: 'pointer' }}>
+              {descobrindo ? 'Consultando…' : `Ver colunas de ${tab}`}
+            </button>
+          ))}
+        </div>
+        {colunasDebug && (
+          <div>
+            <div style={{ fontSize: 11, fontWeight: 700, color: T.inkFaint, marginBottom: 8, textTransform: 'uppercase' }}>{colunasDebug.tabela}</div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+              {colunasDebug.colunas.map((c, i) => (
+                <span key={i} style={{ fontSize: 11.5, fontFamily: FONT_DISPLAY, fontWeight: 600, background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 5, padding: '4px 8px' }}>
+                  {c.nome} <span style={{ color: T.inkFaint, fontWeight: 400 }}>({c.tipo})</span>
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+      </Panel>
 
       {/* Modal: produtos que consumiram essa placa */}
       {drillMP && (
