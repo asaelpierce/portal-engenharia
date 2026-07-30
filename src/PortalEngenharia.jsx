@@ -431,6 +431,7 @@ function PortalConteudo({ currentUser, session }) {
           {view === 'faturamento' && <Faturamento />}
           {view === 'consumo_mp' && <TabErrorBoundary tab="Consumo de MP"><ConsumoMP /></TabErrorBoundary>}
           {view === 'placas_kalocer' && <TabErrorBoundary tab="Placas Kalocer"><ConsumoPlacasKalocer /></TabErrorBoundary>}
+          {view === 'analitico_mp' && <TabErrorBoundary tab="Analítico"><AnaliticoMP /></TabErrorBoundary>}
           {view === 'almoxarifado' && <TabErrorBoundary tab="Almoxarifado"><Almoxarifado /></TabErrorBoundary>}
           {view === 'equipamentos' && <TabErrorBoundary tab="Equipamentos de Terceiros"><EquipamentosTerceiros /></TabErrorBoundary>}
           {view === 'pedidosvale' && <PedidosVale />}
@@ -476,6 +477,7 @@ function Sidebar({ view, setView, pendCount, papel, telasPermitidas }) {
     { id: 'faturamento',  label: 'Faturamento (Sankhya)',  icon: DollarSign },
     { id: 'consumo_mp',   label: 'Consumo de MP',          icon: Layers },
     { id: 'placas_kalocer', label: 'Placas Kalocer',       icon: Layers },
+    { id: 'analitico_mp', label: 'Analítico',              icon: BarChart2 },
     { id: 'almoxarifado', label: 'Almoxarifado',           icon: Package },
     { id: 'equipamentos', label: 'Equip. Terceiros',       icon: Webhook },
     { id: 'pedidosvale',  label: 'Pedidos Vale',           icon: FileWarning },
@@ -4902,6 +4904,390 @@ function categoriaMP(descricao) {
   return 'Outros';
 }
 
+function AnaliticoMP() {
+  const anoAtual = new Date().getFullYear();
+  const [filtros, setFiltros] = useState({ anoIni: 2025, anoFim: anoAtual, mesIni: 1, mesFim: 12 });
+  const [linhasGeral, setLinhasGeral] = useState([]);
+  const [loadingGeral, setLoadingGeral] = useState(true);
+  const [erroGeral, setErroGeral] = useState(null);
+
+  const [busca, setBusca] = useState('');
+  const [sugestoes, setSugestoes] = useState([]);
+  const [dados, setDados] = useState(null); // { descricao, unidade, itens, kpis } — detalhe da MP selecionada
+  const [loadingDetalhe, setLoadingDetalhe] = useState(false);
+  const [erroDetalhe, setErroDetalhe] = useState(null);
+  const [sortCol, setSortCol] = useState('data_ref');
+  const [sortDir, setSortDir] = useState('desc');
+  const detalheRef = useRef(null);
+
+  const rangeDatas = () => {
+    const ini = `${filtros.anoIni}-${String(filtros.mesIni).padStart(2, '0')}-01`;
+    const ultimoDia = new Date(filtros.anoFim, filtros.mesFim, 0).getDate();
+    const fim = `${filtros.anoFim}-${String(filtros.mesFim).padStart(2, '0')}-${String(ultimoDia).padStart(2, '0')}`;
+    return { ini, fim };
+  };
+
+  // Visão geral: carrega todos os apontamentos do período pra montar os rankings e KPIs consolidados.
+  const carregarGeral = useCallback(async () => {
+    setLoadingGeral(true);
+    setErroGeral(null);
+    const { ini, fim } = rangeDatas();
+    const { data, error } = await supabase.from('producao_mp_apontamentos')
+      .select('nuapo,cod_materia_prima,desc_materia_prima,unidade_mp,cod_prod_acabado,desc_prod_acabado,br,qtd_mp,custo_total,data_ref')
+      .gte('data_ref', ini).lte('data_ref', fim)
+      .range(0, 49999);
+    if (error) { setErroGeral(error.message); setLoadingGeral(false); return; }
+    setLinhasGeral(data || []);
+    setLoadingGeral(false);
+  }, [filtros]);
+
+  useEffect(() => { carregarGeral(); }, [carregarGeral]);
+
+  const overview = useMemo(() => {
+    const mpMap = {}, prodMap = {}, brMap = {};
+    const opsSet = new Set(), mpSet = new Set(), prodSet = new Set(), brSet = new Set();
+    let custoTotalGeral = 0;
+
+    linhasGeral.forEach(l => {
+      opsSet.add(l.nuapo);
+      custoTotalGeral += Number(l.custo_total) || 0;
+
+      if (l.cod_materia_prima) {
+        mpSet.add(l.cod_materia_prima);
+        if (!mpMap[l.cod_materia_prima]) mpMap[l.cod_materia_prima] = { codigo: l.cod_materia_prima, descricao: l.desc_materia_prima, custo: 0, qtd: 0, unidade: l.unidade_mp };
+        mpMap[l.cod_materia_prima].custo += Number(l.custo_total) || 0;
+        mpMap[l.cod_materia_prima].qtd += Number(l.qtd_mp) || 0;
+      }
+      if (l.cod_prod_acabado) {
+        prodSet.add(l.cod_prod_acabado);
+        if (!prodMap[l.cod_prod_acabado]) prodMap[l.cod_prod_acabado] = { codigo: l.cod_prod_acabado, descricao: l.desc_prod_acabado, custo: 0 };
+        prodMap[l.cod_prod_acabado].custo += Number(l.custo_total) || 0;
+      }
+      if (l.br && l.br !== '<SEM PROJETO>') {
+        brSet.add(l.br);
+        if (!brMap[l.br]) brMap[l.br] = { br: l.br, custo: 0 };
+        brMap[l.br].custo += Number(l.custo_total) || 0;
+      }
+    });
+
+    return {
+      totalOPs: opsSet.size,
+      totalMPs: mpSet.size,
+      totalProdutos: prodSet.size,
+      totalProjetos: brSet.size,
+      custoTotalGeral,
+      topMPs: Object.values(mpMap).sort((a, b) => b.custo - a.custo).slice(0, 8),
+      topProdutos: Object.values(prodMap).sort((a, b) => b.custo - a.custo).slice(0, 8),
+      topProjetos: Object.values(brMap).sort((a, b) => b.custo - a.custo).slice(0, 8),
+    };
+  }, [linhasGeral]);
+
+  // Sugestões de código conforme digita (busca em ambas as fontes)
+  useEffect(() => {
+    if (!busca || busca.length < 2) { setSugestoes([]); return; }
+    const t = setTimeout(async () => {
+      const [rLista, rApontamentos] = await Promise.all([
+        supabase.from('mp_placas_kalocer').select('codigo_mp,descricao')
+          .or(`codigo_mp.ilike.%${busca}%,descricao.ilike.%${busca}%`).limit(8),
+        supabase.from('producao_mp_apontamentos').select('cod_materia_prima,desc_materia_prima')
+          .or(`cod_materia_prima.ilike.%${busca}%,desc_materia_prima.ilike.%${busca}%`).limit(8),
+      ]);
+      const mapa = new Map();
+      (rLista.data || []).forEach(l => mapa.set(l.codigo_mp, l.descricao));
+      (rApontamentos.data || []).forEach(l => { if (!mapa.has(l.cod_materia_prima)) mapa.set(l.cod_materia_prima, l.desc_materia_prima); });
+      setSugestoes([...mapa.entries()].map(([codigo, descricao]) => ({ codigo, descricao })).slice(0, 8));
+    }, 300);
+    return () => clearTimeout(t);
+  }, [busca]);
+
+  const selecionar = useCallback(async (codigo) => {
+    setSugestoes([]);
+    setLoadingDetalhe(true);
+    setErroDetalhe(null);
+    setTimeout(() => detalheRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100);
+
+    const [rApontamentos, rComposicao] = await Promise.all([
+      supabase.from('producao_mp_apontamentos')
+        .select('nuapo,seq_pa,data_ref,cod_prod_acabado,desc_prod_acabado,qtd_lote_pa,qtd_mp,unidade_mp,custo_unitario,custo_total,saldo_disponivel_mp,br,cliente_nome,desc_materia_prima')
+        .eq('cod_materia_prima', codigo)
+        .order('data_ref', { ascending: false }),
+      supabase.from('composicao_produtos').select('cod_prod_pai').eq('cod_prod_mp', codigo),
+    ]);
+
+    if (rApontamentos.error) { setErroDetalhe(rApontamentos.error.message); setLoadingDetalhe(false); return; }
+
+    const itens = rApontamentos.data || [];
+    const produtosQueUsam = new Set((rComposicao.data || []).map(c => c.cod_prod_pai));
+
+    let carteira = [];
+    if (produtosQueUsam.size > 0) {
+      const codigos = [...produtosQueUsam];
+      const { data } = await supabase.from('pedidos_itens')
+        .select('br,cliente_nome,cod_produto,numero_pedido,data_prevista_entrega')
+        .in('cod_produto', codigos.slice(0, 500));
+      carteira = data || [];
+    }
+
+    const produtosAcabadosDistintos = new Set(itens.map(i => i.cod_prod_acabado).filter(Boolean));
+    const projetosAtendidos = new Set(itens.map(i => i.br).filter(b => b && b !== '<SEM PROJETO>'));
+    const projetosCarteira = new Set(carteira.map(c => c.br).filter(Boolean));
+    const custoTotalGeral = itens.reduce((s, i) => s + (Number(i.custo_total) || 0), 0);
+    const qtdTotal = itens.reduce((s, i) => s + (Number(i.qtd_mp) || 0), 0);
+    const ultimoSaldo = itens.length ? itens[0].saldo_disponivel_mp : null;
+    const descricao = itens[0]?.desc_materia_prima || '';
+    const unidade = itens[0]?.unidade_mp || '';
+
+    setDados({
+      codigo, descricao, unidade,
+      itens,
+      kpis: {
+        produtosAcabados: produtosAcabadosDistintos.size,
+        projetosAtendidos: projetosAtendidos.size,
+        estoqueDisponivel: ultimoSaldo,
+        projetosCarteira: projetosCarteira.size,
+        custoTotal: custoTotalGeral,
+        qtdTotal,
+      },
+    });
+    setLoadingDetalhe(false);
+  }, []);
+
+  const itensOrdenados = useMemo(() => {
+    if (!dados) return [];
+    return [...dados.itens].sort((a, b) => {
+      let va = a[sortCol] ?? 0, vb = b[sortCol] ?? 0;
+      if (typeof va === 'string') va = va.toLowerCase();
+      if (typeof vb === 'string') vb = vb.toLowerCase();
+      if (va < vb) return sortDir === 'asc' ? -1 : 1;
+      if (va > vb) return sortDir === 'asc' ? 1 : -1;
+      return 0;
+    });
+  }, [dados, sortCol, sortDir]);
+
+  const handleSort = (col) => {
+    if (sortCol === col) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+    else { setSortCol(col); setSortDir('desc'); }
+  };
+
+  const LocalSortTh = ({ label, col, right }) => {
+    const active = sortCol === col;
+    return (
+      <th onClick={() => handleSort(col)} style={{ ...thFat(0, right ? 'right' : 'left'), cursor: 'pointer', whiteSpace: 'nowrap' }}>
+        <span style={{ color: active ? T.terracotta : T.inkFaint }}>{label}{active ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''}</span>
+      </th>
+    );
+  };
+
+  const fmtQtd = (v) => v == null ? '—' : new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 3 }).format(v);
+  const fmtR = (v) => v == null ? '—' : new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(v);
+  const fmtRCompacta = (v) => v == null ? '—' : new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL', notation: 'compact', maximumFractionDigits: 1 }).format(v);
+  const fmtDataCurta = (iso) => !iso ? '—' : new Date(iso + 'T00:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: '2-digit' });
+
+  const RankingBar = ({ label, sub, valor, max, onClick }) => (
+    <button onClick={onClick} style={{
+      display: 'flex', alignItems: 'center', gap: 10, width: '100%', background: 'none', border: 'none',
+      cursor: onClick ? 'pointer' : 'default', padding: '6px 0', textAlign: 'left',
+    }}
+      onMouseEnter={e => onClick && (e.currentTarget.style.opacity = '0.75')}
+      onMouseLeave={e => onClick && (e.currentTarget.style.opacity = '1')}
+    >
+      <div style={{ width: 130, flexShrink: 0, overflow: 'hidden' }}>
+        <div style={{ fontSize: 12, fontWeight: 600, color: T.ink, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={label}>{label}</div>
+        {sub && <div style={{ fontSize: 10, color: T.inkFaint, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={sub}>{sub}</div>}
+      </div>
+      <div style={{ flex: 1, background: T.lineSoft, height: 7, borderRadius: 4, overflow: 'hidden' }}>
+        <div style={{ width: `${Math.max((valor / max) * 100, 2)}%`, height: '100%', background: T.terracotta, borderRadius: 4 }} />
+      </div>
+      <span style={{ fontSize: 11.5, fontWeight: 700, color: T.rustText, fontFamily: FONT_DISPLAY, width: 60, textAlign: 'right', flexShrink: 0 }}>{fmtRCompacta(valor)}</span>
+    </button>
+  );
+
+  const maxMP = Math.max(...overview.topMPs.map(m => m.custo), 1);
+  const maxProd = Math.max(...overview.topProdutos.map(p => p.custo), 1);
+  const maxProj = Math.max(...overview.topProjetos.map(p => p.custo), 1);
+
+  return (
+    <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+
+      {erroGeral && (
+        <div style={{ background: T.rustSoft, color: T.rustText, borderRadius: 8, padding: '10px 14px', fontSize: 12.5, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <AlertTriangle size={14} /> {erroGeral}
+        </div>
+      )}
+
+      {/* Filtro de período */}
+      <Panel>
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+          <FiltroCampoFat label="Ano início">
+            <SelectAnoFat value={filtros.anoIni} onChange={v => setFiltros(f => ({ ...f, anoIni: v }))} />
+          </FiltroCampoFat>
+          <FiltroCampoFat label="Mês início">
+            <SelectMesFat value={filtros.mesIni} onChange={v => setFiltros(f => ({ ...f, mesIni: v }))} />
+          </FiltroCampoFat>
+          <FiltroCampoFat label="Ano fim">
+            <SelectAnoFat value={filtros.anoFim} onChange={v => setFiltros(f => ({ ...f, anoFim: v }))} />
+          </FiltroCampoFat>
+          <FiltroCampoFat label="Mês fim">
+            <SelectMesFat value={filtros.mesFim} onChange={v => setFiltros(f => ({ ...f, mesFim: v }))} />
+          </FiltroCampoFat>
+        </div>
+      </Panel>
+
+      {/* KPIs consolidados */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(170px,1fr))', gap: 12 }}>
+        <Kpi label="Ordens de produção" value={loadingGeral ? '…' : overview.totalOPs} icon={Gauge}
+          sub="OPs com consumo de MP no período" />
+        <Kpi label="Matérias-primas distintas" value={loadingGeral ? '…' : overview.totalMPs} icon={Layers} tone="blue"
+          sub="códigos de MP consumidos" />
+        <Kpi label="Produtos acabados" value={loadingGeral ? '…' : overview.totalProdutos} icon={Package} tone="olive"
+          sub="produtos diferentes produzidos" />
+        <Kpi label="Projetos atendidos" value={loadingGeral ? '…' : overview.totalProjetos} icon={CheckCircle2} tone="amber"
+          sub="BRs com produção no período" />
+        <Kpi label="Custo total de MP" value={loadingGeral ? '…' : fmtRCompacta(overview.custoTotalGeral)} icon={DollarSign} tone="rust"
+          sub="soma do custo médio (TGFCUS) consumido" />
+      </div>
+
+      {/* Rankings — clique numa matéria-prima pra ver o detalhe completo */}
+      <div className="grid-3col">
+        <Panel title="Top matérias-primas por custo" subtitle="Clique pra ver o detalhe completo">
+          {loadingGeral ? (
+            <div style={{ textAlign: 'center', padding: 20, color: T.inkFaint, fontSize: 12.5 }}>Carregando…</div>
+          ) : overview.topMPs.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: 20, color: T.inkFaint, fontSize: 12.5 }}>Sem dados no período.</div>
+          ) : overview.topMPs.map(mp => (
+            <RankingBar key={mp.codigo} label={mp.codigo} sub={mp.descricao} valor={mp.custo} max={maxMP}
+              onClick={() => { setBusca(`${mp.codigo} — ${mp.descricao || ''}`); selecionar(mp.codigo); }} />
+          ))}
+        </Panel>
+
+        <Panel title="Top produtos acabados por custo de MP" subtitle="Onde o custo de matéria-prima mais pesa">
+          {loadingGeral ? (
+            <div style={{ textAlign: 'center', padding: 20, color: T.inkFaint, fontSize: 12.5 }}>Carregando…</div>
+          ) : overview.topProdutos.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: 20, color: T.inkFaint, fontSize: 12.5 }}>Sem dados no período.</div>
+          ) : overview.topProdutos.map(p => (
+            <RankingBar key={p.codigo} label={p.codigo} sub={p.descricao} valor={p.custo} max={maxProd} />
+          ))}
+        </Panel>
+
+        <Panel title="Top projetos por custo de MP" subtitle="BRs com maior custo de matéria-prima consumida">
+          {loadingGeral ? (
+            <div style={{ textAlign: 'center', padding: 20, color: T.inkFaint, fontSize: 12.5 }}>Carregando…</div>
+          ) : overview.topProjetos.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: 20, color: T.inkFaint, fontSize: 12.5 }}>Sem dados no período.</div>
+          ) : overview.topProjetos.map(p => (
+            <RankingBar key={p.br} label={p.br} valor={p.custo} max={maxProj} />
+          ))}
+        </Panel>
+      </div>
+
+      {/* Busca detalhada por matéria-prima específica */}
+      <div ref={detalheRef}>
+        <Panel title="Analisar uma matéria-prima específica" subtitle="Digite o código ou a descrição — ou clique num item do ranking acima">
+          <div style={{ position: 'relative', maxWidth: 460 }}>
+            <div style={{ position: 'relative' }}>
+              <Search size={14} style={{ position: 'absolute', left: 10, top: 11, color: T.inkFaint }} />
+              <input
+                value={busca}
+                onChange={e => { setBusca(e.target.value); setDados(null); }}
+                placeholder="Ex: 10988, SM-PLACA-RETANGULAR…"
+                style={{ ...selectStyleFat(460), paddingLeft: 32, fontSize: 13.5 }}
+              />
+            </div>
+            {sugestoes.length > 0 && (
+              <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, marginTop: 4, background: T.panel, border: `1px solid ${T.line}`, borderRadius: 8, boxShadow: SHADOW_LG, zIndex: 20, overflow: 'hidden' }}>
+                {sugestoes.map(s => (
+                  <button key={s.codigo} onClick={() => { setBusca(`${s.codigo} — ${s.descricao}`); selecionar(s.codigo); }}
+                    style={{ display: 'block', width: '100%', textAlign: 'left', padding: '9px 12px', background: 'none', border: 'none', cursor: 'pointer', borderBottom: `1px solid ${T.lineSoft}`, fontSize: 12.5 }}
+                    onMouseEnter={e => e.currentTarget.style.background = T.panelAlt}
+                    onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                    <span style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText }}>{s.codigo}</span>
+                    <span style={{ color: T.inkDim, marginLeft: 8 }}>{s.descricao}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </Panel>
+      </div>
+
+      {loadingDetalhe && <div style={{ textAlign: 'center', padding: 40, color: T.inkFaint, fontSize: 13 }}>Carregando…</div>}
+
+      {erroDetalhe && (
+        <div style={{ background: T.rustSoft, color: T.rustText, borderRadius: 8, padding: '10px 14px', fontSize: 12.5, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <AlertTriangle size={14} /> {erroDetalhe}
+        </div>
+      )}
+
+      {dados && !loadingDetalhe && (
+        <>
+          <div style={{ fontFamily: FONT_DISPLAY, fontSize: 19, fontWeight: 700, color: T.ink }}>
+            {dados.codigo} — {dados.descricao || 'Sem descrição sincronizada'}
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(170px,1fr))', gap: 12 }}>
+            <Kpi label="Produtos acabados distintos" value={dados.kpis.produtosAcabados} icon={Package}
+              sub="quantos produtos diferentes usam essa MP" />
+            <Kpi label="Projetos atendidos" value={dados.kpis.projetosAtendidos} icon={CheckCircle2} tone="olive"
+              sub="BRs que já consumiram essa MP em produção" />
+            <Kpi label="Estoque disponível" value={fmtQtd(dados.kpis.estoqueDisponivel)} icon={Layers} tone="blue"
+              sub={`${dados.unidade || ''} · saldo físico − reservado (Sankhya)`} />
+            <Kpi label="Projetos em carteira" value={dados.kpis.projetosCarteira} icon={Clock3} tone="amber"
+              sub="BRs em pedido que ainda vão usar essa MP" />
+            <Kpi label="Custo total consumido" value={fmtRCompacta(dados.kpis.custoTotal)} icon={DollarSign} tone="rust"
+              sub={`${fmtQtd(dados.kpis.qtdTotal)} ${dados.unidade || ''} ao custo médio (TGFCUS)`} />
+          </div>
+
+          <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                <thead>
+                  <tr style={{ background: T.panelAlt, borderBottom: `1px solid ${T.line}` }}>
+                    <LocalSortTh label="Data" col="data_ref" />
+                    <th style={thFat(0)}>Produto acabado / OP</th>
+                    <th style={thFat(140)}>Projeto / Cliente</th>
+                    <LocalSortTh label="Qtd consumida" col="qtd_mp" right />
+                    <LocalSortTh label="Vlr. unitário" col="custo_unitario" right />
+                    <LocalSortTh label="Custo total" col="custo_total" right />
+                  </tr>
+                </thead>
+                <tbody>
+                  {itensOrdenados.length === 0 ? (
+                    <tr><td colSpan={6} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Nenhum apontamento de produção encontrado para essa MP.</td></tr>
+                  ) : itensOrdenados.map((it, i) => (
+                    <tr key={i} style={{ borderBottom: `1px solid ${T.lineSoft}` }}
+                      onMouseEnter={e => e.currentTarget.style.background = T.panelAlt}
+                      onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                      <td style={{ padding: '9px 12px', fontSize: 11, color: T.inkFaint, whiteSpace: 'nowrap' }}>{fmtDataCurta(it.data_ref)}</td>
+                      <td style={{ padding: '9px 12px' }}>
+                        <div style={{ fontWeight: 600 }}>{it.cod_prod_acabado} — {it.desc_prod_acabado}</div>
+                        <div style={{ fontSize: 10.5, color: T.inkFaint }}>OP {it.nuapo}</div>
+                      </td>
+                      <td style={{ padding: '9px 12px', fontSize: 11.5 }}>
+                        <div>{it.br && it.br !== '<SEM PROJETO>' ? it.br : '—'}</div>
+                        <div style={{ color: T.inkFaint }}>{it.cliente_nome && it.cliente_nome !== '<SEM PARCEIRO>' ? it.cliente_nome : '—'}</div>
+                      </td>
+                      <td style={{ padding: '9px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 700 }}>{fmtQtd(it.qtd_mp)} {it.unidade_mp}</td>
+                      <td style={{ padding: '9px 12px', textAlign: 'right', color: T.inkDim }}>{fmtR(it.custo_unitario)}</td>
+                      <td style={{ padding: '9px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.rustText }}>{fmtR(it.custo_total)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div style={{ padding: '10px 16px', borderTop: `1px solid ${T.line}`, fontSize: 11, color: T.inkFaint, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span>{itensOrdenados.length} apontamento{itensOrdenados.length !== 1 ? 's' : ''} de produção · Custo = custo médio (TGFCUS) na data do apontamento × quantidade consumida</span>
+              <BotaoExportar small onClick={() => exportCSV(itensOrdenados, `analitico_${dados.codigo}.csv`,
+                ['data_ref','cod_prod_acabado','desc_prod_acabado','nuapo','br','cliente_nome','qtd_mp','custo_unitario','custo_total'])} />
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+
 function ConsumoPlacasKalocer() {
   const anoAtual = new Date().getFullYear();
   const [filtros, setFiltros] = useState({ anoIni: 2026, anoFim: anoAtual, mesIni: 1, mesFim: 12 });
@@ -4914,8 +5300,6 @@ function ConsumoPlacasKalocer() {
   const [drillMP, setDrillMP] = useState(null); // { codigo_mp, descricao, itens: [...] }
   const [syncing, setSyncing] = useState(false);
   const [syncStatus, setSyncStatus] = useState(null);
-  const [colunasDebug, setColunasDebug] = useState(null); // temporário — descoberta de campo de custo
-  const [descobrindo, setDescobrindo] = useState(false);
 
   const rangeDatas = () => {
     const ini = `${filtros.anoIni}-${String(filtros.mesIni).padStart(2, '0')}-01`;
@@ -4996,23 +5380,6 @@ function ConsumoPlacasKalocer() {
       setSyncStatus({ ok: false, message: String(err) });
     } finally {
       setSyncing(false);
-    }
-  };
-
-  // Temporário — descobre colunas de tabelas candidatas a ter o custo da MP.
-  const handleDescobrirColunas = async (tabela) => {
-    setDescobrindo(true);
-    setColunasDebug(null);
-    try {
-      const res = await fetch(`${SUPABASE_URL}/functions/v1/sankhya-descobrir-colunas`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tabela }),
-      }).then(r => r.json());
-      setColunasDebug(res.ok ? { tabela: res.tabela, colunas: res.colunas } : { tabela, colunas: [{ nome: 'ERRO', tipo: res.error }] });
-    } catch (err) {
-      setColunasDebug({ tabela, colunas: [{ nome: 'ERRO', tipo: String(err) }] });
-    } finally {
-      setDescobrindo(false);
     }
   };
 
@@ -5185,30 +5552,6 @@ function ConsumoPlacasKalocer() {
           {syncStatus.message}
         </div>
       )}
-
-      {/* TEMPORÁRIO — descobrir campo de custo (Vlr. unitário / Custo Total) pra montar a aba Analítica. */}
-      <Panel title="🔧 Descobrir campo de custo (temporário)" subtitle="Lista as colunas de uma tabela do Sankhya pra identificar onde fica o custo da MP consumida">
-        <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
-          {['TGFPRO', 'TGFMOV', 'TGFCUS', 'TPRAMP'].map(tab => (
-            <button key={tab} onClick={() => handleDescobrirColunas(tab)} disabled={descobrindo}
-              style={{ background: T.blueText, color: '#fff', border: 'none', borderRadius: 6, padding: '8px 14px', fontSize: 12.5, fontWeight: 700, cursor: 'pointer' }}>
-              {descobrindo ? 'Consultando…' : `Ver colunas de ${tab}`}
-            </button>
-          ))}
-        </div>
-        {colunasDebug && (
-          <div>
-            <div style={{ fontSize: 11, fontWeight: 700, color: T.inkFaint, marginBottom: 8, textTransform: 'uppercase' }}>{colunasDebug.tabela}</div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-              {colunasDebug.colunas.map((c, i) => (
-                <span key={i} style={{ fontSize: 11.5, fontFamily: FONT_DISPLAY, fontWeight: 600, background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 5, padding: '4px 8px' }}>
-                  {c.nome} <span style={{ color: T.inkFaint, fontWeight: 400 }}>({c.tipo})</span>
-                </span>
-              ))}
-            </div>
-          </div>
-        )}
-      </Panel>
 
       {/* Modal: produtos que consumiram essa placa */}
       {drillMP && (
@@ -6598,6 +6941,7 @@ const TELAS_CATALOGO = [
   { id: 'faturamento',  label: 'Faturamento (Sankhya)' },
   { id: 'consumo_mp',   label: 'Consumo de MP' },
   { id: 'placas_kalocer', label: 'Placas Kalocer' },
+  { id: 'analitico_mp', label: 'Analítico' },
   { id: 'almoxarifado', label: 'Almoxarifado' },
   { id: 'equipamentos', label: 'Equip. Terceiros' },
   { id: 'pedidosvale',  label: 'Pedidos Vale' },
