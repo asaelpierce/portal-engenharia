@@ -5041,7 +5041,7 @@ function AnaliticoMP() {
 
     const [rApontamentos, rComposicao] = await Promise.all([
       supabase.from('producao_mp_apontamentos')
-        .select('nuapo,seq_pa,data_ref,cod_prod_acabado,desc_prod_acabado,qtd_lote_pa,qtd_mp,unidade_mp,custo_unitario,custo_total,saldo_fisico_mp,saldo_reservado_mp,saldo_disponivel_mp,br,cliente_nome,desc_materia_prima,situacao_op')
+        .select('nuapo,seq_pa,data_ref,cod_prod_acabado,desc_prod_acabado,qtd_lote_pa,qtd_mp,unidade_mp,custo_unitario,custo_total,saldo_fisico_mp,saldo_reservado_mp,saldo_disponivel_mp,br,cliente_nome,desc_materia_prima,situacao_op,nro_ordem_producao')
         .eq('cod_materia_prima', codigo)
         .gte('data_ref', ini).lte('data_ref', fim)
         .order('data_ref', { ascending: false }),
@@ -5417,7 +5417,7 @@ function AnaliticoMP() {
                         <td style={{ padding: '9px 12px', fontSize: 11, color: T.inkFaint, whiteSpace: 'nowrap' }}>{fmtDataCurta(it.data_ref)}</td>
                         <td style={{ padding: '9px 12px' }}>
                           <div style={{ fontWeight: 600 }}>{it.cod_prod_acabado} — {it.desc_prod_acabado}</div>
-                          <div style={{ fontSize: 10.5, color: T.inkFaint }}>OP {it.nuapo}</div>
+                          <div style={{ fontSize: 10.5, color: T.inkFaint }}>OP {it.nro_ordem_producao ?? it.nuapo}</div>
                         </td>
                         <td style={{ padding: '9px 12px' }}>
                           <span style={{
@@ -5452,7 +5452,7 @@ function AnaliticoMP() {
             <div style={{ padding: '10px 16px', borderTop: `1px solid ${T.line}`, fontSize: 11, color: T.inkFaint, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <span>{itensOrdenados.length} apontamento{itensOrdenados.length !== 1 ? 's' : ''} de produção · Custo = custo médio (TGFCUS) na data do apontamento × quantidade consumida</span>
               <BotaoExportar small onClick={() => exportCSV(itensOrdenados, `analitico_${dados.codigo}.csv`,
-                ['data_ref','situacao_op','cod_prod_acabado','desc_prod_acabado','nuapo','br','cliente_nome','qtd_mp','custo_unitario','custo_total'])} />
+                ['data_ref','situacao_op','cod_prod_acabado','desc_prod_acabado','nro_ordem_producao','nuapo','br','cliente_nome','qtd_mp','custo_unitario','custo_total'])} />
             </div>
           </div>
         </>
@@ -5493,7 +5493,7 @@ function ConsumoPlacasKalocer() {
     const [rLista, rApontamentos] = await Promise.all([
       supabase.from('mp_placas_kalocer').select('codigo_mp,descricao,unidade'),
       supabase.from('producao_mp_apontamentos')
-        .select('nuapo,seq_pa,data_ref,cod_prod_acabado,desc_prod_acabado,qtd_lote_pa,cod_materia_prima,qtd_mp,unidade_mp,br,cliente_nome')
+        .select('nuapo,seq_pa,data_ref,cod_prod_acabado,desc_prod_acabado,qtd_lote_pa,cod_materia_prima,qtd_mp,unidade_mp,br,cliente_nome,nro_ordem_producao')
         .gte('data_ref', ini).lte('data_ref', fim),
     ]);
 
@@ -5571,23 +5571,6 @@ function ConsumoPlacasKalocer() {
       setStatusRelatorio({ ok: false, message: String(err) });
     } finally {
       setGerandoRelatorio(false);
-    }
-  };
-
-  const [diagOP, setDiagOP] = useState(null);
-  const [diagnosticandoOP, setDiagnosticandoOP] = useState(false);
-  const handleDiagnosticarOP = async () => {
-    setDiagnosticandoOP(true);
-    setDiagOP(null);
-    try {
-      const res = await fetch(`${SUPABASE_URL}/functions/v1/sankhya-diagnostico-op`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-      }).then(r => r.json());
-      setDiagOP(res);
-    } catch (err) {
-      setDiagOP({ ok: false, error: String(err) });
-    } finally {
-      setDiagnosticandoOP(false);
     }
   };
 
@@ -5774,19 +5757,6 @@ function ConsumoPlacasKalocer() {
         )}
       </Panel>
 
-      {/* TEMPORÁRIO — diagnóstico do campo real de "Nro Ordem Produção" */}
-      <Panel title="🔍 Diagnóstico: Nro Ordem Produção (temporário)" subtitle="Um clique — descobre de onde vem o número real da OP que aparece na tela do Sankhya">
-        <button onClick={handleDiagnosticarOP} disabled={diagnosticandoOP}
-          style={{ background: T.blueText, color: '#fff', border: 'none', borderRadius: 6, padding: '9px 16px', fontSize: 12.5, fontWeight: 700, cursor: 'pointer', marginBottom: 12 }}>
-          {diagnosticandoOP ? 'Diagnosticando…' : 'Rodar diagnóstico'}
-        </button>
-        {diagOP && (
-          <pre style={{ fontSize: 11, background: T.panelAlt, padding: 12, borderRadius: 8, overflow: 'auto', maxHeight: 400 }}>
-            {JSON.stringify(diagOP, null, 2)}
-          </pre>
-        )}
-      </Panel>
-
       {/* Modal: produtos que consumiram essa placa */}
       {drillMP && (
         <Overlay onClose={() => setDrillMP(null)}>
@@ -5818,7 +5788,7 @@ function ConsumoPlacasKalocer() {
                     <tr key={i} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
                       <td style={{ padding: '10px 12px' }}>
                         <div style={{ fontWeight: 600 }}>{it.produto} — {it.descricao_produto}</div>
-                        <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 2 }}>OP {it.nuapo} · {fmtDataCurta(it.data_ref)}{it.br ? ` · ${it.br}` : ''}{it.cliente_nome ? ` · ${it.cliente_nome}` : ''}</div>
+                        <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 2 }}>OP {it.nro_ordem_producao ?? it.nuapo} · {fmtDataCurta(it.data_ref)}{it.br ? ` · ${it.br}` : ''}{it.cliente_nome ? ` · ${it.cliente_nome}` : ''}</div>
                       </td>
                       <td style={{ padding: '10px 12px', textAlign: 'right', color: T.inkDim }}>{fmtQtd(it.qtd_lote_pa)}</td>
                       <td style={{ padding: '10px 12px', textAlign: 'right', fontWeight: 700, fontFamily: FONT_DISPLAY }}>{fmtQtd(it.qtd_mp)} {it.unidade_mp}</td>
