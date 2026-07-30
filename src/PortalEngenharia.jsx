@@ -430,6 +430,7 @@ function PortalConteudo({ currentUser, session }) {
           {view === 'produtividade' && <Produtividade propostas={propostas} mesFiltro={mesFiltro} currentUser={currentUser} />}
           {view === 'faturamento' && <Faturamento />}
           {view === 'consumo_mp' && <TabErrorBoundary tab="Consumo de MP"><ConsumoMP /></TabErrorBoundary>}
+          {view === 'placas_kalocer' && <TabErrorBoundary tab="Placas Kalocer"><ConsumoPlacasKalocer /></TabErrorBoundary>}
           {view === 'almoxarifado' && <TabErrorBoundary tab="Almoxarifado"><Almoxarifado /></TabErrorBoundary>}
           {view === 'equipamentos' && <TabErrorBoundary tab="Equipamentos de Terceiros"><EquipamentosTerceiros /></TabErrorBoundary>}
           {view === 'pedidosvale' && <PedidosVale />}
@@ -474,6 +475,7 @@ function Sidebar({ view, setView, pendCount, papel, telasPermitidas }) {
     { id: 'comercial',    label: 'Painel Comercial',       icon: TrendingUp },
     { id: 'faturamento',  label: 'Faturamento (Sankhya)',  icon: DollarSign },
     { id: 'consumo_mp',   label: 'Consumo de MP',          icon: Layers },
+    { id: 'placas_kalocer', label: 'Placas Kalocer',       icon: Layers },
     { id: 'almoxarifado', label: 'Almoxarifado',           icon: Package },
     { id: 'equipamentos', label: 'Equip. Terceiros',       icon: Webhook },
     { id: 'pedidosvale',  label: 'Pedidos Vale',           icon: FileWarning },
@@ -4880,6 +4882,306 @@ function categoriaMP(descricao) {
   return 'Outros';
 }
 
+function ConsumoPlacasKalocer() {
+  const anoAtual = new Date().getFullYear();
+  const [filtros, setFiltros] = useState({ anoIni: 2026, anoFim: anoAtual, mesIni: 1, mesFim: 12 });
+  const [linhas, setLinhas] = useState([]); // uma por código da lista (mp_placas_kalocer)
+  const [loading, setLoading] = useState(true);
+  const [erro, setErro] = useState(null);
+  const [busca, setBusca] = useState('');
+  const [sortCol, setSortCol] = useState('consumido');
+  const [sortDir, setSortDir] = useState('desc');
+  const [drillMP, setDrillMP] = useState(null); // { codigo_mp, descricao, itens: [...] }
+
+  const rangeDatas = () => {
+    const ini = `${filtros.anoIni}-${String(filtros.mesIni).padStart(2, '0')}-01`;
+    const ultimoDia = new Date(filtros.anoFim, filtros.mesFim, 0).getDate();
+    const fim = `${filtros.anoFim}-${String(filtros.mesFim).padStart(2, '0')}-${String(ultimoDia).padStart(2, '0')}`;
+    return { ini, fim };
+  };
+
+  // Cruza a lista de códigos de MP (mp_placas_kalocer) com a composição real dos produtos
+  // (composicao_produtos, sincronizada do Sankhya) e com o que foi de fato faturado no período
+  // (nota_venda_itens, mesma fonte da aba Consumo de MP). Tudo automático — atualiza sozinho
+  // conforme o sync do Sankhya roda.
+  const carregar = useCallback(async () => {
+    setLoading(true);
+    setErro(null);
+    const { ini, fim } = rangeDatas();
+
+    const [rLista, rNotas] = await Promise.all([
+      supabase.from('mp_placas_kalocer').select('codigo_mp,descricao,unidade'),
+      supabase.from('nota_venda_itens')
+        .select('nunota,br,cliente_nome,data_neg,cod_produto,produto_descricao,quantidade')
+        .in('codtipoper', TOPS_FATURAMENTO_VALIDOS)
+        .gte('data_neg', ini).lte('data_neg', fim),
+    ]);
+
+    if (rLista.error) { setErro(`Erro lista de placas: ${rLista.error.message}`); setLoading(false); return; }
+    if (rNotas.error) { setErro(`Erro faturamento: ${rNotas.error.message}`); setLoading(false); return; }
+
+    const listaCodigos = rLista.data || [];
+    const codigosSet = new Set(listaCodigos.map(l => l.codigo_mp));
+
+    // Só busca composição dos produtos que realmente foram faturados no período — evita puxar a tabela inteira.
+    const produtosFaturados = [...new Set((rNotas.data || []).map(n => n.cod_produto).filter(Boolean))];
+
+    let composicaoRelevante = [];
+    if (produtosFaturados.length > 0) {
+      // Busca em lotes de 300 pra não estourar limite de URL do .in()
+      for (let i = 0; i < produtosFaturados.length; i += 300) {
+        const lote = produtosFaturados.slice(i, i + 300);
+        const { data, error } = await supabase.from('composicao_produtos')
+          .select('cod_prod_pai,cod_prod_mp,quantidade')
+          .in('cod_prod_pai', lote)
+          .in('cod_prod_mp', listaCodigos.map(l => l.codigo_mp));
+        if (error) { setErro(`Erro composição: ${error.message}`); setLoading(false); return; }
+        composicaoRelevante = composicaoRelevante.concat(data || []);
+      }
+    }
+
+    // Mapa: produto_pai -> [{codigo_mp, quantidade_unitaria}] (só das MPs da lista)
+    const composicaoPorProduto = {};
+    composicaoRelevante.forEach(c => {
+      if (!composicaoPorProduto[c.cod_prod_pai]) composicaoPorProduto[c.cod_prod_pai] = [];
+      composicaoPorProduto[c.cod_prod_pai].push({ codigo_mp: c.cod_prod_mp, quantidade_unitaria: Number(c.quantidade) || 0 });
+    });
+
+    // Agrega consumo por código de MP da lista
+    const consumoPorMP = {}; // codigo_mp -> { total, itens: [...] }
+    (rNotas.data || []).forEach(item => {
+      const composicao = composicaoPorProduto[item.cod_produto];
+      if (!composicao) return;
+      composicao.forEach(c => {
+        if (!codigosSet.has(c.codigo_mp)) return;
+        const consumo = c.quantidade_unitaria * (Number(item.quantidade) || 0);
+        if (!consumoPorMP[c.codigo_mp]) consumoPorMP[c.codigo_mp] = { total: 0, itens: [] };
+        consumoPorMP[c.codigo_mp].total += consumo;
+        consumoPorMP[c.codigo_mp].itens.push({
+          produto: item.cod_produto, descricao_produto: item.produto_descricao,
+          br: item.br, cliente_nome: item.cliente_nome, data_neg: item.data_neg,
+          quantidade_produto: Number(item.quantidade) || 0, quantidade_unitaria: c.quantidade_unitaria, consumo,
+        });
+      });
+    });
+
+    const lista = listaCodigos.map(l => {
+      const agr = consumoPorMP[l.codigo_mp];
+      return {
+        codigo_mp: l.codigo_mp,
+        descricao: l.descricao,
+        unidade: l.unidade,
+        apareceu: !!agr,
+        consumido: agr ? agr.total : 0,
+        itens: agr ? agr.itens.sort((a, b) => b.consumo - a.consumo) : [],
+      };
+    });
+
+    setLinhas(lista);
+    setLoading(false);
+  }, [filtros]);
+
+  useEffect(() => { carregar(); }, [carregar]);
+
+  // Auto-refresh a cada 30 minutos.
+  useEffect(() => {
+    const id = setInterval(carregar, 30 * 60 * 1000);
+    return () => clearInterval(id);
+  }, [carregar]);
+
+  const filtrados = useMemo(() => {
+    return linhas
+      .filter(l => !busca ||
+        l.codigo_mp.toLowerCase().includes(busca.toLowerCase()) ||
+        (l.descricao || '').toLowerCase().includes(busca.toLowerCase()))
+      .sort((a, b) => {
+        let va = a[sortCol] ?? 0;
+        let vb = b[sortCol] ?? 0;
+        if (typeof va === 'string') va = va.toLowerCase();
+        if (typeof vb === 'string') vb = vb.toLowerCase();
+        if (va < vb) return sortDir === 'asc' ? -1 : 1;
+        if (va > vb) return sortDir === 'asc' ? 1 : -1;
+        return 0;
+      });
+  }, [linhas, busca, sortCol, sortDir]);
+
+  const kpis = useMemo(() => ({
+    totalNaLista: linhas.length,
+    apareceram: linhas.filter(l => l.apareceu).length,
+    naoApareceram: linhas.filter(l => !l.apareceu).length,
+  }), [linhas]);
+
+  const handleSort = (col) => {
+    if (sortCol === col) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+    else { setSortCol(col); setSortDir(col === 'codigo_mp' ? 'asc' : 'desc'); }
+  };
+
+  const LocalSortTh = ({ label, col, right }) => {
+    const active = sortCol === col;
+    return (
+      <th onClick={() => handleSort(col)} style={{ ...thFat(0, right ? 'right' : 'left'), cursor: 'pointer', whiteSpace: 'nowrap' }}>
+        <span style={{ color: active ? T.terracotta : T.inkFaint }}>{label}{active ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''}</span>
+      </th>
+    );
+  };
+
+  const fmtQtd = (v) => v == null ? '—' : new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 2 }).format(v);
+  const fmtDataCurta = (iso) => !iso ? '—' : new Date(iso + 'T00:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: '2-digit' });
+
+  return (
+    <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+
+      {erro && (
+        <div style={{ background: T.rustSoft, color: T.rustText, borderRadius: 8, padding: '10px 14px', fontSize: 12.5, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <AlertTriangle size={14} /> {erro}
+        </div>
+      )}
+
+      {/* KPIs */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 12 }}>
+        {[
+          { label: 'Placas na lista', value: kpis.totalNaLista, color: T.ink, desc: 'Códigos fornecidos (Kalocer)' },
+          { label: 'Consumidas no período', value: kpis.apareceram, color: T.oliveText, desc: 'Apareceram em algum item faturado' },
+          { label: 'Sem consumo no período', value: kpis.naoApareceram, color: kpis.naoApareceram > 0 ? T.amberText : T.oliveText, desc: 'Não apareceram em nenhuma composição faturada' },
+        ].map(k => (
+          <div key={k.label} style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '12px 14px', boxShadow: SHADOW_SM }}>
+            <div style={{ fontSize: 10.5, color: T.inkFaint, fontWeight: 600 }}>{k.label}</div>
+            <div style={{ fontFamily: FONT_DISPLAY, fontSize: 20, fontWeight: 700, color: k.color, marginTop: 6 }}>{loading ? '…' : k.value}</div>
+            {k.desc && <div style={{ fontSize: 10, color: T.inkFaint, marginTop: 2 }}>{k.desc}</div>}
+          </div>
+        ))}
+      </div>
+
+      {/* Filtros */}
+      <Panel>
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+          <FiltroCampoFat label="Ano início">
+            <SelectAnoFat value={filtros.anoIni} onChange={v => setFiltros(f => ({ ...f, anoIni: v }))} />
+          </FiltroCampoFat>
+          <FiltroCampoFat label="Mês início">
+            <SelectMesFat value={filtros.mesIni} onChange={v => setFiltros(f => ({ ...f, mesIni: v }))} />
+          </FiltroCampoFat>
+          <FiltroCampoFat label="Ano fim">
+            <SelectAnoFat value={filtros.anoFim} onChange={v => setFiltros(f => ({ ...f, anoFim: v }))} />
+          </FiltroCampoFat>
+          <FiltroCampoFat label="Mês fim">
+            <SelectMesFat value={filtros.mesFim} onChange={v => setFiltros(f => ({ ...f, mesFim: v }))} />
+          </FiltroCampoFat>
+          <FiltroCampoFat label="Buscar código ou descrição">
+            <div style={{ position: 'relative' }}>
+              <Search size={13} style={{ position: 'absolute', left: 9, top: 9, color: T.inkFaint }} />
+              <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Ex: 10988, PLACA-RETANGULAR…"
+                style={{ ...selectStyleFat(260), paddingLeft: 28 }} />
+            </div>
+          </FiltroCampoFat>
+          {busca && (
+            <button onClick={() => setBusca('')}
+              style={{ fontSize: 12, color: T.amberText, background: T.amberSoft, border: 'none', borderRadius: 5, padding: '6px 12px', cursor: 'pointer', fontWeight: 600 }}>
+              ✕ Limpar
+            </button>
+          )}
+        </div>
+      </Panel>
+
+      {/* Tabela — uma linha por código da lista fornecida */}
+      <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+            <thead>
+              <tr style={{ background: T.panelAlt, borderBottom: `1px solid ${T.line}` }}>
+                <LocalSortTh label="Código"   col="codigo_mp" />
+                <th style={thFat(0)}>Descrição</th>
+                <th style={{ ...thFat(70), textAlign: 'center' }}>UM</th>
+                <LocalSortTh label="Consumido no período" col="consumido" right />
+                <th style={{ ...thFat(100), textAlign: 'center' }}>Status</th>
+                <th style={{ ...thFat(90), textAlign: 'center' }}>Detalhe</th>
+              </tr>
+            </thead>
+            <tbody>
+              {loading ? (
+                <tr><td colSpan={6} style={{ padding: 40, textAlign: 'center', color: T.inkFaint }}>Carregando…</td></tr>
+              ) : filtrados.length === 0 ? (
+                <tr><td colSpan={6} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Nenhum código encontrado.</td></tr>
+              ) : filtrados.map((r) => (
+                <tr key={r.codigo_mp} style={{ borderBottom: `1px solid ${T.lineSoft}` }}
+                  onMouseEnter={e => e.currentTarget.style.background = T.panelAlt}
+                  onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                  <td style={{ padding: '9px 12px', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText, whiteSpace: 'nowrap' }}>{r.codigo_mp}</td>
+                  <td style={{ padding: '9px 12px', maxWidth: 380, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.descricao}>{r.descricao}</td>
+                  <td style={{ padding: '9px 12px', textAlign: 'center', fontSize: 11, color: T.inkFaint }}>{r.unidade}</td>
+                  <td style={{ padding: '9px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 700, color: r.apareceu ? T.ink : T.inkFaint }}>{r.apareceu ? fmtQtd(r.consumido) : '—'}</td>
+                  <td style={{ padding: '9px 12px', textAlign: 'center' }}>
+                    {r.apareceu
+                      ? <span style={{ fontSize: 10.5, fontWeight: 700, color: T.oliveText, background: T.oliveSoft, padding: '3px 8px', borderRadius: 4 }}>✓ Consumida</span>
+                      : <span style={{ fontSize: 10.5, fontWeight: 700, color: T.inkFaint, background: T.lineSoft, padding: '3px 8px', borderRadius: 4 }}>Sem consumo</span>}
+                  </td>
+                  <td style={{ padding: '9px 12px', textAlign: 'center' }}>
+                    {r.apareceu && (
+                      <button onClick={() => setDrillMP(r)}
+                        style={{ fontSize: 11, color: T.blueText, background: T.blueSoft, border: 'none', borderRadius: 5, padding: '4px 10px', cursor: 'pointer', fontWeight: 600 }}>
+                        Ver produtos
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div style={{ padding: '10px 16px', borderTop: `1px solid ${T.line}`, fontSize: 11, color: T.inkFaint, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span>{filtrados.length} código{filtrados.length !== 1 ? 's' : ''} · Consumido = Σ (quantidade da composição × quantidade faturada de cada item, no período)</span>
+          <BotaoExportar small onClick={() => exportCSV(filtrados, 'consumo_placas_kalocer.csv',
+            ['codigo_mp','descricao','unidade','consumido','apareceu'])} />
+        </div>
+      </div>
+
+      {/* Modal: produtos que consumiram essa placa */}
+      {drillMP && (
+        <Overlay onClose={() => setDrillMP(null)}>
+          <div className="scale-in" style={{
+            background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, width: '100%', maxWidth: 640,
+            maxHeight: '85vh', display: 'flex', flexDirection: 'column', overflow: 'hidden', boxShadow: '0 24px 60px rgba(0,0,0,.18)',
+          }}>
+            <div style={{ padding: '18px 22px', borderBottom: `1px solid ${T.line}`, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontFamily: FONT_DISPLAY, fontSize: 17, fontWeight: 700, color: T.ink }}>{drillMP.codigo_mp} — {drillMP.descricao}</div>
+                <div style={{ fontSize: 11.5, color: T.inkFaint, marginTop: 4 }}>Consumido no período: {fmtQtd(drillMP.consumido)} {drillMP.unidade}</div>
+              </div>
+              <button onClick={() => setDrillMP(null)} style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: T.inkFaint, flexShrink: 0 }}><X size={20} /></button>
+            </div>
+            <div style={{ padding: '10px 22px', fontSize: 11, color: T.inkFaint, borderBottom: `1px solid ${T.lineSoft}`, background: T.panelAlt }}>
+              Produtos faturados que usaram essa placa na composição
+            </div>
+            <div style={{ overflow: 'auto', flex: 1 }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+                <thead>
+                  <tr style={{ borderBottom: `1px solid ${T.line}`, position: 'sticky', top: 0, background: T.panel }}>
+                    <th style={thFat(0)}>Produto / Projeto</th>
+                    <th style={{ ...thFat(70), textAlign: 'right' }}>Qtd faturada</th>
+                    <th style={{ ...thFat(90), textAlign: 'right' }}>Consumo</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {drillMP.itens.map((it, i) => (
+                    <tr key={i} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                      <td style={{ padding: '10px 12px' }}>
+                        <div style={{ fontWeight: 600 }}>{it.produto} — {it.descricao_produto}</div>
+                        <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 2 }}>{it.br || '—'} · {it.cliente_nome || '—'} · {fmtDataCurta(it.data_neg)}</div>
+                      </td>
+                      <td style={{ padding: '10px 12px', textAlign: 'right', color: T.inkDim }}>{fmtQtd(it.quantidade_produto)}</td>
+                      <td style={{ padding: '10px 12px', textAlign: 'right', fontWeight: 700, fontFamily: FONT_DISPLAY }}>{fmtQtd(it.consumo)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </Overlay>
+      )}
+    </div>
+  );
+}
+
 function ConsumoMP() {
   const anoAtual = new Date().getFullYear();
   const [filtros, setFiltros] = useState({ anoIni: 2026, anoFim: anoAtual, mesIni: 1, mesFim: 12 });
@@ -6220,6 +6522,7 @@ const TELAS_CATALOGO = [
   { id: 'comercial',    label: 'Painel Comercial' },
   { id: 'faturamento',  label: 'Faturamento (Sankhya)' },
   { id: 'consumo_mp',   label: 'Consumo de MP' },
+  { id: 'placas_kalocer', label: 'Placas Kalocer' },
   { id: 'almoxarifado', label: 'Almoxarifado' },
   { id: 'equipamentos', label: 'Equip. Terceiros' },
   { id: 'pedidosvale',  label: 'Pedidos Vale' },
