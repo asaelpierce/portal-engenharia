@@ -4931,6 +4931,10 @@ function AnaliticoMP() {
   const detalheRef = useRef(null);
   const [projetoSelecionado, setProjetoSelecionado] = useState(null); // BR selecionado pro drill-down de projeto
   const projetoRef = useRef(null);
+  const [buscaProjeto, setBuscaProjeto] = useState('');
+  const [mesSelecionado, setMesSelecionado] = useState(null); // 'YYYY-MM' — drill-down do gráfico mensal
+  const [faturamentoPorProduto, setFaturamentoPorProduto] = useState({}); // cod_produto -> { faturado, br }
+  const [loadingMargem, setLoadingMargem] = useState(true);
 
   const rangeDatas = useCallback(() => {
     const ini = `${filtros.anoIni}-${String(filtros.mesIni).padStart(2, '0')}-01`;
@@ -4967,6 +4971,40 @@ function AnaliticoMP() {
   }, [rangeDatas]);
 
   useEffect(() => { carregarGeral(); }, [carregarGeral]);
+
+  // Carrega o faturado por produto no mesmo período — pra cruzar com o custo de MP e calcular margem.
+  // Mesma fonte/lógica da aba Faturamento (nota_venda_itens, TOPs de venda validados).
+  useEffect(() => {
+    const carregarFaturamento = async () => {
+      setLoadingMargem(true);
+      const { ini, fim } = rangeDatas();
+      const TAMANHO_LOTE = 1000;
+      let todasLinhas = [];
+      let pagina = 0;
+      while (true) {
+        const { data, error } = await supabase.from('nota_venda_itens')
+          .select('cod_produto,produto_descricao,valor_bruto,br,quantidade')
+          .in('codtipoper', TOPS_FATURAMENTO_VALIDOS)
+          .gte('data_neg', ini).lte('data_neg', fim)
+          .range(pagina * TAMANHO_LOTE, (pagina + 1) * TAMANHO_LOTE - 1);
+        if (error) break;
+        todasLinhas = todasLinhas.concat(data || []);
+        if (!data || data.length < TAMANHO_LOTE) break;
+        pagina += 1;
+        if (pagina > 100) break;
+      }
+      const mapa = {};
+      todasLinhas.forEach(it => {
+        if (!it.cod_produto) return;
+        if (!mapa[it.cod_produto]) mapa[it.cod_produto] = { faturado: 0, descricao: it.produto_descricao, brs: new Set() };
+        mapa[it.cod_produto].faturado += Number(it.valor_bruto) || 0;
+        if (it.br) mapa[it.cod_produto].brs.add(it.br);
+      });
+      setFaturamentoPorProduto(mapa);
+      setLoadingMargem(false);
+    };
+    carregarFaturamento();
+  }, [filtros]);
 
   const overview = useMemo(() => {
     const mpMap = {}, prodMap = {}, brMap = {}, mesMap = {};
@@ -5013,6 +5051,8 @@ function AnaliticoMP() {
       topProdutos: Object.values(prodMap).sort((a, b) => b.custo - a.custo).slice(0, 8),
       topProjetos: Object.values(brMap).sort((a, b) => b.custo - a.custo).slice(0, 8),
       custoPorMes: Object.values(mesMap).sort((a, b) => a.mes.localeCompare(b.mes)),
+      prodMapCompleto: prodMap,
+      brsDisponiveis: [...brSet].sort(),
     };
   }, [linhasGeral]);
 
@@ -5058,6 +5098,55 @@ function AnaliticoMP() {
     setTimeout(() => projetoRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100);
   };
 
+  // Margem por produto: cruza o faturado (nota_venda_itens) com o custo de MP consumido
+  // (producao_mp_apontamentos), pro mesmo produto acabado no mesmo período.
+  const margemPorProduto = useMemo(() => {
+    const codigos = new Set([...Object.keys(overview.prodMapCompleto || {}), ...Object.keys(faturamentoPorProduto)]);
+    const linhas = [...codigos].map(cod => {
+      const custoInfo = overview.prodMapCompleto?.[cod];
+      const fatInfo = faturamentoPorProduto[cod];
+      const custo = custoInfo?.custo || 0;
+      const faturado = fatInfo?.faturado || 0;
+      const margem = faturado - custo;
+      const margemPct = faturado > 0 ? (margem / faturado) * 100 : null;
+      return {
+        codigo: cod,
+        descricao: custoInfo?.descricao || fatInfo?.descricao || cod,
+        custo, faturado, margem, margemPct,
+        temAmbos: !!custoInfo && !!fatInfo,
+      };
+    });
+    return linhas
+      .filter(l => l.temAmbos) // só onde dá pra calcular margem de verdade (tem os dois lados)
+      .sort((a, b) => b.faturado - a.faturado);
+  }, [overview.prodMapCompleto, faturamentoPorProduto]);
+
+  // Drill-down do gráfico mensal: top matérias-primas e projetos só daquele mês.
+  const mesDrill = useMemo(() => {
+    if (!mesSelecionado) return null;
+    const itensDoMes = linhasGeral.filter(l => l.data_ref && l.data_ref.slice(0, 7) === mesSelecionado);
+    const mpMap = {}, brMap = {};
+    let custoTotal = 0;
+    itensDoMes.forEach(l => {
+      const custo = Number(l.custo_total) || 0;
+      custoTotal += custo;
+      if (l.cod_materia_prima) {
+        if (!mpMap[l.cod_materia_prima]) mpMap[l.cod_materia_prima] = { codigo: l.cod_materia_prima, descricao: l.desc_materia_prima, custo: 0 };
+        mpMap[l.cod_materia_prima].custo += custo;
+      }
+      if (l.br && l.br !== '<SEM PROJETO>') {
+        if (!brMap[l.br]) brMap[l.br] = { br: l.br, custo: 0 };
+        brMap[l.br].custo += custo;
+      }
+    });
+    return {
+      mes: mesSelecionado,
+      custoTotal,
+      topMPs: Object.values(mpMap).sort((a, b) => b.custo - a.custo).slice(0, 8),
+      topProjetos: Object.values(brMap).sort((a, b) => b.custo - a.custo).slice(0, 8),
+    };
+  }, [mesSelecionado, linhasGeral]);
+
   // Sugestões de código conforme digita (busca em ambas as fontes)
   useEffect(() => {
     if (!busca || busca.length < 2) { setSugestoes([]); return; }
@@ -5075,6 +5164,13 @@ function AnaliticoMP() {
     }, 300);
     return () => clearTimeout(t);
   }, [busca]);
+
+  // Sugestões de projeto (BR) — filtro local sobre os dados já carregados, sem nova consulta.
+  const sugestoesProjeto = useMemo(() => {
+    if (!buscaProjeto || buscaProjeto.length < 2) return [];
+    const termo = buscaProjeto.toLowerCase();
+    return (overview.brsDisponiveis || []).filter(br => br.toLowerCase().includes(termo)).slice(0, 8);
+  }, [buscaProjeto, overview.brsDisponiveis]);
 
   // Carrega o detalhe de uma matéria-prima específica, respeitando o MESMO período do filtro geral
   // (antes, essa busca ignorava o período e trazia o histórico inteiro — causava datas fora do filtro).
@@ -5200,7 +5296,7 @@ function AnaliticoMP() {
   );
 
   // Gráfico de barras verticais simples (custo consumido por mês) — SVG puro, sem lib externa.
-  const BarChartMensal = ({ dadosMes }) => {
+  const BarChartMensal = ({ dadosMes, mesAtivo, onClickMes }) => {
     if (dadosMes.length === 0) return <div style={{ textAlign: 'center', padding: 20, color: T.inkFaint, fontSize: 12.5 }}>Sem dados no período.</div>;
     const W = 900, H = 220, PAD_L = 60, PAD_B = 30, PAD_T = 10;
     const max = Math.max(...dadosMes.map(d => d.custo), 1);
@@ -5215,12 +5311,14 @@ function AnaliticoMP() {
           const alturaBarra = (d.custo / max) * (H - PAD_B - PAD_T);
           const x = PAD_L + i * passo + (passo - larguraBarra) / 2;
           const y = H - PAD_B - alturaBarra;
+          const ativo = mesAtivo === d.mes;
           return (
-            <g key={d.mes}>
-              <rect x={x} y={y} width={larguraBarra} height={alturaBarra} rx={3} fill={T.terracotta} opacity={0.9}>
-                <title>{fmtMesLabel(d.mes)}: {fmtR(d.custo)}</title>
+            <g key={d.mes} onClick={() => onClickMes && onClickMes(d.mes)} style={{ cursor: onClickMes ? 'pointer' : 'default' }}>
+              <rect x={x} y={y} width={larguraBarra} height={alturaBarra} rx={3} fill={T.terracotta} opacity={ativo ? 1 : 0.75}
+                stroke={ativo ? T.ink : 'none'} strokeWidth={ativo ? 2 : 0}>
+                <title>{fmtMesLabel(d.mes)}: {fmtR(d.custo)} — clique pra ver o detalhe</title>
               </rect>
-              <text x={x + larguraBarra / 2} y={H - PAD_B + 16} textAnchor="middle" fontSize={10} fill={T.inkFaint}>{fmtMesLabel(d.mes)}</text>
+              <text x={x + larguraBarra / 2} y={H - PAD_B + 16} textAnchor="middle" fontSize={10} fontWeight={ativo ? 700 : 400} fill={ativo ? T.ink : T.inkFaint}>{fmtMesLabel(d.mes)}</text>
               <text x={x + larguraBarra / 2} y={y - 6} textAnchor="middle" fontSize={9.5} fontWeight={700} fill={T.rustText}>{fmtRCompacta(d.custo)}</text>
             </g>
           );
@@ -5327,11 +5425,52 @@ function AnaliticoMP() {
       </div>
 
       {/* Gráfico comparativo — custo consumido por mês */}
-      <Panel title="Custo de MP consumido por mês" subtitle="Comparativo mensal — ajuda a ver picos e sazonalidade de consumo">
+      <Panel title="Custo de MP consumido por mês" subtitle="Comparativo mensal — clique numa barra pra ver o detalhe (matérias-primas e projetos daquele mês)">
         {loadingGeral ? (
           <div style={{ textAlign: 'center', padding: 30, color: T.inkFaint, fontSize: 12.5 }}>Carregando…</div>
         ) : (
-          <BarChartMensal dadosMes={overview.custoPorMes} />
+          <BarChartMensal dadosMes={overview.custoPorMes} mesAtivo={mesSelecionado}
+            onClickMes={(mes) => setMesSelecionado(prev => prev === mes ? null : mes)} />
+        )}
+      </Panel>
+
+      {/* Drill-down do mês selecionado */}
+      {mesDrill && (
+        <Panel title={`Detalhe de ${fmtMesLabel(mesDrill.mes)}`} subtitle={`Custo total no mês: ${fmtR(mesDrill.custoTotal)}`}
+          right={<button onClick={() => setMesSelecionado(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.inkFaint }}><X size={16} /></button>}>
+          <div className="grid-2col">
+            <div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: T.inkFaint, marginBottom: 10, textTransform: 'uppercase' }}>Top matérias-primas no mês</div>
+              {mesDrill.topMPs.length === 0 ? (
+                <div style={{ color: T.inkFaint, fontSize: 12.5 }}>Sem dados.</div>
+              ) : mesDrill.topMPs.map(mp => (
+                <RankingBar key={mp.codigo} label={mp.codigo} sub={mp.descricao} valor={mp.custo}
+                  max={Math.max(...mesDrill.topMPs.map(m => m.custo), 1)}
+                  onClick={() => { setBusca(`${mp.codigo} — ${mp.descricao || ''}`); selecionar(mp.codigo); }} />
+              ))}
+            </div>
+            <div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: T.inkFaint, marginBottom: 10, textTransform: 'uppercase' }}>Top projetos no mês</div>
+              {mesDrill.topProjetos.length === 0 ? (
+                <div style={{ color: T.inkFaint, fontSize: 12.5 }}>Sem BR vinculado nesse mês.</div>
+              ) : mesDrill.topProjetos.map(p => (
+                <RankingBar key={p.br} label={p.br} valor={p.custo} max={Math.max(...mesDrill.topProjetos.map(pp => pp.custo), 1)}
+                  onClick={() => selecionarProjeto(p.br)} />
+              ))}
+            </div>
+          </div>
+        </Panel>
+      )}
+
+      {/* Comparativo Finalizado x Em andamento */}
+      <Panel title="Custo: Finalizado × Em andamento" subtitle="Quanto do custo total já é de produção concluída vs ainda em curso">
+        {loadingGeral ? (
+          <div style={{ textAlign: 'center', padding: 20, color: T.inkFaint, fontSize: 12.5 }}>Carregando…</div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <RankingBar label="Finalizado" valor={overview.custoFinalizado} max={Math.max(overview.custoFinalizado, overview.custoAndamento, 1)} />
+            <RankingBar label="Em andamento" valor={overview.custoAndamento} max={Math.max(overview.custoFinalizado, overview.custoAndamento, 1)} />
+          </div>
         )}
       </Panel>
 
@@ -5442,6 +5581,33 @@ function AnaliticoMP() {
         </Panel>
       </div>
 
+      {/* Busca de projeto específico (não só o Top 8 do ranking) */}
+      <Panel title="Analisar um projeto específico" subtitle="Digite o BR — ou clique num item do ranking 'Top projetos' acima">
+        <div style={{ position: 'relative', maxWidth: 460 }}>
+          <div style={{ position: 'relative' }}>
+            <Search size={14} style={{ position: 'absolute', left: 10, top: 11, color: T.inkFaint }} />
+            <input
+              value={buscaProjeto}
+              onChange={e => setBuscaProjeto(e.target.value)}
+              placeholder="Ex: BR14312, BR14206…"
+              style={{ ...selectStyleFat(460), paddingLeft: 32, fontSize: 13.5 }}
+            />
+          </div>
+          {sugestoesProjeto.length > 0 && (
+            <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, marginTop: 4, background: T.panel, border: `1px solid ${T.line}`, borderRadius: 8, boxShadow: SHADOW_LG, zIndex: 20, overflow: 'hidden' }}>
+              {sugestoesProjeto.map(br => (
+                <button key={br} onClick={() => { setBuscaProjeto(br); selecionarProjeto(br); }}
+                  style={{ display: 'block', width: '100%', textAlign: 'left', padding: '9px 12px', background: 'none', border: 'none', cursor: 'pointer', borderBottom: `1px solid ${T.lineSoft}`, fontSize: 12.5, fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText }}
+                  onMouseEnter={e => e.currentTarget.style.background = T.panelAlt}
+                  onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                  {br}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </Panel>
+
       {loadingDetalhe && <div style={{ textAlign: 'center', padding: 40, color: T.inkFaint, fontSize: 13 }}>Carregando…</div>}
 
       {erroDetalhe && (
@@ -5546,6 +5712,55 @@ function AnaliticoMP() {
           </div>
         </>
       )}
+
+      {/* Margem: faturado x custo de matéria-prima, por produto */}
+      <Panel title="Margem sobre custo de matéria-prima" subtitle="Cruza o valor faturado (Nota de Venda) com o custo de MP consumido, por produto acabado, no mesmo período">
+        {(loadingGeral || loadingMargem) ? (
+          <div style={{ textAlign: 'center', padding: 30, color: T.inkFaint, fontSize: 12.5 }}>Carregando…</div>
+        ) : margemPorProduto.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: 30, color: T.inkFaint, fontSize: 12.5 }}>
+            Nenhum produto tem faturamento e consumo de MP simultâneos nesse período.
+          </div>
+        ) : (
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+              <thead>
+                <tr style={{ background: T.panelAlt, borderBottom: `1px solid ${T.line}` }}>
+                  <th style={thFat(0)}>Produto</th>
+                  <th style={{ ...thFat(110), textAlign: 'right' }}>Faturado</th>
+                  <th style={{ ...thFat(110), textAlign: 'right' }}>Custo de MP</th>
+                  <th style={{ ...thFat(110), textAlign: 'right' }}>Margem (R$)</th>
+                  <th style={{ ...thFat(90), textAlign: 'right' }}>Margem %</th>
+                </tr>
+              </thead>
+              <tbody>
+                {margemPorProduto.slice(0, 25).map(m => (
+                  <tr key={m.codigo} style={{ borderBottom: `1px solid ${T.lineSoft}` }}
+                    onMouseEnter={e => e.currentTarget.style.background = T.panelAlt}
+                    onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                    <td style={{ padding: '9px 12px' }}>
+                      <div style={{ fontWeight: 600 }}>{m.codigo} — {m.descricao}</div>
+                    </td>
+                    <td style={{ padding: '9px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 700 }}>{fmtR(m.faturado)}</td>
+                    <td style={{ padding: '9px 12px', textAlign: 'right', color: T.rustText }}>{fmtR(m.custo)}</td>
+                    <td style={{ padding: '9px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 700, color: m.margem >= 0 ? T.oliveText : T.rustText }}>{fmtR(m.margem)}</td>
+                    <td style={{ padding: '9px 12px', textAlign: 'right', fontWeight: 700, color: m.margemPct == null ? T.inkFaint : m.margemPct >= 0 ? T.oliveText : T.rustText }}>
+                      {m.margemPct == null ? '—' : `${m.margemPct.toFixed(1)}%`}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        <div style={{ padding: '10px 0 0', fontSize: 11, color: T.inkFaint, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span>{margemPorProduto.length} produto{margemPorProduto.length !== 1 ? 's' : ''} com faturamento e consumo de MP no período · Margem = Faturado − Custo de MP (não considera outros custos de fabricação)</span>
+          {margemPorProduto.length > 0 && (
+            <BotaoExportar small onClick={() => exportCSV(margemPorProduto, 'margem_por_produto.csv',
+              ['codigo','descricao','faturado','custo','margem','margemPct'])} />
+          )}
+        </div>
+      </Panel>
     </div>
   );
 }
