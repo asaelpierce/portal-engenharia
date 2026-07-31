@@ -432,6 +432,7 @@ function PortalConteudo({ currentUser, session }) {
           {view === 'consumo_mp' && <TabErrorBoundary tab="Consumo de MP"><ConsumoMP /></TabErrorBoundary>}
           {view === 'placas_kalocer' && <TabErrorBoundary tab="Placas Kalocer"><ConsumoPlacasKalocer /></TabErrorBoundary>}
           {view === 'analitico_mp' && <TabErrorBoundary tab="Analítico"><AnaliticoMP /></TabErrorBoundary>}
+          {view === 'carteira_estoque' && <TabErrorBoundary tab="Carteira x Estoque"><CarteiraEstoque /></TabErrorBoundary>}
           {view === 'almoxarifado' && <TabErrorBoundary tab="Almoxarifado"><Almoxarifado /></TabErrorBoundary>}
           {view === 'equipamentos' && <TabErrorBoundary tab="Equipamentos de Terceiros"><EquipamentosTerceiros /></TabErrorBoundary>}
           {view === 'pedidosvale' && <PedidosVale />}
@@ -478,6 +479,7 @@ function Sidebar({ view, setView, pendCount, papel, telasPermitidas }) {
     { id: 'consumo_mp',   label: 'Consumo de MP',          icon: Layers },
     { id: 'placas_kalocer', label: 'Placas Kalocer',       icon: Layers },
     { id: 'analitico_mp', label: 'Analítico',              icon: BarChart2 },
+    { id: 'carteira_estoque', label: 'Carteira x Estoque',  icon: Package },
     { id: 'almoxarifado', label: 'Almoxarifado',           icon: Package },
     { id: 'equipamentos', label: 'Equip. Terceiros',       icon: Webhook },
     { id: 'pedidosvale',  label: 'Pedidos Vale',           icon: FileWarning },
@@ -4933,8 +4935,10 @@ function AnaliticoMP() {
   const projetoRef = useRef(null);
   const [buscaProjeto, setBuscaProjeto] = useState('');
   const [mesSelecionado, setMesSelecionado] = useState(null); // 'YYYY-MM' — drill-down do gráfico mensal
-  const [faturamentoPorProduto, setFaturamentoPorProduto] = useState({}); // cod_produto -> { faturado, br }
+  const [notaVendaItensRaw, setNotaVendaItensRaw] = useState([]); // itens brutos de faturamento (pra poder quebrar por projeto)
   const [loadingMargem, setLoadingMargem] = useState(true);
+  const [situacaoSelecionada, setSituacaoSelecionada] = useState(null); // 'C' | 'P' — drill-down Finalizado x Em andamento
+  const [produtoMargemSelecionado, setProdutoMargemSelecionado] = useState(null); // código do produto — drill-down de margem por projeto
 
   const rangeDatas = useCallback(() => {
     const ini = `${filtros.anoIni}-${String(filtros.mesIni).padStart(2, '0')}-01`;
@@ -4974,6 +4978,7 @@ function AnaliticoMP() {
 
   // Carrega o faturado por produto no mesmo período — pra cruzar com o custo de MP e calcular margem.
   // Mesma fonte/lógica da aba Faturamento (nota_venda_itens, TOPs de venda validados).
+  // Guardamos a lista BRUTA (não só agregada) pra poder quebrar margem por projeto também.
   useEffect(() => {
     const carregarFaturamento = async () => {
       setLoadingMargem(true);
@@ -4993,18 +4998,22 @@ function AnaliticoMP() {
         pagina += 1;
         if (pagina > 100) break;
       }
-      const mapa = {};
-      todasLinhas.forEach(it => {
-        if (!it.cod_produto) return;
-        if (!mapa[it.cod_produto]) mapa[it.cod_produto] = { faturado: 0, descricao: it.produto_descricao, brs: new Set() };
-        mapa[it.cod_produto].faturado += Number(it.valor_bruto) || 0;
-        if (it.br) mapa[it.cod_produto].brs.add(it.br);
-      });
-      setFaturamentoPorProduto(mapa);
+      setNotaVendaItensRaw(todasLinhas);
       setLoadingMargem(false);
     };
     carregarFaturamento();
   }, [filtros]);
+
+  // Faturado agregado por produto (derivado da lista bruta acima).
+  const faturamentoPorProduto = useMemo(() => {
+    const mapa = {};
+    notaVendaItensRaw.forEach(it => {
+      if (!it.cod_produto) return;
+      if (!mapa[it.cod_produto]) mapa[it.cod_produto] = { faturado: 0, descricao: it.produto_descricao };
+      mapa[it.cod_produto].faturado += Number(it.valor_bruto) || 0;
+    });
+    return mapa;
+  }, [notaVendaItensRaw]);
 
   const overview = useMemo(() => {
     const mpMap = {}, prodMap = {}, brMap = {}, mesMap = {};
@@ -5052,6 +5061,8 @@ function AnaliticoMP() {
       topProjetos: Object.values(brMap).sort((a, b) => b.custo - a.custo).slice(0, 8),
       custoPorMes: Object.values(mesMap).sort((a, b) => a.mes.localeCompare(b.mes)),
       prodMapCompleto: prodMap,
+      mpMapCompleto: mpMap,
+      brMapCompleto: brMap,
       brsDisponiveis: [...brSet].sort(),
     };
   }, [linhasGeral]);
@@ -5121,7 +5132,7 @@ function AnaliticoMP() {
       .sort((a, b) => b.faturado - a.faturado);
   }, [overview.prodMapCompleto, faturamentoPorProduto]);
 
-  // Drill-down do gráfico mensal: top matérias-primas e projetos só daquele mês.
+  // Drill-down do gráfico mensal: TODAS as matérias-primas e projetos daquele mês (não só top 8).
   const mesDrill = useMemo(() => {
     if (!mesSelecionado) return null;
     const itensDoMes = linhasGeral.filter(l => l.data_ref && l.data_ref.slice(0, 7) === mesSelecionado);
@@ -5142,10 +5153,59 @@ function AnaliticoMP() {
     return {
       mes: mesSelecionado,
       custoTotal,
-      topMPs: Object.values(mpMap).sort((a, b) => b.custo - a.custo).slice(0, 8),
-      topProjetos: Object.values(brMap).sort((a, b) => b.custo - a.custo).slice(0, 8),
+      todasMPs: Object.values(mpMap).sort((a, b) => b.custo - a.custo),
+      todosProjetos: Object.values(brMap).sort((a, b) => b.custo - a.custo),
     };
   }, [mesSelecionado, linhasGeral]);
+
+  // Drill-down Finalizado x Em andamento: TODOS os projetos daquela situação.
+  const situacaoDrill = useMemo(() => {
+    if (!situacaoSelecionada) return null;
+    const itensDaSituacao = linhasGeral.filter(l => l.situacao_op === situacaoSelecionada);
+    const brMap = {};
+    let custoTotal = 0;
+    itensDaSituacao.forEach(l => {
+      const custo = Number(l.custo_total) || 0;
+      custoTotal += custo;
+      if (l.br && l.br !== '<SEM PROJETO>') {
+        if (!brMap[l.br]) brMap[l.br] = { br: l.br, custo: 0, ops: new Set() };
+        brMap[l.br].custo += custo;
+        brMap[l.br].ops.add(l.nuapo);
+      }
+    });
+    return {
+      situacao: situacaoSelecionada,
+      custoTotal,
+      todosProjetos: Object.values(brMap).map(p => ({ br: p.br, custo: p.custo, numOps: p.ops.size })).sort((a, b) => b.custo - a.custo),
+    };
+  }, [situacaoSelecionada, linhasGeral]);
+
+  // Drill-down de margem por projeto: quebra o faturado e o custo de um produto específico
+  // entre os diferentes BRs em que ele foi faturado/consumido.
+  const margemPorProjetoDoProduto = useMemo(() => {
+    if (!produtoMargemSelecionado) return null;
+    const faturadoPorBR = {};
+    notaVendaItensRaw.filter(it => it.cod_produto === produtoMargemSelecionado).forEach(it => {
+      const br = it.br || '<SEM PROJETO>';
+      if (!faturadoPorBR[br]) faturadoPorBR[br] = 0;
+      faturadoPorBR[br] += Number(it.valor_bruto) || 0;
+    });
+    const custoPorBR = {};
+    linhasGeral.filter(l => l.cod_prod_acabado === produtoMargemSelecionado).forEach(l => {
+      const br = l.br || '<SEM PROJETO>';
+      if (!custoPorBR[br]) custoPorBR[br] = 0;
+      custoPorBR[br] += Number(l.custo_total) || 0;
+    });
+    const brs = new Set([...Object.keys(faturadoPorBR), ...Object.keys(custoPorBR)]);
+    const linhas = [...brs].map(br => {
+      const faturado = faturadoPorBR[br] || 0;
+      const custo = custoPorBR[br] || 0;
+      const margem = faturado - custo;
+      return { br, faturado, custo, margem, margemPct: faturado > 0 ? (margem / faturado) * 100 : null };
+    }).sort((a, b) => b.faturado - a.faturado);
+    const info = margemPorProduto.find(m => m.codigo === produtoMargemSelecionado);
+    return { codigo: produtoMargemSelecionado, descricao: info?.descricao || produtoMargemSelecionado, linhas };
+  }, [produtoMargemSelecionado, notaVendaItensRaw, linhasGeral, margemPorProduto]);
 
   // Sugestões de código conforme digita (busca em ambas as fontes)
   useEffect(() => {
@@ -5434,45 +5494,93 @@ function AnaliticoMP() {
         )}
       </Panel>
 
-      {/* Drill-down do mês selecionado */}
+      {/* Drill-down do mês selecionado — lista COMPLETA, ranqueada, sem limite de top 8 */}
       {mesDrill && (
-        <Panel title={`Detalhe de ${fmtMesLabel(mesDrill.mes)}`} subtitle={`Custo total no mês: ${fmtR(mesDrill.custoTotal)}`}
+        <Panel title={`Detalhe de ${fmtMesLabel(mesDrill.mes)}`} subtitle={`Custo total no mês: ${fmtR(mesDrill.custoTotal)} · ranking completo, do maior pro menor`}
           right={<button onClick={() => setMesSelecionado(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.inkFaint }}><X size={16} /></button>}>
           <div className="grid-2col">
             <div>
-              <div style={{ fontSize: 11, fontWeight: 700, color: T.inkFaint, marginBottom: 10, textTransform: 'uppercase' }}>Top matérias-primas no mês</div>
-              {mesDrill.topMPs.length === 0 ? (
-                <div style={{ color: T.inkFaint, fontSize: 12.5 }}>Sem dados.</div>
-              ) : mesDrill.topMPs.map(mp => (
-                <RankingBar key={mp.codigo} label={mp.codigo} sub={mp.descricao} valor={mp.custo}
-                  max={Math.max(...mesDrill.topMPs.map(m => m.custo), 1)}
-                  onClick={() => { setBusca(`${mp.codigo} — ${mp.descricao || ''}`); selecionar(mp.codigo); }} />
-              ))}
+              <div style={{ fontSize: 11, fontWeight: 700, color: T.inkFaint, marginBottom: 10, textTransform: 'uppercase' }}>
+                Todas as matérias-primas no mês ({mesDrill.todasMPs.length})
+              </div>
+              <div style={{ maxHeight: 420, overflowY: 'auto', paddingRight: 4 }}>
+                {mesDrill.todasMPs.length === 0 ? (
+                  <div style={{ color: T.inkFaint, fontSize: 12.5 }}>Sem dados.</div>
+                ) : mesDrill.todasMPs.map((mp, i) => (
+                  <div key={mp.codigo} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 0', borderBottom: `1px solid ${T.lineSoft}` }}>
+                    <span style={{ fontSize: 10.5, color: T.inkFaint, width: 22, flexShrink: 0 }}>{i + 1}º</span>
+                    <RankingBar label={mp.codigo} sub={mp.descricao} valor={mp.custo} max={Math.max(mesDrill.todasMPs[0]?.custo || 1, 1)}
+                      onClick={() => { setBusca(`${mp.codigo} — ${mp.descricao || ''}`); selecionar(mp.codigo); }} />
+                  </div>
+                ))}
+              </div>
             </div>
             <div>
-              <div style={{ fontSize: 11, fontWeight: 700, color: T.inkFaint, marginBottom: 10, textTransform: 'uppercase' }}>Top projetos no mês</div>
-              {mesDrill.topProjetos.length === 0 ? (
-                <div style={{ color: T.inkFaint, fontSize: 12.5 }}>Sem BR vinculado nesse mês.</div>
-              ) : mesDrill.topProjetos.map(p => (
-                <RankingBar key={p.br} label={p.br} valor={p.custo} max={Math.max(...mesDrill.topProjetos.map(pp => pp.custo), 1)}
-                  onClick={() => selecionarProjeto(p.br)} />
-              ))}
+              <div style={{ fontSize: 11, fontWeight: 700, color: T.inkFaint, marginBottom: 10, textTransform: 'uppercase' }}>
+                Todos os projetos no mês ({mesDrill.todosProjetos.length})
+              </div>
+              <div style={{ maxHeight: 420, overflowY: 'auto', paddingRight: 4 }}>
+                {mesDrill.todosProjetos.length === 0 ? (
+                  <div style={{ color: T.inkFaint, fontSize: 12.5 }}>Sem BR vinculado nesse mês.</div>
+                ) : mesDrill.todosProjetos.map((p, i) => (
+                  <div key={p.br} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 0', borderBottom: `1px solid ${T.lineSoft}` }}>
+                    <span style={{ fontSize: 10.5, color: T.inkFaint, width: 22, flexShrink: 0 }}>{i + 1}º</span>
+                    <RankingBar label={p.br} valor={p.custo} max={Math.max(mesDrill.todosProjetos[0]?.custo || 1, 1)}
+                      onClick={() => selecionarProjeto(p.br)} />
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
         </Panel>
       )}
 
-      {/* Comparativo Finalizado x Em andamento */}
-      <Panel title="Custo: Finalizado × Em andamento" subtitle="Quanto do custo total já é de produção concluída vs ainda em curso">
+      {/* Comparativo Finalizado x Em andamento — clicável, abre lista completa de projetos */}
+      <Panel title="Custo: Finalizado × Em andamento" subtitle="Clique numa barra pra ver todos os projetos daquela situação">
         {loadingGeral ? (
           <div style={{ textAlign: 'center', padding: 20, color: T.inkFaint, fontSize: 12.5 }}>Carregando…</div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-            <RankingBar label="Finalizado" valor={overview.custoFinalizado} max={Math.max(overview.custoFinalizado, overview.custoAndamento, 1)} />
-            <RankingBar label="Em andamento" valor={overview.custoAndamento} max={Math.max(overview.custoFinalizado, overview.custoAndamento, 1)} />
+            <RankingBar label="Finalizado" valor={overview.custoFinalizado} max={Math.max(overview.custoFinalizado, overview.custoAndamento, 1)}
+              onClick={() => setSituacaoSelecionada(prev => prev === 'C' ? null : 'C')} />
+            <RankingBar label="Em andamento" valor={overview.custoAndamento} max={Math.max(overview.custoFinalizado, overview.custoAndamento, 1)}
+              onClick={() => setSituacaoSelecionada(prev => prev === 'P' ? null : 'P')} />
           </div>
         )}
       </Panel>
+
+      {/* Drill-down de situação: todos os projetos Finalizados ou Em andamento */}
+      {situacaoDrill && (
+        <Panel title={situacaoDrill.situacao === 'C' ? 'Projetos Finalizados' : 'Projetos Em andamento'}
+          subtitle={`${situacaoDrill.todosProjetos.length} projeto${situacaoDrill.todosProjetos.length !== 1 ? 's' : ''} · custo total: ${fmtR(situacaoDrill.custoTotal)}`}
+          right={<button onClick={() => setSituacaoSelecionada(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.inkFaint }}><X size={16} /></button>}>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+              <thead>
+                <tr style={{ background: T.panelAlt, borderBottom: `1px solid ${T.line}` }}>
+                  <th style={thFat(50)}>#</th>
+                  <th style={thFat(0)}>Projeto (BR)</th>
+                  <th style={{ ...thFat(90), textAlign: 'center' }}>OPs</th>
+                  <th style={{ ...thFat(120), textAlign: 'right' }}>Custo de MP</th>
+                </tr>
+              </thead>
+              <tbody>
+                {situacaoDrill.todosProjetos.map((p, i) => (
+                  <tr key={p.br} style={{ borderBottom: `1px solid ${T.lineSoft}`, cursor: 'pointer' }}
+                    onClick={() => selecionarProjeto(p.br)}
+                    onMouseEnter={e => e.currentTarget.style.background = T.panelAlt}
+                    onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                    <td style={{ padding: '8px 12px', color: T.inkFaint }}>{i + 1}º</td>
+                    <td style={{ padding: '8px 12px', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText }}>{p.br}</td>
+                    <td style={{ padding: '8px 12px', textAlign: 'center', color: T.inkDim }}>{p.numOps}</td>
+                    <td style={{ padding: '8px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 700 }}>{fmtR(p.custo)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Panel>
+      )}
 
       {/* Rankings — clique numa matéria-prima pra ver o detalhe completo */}
       <div className="grid-3col">
@@ -5714,7 +5822,7 @@ function AnaliticoMP() {
       )}
 
       {/* Margem: faturado x custo de matéria-prima, por produto */}
-      <Panel title="Margem sobre custo de matéria-prima" subtitle="Cruza o valor faturado (Nota de Venda) com o custo de MP consumido, por produto acabado, no mesmo período">
+      <Panel title="Margem sobre custo de matéria-prima" subtitle="Cruza o valor faturado (Nota de Venda) com o custo de MP consumido, por produto acabado — clique num produto pra ver a quebra por projeto">
         {(loadingGeral || loadingMargem) ? (
           <div style={{ textAlign: 'center', padding: 30, color: T.inkFaint, fontSize: 12.5 }}>Carregando…</div>
         ) : margemPorProduto.length === 0 ? (
@@ -5735,9 +5843,10 @@ function AnaliticoMP() {
               </thead>
               <tbody>
                 {margemPorProduto.slice(0, 25).map(m => (
-                  <tr key={m.codigo} style={{ borderBottom: `1px solid ${T.lineSoft}` }}
+                  <tr key={m.codigo} style={{ borderBottom: `1px solid ${T.lineSoft}`, cursor: 'pointer', background: produtoMargemSelecionado === m.codigo ? T.panelAlt : 'transparent' }}
+                    onClick={() => setProdutoMargemSelecionado(prev => prev === m.codigo ? null : m.codigo)}
                     onMouseEnter={e => e.currentTarget.style.background = T.panelAlt}
-                    onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                    onMouseLeave={e => e.currentTarget.style.background = produtoMargemSelecionado === m.codigo ? T.panelAlt : 'transparent'}>
                     <td style={{ padding: '9px 12px' }}>
                       <div style={{ fontWeight: 600 }}>{m.codigo} — {m.descricao}</div>
                     </td>
@@ -5761,10 +5870,418 @@ function AnaliticoMP() {
           )}
         </div>
       </Panel>
+
+      {/* Quebra de margem por projeto — abre ao clicar num produto na tabela acima */}
+      {margemPorProjetoDoProduto && (
+        <Panel title={`${margemPorProjetoDoProduto.codigo} — margem por projeto`} subtitle={margemPorProjetoDoProduto.descricao}
+          right={<button onClick={() => setProdutoMargemSelecionado(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.inkFaint }}><X size={16} /></button>}>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+              <thead>
+                <tr style={{ background: T.panelAlt, borderBottom: `1px solid ${T.line}` }}>
+                  <th style={thFat(0)}>Projeto (BR)</th>
+                  <th style={{ ...thFat(110), textAlign: 'right' }}>Faturado</th>
+                  <th style={{ ...thFat(110), textAlign: 'right' }}>Custo de MP</th>
+                  <th style={{ ...thFat(110), textAlign: 'right' }}>Margem (R$)</th>
+                  <th style={{ ...thFat(90), textAlign: 'right' }}>Margem %</th>
+                </tr>
+              </thead>
+              <tbody>
+                {margemPorProjetoDoProduto.linhas.map(l => (
+                  <tr key={l.br} style={{ borderBottom: `1px solid ${T.lineSoft}`, cursor: l.br !== '<SEM PROJETO>' ? 'pointer' : 'default' }}
+                    onClick={() => l.br !== '<SEM PROJETO>' && selecionarProjeto(l.br)}
+                    onMouseEnter={e => e.currentTarget.style.background = T.panelAlt}
+                    onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                    <td style={{ padding: '9px 12px', fontFamily: FONT_DISPLAY, fontWeight: 700, color: l.br !== '<SEM PROJETO>' ? T.blueText : T.inkFaint }}>{l.br}</td>
+                    <td style={{ padding: '9px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 700 }}>{fmtR(l.faturado)}</td>
+                    <td style={{ padding: '9px 12px', textAlign: 'right', color: T.rustText }}>{fmtR(l.custo)}</td>
+                    <td style={{ padding: '9px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 700, color: l.margem >= 0 ? T.oliveText : T.rustText }}>{fmtR(l.margem)}</td>
+                    <td style={{ padding: '9px 12px', textAlign: 'right', fontWeight: 700, color: l.margemPct == null ? T.inkFaint : l.margemPct >= 0 ? T.oliveText : T.rustText }}>
+                      {l.margemPct == null ? '—' : `${l.margemPct.toFixed(1)}%`}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ fontSize: 11, color: T.inkFaint, marginTop: 10 }}>
+            "&lt;SEM PROJETO&gt;" = faturado ou produzido sem nota de venda/projeto vinculado no momento do apontamento.
+          </div>
+        </Panel>
+      )}
     </div>
   );
 }
 
+
+function CarteiraEstoque() {
+  const [linhas, setLinhas] = useState([]); // uma por MP, com demanda x saldo
+  const [semComposicao, setSemComposicao] = useState([]); // produtos em carteira sem composição cadastrada
+  const [loading, setLoading] = useState(true);
+  const [erro, setErro] = useState(null);
+  const [busca, setBusca] = useState('');
+  const [statusFiltro, setStatusFiltro] = useState('Todos');
+  const [sortCol, setSortCol] = useState('deficit');
+  const [sortDir, setSortDir] = useState('desc');
+  const [drillMP, setDrillMP] = useState(null);
+
+  const carregar = useCallback(async () => {
+    setLoading(true);
+    setErro(null);
+
+    // 1) Pedidos em carteira (ainda não entregues por completo)
+    const TAMANHO_LOTE = 1000;
+    let pedidos = [];
+    let pagina = 0;
+    while (true) {
+      const { data, error } = await supabase.from('pedidos_itens')
+        .select('id,cod_produto,produto_descricao,quantidade,qtd_entregue,br,cliente_nome,numero_pedido,data_prevista_entrega')
+        .not('cod_produto', 'is', null)
+        .range(pagina * TAMANHO_LOTE, (pagina + 1) * TAMANHO_LOTE - 1);
+      if (error) { setErro(`Erro pedidos_itens: ${error.message}`); setLoading(false); return; }
+      pedidos = pedidos.concat(data || []);
+      if (!data || data.length < TAMANHO_LOTE) break;
+      pagina += 1;
+      if (pagina > 100) break;
+    }
+
+    const pendentes = pedidos
+      .map(p => ({ ...p, pendente: (Number(p.quantidade) || 0) - (Number(p.qtd_entregue) || 0) }))
+      .filter(p => p.pendente > 0.0001);
+
+    const codigosProdutos = [...new Set(pendentes.map(p => p.cod_produto))];
+
+    // 2) Composição (BOM) só dos produtos que estão em carteira
+    let composicao = [];
+    for (let i = 0; i < codigosProdutos.length; i += 300) {
+      const lote = codigosProdutos.slice(i, i + 300);
+      const { data, error } = await supabase.from('composicao_produtos')
+        .select('cod_prod_pai,cod_prod_mp,descr_prod_mp,unidade,quantidade')
+        .in('cod_prod_pai', lote);
+      if (error) { setErro(`Erro composição: ${error.message}`); setLoading(false); return; }
+      composicao = composicao.concat(data || []);
+    }
+    const composicaoPorProduto = {};
+    composicao.forEach(c => {
+      if (!composicaoPorProduto[c.cod_prod_pai]) composicaoPorProduto[c.cod_prod_pai] = [];
+      composicaoPorProduto[c.cod_prod_pai].push(c);
+    });
+
+    // 3) Saldo atual de cada matéria-prima — pega o registro mais recente por código
+    let apontamentos = [];
+    pagina = 0;
+    while (true) {
+      const { data, error } = await supabase.from('producao_mp_apontamentos')
+        .select('cod_materia_prima,desc_materia_prima,unidade_mp,saldo_fisico_mp,saldo_reservado_mp,saldo_disponivel_mp,sincronizado_em')
+        .order('sincronizado_em', { ascending: false })
+        .range(pagina * TAMANHO_LOTE, (pagina + 1) * TAMANHO_LOTE - 1);
+      if (error) { setErro(`Erro estoque: ${error.message}`); setLoading(false); return; }
+      apontamentos = apontamentos.concat(data || []);
+      if (!data || data.length < TAMANHO_LOTE) break;
+      pagina += 1;
+      if (pagina > 100) break;
+    }
+    const saldoPorMP = {}; // primeira ocorrência = mais recente (já veio ordenado desc)
+    apontamentos.forEach(a => {
+      if (!saldoPorMP[a.cod_materia_prima]) {
+        saldoPorMP[a.cod_materia_prima] = {
+          descricao: a.desc_materia_prima, unidade: a.unidade_mp,
+          fisico: Number(a.saldo_fisico_mp) || 0, reservado: Number(a.saldo_reservado_mp) || 0,
+          disponivel: Number(a.saldo_disponivel_mp) || 0,
+        };
+      }
+    });
+
+    // 4) Calcula demanda total por MP (soma de todos os pedidos pendentes que a usam)
+    const demandaPorMP = {}; // codigo -> { total, itens: [...] }
+    const faltantes = new Map();
+
+    pendentes.forEach(p => {
+      const bom = composicaoPorProduto[p.cod_produto];
+      if (!bom) {
+        faltantes.set(p.cod_produto, { produto: p.cod_produto, descricao: p.produto_descricao, br: p.br });
+        return;
+      }
+      bom.forEach(mat => {
+        const codigo = mat.cod_prod_mp;
+        const qtdUnitaria = Number(mat.quantidade) || 0;
+        const demanda = qtdUnitaria * p.pendente;
+        if (!demandaPorMP[codigo]) demandaPorMP[codigo] = { total: 0, descricao: mat.descr_prod_mp, unidade: mat.unidade, itens: [] };
+        demandaPorMP[codigo].total += demanda;
+        demandaPorMP[codigo].itens.push({
+          produto: p.cod_produto, descricaoProduto: p.produto_descricao, br: p.br,
+          cliente: p.cliente_nome, pedido: p.numero_pedido, pendente: p.pendente,
+          demanda, dataPrevista: p.data_prevista_entrega,
+        });
+      });
+    });
+
+    const lista = Object.entries(demandaPorMP).map(([codigo, info]) => {
+      const saldo = saldoPorMP[codigo];
+      const disponivel = saldo?.disponivel ?? null;
+      const deficit = disponivel != null ? info.total - disponivel : null;
+      return {
+        codigo,
+        descricao: saldo?.descricao || info.descricao || `MP ${codigo}`,
+        unidade: saldo?.unidade || info.unidade || '',
+        demanda: info.total,
+        saldoDisponivel: disponivel,
+        deficit,
+        status: disponivel == null ? 'sem_saldo' : deficit > 0.0001 ? 'insuficiente' : 'ok',
+        itens: info.itens.sort((a, b) => b.demanda - a.demanda),
+      };
+    });
+
+    setLinhas(lista);
+    setSemComposicao([...faltantes.values()]);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { carregar(); }, [carregar]);
+
+  // Auto-refresh a cada 30 minutos.
+  useEffect(() => {
+    const id = setInterval(carregar, 30 * 60 * 1000);
+    return () => clearInterval(id);
+  }, [carregar]);
+
+  const filtrados = useMemo(() => {
+    return linhas
+      .filter(l => statusFiltro === 'Todos' || l.status === statusFiltro)
+      .filter(l => !busca ||
+        l.codigo.toLowerCase().includes(busca.toLowerCase()) ||
+        (l.descricao || '').toLowerCase().includes(busca.toLowerCase()))
+      .sort((a, b) => {
+        let va = a[sortCol] ?? -Infinity, vb = b[sortCol] ?? -Infinity;
+        if (typeof va === 'string') va = va.toLowerCase();
+        if (typeof vb === 'string') vb = vb.toLowerCase();
+        if (va < vb) return sortDir === 'asc' ? -1 : 1;
+        if (va > vb) return sortDir === 'asc' ? 1 : -1;
+        return 0;
+      });
+  }, [linhas, busca, statusFiltro, sortCol, sortDir]);
+
+  const kpis = useMemo(() => ({
+    totalMPs: linhas.length,
+    insuficientes: linhas.filter(l => l.status === 'insuficiente').length,
+    semSaldo: linhas.filter(l => l.status === 'sem_saldo').length,
+    ok: linhas.filter(l => l.status === 'ok').length,
+    produtosSemComposicao: semComposicao.length,
+  }), [linhas, semComposicao]);
+
+  const handleSort = (col) => {
+    if (sortCol === col) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+    else { setSortCol(col); setSortDir('desc'); }
+  };
+
+  const LocalSortTh = ({ label, col, right }) => {
+    const active = sortCol === col;
+    return (
+      <th onClick={() => handleSort(col)} style={{ ...thFat(0, right ? 'right' : 'left'), cursor: 'pointer', whiteSpace: 'nowrap' }}>
+        <span style={{ color: active ? T.terracotta : T.inkFaint }}>{label}{active ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''}</span>
+      </th>
+    );
+  };
+
+  const fmtQtd = (v) => v == null ? '—' : new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 2 }).format(v);
+  const fmtData = (iso) => !iso ? '—' : new Date(iso + 'T00:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: '2-digit' });
+
+  const statusInfo = (status) => ({
+    ok:           { label: '✓ Atende',    cor: T.oliveText, bg: T.oliveSoft },
+    insuficiente: { label: '⚠ Insuficiente', cor: T.rustText, bg: T.rustSoft },
+    sem_saldo:    { label: '— Sem dado de estoque', cor: T.inkFaint, bg: T.lineSoft },
+  }[status] || { label: status, cor: T.inkFaint, bg: T.lineSoft });
+
+  return (
+    <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+
+      {erro && (
+        <div style={{ background: T.rustSoft, color: T.rustText, borderRadius: 8, padding: '10px 14px', fontSize: 12.5, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <AlertTriangle size={14} /> {erro}
+        </div>
+      )}
+
+      <div style={{ fontSize: 12.5, color: T.inkFaint, background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 8, padding: '10px 14px' }}>
+        Cruza os pedidos ainda não entregues (quantidade pedida − quantidade já entregue) com a composição de cada produto,
+        e compara a demanda total de cada matéria-prima com o saldo disponível atual (mesmo saldo usado na aba Analítico).
+      </div>
+
+      {/* KPIs */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(170px,1fr))', gap: 12 }}>
+        <Kpi label="Matérias-primas analisadas" value={loading ? '…' : kpis.totalMPs} icon={Layers} tone="blue"
+          sub="usadas em algum pedido em carteira" />
+        <Kpi label="Atendem a demanda" value={loading ? '…' : kpis.ok} icon={CheckCircle2} tone="olive"
+          sub="saldo atual cobre tudo que está em carteira" />
+        <Kpi label="Insuficientes" value={loading ? '…' : kpis.insuficientes} icon={AlertTriangle} tone="rust"
+          sub="saldo atual NÃO cobre a demanda da carteira" />
+        <Kpi label="Sem dado de estoque" value={loading ? '…' : kpis.semSaldo} icon={Clock3} tone="amber"
+          sub="MP nunca apareceu num apontamento sincronizado" />
+        <Kpi label="Produtos sem composição" value={loading ? '…' : kpis.produtosSemComposicao} icon={Package}
+          sub="em carteira, mas sem BOM cadastrada — não entram no cálculo" />
+      </div>
+
+      {/* Filtros */}
+      <Panel>
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+          <FiltroCampoFat label="Buscar código ou descrição">
+            <div style={{ position: 'relative' }}>
+              <Search size={13} style={{ position: 'absolute', left: 9, top: 9, color: T.inkFaint }} />
+              <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Ex: 10988, PLACA-RETANGULAR…"
+                style={{ ...selectStyleFat(260), paddingLeft: 28 }} />
+            </div>
+          </FiltroCampoFat>
+          <FiltroCampoFat label="Status">
+            <div style={{ position: 'relative' }}>
+              <select value={statusFiltro} onChange={e => setStatusFiltro(e.target.value)} style={selectStyleFat(180)}>
+                <option value="Todos">Todos</option>
+                <option value="insuficiente">⚠ Insuficiente</option>
+                <option value="ok">✓ Atende</option>
+                <option value="sem_saldo">Sem dado de estoque</option>
+              </select>
+              <ChevronDown size={13} style={chevronStyleFat} />
+            </div>
+          </FiltroCampoFat>
+          {(busca || statusFiltro !== 'Todos') && (
+            <button onClick={() => { setBusca(''); setStatusFiltro('Todos'); }}
+              style={{ fontSize: 12, color: T.amberText, background: T.amberSoft, border: 'none', borderRadius: 5, padding: '6px 12px', cursor: 'pointer', fontWeight: 600 }}>
+              ✕ Limpar
+            </button>
+          )}
+        </div>
+      </Panel>
+
+      {/* Tabela principal */}
+      <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+            <thead>
+              <tr style={{ background: T.panelAlt, borderBottom: `1px solid ${T.line}` }}>
+                <LocalSortTh label="Código" col="codigo" />
+                <th style={thFat(0)}>Descrição</th>
+                <th style={{ ...thFat(70), textAlign: 'center' }}>UM</th>
+                <LocalSortTh label="Demanda (carteira)" col="demanda" right />
+                <LocalSortTh label="Saldo disponível" col="saldoDisponivel" right />
+                <LocalSortTh label="Déficit" col="deficit" right />
+                <th style={{ ...thFat(140), textAlign: 'center' }}>Status</th>
+                <th style={{ ...thFat(90), textAlign: 'center' }}>Detalhe</th>
+              </tr>
+            </thead>
+            <tbody>
+              {loading ? (
+                <tr><td colSpan={8} style={{ padding: 40, textAlign: 'center', color: T.inkFaint }}>Carregando…</td></tr>
+              ) : filtrados.length === 0 ? (
+                <tr><td colSpan={8} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Nenhuma matéria-prima encontrada.</td></tr>
+              ) : filtrados.map(r => {
+                const st = statusInfo(r.status);
+                return (
+                  <tr key={r.codigo} style={{ borderBottom: `1px solid ${T.lineSoft}` }}
+                    onMouseEnter={e => e.currentTarget.style.background = T.panelAlt}
+                    onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                    <td style={{ padding: '9px 12px', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText, whiteSpace: 'nowrap' }}>{r.codigo}</td>
+                    <td style={{ padding: '9px 12px', maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.descricao}>{r.descricao}</td>
+                    <td style={{ padding: '9px 12px', textAlign: 'center', fontSize: 11, color: T.inkFaint }}>{r.unidade}</td>
+                    <td style={{ padding: '9px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 700 }}>{fmtQtd(r.demanda)}</td>
+                    <td style={{ padding: '9px 12px', textAlign: 'right' }}>{fmtQtd(r.saldoDisponivel)}</td>
+                    <td style={{ padding: '9px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 700, color: r.deficit == null ? T.inkFaint : r.deficit > 0 ? T.rustText : T.oliveText }}>
+                      {r.deficit == null ? '—' : r.deficit > 0 ? `-${fmtQtd(r.deficit)}` : `+${fmtQtd(-r.deficit)}`}
+                    </td>
+                    <td style={{ padding: '9px 12px', textAlign: 'center' }}>
+                      <span style={{ fontSize: 10.5, fontWeight: 700, color: st.cor, background: st.bg, padding: '3px 8px', borderRadius: 4, whiteSpace: 'nowrap' }}>{st.label}</span>
+                    </td>
+                    <td style={{ padding: '9px 12px', textAlign: 'center' }}>
+                      <button onClick={() => setDrillMP(r)}
+                        style={{ fontSize: 11, color: T.blueText, background: T.blueSoft, border: 'none', borderRadius: 5, padding: '4px 10px', cursor: 'pointer', fontWeight: 600 }}>
+                        Ver pedidos
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        <div style={{ padding: '10px 16px', borderTop: `1px solid ${T.line}`, fontSize: 11, color: T.inkFaint, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span>{filtrados.length} matéria{filtrados.length !== 1 ? 's' : ''}-prima · Demanda = Σ (composição do produto × quantidade pendente de entrega)</span>
+          <BotaoExportar small onClick={() => exportCSV(filtrados, 'carteira_x_estoque.csv',
+            ['codigo','descricao','unidade','demanda','saldoDisponivel','deficit','status'])} />
+        </div>
+      </div>
+
+      {semComposicao.length > 0 && (
+        <Panel title="Produtos em carteira sem composição cadastrada" subtitle="Esses pedidos não entraram no cálculo de demanda acima, porque o produto não está em `composicao_produtos`">
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+              <thead>
+                <tr style={{ background: T.panelAlt, borderBottom: `1px solid ${T.line}` }}>
+                  <th style={thFat(100)}>Produto</th>
+                  <th style={thFat(0)}>Descrição</th>
+                  <th style={thFat(120)}>BR</th>
+                </tr>
+              </thead>
+              <tbody>
+                {semComposicao.map((f, i) => (
+                  <tr key={i} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                    <td style={{ padding: '8px 12px', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.amberText }}>{f.produto}</td>
+                    <td style={{ padding: '8px 12px' }}>{f.descricao}</td>
+                    <td style={{ padding: '8px 12px', color: T.inkFaint }}>{f.br || '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Panel>
+      )}
+
+      {/* Modal: pedidos que precisam dessa matéria-prima */}
+      {drillMP && (
+        <Overlay onClose={() => setDrillMP(null)}>
+          <div className="scale-in" style={{
+            background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, width: '100%', maxWidth: 680,
+            maxHeight: '85vh', display: 'flex', flexDirection: 'column', overflow: 'hidden', boxShadow: '0 24px 60px rgba(0,0,0,.18)',
+          }}>
+            <div style={{ padding: '18px 22px', borderBottom: `1px solid ${T.line}`, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontFamily: FONT_DISPLAY, fontSize: 17, fontWeight: 700, color: T.ink }}>{drillMP.codigo} — {drillMP.descricao}</div>
+                <div style={{ fontSize: 11.5, color: T.inkFaint, marginTop: 4 }}>
+                  Demanda: {fmtQtd(drillMP.demanda)} {drillMP.unidade} · Saldo disponível: {fmtQtd(drillMP.saldoDisponivel)} {drillMP.unidade}
+                </div>
+              </div>
+              <button onClick={() => setDrillMP(null)} style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: T.inkFaint, flexShrink: 0 }}><X size={20} /></button>
+            </div>
+            <div style={{ padding: '10px 22px', fontSize: 11, color: T.inkFaint, borderBottom: `1px solid ${T.lineSoft}`, background: T.panelAlt }}>
+              Pedidos em carteira que vão consumir essa matéria-prima
+            </div>
+            <div style={{ overflow: 'auto', flex: 1 }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                <thead>
+                  <tr style={{ borderBottom: `1px solid ${T.line}`, position: 'sticky', top: 0, background: T.panel }}>
+                    <th style={thFat(0)}>Produto / BR</th>
+                    <th style={{ ...thFat(80), textAlign: 'right' }}>Pendente</th>
+                    <th style={{ ...thFat(100), textAlign: 'right' }}>Demanda MP</th>
+                    <th style={{ ...thFat(90) }}>Previsão</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {drillMP.itens.map((it, i) => (
+                    <tr key={i} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                      <td style={{ padding: '9px 12px' }}>
+                        <div style={{ fontWeight: 600 }}>{it.produto} — {it.descricaoProduto}</div>
+                        <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 2 }}>{it.br || '—'} · {it.cliente || '—'} · Pedido {it.pedido || '—'}</div>
+                      </td>
+                      <td style={{ padding: '9px 12px', textAlign: 'right' }}>{fmtQtd(it.pendente)}</td>
+                      <td style={{ padding: '9px 12px', textAlign: 'right', fontWeight: 700, fontFamily: FONT_DISPLAY }}>{fmtQtd(it.demanda)} {drillMP.unidade}</td>
+                      <td style={{ padding: '9px 12px', fontSize: 11, color: T.inkFaint }}>{fmtData(it.dataPrevista)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </Overlay>
+      )}
+    </div>
+  );
+}
 
 function ConsumoPlacasKalocer() {
   const anoAtual = new Date().getFullYear();
@@ -6903,6 +7420,7 @@ function PedidosVale() {
   const [brvLoading, setBrvLoading] = useState(true);
   const [brvSyncing, setBrvSyncing] = useState(false);
   const [brvSyncStatus, setBrvSyncStatus] = useState(null);
+  const [descricaoAberta, setDescricaoAberta] = useState(null); // { cod, descricao } — modal de descrição completa
 
   const carregar = useCallback(async () => {
     setLoading(true);
@@ -7058,6 +7576,8 @@ function PedidosVale() {
                   <th style={thFat()}>Cliente</th>
                   <th style={thFat()}>UF</th>
                   <th style={thFat()}>BR</th>
+                  <th style={thFat()}>Cód Sankhya</th>
+                  <th style={thFat()}>Descrição</th>
                   <th style={thFat()}>Cod. Vale</th>
                   <th style={thFat(0, 'right')}>Qtd peças</th>
                   <th style={thFat()}>Cerâmica 1</th>
@@ -7069,7 +7589,7 @@ function PedidosVale() {
               </thead>
               <tbody>
                 {linhas.length === 0 ? (
-                  <tr><td colSpan={12} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Nenhum pedido Vale no período. Clique em "Atualizar do Sankhya".</td></tr>
+                  <tr><td colSpan={14} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Nenhum pedido Vale no período. Clique em "Atualizar do Sankhya".</td></tr>
                 ) : linhas.map(l => {
                   const semRegraLinha = l.area_placa_m2 === null;
                   return (
@@ -7079,6 +7599,12 @@ function PedidosVale() {
                       <td style={{ padding: '9px 12px', fontWeight: 600, maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={l.client}>{l.client}</td>
                       <td style={{ padding: '9px 12px', color: T.inkDim }}>{l.uf || '—'}</td>
                       <td style={{ padding: '9px 12px', fontFamily: FONT_DISPLAY, fontWeight: 600 }}>{l.br || '—'}</td>
+                      <td style={{ padding: '9px 12px', fontFamily: FONT_DISPLAY, color: T.blueText, whiteSpace: 'nowrap' }}>{l.cod_sankhya || '—'}</td>
+                      <td style={{ padding: '9px 12px', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: l.descricao_produto ? 'pointer' : 'default', color: l.descricao_produto ? T.inkDim : T.inkFaint }}
+                        onClick={() => l.descricao_produto && setDescricaoAberta({ cod: l.cod_sankhya, descricao: l.descricao_produto })}
+                        title="Clique pra ver a descrição completa">
+                        {l.descricao_produto ? `${l.descricao_produto.slice(0, 34)}${l.descricao_produto.length > 34 ? '…' : ''}` : '—'}
+                      </td>
                       <td style={{ padding: '9px 12px', color: T.inkDim, fontFamily: FONT_DISPLAY }}>{l.cod_vale || '—'}</td>
                       <td style={{ padding: '9px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY }}>{l.qtd_pecas}</td>
                       <td style={{ padding: '9px 12px', color: semRegraLinha ? T.amberText : T.inkDim }}>{l.ceramica_1_descricao || (semRegraLinha ? 'Sem regra' : '—')}</td>
@@ -7094,6 +7620,18 @@ function PedidosVale() {
           </div>
         )}
       </Panel>
+
+      {descricaoAberta && (
+        <Overlay onClose={() => setDescricaoAberta(null)}>
+          <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, padding: 20, maxWidth: 520, boxShadow: '0 24px 60px rgba(0,0,0,.18)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 }}>
+              <div style={{ fontFamily: FONT_DISPLAY, fontSize: 15, fontWeight: 700, color: T.blueText }}>{descricaoAberta.cod || '—'}</div>
+              <button onClick={() => setDescricaoAberta(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.inkFaint }}><X size={18} /></button>
+            </div>
+            <div style={{ fontSize: 13, color: T.ink, lineHeight: 1.5 }}>{descricaoAberta.descricao}</div>
+          </div>
+        </Overlay>
+      )}
 
       <Panel
         title="Orçamentos BRV — margem e matéria-prima"
@@ -7489,6 +8027,7 @@ const TELAS_CATALOGO = [
   { id: 'consumo_mp',   label: 'Consumo de MP' },
   { id: 'placas_kalocer', label: 'Placas Kalocer' },
   { id: 'analitico_mp', label: 'Analítico' },
+  { id: 'carteira_estoque', label: 'Carteira x Estoque' },
   { id: 'almoxarifado', label: 'Almoxarifado' },
   { id: 'equipamentos', label: 'Equip. Terceiros' },
   { id: 'pedidosvale',  label: 'Pedidos Vale' },
