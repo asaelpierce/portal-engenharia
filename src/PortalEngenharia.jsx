@@ -4054,7 +4054,7 @@ function Faturamento() {
     try {
       const { ini, fim } = rangeDatas();
 
-      const [resItens, resNota] = await Promise.all([
+      const [resItens, resNota, resResumo] = await Promise.all([
         fetch(`${SUPABASE_URL}/functions/v1/sankhya-pedidos-itens-sync`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ dataIni: ini, dataFim: fim }),
@@ -4063,13 +4063,19 @@ function Faturamento() {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ dataIni: ini, dataFim: fim }),
         }).then(r => r.json()),
+        // faturamento_resumo (usada na "Conferência auditada" e nos gráficos mensais) — faltava
+        // ser chamada aqui, por isso ficava parada mesmo depois de clicar em "Atualizar do Sankhya".
+        fetch(`${SUPABASE_URL}/functions/v1/sankhya-faturamento-resumo-sync`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ dataIni: ini, dataFim: fim }),
+        }).then(r => r.json()),
       ]);
 
-      if (resItens.ok && resNota.ok) {
-        setSyncStatus({ ok: true, message: `Sincronizado: ${resItens.itens_sincronizados} itens de pedido, ${resNota.itens_sincronizados} itens de nota de venda.` });
+      if (resItens.ok && resNota.ok && resResumo.ok) {
+        setSyncStatus({ ok: true, message: `Sincronizado: ${resItens.itens_sincronizados} itens de pedido, ${resNota.itens_sincronizados} itens de nota de venda, ${resResumo.notas_sincronizadas} notas (resumo).` });
         await carregarDados();
       } else {
-        setSyncStatus({ ok: false, message: resItens.erro || resNota.erro || 'Erro desconhecido na sincronização.' });
+        setSyncStatus({ ok: false, message: resItens.erro || resNota.erro || resResumo.erro || 'Erro desconhecido na sincronização.' });
       }
     } catch (err) {
       setSyncStatus({ ok: false, message: String(err) });
@@ -4249,7 +4255,7 @@ function Faturamento() {
               sub={`${itensCount} itens no período`}
             />
             <KpiClicavel
-              label="Não faturado (estimado)" valor={pedidosNaoFat.reduce((s, c) => s + (c.valorPendente || 0), 0)} icon={AlertTriangle} cor={T.amber}
+              label="Não faturado (estimado)" valor={pedidosNaoFat.reduce((s, c) => s + c.nao_faturado, 0)} icon={AlertTriangle} cor={T.amber}
               formatador={fmtValor}
               sub={`${pedidosNaoFat.length} pedido${pedidosNaoFat.length !== 1 ? 's' : ''} com saldo em aberto`}
               onClick={pedidosNaoFat.length > 0 ? () => setDrillDown({ titulo: 'Pedidos não faturados — por BR', itens: pedidosNaoFat, tipo: 'nao_fat' }) : undefined}
@@ -4773,8 +4779,8 @@ function DrillDownPedidos({ titulo, itens, loading, onClose, campoValor = 'valor
    DRILL-DOWN NÃO FATURADOS — lista de clientes com saldo em aberto
 ============================================================================ */
 function DrillDownNaoFaturados({ titulo, clientes, fmtValor, onClose }) {
-  const totalNaoFat = clientes.reduce((s, c) => s + (c.valorPendente || 0), 0);
-  const totalPedido = clientes.reduce((s, c) => s + (c.valorPedido || 0), 0);
+  const totalNaoFat = clientes.reduce((s, c) => s + c.nao_faturado, 0);
+  const totalPedido = clientes.reduce((s, c) => s + c.valorPedido, 0);
   return (
     <Overlay onClose={onClose}>
       <div className="scale-in" style={{
@@ -4788,7 +4794,7 @@ function DrillDownNaoFaturados({ titulo, clientes, fmtValor, onClose }) {
               {clientes.length} pedido{clientes.length !== 1 ? 's' : ''} · {fmtValor(totalNaoFat)} em aberto de {fmtValor(totalPedido)} em pedidos
             </p>
             <p style={{ fontSize: 11.5, color: T.inkFaint, margin: '4px 0 0' }}>
-              Falta faturar = valor pendente de entrega (proporcional à quantidade que ainda não foi entregue nesse pedido).
+              Falta faturar = valor do pedido − o que já foi faturado desse mesmo BR (em qualquer data).
             </p>
           </div>
           <button onClick={onClose} style={{ background: 'transparent', border: 'none', color: T.inkFaint }}><X size={20} /></button>
@@ -4801,7 +4807,7 @@ function DrillDownNaoFaturados({ titulo, clientes, fmtValor, onClose }) {
                 <th style={thFat()}>BR</th>
                 <th style={thFat()}>Cliente</th>
                 <th style={thFat(0, 'right')}>Valor pedido</th>
-                <th style={thFat(0, 'right')}>Já entregue (estim.)</th>
+                <th style={thFat(0, 'right')}>Já faturado</th>
                 <th style={thFat(0, 'right')}>Falta faturar</th>
                 <th style={thFat(120)}>Cobertura</th>
               </tr>
@@ -4810,19 +4816,16 @@ function DrillDownNaoFaturados({ titulo, clientes, fmtValor, onClose }) {
               {clientes.length === 0 ? (
                 <tr><td colSpan={7} style={{ padding: 30, textAlign: 'center', color: T.oliveText, fontWeight: 600 }}>✓ Tudo faturado no período.</td></tr>
               ) : clientes.map((c, i) => {
-                const valorPedido = c.valorPedido || 0;
-                const valorPendente = c.valorPendente || 0;
-                const jaEntregue = Math.max(0, valorPedido - valorPendente);
-                const cob = valorPedido > 0 ? Math.min((jaEntregue / valorPedido) * 100, 100) : 0;
+                const cob = c.valorPedido > 0 ? Math.min((c.faturado / c.valorPedido) * 100, 100) : 0;
                 const cor = cob >= 80 ? T.oliveText : cob >= 40 ? T.amberText : T.rustText;
                 return (
-                  <tr key={c.nunota || c.br} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                  <tr key={c.br} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
                     <td style={{ padding: '10px 12px', color: T.inkFaint, fontFamily: FONT_DISPLAY, fontSize: 11 }}>#{i + 1}</td>
                     <td style={{ padding: '10px 12px', fontWeight: 700, fontFamily: FONT_DISPLAY, color: T.blueText }}>{c.br}</td>
                     <td style={{ padding: '10px 12px', fontWeight: 600, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={c.cliente}>{c.cliente}</td>
-                    <td style={{ ...tdFat(), color: T.ink, fontWeight: 600 }}>{fmtValor(valorPedido)}</td>
-                    <td style={{ ...tdFat(), color: T.blueText }}>{fmtValor(jaEntregue)}</td>
-                    <td style={{ ...tdFat(), color: T.rustText, fontWeight: 700 }}>{fmtValor(valorPendente)}</td>
+                    <td style={{ ...tdFat(), color: T.ink, fontWeight: 600 }}>{fmtValor(c.valorPedido)}</td>
+                    <td style={{ ...tdFat(), color: T.blueText }}>{fmtValor(c.faturado)}</td>
+                    <td style={{ ...tdFat(), color: T.rustText, fontWeight: 700 }}>{fmtValor(c.nao_faturado)}</td>
                     <td style={{ padding: '10px 12px' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                         <div style={{ flex: 1, background: T.lineSoft, height: 6, borderRadius: 3, overflow: 'hidden' }}>
