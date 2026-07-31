@@ -4929,6 +4929,8 @@ function AnaliticoMP() {
   const [sortCol, setSortCol] = useState('data_ref');
   const [sortDir, setSortDir] = useState('desc');
   const detalheRef = useRef(null);
+  const [projetoSelecionado, setProjetoSelecionado] = useState(null); // BR selecionado pro drill-down de projeto
+  const projetoRef = useRef(null);
 
   const rangeDatas = useCallback(() => {
     const ini = `${filtros.anoIni}-${String(filtros.mesIni).padStart(2, '0')}-01`;
@@ -5013,6 +5015,48 @@ function AnaliticoMP() {
       custoPorMes: Object.values(mesMap).sort((a, b) => a.mes.localeCompare(b.mes)),
     };
   }, [linhasGeral]);
+
+  // Drill-down de projeto: todo o custo de matéria-prima dentro de um BR específico,
+  // calculado sobre os mesmos dados já carregados (sem nova busca no banco).
+  const dadosProjeto = useMemo(() => {
+    if (!projetoSelecionado) return null;
+    const itensDoProjeto = linhasGeral.filter(l => l.br === projetoSelecionado);
+    const mpMap = {}, prodMap = {};
+    const prodSet = new Set(), opsSet = new Set();
+    let custoTotal = 0;
+
+    itensDoProjeto.forEach(l => {
+      opsSet.add(l.nuapo);
+      const custo = Number(l.custo_total) || 0;
+      custoTotal += custo;
+      if (l.cod_materia_prima) {
+        if (!mpMap[l.cod_materia_prima]) mpMap[l.cod_materia_prima] = { codigo: l.cod_materia_prima, descricao: l.desc_materia_prima, custo: 0, qtd: 0, unidade: l.unidade_mp };
+        mpMap[l.cod_materia_prima].custo += custo;
+        mpMap[l.cod_materia_prima].qtd += Number(l.qtd_mp) || 0;
+      }
+      if (l.cod_prod_acabado) {
+        prodSet.add(l.cod_prod_acabado);
+        if (!prodMap[l.cod_prod_acabado]) prodMap[l.cod_prod_acabado] = { codigo: l.cod_prod_acabado, descricao: l.desc_prod_acabado, custo: 0 };
+        prodMap[l.cod_prod_acabado].custo += custo;
+      }
+    });
+
+    return {
+      br: projetoSelecionado,
+      custoTotal,
+      totalOPs: opsSet.size,
+      totalMPs: Object.keys(mpMap).length,
+      totalProdutos: prodSet.size,
+      topMPs: Object.values(mpMap).sort((a, b) => b.custo - a.custo),
+      topProdutos: Object.values(prodMap).sort((a, b) => b.custo - a.custo).slice(0, 8),
+      itens: [...itensDoProjeto].sort((a, b) => (b.data_ref || '').localeCompare(a.data_ref || '')),
+    };
+  }, [projetoSelecionado, linhasGeral]);
+
+  const selecionarProjeto = (br) => {
+    setProjetoSelecionado(br);
+    setTimeout(() => projetoRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100);
+  };
 
   // Sugestões de código conforme digita (busca em ambas as fontes)
   useEffect(() => {
@@ -5314,16 +5358,59 @@ function AnaliticoMP() {
           ))}
         </Panel>
 
-        <Panel title="Top projetos por custo de MP" subtitle="BRs com maior custo de matéria-prima consumida">
+        <Panel title="Top projetos por custo de MP" subtitle="BRs com maior custo de matéria-prima consumida — clique pra ver o detalhe completo">
           {loadingGeral ? (
             <div style={{ textAlign: 'center', padding: 20, color: T.inkFaint, fontSize: 12.5 }}>Carregando…</div>
           ) : overview.topProjetos.length === 0 ? (
             <div style={{ textAlign: 'center', padding: 20, color: T.inkFaint, fontSize: 12.5 }}>Sem dados no período.</div>
           ) : overview.topProjetos.map(p => (
-            <RankingBar key={p.br} label={p.br} valor={p.custo} max={maxProj} />
+            <RankingBar key={p.br} label={p.br} valor={p.custo} max={maxProj} onClick={() => selecionarProjeto(p.br)} />
           ))}
         </Panel>
       </div>
+
+      {/* Drill-down de projeto: todo o custo de matéria-prima dentro do BR selecionado */}
+      {dadosProjeto && (
+        <div ref={projetoRef} style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div style={{ fontFamily: FONT_DISPLAY, fontSize: 19, fontWeight: 700, color: T.ink }}>
+              Projeto {dadosProjeto.br} — custo de matéria-prima
+            </div>
+            <button onClick={() => setProjetoSelecionado(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.inkFaint }}><X size={18} /></button>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(170px,1fr))', gap: 12 }}>
+            <Kpi label="Custo total de MP" value={fmtRCompacta(dadosProjeto.custoTotal)} icon={DollarSign} tone="rust"
+              sub="soma de todas as matérias-primas consumidas nesse projeto" />
+            <Kpi label="Matérias-primas distintas" value={dadosProjeto.totalMPs} icon={Layers} tone="blue"
+              sub="códigos diferentes consumidos" />
+            <Kpi label="Produtos acabados" value={dadosProjeto.totalProdutos} icon={Package} tone="olive"
+              sub="produtos diferentes produzidos pra esse projeto" />
+            <Kpi label="Ordens de produção" value={dadosProjeto.totalOPs} icon={Gauge}
+              sub="OPs desse projeto no período" />
+          </div>
+
+          <div className="grid-2col">
+            <Panel title="Matérias-primas por custo neste projeto" subtitle="Clique numa MP pra ver o detalhe completo dela">
+              {dadosProjeto.topMPs.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: 20, color: T.inkFaint, fontSize: 12.5 }}>Sem dados.</div>
+              ) : dadosProjeto.topMPs.slice(0, 12).map(mp => (
+                <RankingBar key={mp.codigo} label={mp.codigo} sub={mp.descricao} valor={mp.custo}
+                  max={Math.max(...dadosProjeto.topMPs.map(m => m.custo), 1)}
+                  onClick={() => { setBusca(`${mp.codigo} — ${mp.descricao || ''}`); selecionar(mp.codigo); }} />
+              ))}
+            </Panel>
+            <Panel title="Produtos acabados por custo neste projeto" subtitle="Onde o custo de matéria-prima mais pesa">
+              {dadosProjeto.topProdutos.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: 20, color: T.inkFaint, fontSize: 12.5 }}>Sem dados.</div>
+              ) : dadosProjeto.topProdutos.map(p => (
+                <RankingBar key={p.codigo} label={p.codigo} sub={p.descricao} valor={p.custo}
+                  max={Math.max(...dadosProjeto.topProdutos.map(pp => pp.custo), 1)} />
+              ))}
+            </Panel>
+          </div>
+        </div>
+      )}
 
       {/* Busca detalhada por matéria-prima específica */}
       <div ref={detalheRef}>
@@ -5476,6 +5563,7 @@ function ConsumoPlacasKalocer() {
   const [drillMP, setDrillMP] = useState(null); // { codigo_mp, descricao, itens: [...] }
   const [syncing, setSyncing] = useState(false);
   const [syncStatus, setSyncStatus] = useState(null);
+  const [mostrarSemConsumo, setMostrarSemConsumo] = useState(false);
 
   const rangeDatas = () => {
     const ini = `${filtros.anoIni}-${String(filtros.mesIni).padStart(2, '0')}-01`;
@@ -5603,6 +5691,7 @@ function ConsumoPlacasKalocer() {
 
   const filtrados = useMemo(() => {
     return linhas
+      .filter(l => mostrarSemConsumo || l.apareceu)
       .filter(l => !busca ||
         l.codigo_mp.toLowerCase().includes(busca.toLowerCase()) ||
         (l.descricao || '').toLowerCase().includes(busca.toLowerCase()) ||
@@ -5616,7 +5705,7 @@ function ConsumoPlacasKalocer() {
         if (va > vb) return sortDir === 'asc' ? 1 : -1;
         return 0;
       });
-  }, [linhas, busca, sortCol, sortDir]);
+  }, [linhas, busca, sortCol, sortDir, mostrarSemConsumo]);
 
   const kpis = useMemo(() => ({
     totalNaLista: linhas.length,
@@ -5693,6 +5782,13 @@ function ConsumoPlacasKalocer() {
               ✕ Limpar
             </button>
           )}
+          <button onClick={() => setMostrarSemConsumo(v => !v)}
+            style={{
+              fontSize: 12, fontWeight: 600, border: `1px solid ${T.line}`, borderRadius: 5, padding: '7px 12px', cursor: 'pointer',
+              background: mostrarSemConsumo ? T.blueSoft : T.panel, color: mostrarSemConsumo ? T.blueText : T.inkDim,
+            }}>
+            {mostrarSemConsumo ? '✓ ' : ''}Mostrar sem consumo ({kpis.naoApareceram})
+          </button>
         </div>
       </Panel>
 
