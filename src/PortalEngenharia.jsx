@@ -5380,8 +5380,10 @@ function AnaliticoMP() {
               sub={dados.kpis.opsAndamento > 0 && dados.kpis.projetosEmAndamento === 0
                 ? `${dados.kpis.opsAndamento} OP${dados.kpis.opsAndamento !== 1 ? 's' : ''} em produção, mas sem BR vinculado ainda`
                 : `de ${dados.kpis.opsAndamento} OP${dados.kpis.opsAndamento !== 1 ? 's' : ''} em produção`} />
-            <Kpi label="Estoque disponível" value={fmtQtd(dados.kpis.estoqueDisponivel)} icon={Layers} tone="blue"
-              sub={`${dados.unidade || ''} · Físico: ${fmtQtd(dados.kpis.estoqueFisico)} · Reservado: ${fmtQtd(dados.kpis.estoqueReservado)}`} />
+            <Kpi label="Saldo de Matéria-Prima" value={fmtQtd(dados.kpis.estoqueFisico)} icon={Layers} tone="blue"
+              sub={`${dados.unidade || ''} · Local 1050, estoque próprio (não é o estoque total da empresa)`} />
+            <Kpi label="Saldo Reservado" value={fmtQtd(dados.kpis.estoqueReservado)} icon={Clock3} tone="amber"
+              sub={`${dados.unidade || ''} · Já comprometido · Disponível pra novo consumo: ${fmtQtd(dados.kpis.estoqueDisponivel)}`} />
             <Kpi label="Custo total consumido" value={fmtRCompacta(dados.kpis.custoTotal)} icon={DollarSign} tone="rust"
               sub={`${fmtQtd(dados.kpis.qtdTotal)} ${dados.unidade || ''} ao custo médio (TGFCUS)`} />
           </div>
