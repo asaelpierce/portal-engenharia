@@ -5931,9 +5931,11 @@ function PrecoCompra() {
   const [buscando, setBuscando] = useState(false);
   const [resultados, setResultados] = useState([]); // lista de produtos que bateram na busca
   const [itemSelecionado, setItemSelecionado] = useState(null); // { codigo, descricao }
-  const [historico, setHistorico] = useState([]); // últimas compras do item selecionado
+  const [historico, setHistorico] = useState([]); // compras do item selecionado
   const [loadingHistorico, setLoadingHistorico] = useState(false);
   const [erro, setErro] = useState(null);
+  const [qtdCompras, setQtdCompras] = useState(3); // 3, 5, 10 ou 'todas' — escolhido pelo usuário
+  const [contatosFornecedor, setContatosFornecedor] = useState({}); // cod_fornecedor -> {email, telefone, razao_social}
 
   // Análise geral: maiores gastos, mais recorrentes, maiores variações de preço.
   const [analise, setAnalise] = useState([]);
@@ -5997,20 +5999,45 @@ function PrecoCompra() {
     };
   }, [analise]);
 
-  const selecionarItem = async (codigo, descricao) => {
+  const selecionarItem = async (codigo, descricao, qtd) => {
+    const limite = qtd ?? qtdCompras;
     setItemSelecionado({ codigo, descricao });
     setLoadingHistorico(true);
     setErro(null);
-    const { data, error } = await supabaseSupply
+
+    let query = supabaseSupply
       .from('v_ultimas_compras')
-      .select('descricao_produto,fornecedor,data_recebimento,numero_nf,quantidade_recebida,valor_total_linha,preco_unitario,ordem_recencia')
+      .select('descricao_produto,fornecedor,cod_fornecedor,data_recebimento,numero_nf,quantidade_recebida,valor_total_linha,preco_unitario,ordem_recencia')
       .eq('codigo_produto', codigo)
-      .lte('ordem_recencia', 3)
       .order('ordem_recencia', { ascending: true });
+    if (limite !== 'todas') query = query.lte('ordem_recencia', limite);
+
+    const { data, error } = await query;
     if (error) { setErro(error.message); setLoadingHistorico(false); return; }
     setHistorico(data || []);
+
+    // Busca o contato (email/telefone) dos fornecedores que aparecem nesse histórico.
+    const codigosFornecedor = [...new Set((data || []).map(h => h.cod_fornecedor).filter(Boolean))];
+    if (codigosFornecedor.length > 0) {
+      const { data: contatos } = await supabaseSupply
+        .from('fornecedores_email')
+        .select('cod_fornecedor,fornecedor,razao_social,email,telefone,contato')
+        .in('cod_fornecedor', codigosFornecedor);
+      const mapa = {};
+      (contatos || []).forEach(c => { mapa[c.cod_fornecedor] = c; });
+      setContatosFornecedor(mapa);
+    } else {
+      setContatosFornecedor({});
+    }
+
     setLoadingHistorico(false);
   };
+
+  // Se o usuário mudar a quantidade de compras a mostrar com um item já selecionado, refaz a busca.
+  useEffect(() => {
+    if (itemSelecionado) selecionarItem(itemSelecionado.codigo, itemSelecionado.descricao, qtdCompras);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [qtdCompras]);
 
   const fmtMoeda = (v) => v == null ? '—' : new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(v);
   const fmtQtd = (v) => v == null ? '—' : new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 2 }).format(v);
@@ -6075,8 +6102,22 @@ function PrecoCompra() {
 
       {itemSelecionado && !loadingHistorico && (
         <>
-          <div style={{ fontFamily: FONT_DISPLAY, fontSize: 18, fontWeight: 700, color: T.ink }}>
-            {itemSelecionado.codigo} — {itemSelecionado.descricao}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
+            <div style={{ fontFamily: FONT_DISPLAY, fontSize: 18, fontWeight: 700, color: T.ink }}>
+              {itemSelecionado.codigo} — {itemSelecionado.descricao}
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontSize: 12, color: T.inkFaint }}>Mostrar:</span>
+              {[3, 5, 10, 'todas'].map(opt => (
+                <button key={opt} onClick={() => setQtdCompras(opt)}
+                  style={{
+                    fontSize: 12, fontWeight: 600, border: `1px solid ${T.line}`, borderRadius: 6, padding: '6px 12px', cursor: 'pointer',
+                    background: qtdCompras === opt ? T.terracotta : T.panel, color: qtdCompras === opt ? '#fff' : T.inkDim,
+                  }}>
+                  {opt === 'todas' ? 'Todas' : `${opt} últimas`}
+                </button>
+              ))}
+            </div>
           </div>
 
           {historico.length === 0 ? (
@@ -6086,15 +6127,21 @@ function PrecoCompra() {
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(170px,1fr))', gap: 12 }}>
                 <Kpi label="Preço mais recente" value={fmtMoeda(historico[0]?.preco_unitario)} icon={DollarSign} tone="rust"
                   sub={`${fmtData(historico[0]?.data_recebimento)} · ${historico[0]?.fornecedor || '—'}`} />
-                <Kpi label="Compras no histórico" value={historico.length} icon={Package} tone="blue"
-                  sub="mostrando as últimas 3" />
+                <Kpi label="Compras mostradas" value={historico.length} icon={Package} tone="blue"
+                  sub={qtdCompras === 'todas' ? 'histórico completo' : `das últimas ${qtdCompras}`} />
                 {variacaoPreco != null && (
                   <Kpi label="Variação (mais antiga → mais recente)" value={`${variacaoPreco > 0 ? '+' : ''}${variacaoPreco.toFixed(1)}%`}
                     icon={variacaoPreco > 0 ? ArrowUpRight : variacaoPreco < 0 ? ArrowDownRight : Minus}
                     tone={variacaoPreco > 0 ? 'rust' : variacaoPreco < 0 ? 'olive' : undefined}
-                    sub="entre a compra mais antiga e a mais recente dessa lista" />
+                    sub="dentro do período mostrado acima" />
                 )}
               </div>
+
+              {historico.length >= 2 && (
+                <Panel title="Variação de preço ao longo do tempo" subtitle="Preço unitário em cada compra, da mais antiga pra mais recente">
+                  <GraficoPrecoHistorico pontos={[...historico].reverse()} fmtMoeda={fmtMoeda} fmtData={fmtData} />
+                </Panel>
+              )}
 
               <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
                 <div style={{ overflowX: 'auto' }}>
@@ -6104,6 +6151,7 @@ function PrecoCompra() {
                         <th style={thFat(60)}>#</th>
                         <th style={thFat()}>Data</th>
                         <th style={thFat(0)}>Fornecedor</th>
+                        <th style={thFat(180)}>Contato</th>
                         <th style={thFat(100)}>NF</th>
                         <th style={{ ...thFat(90), textAlign: 'right' }}>Qtd</th>
                         <th style={{ ...thFat(120), textAlign: 'right' }}>Vlr. total NF</th>
@@ -6111,22 +6159,32 @@ function PrecoCompra() {
                       </tr>
                     </thead>
                     <tbody>
-                      {historico.map((h, i) => (
-                        <tr key={i} style={{ borderBottom: `1px solid ${T.lineSoft}`, background: i === 0 ? T.oliveSoft : 'transparent' }}>
-                          <td style={{ padding: '10px 12px', color: T.inkFaint }}>{i === 0 ? '★ mais recente' : `${i + 1}ª mais recente`}</td>
-                          <td style={{ padding: '10px 12px', fontFamily: FONT_DISPLAY, color: T.inkDim, whiteSpace: 'nowrap' }}>{fmtData(h.data_recebimento)}</td>
-                          <td style={{ padding: '10px 12px', fontWeight: 600, maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={h.fornecedor}>{h.fornecedor || '—'}</td>
-                          <td style={{ padding: '10px 12px', color: T.inkFaint }}>{h.numero_nf || '—'}</td>
-                          <td style={{ padding: '10px 12px', textAlign: 'right' }}>{fmtQtd(h.quantidade_recebida)}</td>
-                          <td style={{ padding: '10px 12px', textAlign: 'right', color: T.inkDim }}>{fmtMoeda(h.valor_total_linha)}</td>
-                          <td style={{ padding: '10px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.rustText }}>{fmtMoeda(h.preco_unitario)}</td>
-                        </tr>
-                      ))}
+                      {historico.map((h, i) => {
+                        const contato = contatosFornecedor[h.cod_fornecedor];
+                        return (
+                          <tr key={i} style={{ borderBottom: `1px solid ${T.lineSoft}`, background: i === 0 ? T.oliveSoft : 'transparent' }}>
+                            <td style={{ padding: '10px 12px', color: T.inkFaint, fontSize: 11 }}>{i === 0 ? '★ mais recente' : `${i + 1}ª mais recente`}</td>
+                            <td style={{ padding: '10px 12px', fontFamily: FONT_DISPLAY, color: T.inkDim, whiteSpace: 'nowrap' }}>{fmtData(h.data_recebimento)}</td>
+                            <td style={{ padding: '10px 12px', fontWeight: 600, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={h.fornecedor}>{h.fornecedor || '—'}</td>
+                            <td style={{ padding: '10px 12px', fontSize: 11 }}>
+                              {contato?.email ? <div style={{ color: T.blueText }}>{contato.email}</div> : null}
+                              {contato?.telefone ? <div style={{ color: T.inkFaint }}>{contato.telefone}</div> : null}
+                              {!contato?.email && !contato?.telefone && <span style={{ color: T.inkFaint }}>—</span>}
+                            </td>
+                            <td style={{ padding: '10px 12px', color: T.inkFaint }}>{h.numero_nf || '—'}</td>
+                            <td style={{ padding: '10px 12px', textAlign: 'right' }}>{fmtQtd(h.quantidade_recebida)}</td>
+                            <td style={{ padding: '10px 12px', textAlign: 'right', color: T.inkDim }}>{fmtMoeda(h.valor_total_linha)}</td>
+                            <td style={{ padding: '10px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.rustText }}>{fmtMoeda(h.preco_unitario)}</td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
-                <div style={{ padding: '10px 16px', borderTop: `1px solid ${T.line}`, fontSize: 11, color: T.inkFaint }}>
-                  Preço unitário = valor total da linha na NF ÷ quantidade recebida · fonte: Supply Chain (nfs_entrada)
+                <div style={{ padding: '10px 16px', borderTop: `1px solid ${T.line}`, fontSize: 11, color: T.inkFaint, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span>Preço unitário = valor total da linha na NF ÷ quantidade recebida · fonte: Supply Chain (nfs_entrada + cadastro de fornecedores)</span>
+                  <BotaoExportar small onClick={() => exportCSV(historico, `historico_${itemSelecionado.codigo}.csv`,
+                    ['data_recebimento','fornecedor','numero_nf','quantidade_recebida','valor_total_linha','preco_unitario'])} />
                 </div>
               </div>
             </>
@@ -6216,6 +6274,41 @@ function PrecoCompra() {
         </>
       )}
     </div>
+  );
+}
+
+function GraficoPrecoHistorico({ pontos, fmtMoeda, fmtData }) {
+  const validos = pontos.filter(p => p.preco_unitario != null);
+  if (validos.length < 2) return <div style={{ textAlign: 'center', padding: 20, color: T.inkFaint, fontSize: 12.5 }}>Sem dados suficientes pra gráfico.</div>;
+
+  const W = 900, H = 200, PAD_L = 80, PAD_R = 20, PAD_T = 20, PAD_B = 34;
+  const valores = validos.map(p => p.preco_unitario);
+  const min = Math.min(...valores), max = Math.max(...valores);
+  const span = max - min || 1;
+  const passo = (W - PAD_L - PAD_R) / (validos.length - 1);
+  const coordX = (i) => PAD_L + i * passo;
+  const coordY = (v) => PAD_T + (H - PAD_T - PAD_B) * (1 - (v - min) / span);
+  const linha = validos.map((p, i) => `${coordX(i)},${coordY(p.preco_unitario)}`).join(' ');
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 'auto', overflow: 'visible' }}>
+      {[0, 0.5, 1].map(f => (
+        <g key={f}>
+          <line x1={PAD_L} x2={W - PAD_R} y1={PAD_T + (H - PAD_T - PAD_B) * f} y2={PAD_T + (H - PAD_T - PAD_B) * f} stroke={T.lineSoft} strokeWidth={1} />
+          <text x={PAD_L - 8} y={PAD_T + (H - PAD_T - PAD_B) * f + 4} textAnchor="end" fontSize={9.5} fill={T.inkFaint}>{fmtMoeda(max - span * f)}</text>
+        </g>
+      ))}
+      <polyline points={linha} fill="none" stroke={T.terracotta} strokeWidth={2.5} />
+      {validos.map((p, i) => (
+        <circle key={i} cx={coordX(i)} cy={coordY(p.preco_unitario)} r={4} fill={T.panel} stroke={T.terracotta} strokeWidth={2}>
+          <title>{fmtData(p.data_recebimento)} · {p.fornecedor}: {fmtMoeda(p.preco_unitario)}</title>
+        </circle>
+      ))}
+      {validos.filter((_, i) => i === 0 || i === validos.length - 1 || i === Math.floor(validos.length / 2)).map((p) => {
+        const i = validos.indexOf(p);
+        return <text key={i} x={coordX(i)} y={H - PAD_B + 16} textAnchor="middle" fontSize={9.5} fill={T.inkFaint}>{fmtData(p.data_recebimento)}</text>;
+      })}
+    </svg>
   );
 }
 
