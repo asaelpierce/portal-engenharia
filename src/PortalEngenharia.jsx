@@ -25,6 +25,10 @@ const SUPABASE_SGQ_URL = 'https://mdsxiijlkruqnhbyxbhe.supabase.co';
 const SUPABASE_SGQ_KEY = 'sb_publishable_6vD-Jyf4pIJdOpvzXKDCOw_YUcX3TcG';
 const supabaseSGQ = createClient(SUPABASE_SGQ_URL, SUPABASE_SGQ_KEY);
 
+const SUPABASE_SUPPLY_URL = 'https://tocyzucfgwhvpfihakvj.supabase.co';
+const SUPABASE_SUPPLY_KEY = 'sb_publishable_BhQK0Wn95R_pZI1eNz6CdQ_PNdR5rVX';
+const supabaseSupply = createClient(SUPABASE_SUPPLY_URL, SUPABASE_SUPPLY_KEY);
+
 /* ============================================================================
    DESIGN TOKENS — identidade Kalenborn, nível diretoria
    Vermelho de marca (Kalenborn red) sobre grafite/branco, com camadas de
@@ -433,6 +437,7 @@ function PortalConteudo({ currentUser, session }) {
           {view === 'placas_kalocer' && <TabErrorBoundary tab="Placas Kalocer"><ConsumoPlacasKalocer /></TabErrorBoundary>}
           {view === 'analitico_mp' && <TabErrorBoundary tab="Analítico"><AnaliticoMP /></TabErrorBoundary>}
           {view === 'carteira_estoque' && <TabErrorBoundary tab="Carteira x Estoque"><CarteiraEstoque /></TabErrorBoundary>}
+          {view === 'preco_compra' && <TabErrorBoundary tab="Preço de Compra"><PrecoCompra /></TabErrorBoundary>}
           {view === 'almoxarifado' && <TabErrorBoundary tab="Almoxarifado"><Almoxarifado /></TabErrorBoundary>}
           {view === 'equipamentos' && <TabErrorBoundary tab="Equipamentos de Terceiros"><EquipamentosTerceiros /></TabErrorBoundary>}
           {view === 'pedidosvale' && <PedidosVale />}
@@ -480,6 +485,7 @@ function Sidebar({ view, setView, pendCount, papel, telasPermitidas }) {
     { id: 'placas_kalocer', label: 'Placas Kalocer',       icon: Layers },
     { id: 'analitico_mp', label: 'Analítico',              icon: BarChart2 },
     { id: 'carteira_estoque', label: 'Carteira x Estoque',  icon: Package },
+    { id: 'preco_compra',  label: 'Preço de Compra',        icon: DollarSign },
     { id: 'almoxarifado', label: 'Almoxarifado',           icon: Package },
     { id: 'equipamentos', label: 'Equip. Terceiros',       icon: Webhook },
     { id: 'pedidosvale',  label: 'Pedidos Vale',           icon: FileWarning },
@@ -5920,6 +5926,194 @@ function AnaliticoMP() {
 }
 
 
+function PrecoCompra() {
+  const [busca, setBusca] = useState('');
+  const [buscando, setBuscando] = useState(false);
+  const [resultados, setResultados] = useState([]); // lista de produtos que bateram na busca
+  const [itemSelecionado, setItemSelecionado] = useState(null); // { codigo, descricao }
+  const [historico, setHistorico] = useState([]); // últimas compras do item selecionado
+  const [loadingHistorico, setLoadingHistorico] = useState(false);
+  const [erro, setErro] = useState(null);
+
+  // Busca inteligente por similaridade de texto (pg_trgm) — funciona mesmo com
+  // descrições parciais/genéricas, sem precisar do código exato do item.
+  useEffect(() => {
+    if (!busca || busca.trim().length < 3) { setResultados([]); return; }
+    const t = setTimeout(async () => {
+      setBuscando(true);
+      setErro(null);
+      const termo = busca.trim();
+      const { data, error } = await supabaseSupply.rpc('buscar_itens_compra', { termo_busca: termo });
+      if (error) {
+        // fallback: busca simples por ILIKE caso a function ainda não exista
+        const { data: dataFallback, error: errorFallback } = await supabaseSupply
+          .from('nfs_entrada')
+          .select('codigo_produto,descricao_produto')
+          .ilike('descricao_produto', `%${termo}%`)
+          .limit(30);
+        if (errorFallback) { setErro(errorFallback.message); setBuscando(false); return; }
+        const vistos = new Set();
+        const unicos = (dataFallback || []).filter(r => {
+          if (vistos.has(r.codigo_produto)) return false;
+          vistos.add(r.codigo_produto);
+          return true;
+        });
+        setResultados(unicos);
+        setBuscando(false);
+        return;
+      }
+      setResultados(data || []);
+      setBuscando(false);
+    }, 350);
+    return () => clearTimeout(t);
+  }, [busca]);
+
+  const selecionarItem = async (codigo, descricao) => {
+    setItemSelecionado({ codigo, descricao });
+    setLoadingHistorico(true);
+    setErro(null);
+    const { data, error } = await supabaseSupply
+      .from('v_ultimas_compras')
+      .select('descricao_produto,fornecedor,data_recebimento,numero_nf,quantidade_recebida,valor_total_linha,preco_unitario,ordem_recencia')
+      .eq('codigo_produto', codigo)
+      .lte('ordem_recencia', 3)
+      .order('ordem_recencia', { ascending: true });
+    if (error) { setErro(error.message); setLoadingHistorico(false); return; }
+    setHistorico(data || []);
+    setLoadingHistorico(false);
+  };
+
+  const fmtMoeda = (v) => v == null ? '—' : new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(v);
+  const fmtQtd = (v) => v == null ? '—' : new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 2 }).format(v);
+  const fmtData = (iso) => !iso ? '—' : new Date(iso).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: '2-digit' });
+
+  const variacaoPreco = useMemo(() => {
+    if (historico.length < 2) return null;
+    const maisRecente = historico[0]?.preco_unitario;
+    const maisAntiga = historico[historico.length - 1]?.preco_unitario;
+    if (maisRecente == null || maisAntiga == null || maisAntiga === 0) return null;
+    return ((maisRecente - maisAntiga) / maisAntiga) * 100;
+  }, [historico]);
+
+  return (
+    <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+
+      <div style={{ fontSize: 12.5, color: T.inkFaint, background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 8, padding: '10px 14px' }}>
+        Busca pelo histórico real de compras (Notas Fiscais de entrada) — fonte: Supply Chain. Digite qualquer termo da descrição
+        (não precisa ser exato) e veja as últimas 3 compras de cada item, com fornecedor, quantidade e preço unitário.
+      </div>
+
+      <Panel title="Buscar item" subtitle="Digite uma descrição genérica (ex: 'ventilador', 'chapa aço', 'rolamento') — a busca acha por similaridade">
+        <div style={{ position: 'relative', maxWidth: 520 }}>
+          <div style={{ position: 'relative' }}>
+            <Search size={14} style={{ position: 'absolute', left: 10, top: 11, color: T.inkFaint }} />
+            <input
+              value={busca}
+              onChange={e => { setBusca(e.target.value); setItemSelecionado(null); setHistorico([]); }}
+              placeholder="Ex: ventilador, chapa de aço, rolamento…"
+              style={{ ...selectStyleFat(520), paddingLeft: 32, fontSize: 13.5 }}
+            />
+            {buscando && <span style={{ position: 'absolute', right: 10, top: 10, fontSize: 11, color: T.inkFaint }}>buscando…</span>}
+          </div>
+          {resultados.length > 0 && !itemSelecionado && (
+            <div style={{ position: 'relative' }}>
+              <div style={{ position: 'absolute', top: 4, left: 0, right: 0, background: T.panel, border: `1px solid ${T.line}`, borderRadius: 8, boxShadow: SHADOW_LG, zIndex: 20, overflow: 'hidden', maxHeight: 320, overflowY: 'auto' }}>
+                {resultados.map(r => (
+                  <button key={r.codigo_produto} onClick={() => { setBusca(`${r.codigo_produto} — ${r.descricao_produto}`); selecionarItem(r.codigo_produto, r.descricao_produto); }}
+                    style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 14px', background: 'none', border: 'none', cursor: 'pointer', borderBottom: `1px solid ${T.lineSoft}`, fontSize: 12.5 }}
+                    onMouseEnter={e => e.currentTarget.style.background = T.panelAlt}
+                    onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                    <span style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText }}>{r.codigo_produto}</span>
+                    <span style={{ color: T.inkDim, marginLeft: 8 }}>{r.descricao_produto}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          {busca.trim().length >= 3 && !buscando && resultados.length === 0 && !itemSelecionado && (
+            <div style={{ fontSize: 12, color: T.inkFaint, marginTop: 8 }}>Nenhum item encontrado com esse termo.</div>
+          )}
+        </div>
+      </Panel>
+
+      {erro && (
+        <div style={{ background: T.rustSoft, color: T.rustText, borderRadius: 8, padding: '10px 14px', fontSize: 12.5, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <AlertTriangle size={14} /> {erro}
+        </div>
+      )}
+
+      {loadingHistorico && <div style={{ textAlign: 'center', padding: 30, color: T.inkFaint, fontSize: 13 }}>Carregando histórico…</div>}
+
+      {itemSelecionado && !loadingHistorico && (
+        <>
+          <div style={{ fontFamily: FONT_DISPLAY, fontSize: 18, fontWeight: 700, color: T.ink }}>
+            {itemSelecionado.codigo} — {itemSelecionado.descricao}
+          </div>
+
+          {historico.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: 30, color: T.inkFaint, fontSize: 13 }}>Nenhuma compra registrada pra esse item.</div>
+          ) : (
+            <>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(170px,1fr))', gap: 12 }}>
+                <Kpi label="Preço mais recente" value={fmtMoeda(historico[0]?.preco_unitario)} icon={DollarSign} tone="rust"
+                  sub={`${fmtData(historico[0]?.data_recebimento)} · ${historico[0]?.fornecedor || '—'}`} />
+                <Kpi label="Compras no histórico" value={historico.length} icon={Package} tone="blue"
+                  sub="mostrando as últimas 3" />
+                {variacaoPreco != null && (
+                  <Kpi label="Variação (mais antiga → mais recente)" value={`${variacaoPreco > 0 ? '+' : ''}${variacaoPreco.toFixed(1)}%`}
+                    icon={variacaoPreco > 0 ? ArrowUpRight : variacaoPreco < 0 ? ArrowDownRight : Minus}
+                    tone={variacaoPreco > 0 ? 'rust' : variacaoPreco < 0 ? 'olive' : undefined}
+                    sub="entre a compra mais antiga e a mais recente dessa lista" />
+                )}
+              </div>
+
+              <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+                    <thead>
+                      <tr style={{ background: T.panelAlt, borderBottom: `1px solid ${T.line}` }}>
+                        <th style={thFat(60)}>#</th>
+                        <th style={thFat()}>Data</th>
+                        <th style={thFat(0)}>Fornecedor</th>
+                        <th style={thFat(100)}>NF</th>
+                        <th style={{ ...thFat(90), textAlign: 'right' }}>Qtd</th>
+                        <th style={{ ...thFat(120), textAlign: 'right' }}>Vlr. total NF</th>
+                        <th style={{ ...thFat(120), textAlign: 'right' }}>Preço unitário</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {historico.map((h, i) => (
+                        <tr key={i} style={{ borderBottom: `1px solid ${T.lineSoft}`, background: i === 0 ? T.oliveSoft : 'transparent' }}>
+                          <td style={{ padding: '10px 12px', color: T.inkFaint }}>{i === 0 ? '★ mais recente' : `${i + 1}ª mais recente`}</td>
+                          <td style={{ padding: '10px 12px', fontFamily: FONT_DISPLAY, color: T.inkDim, whiteSpace: 'nowrap' }}>{fmtData(h.data_recebimento)}</td>
+                          <td style={{ padding: '10px 12px', fontWeight: 600, maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={h.fornecedor}>{h.fornecedor || '—'}</td>
+                          <td style={{ padding: '10px 12px', color: T.inkFaint }}>{h.numero_nf || '—'}</td>
+                          <td style={{ padding: '10px 12px', textAlign: 'right' }}>{fmtQtd(h.quantidade_recebida)}</td>
+                          <td style={{ padding: '10px 12px', textAlign: 'right', color: T.inkDim }}>{fmtMoeda(h.valor_total_linha)}</td>
+                          <td style={{ padding: '10px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.rustText }}>{fmtMoeda(h.preco_unitario)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div style={{ padding: '10px 16px', borderTop: `1px solid ${T.line}`, fontSize: 11, color: T.inkFaint }}>
+                  Preço unitário = valor total da linha na NF ÷ quantidade recebida · fonte: Supply Chain (nfs_entrada)
+                </div>
+              </div>
+            </>
+          )}
+        </>
+      )}
+
+      {!itemSelecionado && !buscando && busca.trim().length < 3 && (
+        <div style={{ textAlign: 'center', padding: '50px 20px', color: T.inkFaint, fontSize: 13 }}>
+          Digite pelo menos 3 letras pra buscar um item e ver o histórico de compras (últimas 3, com preço).
+        </div>
+      )}
+    </div>
+  );
+}
+
 function CarteiraEstoque() {
   const [linhas, setLinhas] = useState([]); // uma por MP, com demanda x saldo
   const [semComposicao, setSemComposicao] = useState([]); // produtos em carteira sem composição cadastrada
@@ -8034,6 +8228,7 @@ const TELAS_CATALOGO = [
   { id: 'placas_kalocer', label: 'Placas Kalocer' },
   { id: 'analitico_mp', label: 'Analítico' },
   { id: 'carteira_estoque', label: 'Carteira x Estoque' },
+  { id: 'preco_compra', label: 'Preço de Compra' },
   { id: 'almoxarifado', label: 'Almoxarifado' },
   { id: 'equipamentos', label: 'Equip. Terceiros' },
   { id: 'pedidosvale',  label: 'Pedidos Vale' },
