@@ -4960,6 +4960,7 @@ function AnaliticoMP() {
   const [sortCol, setSortCol] = useState('data_ref');
   const [sortDir, setSortDir] = useState('desc');
   const detalheRef = useRef(null);
+  const dadosRef = useRef(null); // aponta pro início do CONTEÚDO carregado (KPIs/gráfico/tabela), não pra caixa de busca
   const [projetoSelecionado, setProjetoSelecionado] = useState(null); // BR selecionado pro drill-down de projeto
   const projetoRef = useRef(null);
   const [buscaProjeto, setBuscaProjeto] = useState('');
@@ -5356,9 +5357,14 @@ function AnaliticoMP() {
   const selecionar = useCallback((codigo) => {
     setSugestoes([]);
     setCodigoAtual(codigo);
-    setTimeout(() => detalheRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100);
     carregarDetalhe(codigo);
   }, [carregarDetalhe]);
+
+  // Rola pro início do conteúdo carregado (KPIs/gráfico/tabela) assim que os dados chegarem —
+  // não pra caixa de busca, que fica bem mais acima do conteúdo de verdade.
+  useEffect(() => {
+    if (dados) setTimeout(() => dadosRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+  }, [dados]);
 
   // Se o período mudar com uma MP já selecionada, refaz a busca pro novo período automaticamente.
   useEffect(() => {
@@ -5797,7 +5803,7 @@ function AnaliticoMP() {
 
       {dados && !loadingDetalhe && (
         <>
-          <div style={{ fontFamily: FONT_DISPLAY, fontSize: 19, fontWeight: 700, color: T.ink }}>
+          <div ref={dadosRef} style={{ fontFamily: FONT_DISPLAY, fontSize: 19, fontWeight: 700, color: T.ink, scrollMarginTop: 20 }}>
             {dados.codigo} — {dados.descricao || 'Sem descrição sincronizada'}
           </div>
 
