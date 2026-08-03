@@ -240,6 +240,17 @@ function TelaCarregando({ texto = 'Carregando…' }) {
 function PortalConteudo({ currentUser, session }) {
   const [view, setView] = useState('dashboard');
 
+  // Keep-alive de abas: uma vez visitada, a aba fica montada (só escondida via CSS quando
+  // não é a ativa) — preserva filtros/estado local ao trocar de aba e voltar, sem precisar
+  // levantar o estado de cada tela individualmente.
+  const [visitedViews, setVisitedViews] = useState(() => new Set(['dashboard']));
+  useEffect(() => {
+    setVisitedViews(prev => prev.has(view) ? prev : new Set(prev).add(view));
+  }, [view]);
+  const renderTab = (id, node) => visitedViews.has(id) ? (
+    <div key={id} style={{ display: view === id ? 'block' : 'none', height: '100%' }}>{node}</div>
+  ) : null;
+
   // Redireciona papel 'comercial' para a primeira aba permitida
   useEffect(() => {
     if (currentUser?.papel === 'comercial' && view === 'dashboard') {
@@ -291,11 +302,21 @@ function PortalConteudo({ currentUser, session }) {
     // Propostas vindas do Sankhya (origem_dados === 'sankhya') são só histórico/informativo —
     // não passam pelo fluxo de aprovação do portal, só as enviadas manualmente (Word/PDF) passam.
     if (p.origem_dados === 'sankhya') return false;
+
+    // Membros do pool de aprovadores (Edson, Felipe, João Victor) veem qualquer proposta em
+    // estágio ativo (rascunho, revisão técnica ou aguardando aprovação) como pendência deles —
+    // isso vale independente do "papel" cadastrado no banco (hoje os três estão como
+    // 'engenheiro', mas têm poder de decisão do pool mesmo assim).
+    if (APROVADORES_POOL.includes(currentUser.nome) &&
+        ['rascunho', 'em_revisao_tecnica', 'aguardando_aprovacao'].includes(p.status)) {
+      return true;
+    }
+
     if (currentUser.papel === 'engenheiro') {
       return p.responsavel === currentUser.nome && (p.status === 'rascunho' || p.status === 'reprovada' || p.status === 'aprovada');
     }
     if (currentUser.papel === 'revisor_tecnico') return p.status === 'em_revisao_tecnica';
-    if (currentUser.papel === 'analista_aprovador') return p.status === 'aguardando_aprovacao' && APROVADORES_POOL.includes(currentUser.nome);
+    if (currentUser.papel === 'analista_aprovador') return p.status === 'aguardando_aprovacao';
     return false;
   }), [propostas, currentUser]);
 
@@ -421,31 +442,27 @@ function PortalConteudo({ currentUser, session }) {
         />
 
         <main style={{ flex: 1, overflow: 'auto', padding: '28px 32px' }}>
-          {view === 'dashboard' && <Dashboard stats={stats} propostas={propostasMes} todasPropostas={propostas} mesFiltro={mesFiltro} setMesFiltro={setMesFiltro} onNovaProposta={() => setModal('nova')} onNavigate={setView} />}
-          {view === 'propostas' && (
-            <PropostasTable propostas={propostas} titulo="Todas as propostas" onRowClick={p => { setSelected(p); setModal('detalhe'); }} />
-          )}
-          {view === 'pendencias' && (
-            <PropostasTable propostas={pendencias} titulo="Aguardando sua ação" empty="Nenhuma pendência — tudo em dia." onRowClick={p => { setSelected(p); setModal('detalhe'); }} />
-          )}
-          {view === 'comercial' && <TabErrorBoundary tab="Painel Comercial"><PainelComercial /></TabErrorBoundary>}
-          {view === 'metricas' && <Metricas propostas={propostas} />}
-          {view === 'ciclo_comercial' && <TabErrorBoundary tab="Ciclo Comercial"><CicloComercial /></TabErrorBoundary>}
-          {view === 'produtividade' && <Produtividade propostas={propostas} mesFiltro={mesFiltro} currentUser={currentUser} />}
-          {view === 'faturamento' && <Faturamento />}
-          {view === 'consumo_mp' && <TabErrorBoundary tab="Consumo de MP"><ConsumoMP /></TabErrorBoundary>}
-          {view === 'placas_kalocer' && <TabErrorBoundary tab="Placas Kalocer"><ConsumoPlacasKalocer /></TabErrorBoundary>}
-          {view === 'analitico_mp' && <TabErrorBoundary tab="Analítico"><AnaliticoMP /></TabErrorBoundary>}
-          {view === 'carteira_estoque' && <TabErrorBoundary tab="Carteira x Estoque"><CarteiraEstoque /></TabErrorBoundary>}
-          {view === 'preco_compra' && <TabErrorBoundary tab="Preço de Compra"><PrecoCompra /></TabErrorBoundary>}
-          {view === 'almoxarifado' && <TabErrorBoundary tab="Almoxarifado"><Almoxarifado /></TabErrorBoundary>}
-          {view === 'equipamentos' && <TabErrorBoundary tab="Equipamentos de Terceiros"><EquipamentosTerceiros /></TabErrorBoundary>}
-          {view === 'pedidosvale' && <PedidosVale />}
-          {view === 'aberturacotacao' && <TabErrorBoundary tab="Abertura de Cotação"><AberturaCotacao currentUser={currentUser} /></TabErrorBoundary>}
-          {view === 'ranking' && <TabErrorBoundary tab="Ranking"><RankingPontuacao /></TabErrorBoundary>}
-          {view === 'auditoria' && <TabErrorBoundary tab="Auditoria"><Auditoria /></TabErrorBoundary>}
-          {view === 'integracao' && <Integracao />}
-          {view === 'admin' && <Admin currentUser={currentUser} />}
+          {renderTab('dashboard', <Dashboard stats={stats} propostas={propostasMes} todasPropostas={propostas} mesFiltro={mesFiltro} setMesFiltro={setMesFiltro} onNovaProposta={() => setModal('nova')} onNavigate={setView} />)}
+          {renderTab('propostas', <PropostasTable propostas={propostas} titulo="Todas as propostas" onRowClick={p => { setSelected(p); setModal('detalhe'); }} />)}
+          {renderTab('pendencias', <PropostasTable propostas={pendencias} titulo="Aguardando sua ação" empty="Nenhuma pendência — tudo em dia." onRowClick={p => { setSelected(p); setModal('detalhe'); }} />)}
+          {renderTab('comercial', <TabErrorBoundary tab="Painel Comercial"><PainelComercial /></TabErrorBoundary>)}
+          {renderTab('metricas', <Metricas propostas={propostas} />)}
+          {renderTab('ciclo_comercial', <TabErrorBoundary tab="Ciclo Comercial"><CicloComercial /></TabErrorBoundary>)}
+          {renderTab('produtividade', <Produtividade propostas={propostas} mesFiltro={mesFiltro} currentUser={currentUser} />)}
+          {renderTab('faturamento', <Faturamento />)}
+          {renderTab('consumo_mp', <TabErrorBoundary tab="Consumo de MP"><ConsumoMP /></TabErrorBoundary>)}
+          {renderTab('placas_kalocer', <TabErrorBoundary tab="Placas Kalocer"><ConsumoPlacasKalocer /></TabErrorBoundary>)}
+          {renderTab('analitico_mp', <TabErrorBoundary tab="Analítico"><AnaliticoMP /></TabErrorBoundary>)}
+          {renderTab('carteira_estoque', <TabErrorBoundary tab="Carteira x Estoque"><CarteiraEstoque /></TabErrorBoundary>)}
+          {renderTab('preco_compra', <TabErrorBoundary tab="Preço de Compra"><PrecoCompra /></TabErrorBoundary>)}
+          {renderTab('almoxarifado', <TabErrorBoundary tab="Almoxarifado"><Almoxarifado /></TabErrorBoundary>)}
+          {renderTab('equipamentos', <TabErrorBoundary tab="Equipamentos de Terceiros"><EquipamentosTerceiros /></TabErrorBoundary>)}
+          {renderTab('pedidosvale', <PedidosVale />)}
+          {renderTab('aberturacotacao', <TabErrorBoundary tab="Abertura de Cotação"><AberturaCotacao currentUser={currentUser} /></TabErrorBoundary>)}
+          {renderTab('ranking', <TabErrorBoundary tab="Ranking"><RankingPontuacao /></TabErrorBoundary>)}
+          {renderTab('auditoria', <TabErrorBoundary tab="Auditoria"><Auditoria /></TabErrorBoundary>)}
+          {renderTab('integracao', <Integracao />)}
+          {renderTab('admin', <Admin currentUser={currentUser} />)}
         </main>
       </div>
 
@@ -4951,6 +4968,8 @@ function AnaliticoMP() {
   const [loadingMargem, setLoadingMargem] = useState(true);
   const [situacaoSelecionada, setSituacaoSelecionada] = useState(null); // 'C' | 'P' — drill-down Finalizado x Em andamento
   const [produtoMargemSelecionado, setProdutoMargemSelecionado] = useState(null); // código do produto — drill-down de margem por projeto
+  const [sortMargemCol, setSortMargemCol] = useState('faturado');
+  const [sortMargemDir, setSortMargemDir] = useState('desc');
 
   const rangeDatas = useCallback(() => {
     const ini = `${filtros.anoIni}-${String(filtros.mesIni).padStart(2, '0')}-01`;
@@ -5000,7 +5019,7 @@ function AnaliticoMP() {
       let pagina = 0;
       while (true) {
         const { data, error } = await supabase.from('nota_venda_itens')
-          .select('cod_produto,produto_descricao,valor_bruto,br,quantidade')
+          .select('cod_produto,produto_descricao,valor_bruto,br,quantidade,cliente_nome')
           .in('codtipoper', TOPS_FATURAMENTO_VALIDOS)
           .gte('data_neg', ini).lte('data_neg', fim)
           .range(pagina * TAMANHO_LOTE, (pagina + 1) * TAMANHO_LOTE - 1);
@@ -5144,6 +5163,23 @@ function AnaliticoMP() {
       .sort((a, b) => b.faturado - a.faturado);
   }, [overview.prodMapCompleto, faturamentoPorProduto]);
 
+  const margemPorProdutoOrdenado = useMemo(() => {
+    return [...margemPorProduto].sort((a, b) => {
+      let va = a[sortMargemCol], vb = b[sortMargemCol];
+      if (sortMargemCol === 'margemPct') { va = va ?? -Infinity; vb = vb ?? -Infinity; }
+      if (typeof va === 'string') va = va.toLowerCase();
+      if (typeof vb === 'string') vb = vb.toLowerCase();
+      if (va < vb) return sortMargemDir === 'asc' ? -1 : 1;
+      if (va > vb) return sortMargemDir === 'asc' ? 1 : -1;
+      return 0;
+    });
+  }, [margemPorProduto, sortMargemCol, sortMargemDir]);
+
+  const handleSortMargem = (col) => {
+    if (sortMargemCol === col) setSortMargemDir(d => d === 'asc' ? 'desc' : 'asc');
+    else { setSortMargemCol(col); setSortMargemDir('desc'); }
+  };
+
   // Drill-down do gráfico mensal: TODAS as matérias-primas e projetos daquele mês (não só top 8).
   const mesDrill = useMemo(() => {
     if (!mesSelecionado) return null;
@@ -5199,24 +5235,38 @@ function AnaliticoMP() {
     const faturadoPorBR = {};
     notaVendaItensRaw.filter(it => it.cod_produto === produtoMargemSelecionado).forEach(it => {
       const br = it.br || '<SEM PROJETO>';
-      if (!faturadoPorBR[br]) faturadoPorBR[br] = 0;
-      faturadoPorBR[br] += Number(it.valor_bruto) || 0;
+      if (!faturadoPorBR[br]) faturadoPorBR[br] = { valor: 0, cliente: it.cliente_nome };
+      faturadoPorBR[br].valor += Number(it.valor_bruto) || 0;
+      if (!faturadoPorBR[br].cliente && it.cliente_nome) faturadoPorBR[br].cliente = it.cliente_nome;
     });
     const custoPorBR = {};
-    linhasGeral.filter(l => l.cod_prod_acabado === produtoMargemSelecionado).forEach(l => {
+    const itensDoProduto = linhasGeral.filter(l => l.cod_prod_acabado === produtoMargemSelecionado);
+    itensDoProduto.forEach(l => {
       const br = l.br || '<SEM PROJETO>';
       if (!custoPorBR[br]) custoPorBR[br] = 0;
       custoPorBR[br] += Number(l.custo_total) || 0;
     });
     const brs = new Set([...Object.keys(faturadoPorBR), ...Object.keys(custoPorBR)]);
     const linhas = [...brs].map(br => {
-      const faturado = faturadoPorBR[br] || 0;
+      const faturado = faturadoPorBR[br]?.valor || 0;
       const custo = custoPorBR[br] || 0;
       const margem = faturado - custo;
-      return { br, faturado, custo, margem, margemPct: faturado > 0 ? (margem / faturado) * 100 : null };
+      return { br, cliente: faturadoPorBR[br]?.cliente || null, faturado, custo, margem, margemPct: faturado > 0 ? (margem / faturado) * 100 : null };
     }).sort((a, b) => b.faturado - a.faturado);
+
+    // Quebra do custo total por matéria-prima (todas as MPs que compõem esse produto, no período todo).
+    const custoPorMP = {};
+    itensDoProduto.forEach(l => {
+      const codigo = l.cod_materia_prima;
+      if (!codigo) return;
+      if (!custoPorMP[codigo]) custoPorMP[codigo] = { codigo, descricao: l.desc_materia_prima, custo: 0, qtd: 0 };
+      custoPorMP[codigo].custo += Number(l.custo_total) || 0;
+      custoPorMP[codigo].qtd += Number(l.qtd_mp) || 0;
+    });
+    const materiaisPrima = Object.values(custoPorMP).sort((a, b) => b.custo - a.custo);
+
     const info = margemPorProduto.find(m => m.codigo === produtoMargemSelecionado);
-    return { codigo: produtoMargemSelecionado, descricao: info?.descricao || produtoMargemSelecionado, linhas };
+    return { codigo: produtoMargemSelecionado, descricao: info?.descricao || produtoMargemSelecionado, linhas, materiaisPrima };
   }, [produtoMargemSelecionado, notaVendaItensRaw, linhasGeral, margemPorProduto]);
 
   // Sugestões de código conforme digita (busca em ambas as fontes)
@@ -5366,6 +5416,15 @@ function AnaliticoMP() {
       <span style={{ fontSize: 11.5, fontWeight: 700, color: T.rustText, fontFamily: FONT_DISPLAY, width: 60, textAlign: 'right', flexShrink: 0 }}>{fmtRCompacta(valor)}</span>
     </button>
   );
+
+  const SortThMargem = ({ label, col, right }) => {
+    const ativo = sortMargemCol === col;
+    return (
+      <th onClick={() => handleSortMargem(col)} style={{ ...thFat(0, right ? 'right' : 'left'), cursor: 'pointer', whiteSpace: 'nowrap', userSelect: 'none' }}>
+        <span style={{ color: ativo ? T.terracotta : T.inkFaint }}>{label}{ativo ? (sortMargemDir === 'asc' ? ' ↑' : ' ↓') : ''}</span>
+      </th>
+    );
+  };
 
   // Gráfico de barras verticais simples (custo consumido por mês) — SVG puro, sem lib externa.
   const BarChartMensal = ({ dadosMes, mesAtivo, onClickMes }) => {
@@ -5834,7 +5893,7 @@ function AnaliticoMP() {
       )}
 
       {/* Margem: faturado x custo de matéria-prima, por produto */}
-      <Panel title="Margem sobre custo de matéria-prima" subtitle="Cruza o valor faturado (Nota de Venda) com o custo de MP consumido, por produto acabado — clique num produto pra ver a quebra por projeto">
+      <Panel title="Margem sobre custo de matéria-prima" subtitle="Cruza o valor faturado (Nota de Venda) com o custo de MP consumido, por produto acabado — clique no cabeçalho pra ordenar, clique no produto pra ver a quebra por projeto">
         {(loadingGeral || loadingMargem) ? (
           <div style={{ textAlign: 'center', padding: 30, color: T.inkFaint, fontSize: 12.5 }}>Carregando…</div>
         ) : margemPorProduto.length === 0 ? (
@@ -5846,15 +5905,15 @@ function AnaliticoMP() {
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
               <thead>
                 <tr style={{ background: T.panelAlt, borderBottom: `1px solid ${T.line}` }}>
-                  <th style={thFat(0)}>Produto</th>
-                  <th style={{ ...thFat(110), textAlign: 'right' }}>Faturado</th>
-                  <th style={{ ...thFat(110), textAlign: 'right' }}>Custo de MP</th>
-                  <th style={{ ...thFat(110), textAlign: 'right' }}>Margem (R$)</th>
-                  <th style={{ ...thFat(90), textAlign: 'right' }}>Margem %</th>
+                  <SortThMargem label="Produto" col="descricao" col2="codigo" />
+                  <SortThMargem label="Faturado" col="faturado" right />
+                  <SortThMargem label="Custo de MP" col="custo" right />
+                  <SortThMargem label="Margem (R$)" col="margem" right />
+                  <SortThMargem label="Margem %" col="margemPct" right />
                 </tr>
               </thead>
               <tbody>
-                {margemPorProduto.slice(0, 25).map(m => (
+                {margemPorProdutoOrdenado.slice(0, 25).map(m => (
                   <tr key={m.codigo} style={{ borderBottom: `1px solid ${T.lineSoft}`, cursor: 'pointer', background: produtoMargemSelecionado === m.codigo ? T.panelAlt : 'transparent' }}
                     onClick={() => setProdutoMargemSelecionado(prev => prev === m.codigo ? null : m.codigo)}
                     onMouseEnter={e => e.currentTarget.style.background = T.panelAlt}
@@ -5877,7 +5936,7 @@ function AnaliticoMP() {
         <div style={{ padding: '10px 0 0', fontSize: 11, color: T.inkFaint, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <span>{margemPorProduto.length} produto{margemPorProduto.length !== 1 ? 's' : ''} com faturamento e consumo de MP no período · Margem = Faturado − Custo de MP (não considera outros custos de fabricação)</span>
           {margemPorProduto.length > 0 && (
-            <BotaoExportar small onClick={() => exportCSV(margemPorProduto, 'margem_por_produto.csv',
+            <BotaoExportar small onClick={() => exportCSV(margemPorProdutoOrdenado, 'margem_por_produto.csv',
               ['codigo','descricao','faturado','custo','margem','margemPct'])} />
           )}
         </div>
@@ -5885,41 +5944,56 @@ function AnaliticoMP() {
 
       {/* Quebra de margem por projeto — abre ao clicar num produto na tabela acima */}
       {margemPorProjetoDoProduto && (
-        <Panel title={`${margemPorProjetoDoProduto.codigo} — margem por projeto`} subtitle={margemPorProjetoDoProduto.descricao}
-          right={<button onClick={() => setProdutoMargemSelecionado(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.inkFaint }}><X size={16} /></button>}>
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-              <thead>
-                <tr style={{ background: T.panelAlt, borderBottom: `1px solid ${T.line}` }}>
-                  <th style={thFat(0)}>Projeto (BR)</th>
-                  <th style={{ ...thFat(110), textAlign: 'right' }}>Faturado</th>
-                  <th style={{ ...thFat(110), textAlign: 'right' }}>Custo de MP</th>
-                  <th style={{ ...thFat(110), textAlign: 'right' }}>Margem (R$)</th>
-                  <th style={{ ...thFat(90), textAlign: 'right' }}>Margem %</th>
-                </tr>
-              </thead>
-              <tbody>
-                {margemPorProjetoDoProduto.linhas.map(l => (
-                  <tr key={l.br} style={{ borderBottom: `1px solid ${T.lineSoft}`, cursor: l.br !== '<SEM PROJETO>' ? 'pointer' : 'default' }}
-                    onClick={() => l.br !== '<SEM PROJETO>' && selecionarProjeto(l.br)}
-                    onMouseEnter={e => e.currentTarget.style.background = T.panelAlt}
-                    onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
-                    <td style={{ padding: '9px 12px', fontFamily: FONT_DISPLAY, fontWeight: 700, color: l.br !== '<SEM PROJETO>' ? T.blueText : T.inkFaint }}>{l.br}</td>
-                    <td style={{ padding: '9px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 700 }}>{fmtR(l.faturado)}</td>
-                    <td style={{ padding: '9px 12px', textAlign: 'right', color: T.rustText }}>{fmtR(l.custo)}</td>
-                    <td style={{ padding: '9px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 700, color: l.margem >= 0 ? T.oliveText : T.rustText }}>{fmtR(l.margem)}</td>
-                    <td style={{ padding: '9px 12px', textAlign: 'right', fontWeight: 700, color: l.margemPct == null ? T.inkFaint : l.margemPct >= 0 ? T.oliveText : T.rustText }}>
-                      {l.margemPct == null ? '—' : `${l.margemPct.toFixed(1)}%`}
-                    </td>
+        <div className="grid-2col">
+          <Panel title={`${margemPorProjetoDoProduto.codigo} — margem por projeto/cliente`} subtitle={margemPorProjetoDoProduto.descricao}
+            right={<button onClick={() => setProdutoMargemSelecionado(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.inkFaint }}><X size={16} /></button>}>
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                <thead>
+                  <tr style={{ background: T.panelAlt, borderBottom: `1px solid ${T.line}` }}>
+                    <th style={thFat(0)}>Projeto / Cliente</th>
+                    <th style={{ ...thFat(100), textAlign: 'right' }}>Faturado</th>
+                    <th style={{ ...thFat(100), textAlign: 'right' }}>Custo MP</th>
+                    <th style={{ ...thFat(100), textAlign: 'right' }}>Margem</th>
+                    <th style={{ ...thFat(70), textAlign: 'right' }}>%</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <div style={{ fontSize: 11, color: T.inkFaint, marginTop: 10 }}>
-            "&lt;SEM PROJETO&gt;" = faturado ou produzido sem nota de venda/projeto vinculado no momento do apontamento.
-          </div>
-        </Panel>
+                </thead>
+                <tbody>
+                  {margemPorProjetoDoProduto.linhas.map(l => (
+                    <tr key={l.br} style={{ borderBottom: `1px solid ${T.lineSoft}`, cursor: l.br !== '<SEM PROJETO>' ? 'pointer' : 'default' }}
+                      onClick={() => l.br !== '<SEM PROJETO>' && selecionarProjeto(l.br)}
+                      onMouseEnter={e => e.currentTarget.style.background = T.panelAlt}
+                      onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                      <td style={{ padding: '9px 12px' }}>
+                        <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, color: l.br !== '<SEM PROJETO>' ? T.blueText : T.inkFaint }}>{l.br}</div>
+                        {l.cliente && <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 2 }}>{l.cliente}</div>}
+                      </td>
+                      <td style={{ padding: '9px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 700 }}>{fmtR(l.faturado)}</td>
+                      <td style={{ padding: '9px 12px', textAlign: 'right', color: T.rustText }}>{fmtR(l.custo)}</td>
+                      <td style={{ padding: '9px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 700, color: l.margem >= 0 ? T.oliveText : T.rustText }}>{fmtR(l.margem)}</td>
+                      <td style={{ padding: '9px 12px', textAlign: 'right', fontWeight: 700, color: l.margemPct == null ? T.inkFaint : l.margemPct >= 0 ? T.oliveText : T.rustText }}>
+                        {l.margemPct == null ? '—' : `${l.margemPct.toFixed(1)}%`}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div style={{ fontSize: 11, color: T.inkFaint, marginTop: 10 }}>
+              "&lt;SEM PROJETO&gt;" = faturado ou produzido sem nota de venda/projeto vinculado no momento do apontamento.
+            </div>
+          </Panel>
+
+          <Panel title="Matérias-primas desse produto" subtitle="Quanto cada matéria-prima pesa no custo total, no período">
+            {margemPorProjetoDoProduto.materiaisPrima.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: 20, color: T.inkFaint, fontSize: 12.5 }}>Sem dados de consumo de MP nesse período.</div>
+            ) : margemPorProjetoDoProduto.materiaisPrima.map(mp => (
+              <RankingBar key={mp.codigo} label={mp.codigo} sub={mp.descricao} valor={mp.custo}
+                max={Math.max(...margemPorProjetoDoProduto.materiaisPrima.map(m => m.custo), 1)}
+                onClick={() => { setBusca(`${mp.codigo} — ${mp.descricao || ''}`); selecionar(mp.codigo); }} />
+            ))}
+          </Panel>
+        </div>
       )}
     </div>
   );
@@ -9112,11 +9186,17 @@ function ModalDetalhe({ proposta, usuario, onClose, onAction }) {
 
   const isRascunho = proposta.status === 'rascunho' || proposta.status === 'reprovada';
   const sankhyaPendente = proposta.origem_dados === 'sankhya' && !proposta.validado_pelo_engenheiro;
+  const souAprovador = APROVADORES_POOL.includes(usuario.nome);
+  const statusAtivo = ['rascunho', 'em_revisao_tecnica', 'aguardando_aprovacao'].includes(proposta.status);
 
-  const canSendToReview = isRascunho && usuario.papel === 'engenheiro' && !sankhyaPendente;
+  const canSendToReview = isRascunho && usuario.papel === 'engenheiro' && !sankhyaPendente && !souAprovador;
   const canValidateSankhya = sankhyaPendente && usuario.papel === 'engenheiro';
   const canReview = proposta.status === 'em_revisao_tecnica' && usuario.papel === 'revisor_tecnico';
-  const canApprove = proposta.status === 'aguardando_aprovacao' && usuario.papel === 'analista_aprovador' && APROVADORES_POOL.includes(usuario.nome);
+  // Membros do pool de aprovadores (Edson, Felipe, João Victor) têm poder de aprovar ou reprovar
+  // direto, em qualquer estágio ativo — não precisam esperar a proposta passar por revisão técnica.
+  // Isso é checado só pelo nome (pool), não pelo "papel" cadastrado, porque hoje os três estão
+  // cadastrados como papel='engenheiro' no banco (também criam propostas normalmente).
+  const canApprove = souAprovador && statusAtivo;
   const canFinish = proposta.status === 'aprovada' && usuario.papel === 'engenheiro';
 
   const meta = STATUS_META[proposta.status];
