@@ -5935,6 +5935,10 @@ function PrecoCompra() {
   const [loadingHistorico, setLoadingHistorico] = useState(false);
   const [erro, setErro] = useState(null);
 
+  // Análise geral: maiores gastos, mais recorrentes, maiores variações de preço.
+  const [analise, setAnalise] = useState([]);
+  const [loadingAnalise, setLoadingAnalise] = useState(true);
+
   // Busca inteligente por similaridade de texto (pg_trgm) — funciona mesmo com
   // descrições parciais/genéricas, sem precisar do código exato do item.
   useEffect(() => {
@@ -5967,6 +5971,31 @@ function PrecoCompra() {
     }, 350);
     return () => clearTimeout(t);
   }, [busca]);
+
+  // Análise geral: carrega o agregado de TODOS os itens já comprados, uma vez —
+  // usado pros rankings de maior gasto, mais recorrentes e maior variação de preço.
+  useEffect(() => {
+    const carregarAnalise = async () => {
+      setLoadingAnalise(true);
+      const { data, error } = await supabaseSupply
+        .from('v_analise_compras')
+        .select('codigo_produto,descricao_produto,total_compras,valor_total_gasto,quantidade_total,data_ultima_compra,preco_recente,fornecedor_recente,preco_anterior,variacao_pct');
+      if (!error) setAnalise(data || []);
+      setLoadingAnalise(false);
+    };
+    carregarAnalise();
+  }, []);
+
+  const rankings = useMemo(() => {
+    const validos = analise.filter(a => a.valor_total_gasto != null);
+    const comVariacao = analise.filter(a => a.variacao_pct != null);
+    return {
+      maisGastos: [...validos].sort((a, b) => b.valor_total_gasto - a.valor_total_gasto).slice(0, 10),
+      maisRecorrentes: [...validos].sort((a, b) => b.total_compras - a.total_compras).slice(0, 10),
+      maioresAltas: [...comVariacao].filter(a => a.variacao_pct > 0).sort((a, b) => b.variacao_pct - a.variacao_pct).slice(0, 8),
+      maioresQuedas: [...comVariacao].filter(a => a.variacao_pct < 0).sort((a, b) => a.variacao_pct - b.variacao_pct).slice(0, 8),
+    };
+  }, [analise]);
 
   const selecionarItem = async (codigo, descricao) => {
     setItemSelecionado({ codigo, descricao });
@@ -6106,11 +6135,108 @@ function PrecoCompra() {
       )}
 
       {!itemSelecionado && !buscando && busca.trim().length < 3 && (
-        <div style={{ textAlign: 'center', padding: '50px 20px', color: T.inkFaint, fontSize: 13 }}>
-          Digite pelo menos 3 letras pra buscar um item e ver o histórico de compras (últimas 3, com preço).
-        </div>
+        <>
+          {loadingAnalise ? (
+            <div style={{ textAlign: 'center', padding: 40, color: T.inkFaint, fontSize: 13 }}>Carregando análise de compras…</div>
+          ) : (
+            <>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(170px,1fr))', gap: 12 }}>
+                <Kpi label="Itens com histórico" value={analise.length} icon={Package} tone="blue"
+                  sub="códigos distintos já comprados" />
+                <Kpi label="Total gasto (todo o histórico)" value={fmtMoeda(analise.reduce((s, a) => s + (a.valor_total_gasto || 0), 0))} icon={DollarSign} tone="rust" />
+                <Kpi label="Itens com alta de preço" value={rankings.maioresAltas.length ? analise.filter(a => a.variacao_pct > 0).length : 0} icon={ArrowUpRight} tone="amber"
+                  sub="entre a última e a penúltima compra" />
+                <Kpi label="Itens com queda de preço" value={analise.filter(a => a.variacao_pct < 0).length} icon={ArrowDownRight} tone="olive"
+                  sub="entre a última e a penúltima compra" />
+              </div>
+
+              <div className="grid-2col">
+                <Panel title="Maior gasto acumulado" subtitle="Itens em que mais investimos, no histórico todo — clique pra ver o detalhe">
+                  {rankings.maisGastos.length === 0 ? (
+                    <div style={{ textAlign: 'center', padding: 20, color: T.inkFaint, fontSize: 12.5 }}>Sem dados.</div>
+                  ) : rankings.maisGastos.map(a => (
+                    <RankingBarPreco key={a.codigo_produto} label={String(a.codigo_produto)} sub={a.descricao_produto} valor={a.valor_total_gasto}
+                      max={rankings.maisGastos[0]?.valor_total_gasto || 1} fmt={fmtMoeda}
+                      onClick={() => { setBusca(`${a.codigo_produto} — ${a.descricao_produto}`); selecionarItem(a.codigo_produto, a.descricao_produto); }} />
+                  ))}
+                </Panel>
+
+                <Panel title="Itens mais recorrentes" subtitle="Comprados com mais frequência — clique pra ver o detalhe">
+                  {rankings.maisRecorrentes.length === 0 ? (
+                    <div style={{ textAlign: 'center', padding: 20, color: T.inkFaint, fontSize: 12.5 }}>Sem dados.</div>
+                  ) : rankings.maisRecorrentes.map(a => (
+                    <RankingBarPreco key={a.codigo_produto} label={String(a.codigo_produto)} sub={a.descricao_produto} valor={a.total_compras}
+                      max={rankings.maisRecorrentes[0]?.total_compras || 1} fmt={v => `${v}x`}
+                      onClick={() => { setBusca(`${a.codigo_produto} — ${a.descricao_produto}`); selecionarItem(a.codigo_produto, a.descricao_produto); }} />
+                  ))}
+                </Panel>
+              </div>
+
+              <div className="grid-2col">
+                <Panel title="Maiores altas de preço" subtitle="Itens que mais subiram de preço na última compra vs a anterior">
+                  {rankings.maioresAltas.length === 0 ? (
+                    <div style={{ textAlign: 'center', padding: 20, color: T.inkFaint, fontSize: 12.5 }}>Nenhuma alta registrada.</div>
+                  ) : rankings.maioresAltas.map(a => (
+                    <div key={a.codigo_produto} onClick={() => { setBusca(`${a.codigo_produto} — ${a.descricao_produto}`); selecionarItem(a.codigo_produto, a.descricao_produto); }}
+                      style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: `1px solid ${T.lineSoft}`, cursor: 'pointer' }}
+                      onMouseEnter={e => e.currentTarget.style.background = T.panelAlt}
+                      onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        <div style={{ fontSize: 12, fontWeight: 600, color: T.ink, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={a.descricao_produto}>
+                          <span style={{ color: T.blueText, fontFamily: FONT_DISPLAY }}>{a.codigo_produto}</span> — {a.descricao_produto}
+                        </div>
+                        <div style={{ fontSize: 10.5, color: T.inkFaint }}>{fmtMoeda(a.preco_anterior)} → {fmtMoeda(a.preco_recente)}</div>
+                      </div>
+                      <span style={{ fontSize: 13, fontWeight: 700, color: T.rustText, fontFamily: FONT_DISPLAY, flexShrink: 0, marginLeft: 10 }}>+{a.variacao_pct.toFixed(1)}%</span>
+                    </div>
+                  ))}
+                </Panel>
+
+                <Panel title="Maiores quedas de preço" subtitle="Itens que mais baixaram de preço na última compra vs a anterior">
+                  {rankings.maioresQuedas.length === 0 ? (
+                    <div style={{ textAlign: 'center', padding: 20, color: T.inkFaint, fontSize: 12.5 }}>Nenhuma queda registrada.</div>
+                  ) : rankings.maioresQuedas.map(a => (
+                    <div key={a.codigo_produto} onClick={() => { setBusca(`${a.codigo_produto} — ${a.descricao_produto}`); selecionarItem(a.codigo_produto, a.descricao_produto); }}
+                      style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: `1px solid ${T.lineSoft}`, cursor: 'pointer' }}
+                      onMouseEnter={e => e.currentTarget.style.background = T.panelAlt}
+                      onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        <div style={{ fontSize: 12, fontWeight: 600, color: T.ink, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={a.descricao_produto}>
+                          <span style={{ color: T.blueText, fontFamily: FONT_DISPLAY }}>{a.codigo_produto}</span> — {a.descricao_produto}
+                        </div>
+                        <div style={{ fontSize: 10.5, color: T.inkFaint }}>{fmtMoeda(a.preco_anterior)} → {fmtMoeda(a.preco_recente)}</div>
+                      </div>
+                      <span style={{ fontSize: 13, fontWeight: 700, color: T.oliveText, fontFamily: FONT_DISPLAY, flexShrink: 0, marginLeft: 10 }}>{a.variacao_pct.toFixed(1)}%</span>
+                    </div>
+                  ))}
+                </Panel>
+              </div>
+            </>
+          )}
+        </>
       )}
     </div>
+  );
+}
+
+function RankingBarPreco({ label, sub, valor, max, fmt, onClick }) {
+  return (
+    <button onClick={onClick} style={{
+      display: 'flex', alignItems: 'center', gap: 10, width: '100%', background: 'none', border: 'none',
+      cursor: 'pointer', padding: '6px 0', textAlign: 'left',
+    }}
+      onMouseEnter={e => e.currentTarget.style.opacity = '0.75'}
+      onMouseLeave={e => e.currentTarget.style.opacity = '1'}
+    >
+      <div style={{ width: 140, flexShrink: 0, overflow: 'hidden' }}>
+        <div style={{ fontSize: 12, fontWeight: 600, color: T.ink, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={label}>{label}</div>
+        {sub && <div style={{ fontSize: 10, color: T.inkFaint, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={sub}>{sub}</div>}
+      </div>
+      <div style={{ flex: 1, background: T.lineSoft, height: 7, borderRadius: 4, overflow: 'hidden' }}>
+        <div style={{ width: `${Math.max((valor / max) * 100, 2)}%`, height: '100%', background: T.terracotta, borderRadius: 4 }} />
+      </div>
+      <span style={{ fontSize: 11.5, fontWeight: 700, color: T.rustText, fontFamily: FONT_DISPLAY, width: 70, textAlign: 'right', flexShrink: 0 }}>{fmt(valor)}</span>
+    </button>
   );
 }
 
