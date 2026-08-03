@@ -4414,8 +4414,6 @@ function Faturamento() {
             </Panel>
           </div>
 
-          <ComparativoItens moeda={moeda} converter={converter} fmtValor={fmtValor} />
-
           {/* ── TOP CLIENTES ─────────────────────────────────────────────────── */}
           <Panel
             title="Top clientes — por valor de pedido"
@@ -4607,6 +4605,7 @@ function Faturamento() {
 function ComparativoItens({ moeda, converter, fmtValor }) {
   const [codigoBusca, setCodigoBusca] = useState('');
   const [resultado, setResultado] = useState([]);
+  const [pedidosDetalhe, setPedidosDetalhe] = useState([]); // pedidos individuais desse código (BR, cliente, peças)
   const [loading, setLoading] = useState(false);
   const [buscou, setBuscou] = useState(false);
 
@@ -4625,10 +4624,15 @@ function ComparativoItens({ moeda, converter, fmtValor }) {
     if (!codigoBusca.trim()) return;
     setLoading(true);
     setBuscou(true);
-    const { data } = await supabase.from('v_variacao_preco_item').select('*')
-      .eq('codigo_vale', codigoBusca.trim())
-      .order('ano').order('mes');
-    setResultado(data || []);
+    const codigo = codigoBusca.trim();
+    const [rVariacao, rPedidos] = await Promise.all([
+      supabase.from('v_variacao_preco_item').select('*').eq('codigo_vale', codigo).order('ano').order('mes'),
+      // Pedidos individuais desse código — quais BRs/clientes/quantas peças, pra ver quem consumiu.
+      supabase.from('v_pedidos_vale').select('data_neg,br,client,uf,qtd_pecas,cod_sankhya,numero,month_nome,ano')
+        .eq('cod_vale', codigo).order('data_neg', { ascending: false }),
+    ]);
+    setResultado(rVariacao.data || []);
+    setPedidosDetalhe(rPedidos.data || []);
     setLoading(false);
   };
 
@@ -4638,6 +4642,7 @@ function ComparativoItens({ moeda, converter, fmtValor }) {
   const variacaoPct = primeiro && ultimo && Number(primeiro.valor_medio) > 0
     ? ((Number(ultimo.valor_medio) - Number(primeiro.valor_medio)) / Number(primeiro.valor_medio)) * 100
     : null;
+  const totalPecasEncontradas = pedidosDetalhe.reduce((s, p) => s + (Number(p.qtd_pecas) || 0), 0);
 
   return (
     <Panel title="Comparativo de itens" subtitle="Acompanhe como o valor de um mesmo Código Vale variou ao longo dos meses">
@@ -4723,6 +4728,43 @@ function ComparativoItens({ moeda, converter, fmtValor }) {
             })}
           </div>
           <p style={{ fontSize: 11, color: T.inkFaint, marginTop: 14, marginBottom: 0 }}>{resultado[0]?.produto_descricao}</p>
+
+          {pedidosDetalhe.length > 0 && (
+            <div style={{ marginTop: 20 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                <span style={{ fontSize: 11.5, fontWeight: 700, color: T.inkFaint, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                  Pedidos que usaram esse código
+                </span>
+                <span style={{ fontSize: 12.5, fontWeight: 700, color: T.terracottaText, fontFamily: FONT_DISPLAY }}>
+                  {new Intl.NumberFormat('pt-BR').format(totalPecasEncontradas)} peças no total
+                </span>
+              </div>
+              <div style={{ overflowX: 'auto', border: `1px solid ${T.line}`, borderRadius: 8 }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                  <thead>
+                    <tr style={{ background: T.panelAlt, borderBottom: `1px solid ${T.line}` }}>
+                      <th style={thFat()}>Data</th>
+                      <th style={thFat()}>BR (Projeto)</th>
+                      <th style={thFat(0)}>Cliente</th>
+                      <th style={thFat(60)}>UF</th>
+                      <th style={{ ...thFat(100), textAlign: 'right' }}>Qtd peças</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pedidosDetalhe.map((p, i) => (
+                      <tr key={i} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                        <td style={{ padding: '8px 10px', color: T.inkDim, whiteSpace: 'nowrap', fontFamily: FONT_DISPLAY }}>{p.data_neg ? new Date(p.data_neg).toLocaleDateString('pt-BR') : '—'}</td>
+                        <td style={{ padding: '8px 10px', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText }}>{p.br || '—'}</td>
+                        <td style={{ padding: '8px 10px', fontWeight: 600 }}>{p.client || '—'}</td>
+                        <td style={{ padding: '8px 10px', color: T.inkFaint }}>{p.uf || '—'}</td>
+                        <td style={{ padding: '8px 10px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 700 }}>{new Intl.NumberFormat('pt-BR').format(Number(p.qtd_pecas) || 0)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </>
       )}
     </Panel>
@@ -7973,10 +8015,6 @@ function PedidosVale() {
   const [syncStatus, setSyncStatus] = useState(null);
   const [periodo, setPeriodo] = useState({ dataIni: '2026-01-01', dataFim: new Date().toISOString().slice(0, 10) });
 
-  const [brv, setBrv] = useState([]);
-  const [brvLoading, setBrvLoading] = useState(true);
-  const [brvSyncing, setBrvSyncing] = useState(false);
-  const [brvSyncStatus, setBrvSyncStatus] = useState(null);
   const [descricaoAberta, setDescricaoAberta] = useState(null); // { cod, descricao } — modal de descrição completa
   const [buscaCodVale, setBuscaCodVale] = useState('');
   const [exportandoExcel, setExportandoExcel] = useState(false);
@@ -7990,43 +8028,13 @@ function PedidosVale() {
     setLoading(false);
   }, [periodo]);
 
-  const carregarBrv = useCallback(async () => {
-    setBrvLoading(true);
-    const { data } = await supabase.from('orcamentos_brv').select('*')
-      .gte('data_emissao', periodo.dataIni).lte('data_emissao', periodo.dataFim)
-      .order('data_emissao', { ascending: false });
-    setBrv(data || []);
-    setBrvLoading(false);
-  }, [periodo]);
-
-  useEffect(() => { carregar(); carregarBrv(); }, [carregar, carregarBrv]);
+  useEffect(() => { carregar(); }, [carregar]);
 
   // Auto-refresh a cada 30 minutos.
   useEffect(() => {
-    const id = setInterval(() => { carregar(); carregarBrv(); }, 30 * 60 * 1000);
+    const id = setInterval(carregar, 30 * 60 * 1000);
     return () => clearInterval(id);
-  }, [carregar, carregarBrv]);
-
-  const handleAtualizarBrv = async () => {
-    setBrvSyncing(true);
-    setBrvSyncStatus(null);
-    try {
-      const res = await fetch(`${SUPABASE_URL}/functions/v1/sankhya-orcamentos-brv-sync`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ dataIni: periodo.dataIni }),
-      }).then(r => r.json());
-      if (res.ok) {
-        setBrvSyncStatus({ ok: true, message: `Sincronizado: ${res.linhas_sincronizadas} linhas de orçamento BRV.` });
-        await carregarBrv();
-      } else {
-        setBrvSyncStatus({ ok: false, message: res.erro || 'Erro desconhecido.' });
-      }
-    } catch (err) {
-      setBrvSyncStatus({ ok: false, message: String(err) });
-    } finally {
-      setBrvSyncing(false);
-    }
-  };
+  }, [carregar]);
 
   const handleAtualizar = async () => {
     setSyncing(true);
@@ -8347,77 +8355,7 @@ function PedidosVale() {
         </Overlay>
       )}
 
-      <Panel
-        title="Orçamentos BRV — margem e matéria-prima"
-        subtitle="AD_ORCPRECO/AD_ORCPRECOITE/AD_ORCITEMAT — dados brutos, ainda sem ligação com Pedidos Vale (regra de cruzamento pendente)"
-        right={
-          <button onClick={handleAtualizarBrv} disabled={brvSyncing} style={{
-            display: 'flex', alignItems: 'center', gap: 6, background: T.panelAlt, color: T.terracottaText, border: `1px solid ${T.line}`,
-            borderRadius: 6, padding: '7px 12px', fontSize: 12, fontWeight: 600, opacity: brvSyncing ? 0.7 : 1,
-          }}>
-            <RefreshCw size={13} className={brvSyncing ? 'spin' : ''} />
-            {brvSyncing ? 'Atualizando…' : 'Atualizar BRV'}
-          </button>
-        }
-      >
-        {brvSyncStatus && (
-          <div style={{
-            display: 'flex', alignItems: 'center', gap: 10, padding: '9px 14px', borderRadius: 8, marginBottom: 12,
-            background: brvSyncStatus.ok ? T.oliveSoft : T.rustSoft, border: `1px solid ${brvSyncStatus.ok ? T.olive : T.rust}33`,
-          }}>
-            {brvSyncStatus.ok ? <CheckCircle2 size={14} color={T.oliveText} /> : <AlertTriangle size={14} color={T.rustText} />}
-            <span style={{ fontSize: 12.5, color: brvSyncStatus.ok ? T.oliveText : T.rustText }}>{brvSyncStatus.message}</span>
-          </div>
-        )}
-        {brvLoading ? (
-          <div style={{ textAlign: 'center', padding: 40, color: T.inkFaint, fontSize: 13 }}>Carregando…</div>
-        ) : (
-          <div style={{ overflowX: 'auto', marginTop: 10, maxHeight: 480, overflowY: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11.5 }}>
-              <thead>
-                <tr style={{ borderBottom: `1px solid ${T.line}`, position: 'sticky', top: 0, background: T.panel }}>
-                  <th style={thFat()}>Data Emissão</th>
-                  <th style={thFat()}>Nº Orçamento</th>
-                  <th style={thFat()}>Cliente</th>
-                  <th style={thFat()}>Produto BRV</th>
-                  <th style={thFat(0, 'right')}>Qtd Orçada</th>
-                  <th style={thFat(0, 'right')}>Margem Lucro</th>
-                  <th style={thFat(0, 'right')}>Custo Caixa</th>
-                  <th style={thFat(0, 'right')}>Mão de Obra</th>
-                  <th style={thFat(0, 'right')}>Mat. Indireto</th>
-                  <th style={thFat(0, 'right')}>Desconto</th>
-                  <th style={thFat()}>Matéria-Prima</th>
-                  <th style={thFat()}>Desc. Genérica</th>
-                  <th style={thFat(0, 'right')}>Qtd Unit.</th>
-                  <th style={thFat(0, 'right')}>Qtd Total Necessária</th>
-                </tr>
-              </thead>
-              <tbody>
-                {brv.length === 0 ? (
-                  <tr><td colSpan={14} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Sem dados. Clique em "Atualizar BRV".</td></tr>
-                ) : brv.map(l => (
-                  <tr key={l.id} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
-                    <td style={{ padding: '8px 10px', color: T.inkDim, whiteSpace: 'nowrap', fontFamily: FONT_DISPLAY }}>{fmtData(l.data_emissao)}</td>
-                    <td style={{ padding: '8px 10px', fontFamily: FONT_DISPLAY, fontWeight: 600 }}>{l.nureg}</td>
-                    <td style={{ padding: '8px 10px', fontWeight: 600, maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={l.cliente_nome}>{l.cliente_nome}</td>
-                    <td style={{ padding: '8px 10px', color: T.inkDim, maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={l.desc_produto_brv}>{l.desc_produto_brv}</td>
-                    <td style={{ padding: '8px 10px', textAlign: 'right', fontFamily: FONT_DISPLAY }}>{l.qtd_orcada_brv}</td>
-                    <td style={{ padding: '8px 10px', textAlign: 'right', fontFamily: FONT_DISPLAY, color: T.oliveText, fontWeight: 600 }}>{l.margem_lucro_item != null ? `${l.margem_lucro_item}%` : '—'}</td>
-                    <td style={{ padding: '8px 10px', textAlign: 'right', fontFamily: FONT_DISPLAY }}>{l.custo_caixa_item ?? '—'}</td>
-                    <td style={{ padding: '8px 10px', textAlign: 'right', fontFamily: FONT_DISPLAY }}>{l.mao_de_obra_item ?? '—'}</td>
-                    <td style={{ padding: '8px 10px', textAlign: 'right', fontFamily: FONT_DISPLAY }}>{l.material_indireto_item ?? '—'}</td>
-                    <td style={{ padding: '8px 10px', textAlign: 'right', fontFamily: FONT_DISPLAY }}>{l.desconto_item ?? '—'}</td>
-                    <td style={{ padding: '8px 10px', color: T.inkDim, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={l.desc_materia_prima}>{l.desc_materia_prima || '—'}</td>
-                    <td style={{ padding: '8px 10px', color: T.inkFaint }}>{l.desc_generica_tela || '—'}</td>
-                    <td style={{ padding: '8px 10px', textAlign: 'right', fontFamily: FONT_DISPLAY }}>{l.qtd_materia_unitaria ?? '—'}</td>
-                    <td style={{ padding: '8px 10px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 600 }}>{l.total_materia_necessaria ?? '—'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </Panel>
+      <ComparativoItens moeda="BRL" converter={v => v} fmtValor={fmtMoeda} />
     </div>
   );
 }
