@@ -3911,6 +3911,24 @@ function Faturamento() {
     // Tudo abaixo (Net Value, Segmento Kalenborn, Segmento de Mercado, Pedido
     // de Venda) vem da MESMA tabela pedidos_itens — garante que os números
     // sempre somam entre si, sem nenhum arredondamento (Number direto da string).
+    // O Supabase limita cada resposta a ~1000 linhas por padrão — pedidos_itens e nota_venda_itens
+    // já passam ou estão perto disso, então buscamos em lotes até trazer tudo, senão os totais
+    // (Net Value, Nota de Venda etc.) ficam sub-contados silenciosamente.
+    const buscarPaginado = async (query) => {
+      const TAMANHO_LOTE = 1000;
+      let todas = [];
+      let pagina = 0;
+      while (true) {
+        const { data, error } = await query.range(pagina * TAMANHO_LOTE, (pagina + 1) * TAMANHO_LOTE - 1);
+        if (error) return { data: null, error };
+        todas = todas.concat(data || []);
+        if (!data || data.length < TAMANHO_LOTE) break;
+        pagina += 1;
+        if (pagina > 100) break;
+      }
+      return { data: todas, error: null };
+    };
+
     let qItens = supabase.from('pedidos_itens').select('*').gte('data_neg', ini).lte('data_neg', fim);
     if (vendNome) qItens = qItens.eq('vendedor_nome', vendNome);
 
@@ -3929,7 +3947,7 @@ function Faturamento() {
     let qResumo = supabase.from('faturamento_resumo').select('tipmov,valor_nota,net_offer_value,data_neg').gte('data_neg', ini).lte('data_neg', fim);
     if (vendNome) qResumo = qResumo.eq('vendedor_nome', vendNome);
 
-    const [rItens, rNotaItens, rVend, rSync, rResumo] = await Promise.all([qItens, qNotaItens, qVend, qSync, qResumo]);
+    const [rItens, rNotaItens, rVend, rSync, rResumo] = await Promise.all([buscarPaginado(qItens), buscarPaginado(qNotaItens), qVend, qSync, qResumo]);
     const itens = rItens.data || [];
     const notaItensData = rNotaItens.data || [];
     const resumo = rResumo.data || [];
@@ -4120,8 +4138,14 @@ function Faturamento() {
     }
     let q = supabase.from('pedidos_itens').select('*').gte('data_neg', ini).lte('data_neg', fim).order('data_neg', { ascending: false });
     if (filtro?.coluna && filtro?.valor) q = q.eq(filtro.coluna, filtro.valor);
-    const { data } = await q;
-    setDrillDown({ titulo, itens: data || [], campoValor: 'valor_liquido' });
+    // Paginado — o período pode superar as ~1000 linhas que o Supabase devolve por padrão.
+    let dataCompleta = [];
+    for (let pagina = 0; pagina < 100; pagina++) {
+      const { data } = await q.range(pagina * 1000, (pagina + 1) * 1000 - 1);
+      dataCompleta = dataCompleta.concat(data || []);
+      if (!data || data.length < 1000) break;
+    }
+    setDrillDown({ titulo, itens: dataCompleta, campoValor: 'valor_liquido' });
     setDrillLoading(false);
   }, [filtros]);
 
@@ -4138,8 +4162,13 @@ function Faturamento() {
     }
     let q = supabase.from('nota_venda_itens').select('*').in('codtipoper', TOPS_FATURAMENTO_VALIDOS).gte('data_neg', ini).lte('data_neg', fim).order('data_neg', { ascending: false });
     if (filtro?.coluna && filtro?.valor) q = q.eq(filtro.coluna, filtro.valor);
-    const { data } = await q;
-    setDrillDown({ titulo, itens: data || [], campoValor: 'valor_bruto' });
+    let dataCompleta = [];
+    for (let pagina = 0; pagina < 100; pagina++) {
+      const { data } = await q.range(pagina * 1000, (pagina + 1) * 1000 - 1);
+      dataCompleta = dataCompleta.concat(data || []);
+      if (!data || data.length < 1000) break;
+    }
+    setDrillDown({ titulo, itens: dataCompleta, campoValor: 'valor_bruto' });
     setDrillLoading(false);
   }, [filtros]);
 
@@ -6811,15 +6840,26 @@ function ConsumoPlacasKalocer() {
     setErro(null);
     const { ini, fim } = rangeDatas();
 
-    const [rLista, rApontamentos] = await Promise.all([
-      supabase.from('mp_placas_kalocer').select('codigo_mp,descricao,unidade'),
-      supabase.from('producao_mp_apontamentos')
-        .select('nuapo,seq_pa,data_ref,cod_prod_acabado,desc_prod_acabado,qtd_lote_pa,cod_materia_prima,qtd_mp,unidade_mp,br,cliente_nome,nro_ordem_producao')
-        .gte('data_ref', ini).lte('data_ref', fim),
-    ]);
-
+    const rLista = await supabase.from('mp_placas_kalocer').select('codigo_mp,descricao,unidade');
     if (rLista.error) { setErro(`Erro lista de placas: ${rLista.error.message}`); setLoading(false); return; }
-    if (rApontamentos.error) { setErro(`Erro apontamentos: ${rApontamentos.error.message}`); setLoading(false); return; }
+
+    // O Supabase limita cada resposta a ~1000 linhas, mesmo sem pedir explicitamente — por isso
+    // buscamos em lotes de 1000 até não vir mais nada, senão o consumo total fica sub-contado.
+    const TAMANHO_LOTE = 1000;
+    let apontamentos = [];
+    let pagina = 0;
+    while (true) {
+      const { data, error } = await supabase.from('producao_mp_apontamentos')
+        .select('nuapo,seq_pa,data_ref,cod_prod_acabado,desc_prod_acabado,qtd_lote_pa,cod_materia_prima,qtd_mp,unidade_mp,br,cliente_nome,nro_ordem_producao')
+        .gte('data_ref', ini).lte('data_ref', fim)
+        .range(pagina * TAMANHO_LOTE, (pagina + 1) * TAMANHO_LOTE - 1);
+      if (error) { setErro(`Erro apontamentos: ${error.message}`); setLoading(false); return; }
+      apontamentos = apontamentos.concat(data || []);
+      if (!data || data.length < TAMANHO_LOTE) break;
+      pagina += 1;
+      if (pagina > 100) break; // teto de segurança (100k linhas)
+    }
+    const rApontamentos = { data: apontamentos, error: null };
 
     const listaCodigos = rLista.data || [];
 
@@ -7191,13 +7231,31 @@ function ConsumoMP() {
     setErro(null);
     const { ini, fim } = rangeDatas();
 
+    // composicao_produtos tem mais de 1000 linhas — sem paginação, o Supabase corta e produtos
+    // que têm composição cadastrada apareceriam errado como "sem composição".
+    const buscarComposicaoCompleta = async () => {
+      const TAMANHO_LOTE = 1000;
+      let todas = [];
+      let pagina = 0;
+      while (true) {
+        const { data, error } = await supabase.from('composicao_produtos').select('cod_prod_pai')
+          .range(pagina * TAMANHO_LOTE, (pagina + 1) * TAMANHO_LOTE - 1);
+        if (error) return { data: null, error };
+        todas = todas.concat(data || []);
+        if (!data || data.length < TAMANHO_LOTE) break;
+        pagina += 1;
+        if (pagina > 100) break;
+      }
+      return { data: todas, error: null };
+    };
+
     const [rNotas, rComposicao] = await Promise.all([
       supabase.from('nota_venda_itens')
         .select('nunota,sequencia,br,cliente_nome,data_neg,data_faturamento,numero_pedido,valor_bruto,unidade,quantidade,produto_descricao,cod_produto')
         .in('codtipoper', TOPS_FATURAMENTO_VALIDOS)
         .gte('data_neg', ini).lte('data_neg', fim)
         .order('data_neg', { ascending: false }),
-      supabase.from('composicao_produtos').select('cod_prod_pai'),
+      buscarComposicaoCompleta(),
     ]);
 
     if (rNotas.error) { setErro(`Erro: ${rNotas.error.message}`); setLoading(false); return; }
