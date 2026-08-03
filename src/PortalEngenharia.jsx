@@ -7971,13 +7971,15 @@ function PedidosVale() {
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [syncStatus, setSyncStatus] = useState(null);
-  const [periodo, setPeriodo] = useState({ dataIni: '2026-01-01', dataFim: '2026-06-26' });
+  const [periodo, setPeriodo] = useState({ dataIni: '2026-01-01', dataFim: new Date().toISOString().slice(0, 10) });
 
   const [brv, setBrv] = useState([]);
   const [brvLoading, setBrvLoading] = useState(true);
   const [brvSyncing, setBrvSyncing] = useState(false);
   const [brvSyncStatus, setBrvSyncStatus] = useState(null);
   const [descricaoAberta, setDescricaoAberta] = useState(null); // { cod, descricao } — modal de descrição completa
+  const [buscaCodVale, setBuscaCodVale] = useState('');
+  const [exportandoExcel, setExportandoExcel] = useState(false);
 
   const carregar = useCallback(async () => {
     setLoading(true);
@@ -8049,7 +8051,7 @@ function PedidosVale() {
 
   const exportarCsv = () => {
     const headers = ['Nº', 'Month', 'Year', 'Client', 'UF', 'BR', 'Cod. Vale', 'Margem atual %', 'Qts peças', 'Area da Placa (m2)', 'Qtd. Ceramica 1 (PC)', 'Qtd. Total Ceramica 1 (PC)', 'Ceramica 1 Código', 'Ceramica 1 Descrição', 'Qtd. Ceramica 2 (PC)', 'Qtd. Total de Ceramica 2 (PC)', 'Ceramica 2 Código', 'Ceramica 2 Descrição', 'Qtd. Ceramica 3 (PC)', 'Qtd. Total de Ceramica 3 (PC)', 'Ceramica 3 Código', 'Ceramica 3 Descrição', 'Qtd. Ceramica 4 (PC)', 'Qtd. Total de Ceramica 4 (PC)', 'Ceramica 4 Código', 'Ceramica 4 Descrição', 'Espessura de Ceramica (mm)', 'Layout da Placa (mm)', 'MGT?', 'AUTOIMPACTO'];
-    const linhasCsv = linhas.map(l => [
+    const linhasCsv = linhasFiltradas.map(l => [
       l.numero, l.month_nome, l.ano, l.client, l.uf, l.br, l.cod_vale, l.margem_atual_pct ?? '',
       l.qtd_pecas, l.area_placa_m2 ?? '#N/A', l.qtd_ceramica_1 ?? '#N/A', l.qtd_total_ceramica_1 ?? '#N/A',
       l.ceramica_1_codigo ?? '#N/A', l.ceramica_1_descricao ?? '#N/A', l.qtd_ceramica_2 ?? '#N/A',
@@ -8071,6 +8073,133 @@ function PedidosVale() {
   const comRegra = linhas.filter(l => l.area_placa_m2 !== null).length;
   const semRegra = linhas.length - comRegra;
 
+  // Filtro por Cód Vale — o usuário digita um código e vê só os pedidos daquele código,
+  // com o total de peças agregado (pode ter saído em mais de um pedido/BR/data).
+  const linhasFiltradas = useMemo(() => {
+    if (!buscaCodVale.trim()) return linhas;
+    const termo = buscaCodVale.trim().toLowerCase();
+    return linhas.filter(l => (l.cod_vale || '').toLowerCase().includes(termo));
+  }, [linhas, buscaCodVale]);
+
+  const analiseCodVale = useMemo(() => {
+    if (!buscaCodVale.trim()) return null;
+    const totalPecas = linhasFiltradas.reduce((s, l) => s + (Number(l.qtd_pecas) || 0), 0);
+    const brsDistintos = new Set(linhasFiltradas.map(l => l.br).filter(Boolean));
+    const clientesDistintos = new Set(linhasFiltradas.map(l => l.client).filter(Boolean));
+    return { totalPecas, totalPedidos: linhasFiltradas.length, totalBrs: brsDistintos.size, totalClientes: clientesDistintos.size };
+  }, [linhasFiltradas, buscaCodVale]);
+
+  // Exporta em Excel de verdade (formatado: cabeçalho colorido, larguras de coluna,
+  // linhas "sem regra" destacadas) — usa a mesma lista já filtrada na tela.
+  const exportarExcel = async () => {
+    setExportandoExcel(true);
+    try {
+      // Carrega a biblioteca só quando realmente precisa — evita engordar o carregamento
+      // inicial do site inteiro por causa de uma função usada só nessa aba.
+      const { default: ExcelJS } = await import('exceljs');
+      const workbook = new ExcelJS.Workbook();
+      workbook.creator = 'Portal Engenharia Kalenborn';
+      workbook.created = new Date();
+      const sheet = workbook.addWorksheet('Pedidos Vale', { views: [{ state: 'frozen', ySplit: 1 }] });
+
+      const colunas = [
+        { header: 'Nº', key: 'numero', width: 8 },
+        { header: 'Month', key: 'month_nome', width: 12 },
+        { header: 'Year', key: 'ano', width: 8 },
+        { header: 'Client', key: 'client', width: 26 },
+        { header: 'UF', key: 'uf', width: 6 },
+        { header: 'BR', key: 'br', width: 14 },
+        { header: 'Cod. Vale', key: 'cod_vale', width: 12 },
+        { header: 'Margem atual %', key: 'margem_atual_pct', width: 14 },
+        { header: 'Qtd peças', key: 'qtd_pecas', width: 11 },
+        { header: 'Area da Placa (m2)', key: 'area_placa_m2', width: 16 },
+        { header: 'Qtd. Cerâmica 1 (PC)', key: 'qtd_ceramica_1', width: 16 },
+        { header: 'Qtd. Total Cerâmica 1 (PC)', key: 'qtd_total_ceramica_1', width: 18 },
+        { header: 'Cerâmica 1 Código', key: 'ceramica_1_codigo', width: 14 },
+        { header: 'Cerâmica 1 Descrição', key: 'ceramica_1_descricao', width: 30 },
+        { header: 'Qtd. Cerâmica 2 (PC)', key: 'qtd_ceramica_2', width: 16 },
+        { header: 'Qtd. Total Cerâmica 2 (PC)', key: 'qtd_total_ceramica_2', width: 18 },
+        { header: 'Cerâmica 2 Código', key: 'ceramica_2_codigo', width: 14 },
+        { header: 'Cerâmica 2 Descrição', key: 'ceramica_2_descricao', width: 30 },
+        { header: 'Qtd. Cerâmica 3 (PC)', key: 'qtd_ceramica_3', width: 16 },
+        { header: 'Qtd. Total Cerâmica 3 (PC)', key: 'qtd_total_ceramica_3', width: 18 },
+        { header: 'Cerâmica 3 Código', key: 'ceramica_3_codigo', width: 14 },
+        { header: 'Cerâmica 3 Descrição', key: 'ceramica_3_descricao', width: 30 },
+        { header: 'Qtd. Cerâmica 4 (PC)', key: 'qtd_ceramica_4', width: 16 },
+        { header: 'Qtd. Total Cerâmica 4 (PC)', key: 'qtd_total_ceramica_4', width: 18 },
+        { header: 'Cerâmica 4 Código', key: 'ceramica_4_codigo', width: 14 },
+        { header: 'Cerâmica 4 Descrição', key: 'ceramica_4_descricao', width: 30 },
+        { header: 'Espessura Cerâmica (mm)', key: 'espessura_ceramica_mm', width: 16 },
+        { header: 'Layout Placa (mm)', key: 'layout_placa_mm', width: 16 },
+        { header: 'MGT?', key: 'mgt', width: 8 },
+        { header: 'Autoimpacto', key: 'autoimpacto', width: 12 },
+      ];
+      sheet.columns = colunas;
+
+      linhasFiltradas.forEach(l => {
+        sheet.addRow({
+          numero: l.numero, month_nome: l.month_nome?.trim(), ano: l.ano, client: l.client, uf: l.uf, br: l.br,
+          cod_vale: l.cod_vale, margem_atual_pct: l.margem_atual_pct ?? null, qtd_pecas: Number(l.qtd_pecas) || 0,
+          area_placa_m2: l.area_placa_m2 ?? '#N/A', qtd_ceramica_1: l.qtd_ceramica_1 ?? '#N/A',
+          qtd_total_ceramica_1: l.qtd_total_ceramica_1 ?? '#N/A', ceramica_1_codigo: l.ceramica_1_codigo ?? '#N/A',
+          ceramica_1_descricao: l.ceramica_1_descricao ?? '#N/A', qtd_ceramica_2: l.qtd_ceramica_2 ?? '#N/A',
+          qtd_total_ceramica_2: l.qtd_total_ceramica_2 ?? '#N/A', ceramica_2_codigo: l.ceramica_2_codigo ?? '#N/A',
+          ceramica_2_descricao: l.ceramica_2_descricao ?? '#N/A', qtd_ceramica_3: l.qtd_ceramica_3 ?? '#N/A',
+          qtd_total_ceramica_3: l.qtd_total_ceramica_3 ?? '#N/A', ceramica_3_codigo: l.ceramica_3_codigo ?? '#N/A',
+          ceramica_3_descricao: l.ceramica_3_descricao ?? '#N/A', qtd_ceramica_4: l.qtd_ceramica_4 ?? '#N/A',
+          qtd_total_ceramica_4: l.qtd_total_ceramica_4 ?? '#N/A', ceramica_4_codigo: l.ceramica_4_codigo ?? '#N/A',
+          ceramica_4_descricao: l.ceramica_4_descricao ?? '#N/A', espessura_ceramica_mm: l.espessura_ceramica_mm ?? '#N/A',
+          layout_placa_mm: l.layout_placa_mm ?? '#N/A', mgt: l.mgt, autoimpacto: l.autoimpacto,
+        });
+      });
+
+      // Cabeçalho: fundo terracota, texto branco, negrito
+      const headerRow = sheet.getRow(1);
+      headerRow.eachCell(cell => {
+        cell.font = { name: 'Arial', bold: true, color: { argb: 'FFFFFFFF' }, size: 11 };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFC8261C' } };
+        cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+        cell.border = { bottom: { style: 'thin', color: { argb: 'FF999999' } } };
+      });
+      headerRow.height = 32;
+
+      // Linhas de dados: fonte Arial, "sem regra" destacada em âmbar, zebra nas demais
+      sheet.eachRow((row, rowNumber) => {
+        if (rowNumber === 1) return;
+        const linha = linhasFiltradas[rowNumber - 2];
+        const semRegraLinha = linha?.area_placa_m2 == null;
+        row.eachCell({ includeEmpty: true }, cell => {
+          cell.font = { name: 'Arial', size: 10.5 };
+          cell.alignment = { vertical: 'middle' };
+          if (semRegraLinha) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFDF0DC' } };
+          else if (rowNumber % 2 === 0) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF6F4F0' } };
+        });
+        row.getCell('qtd_pecas').numFmt = '#,##0';
+        row.getCell('margem_atual_pct').numFmt = '0.0%';
+      });
+
+      // Linha de resumo no rodapé
+      const linhaResumo = sheet.addRow({});
+      const totalGeral = linhasFiltradas.reduce((s, l) => s + (Number(l.qtd_pecas) || 0), 0);
+      sheet.getCell(`H${linhaResumo.number}`).value = 'Total de peças:';
+      sheet.getCell(`H${linhaResumo.number}`).font = { name: 'Arial', bold: true, size: 10.5 };
+      sheet.getCell(`I${linhaResumo.number}`).value = totalGeral;
+      sheet.getCell(`I${linhaResumo.number}`).font = { name: 'Arial', bold: true, size: 10.5, color: { argb: 'FFC8261C' } };
+      sheet.getCell(`I${linhaResumo.number}`).numFmt = '#,##0';
+
+      const buffer = await workbook.xlsx.writeBuffer();
+      const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const sufixo = buscaCodVale.trim() ? `_${buscaCodVale.trim()}` : '';
+      a.href = url; a.download = `pedidos_vale${sufixo}_${periodo.dataIni}_${periodo.dataFim}.xlsx`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } finally {
+      setExportandoExcel(false);
+    }
+  };
+
   return (
     <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 18, maxWidth: 1400 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', flexWrap: 'wrap', gap: 12 }}>
@@ -8084,8 +8213,15 @@ function PedidosVale() {
           <FiltroCampoFat label="Data fim">
             <input type="date" value={periodo.dataFim} onChange={e => setPeriodo(p => ({ ...p, dataFim: e.target.value }))} style={{ ...selectStyleFat(140), appearance: 'auto' }} />
           </FiltroCampoFat>
-          <button onClick={exportarCsv} disabled={!linhas.length} style={{ ...ghostBtn(T.terracottaText), opacity: linhas.length ? 1 : 0.5 }}>
+          <FiltroCampoFat label="Buscar Cód Vale">
+            <input value={buscaCodVale} onChange={e => setBuscaCodVale(e.target.value)} placeholder="Ex: 15342946"
+              style={{ ...selectStyleFat(160) }} />
+          </FiltroCampoFat>
+          <button onClick={exportarCsv} disabled={!linhasFiltradas.length} style={{ ...ghostBtn(T.terracottaText), opacity: linhasFiltradas.length ? 1 : 0.5 }}>
             <DownloadCloud size={14} /> Exportar CSV
+          </button>
+          <button onClick={exportarExcel} disabled={!linhasFiltradas.length || exportandoExcel} style={{ ...ghostBtn(T.oliveText), opacity: linhasFiltradas.length ? 1 : 0.5 }}>
+            <DownloadCloud size={14} /> {exportandoExcel ? 'Gerando…' : 'Exportar Excel'}
           </button>
           <button onClick={handleAtualizar} disabled={syncing} style={{
             display: 'flex', alignItems: 'center', gap: 8, background: T.terracotta, color: '#fff', border: 'none',
@@ -8096,6 +8232,27 @@ function PedidosVale() {
           </button>
         </div>
       </div>
+
+      {analiseCodVale && (
+        <div style={{ background: T.blueSoft, border: `1px solid ${T.blue}33`, borderRadius: 10, padding: '14px 18px', display: 'flex', gap: 28, flexWrap: 'wrap' }}>
+          <div>
+            <div style={{ fontSize: 11, color: T.blueText, fontWeight: 600 }}>Cód Vale "{buscaCodVale}" — total de peças</div>
+            <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 24, color: T.blueText, marginTop: 4 }}>{new Intl.NumberFormat('pt-BR').format(analiseCodVale.totalPecas)}</div>
+          </div>
+          <div>
+            <div style={{ fontSize: 11, color: T.inkFaint, fontWeight: 600 }}>Pedidos</div>
+            <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 20, color: T.ink, marginTop: 4 }}>{analiseCodVale.totalPedidos}</div>
+          </div>
+          <div>
+            <div style={{ fontSize: 11, color: T.inkFaint, fontWeight: 600 }}>BRs distintos</div>
+            <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 20, color: T.ink, marginTop: 4 }}>{analiseCodVale.totalBrs}</div>
+          </div>
+          <div>
+            <div style={{ fontSize: 11, color: T.inkFaint, fontWeight: 600 }}>Clientes distintos</div>
+            <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 20, color: T.ink, marginTop: 4 }}>{analiseCodVale.totalClientes}</div>
+          </div>
+        </div>
+      )}
 
       {syncStatus && (
         <div style={{
@@ -8145,9 +8302,9 @@ function PedidosVale() {
                 </tr>
               </thead>
               <tbody>
-                {linhas.length === 0 ? (
-                  <tr><td colSpan={14} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Nenhum pedido Vale no período. Clique em "Atualizar do Sankhya".</td></tr>
-                ) : linhas.map(l => {
+                {linhasFiltradas.length === 0 ? (
+                  <tr><td colSpan={14} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>{buscaCodVale ? 'Nenhum pedido com esse Cód Vale.' : 'Nenhum pedido Vale no período. Clique em "Atualizar do Sankhya".'}</td></tr>
+                ) : linhasFiltradas.map(l => {
                   const semRegraLinha = l.area_placa_m2 === null;
                   return (
                     <tr key={l.pedido_item_id} style={{ borderBottom: `1px solid ${T.lineSoft}`, background: semRegraLinha ? T.amberSoft : 'transparent' }}>
