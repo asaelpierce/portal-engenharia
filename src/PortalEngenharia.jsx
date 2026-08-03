@@ -460,6 +460,7 @@ function PortalConteudo({ currentUser, session }) {
           {renderTab('pedidosvale', <PedidosVale />)}
           {renderTab('aberturacotacao', <TabErrorBoundary tab="Abertura de Cotação"><AberturaCotacao currentUser={currentUser} /></TabErrorBoundary>)}
           {renderTab('ranking', <TabErrorBoundary tab="Ranking"><RankingPontuacao /></TabErrorBoundary>)}
+          {renderTab('metas', <TabErrorBoundary tab="Metas"><PainelMetas currentUser={currentUser} /></TabErrorBoundary>)}
           {renderTab('auditoria', <TabErrorBoundary tab="Auditoria"><Auditoria /></TabErrorBoundary>)}
           {renderTab('integracao', <Integracao />)}
           {renderTab('admin', <Admin currentUser={currentUser} />)}
@@ -508,6 +509,7 @@ function Sidebar({ view, setView, pendCount, papel, telasPermitidas }) {
     { id: 'pedidosvale',  label: 'Pedidos Vale',           icon: FileWarning },
     { id: 'aberturacotacao', label: 'Abertura de Cotação',  icon: FileStack },
     { id: 'ranking',      label: 'Ranking de Pontuação',    icon: TrendingUp },
+    { id: 'metas',        label: 'Metas',                   icon: SlidersHorizontal },
     { id: 'auditoria',    label: 'Auditoria',              icon: History },
     { id: 'integracao',   label: 'Integrações',            icon: Workflow },
   ];
@@ -8686,6 +8688,7 @@ const TELAS_CATALOGO = [
   { id: 'pedidosvale',  label: 'Pedidos Vale' },
   { id: 'aberturacotacao', label: 'Abertura de Cotação' },
   { id: 'ranking',      label: 'Ranking de Pontuação' },
+  { id: 'metas',        label: 'Metas' },
   { id: 'auditoria',    label: 'Auditoria' },
   { id: 'integracao',   label: 'Integrações' },
   { id: 'admin',        label: 'Admin' },
@@ -8751,7 +8754,12 @@ function PermissoesManager() {
   const bloquearTudo = async () => {
     if (!selecionado) return;
     setSalvando(true);
+    // IMPORTANTE: nesse modelo, "zero linhas em colaborador_telas" significa "sem restrição
+    // = acesso total" — então pra BLOQUEAR tudo de verdade, não dá pra só apagar as linhas
+    // (isso faria o oposto: liberaria tudo). Grava um marcador que não bate com nenhuma tela
+    // real do catálogo, forçando o modo "restrito" com zero telas visíveis de fato.
     await supabase.from('colaborador_telas').delete().eq('colaborador_id', selecionado);
+    await supabase.from('colaborador_telas').insert({ colaborador_id: selecionado, tela: '__bloqueado_tudo__' });
     await carregar();
     setSalvando(false);
   };
@@ -8819,10 +8827,11 @@ function PermissoesManager() {
   );
 }
 
-function PainelMetas() {
+function PainelMetas({ currentUser }) {
   const [pesos, setPesos] = useState([]);
   const [loading, setLoading] = useState(true);
   const [editando, setEditando] = useState(null); // item sendo editado
+  const ehGestor = currentUser?.papel === 'gestor';
 
   const carregar = useCallback(async () => {
     setLoading(true);
@@ -8840,19 +8849,19 @@ function PainelMetas() {
   };
 
   return (
-    <>
-      <Panel title="Metas individuais — pesos por ação" subtitle="Regra: Conhecimento de Pedido só é contabilizado até 10 realizações">
+    <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 18, maxWidth: 900 }}>
+      <Panel title="Metas individuais — pesos por ação" subtitle={ehGestor ? "Regra: Conhecimento de Pedido só é contabilizado até 10 realizações · clique no peso pra editar" : "Regra: Conhecimento de Pedido só é contabilizado até 10 realizações"}>
         <div style={{ marginTop: 10 }}>
           {pesos.map(p => (
             <div key={p.item} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 10px', borderBottom: `1px solid ${T.lineSoft}` }}>
               <span style={{ fontSize: 13 }}>{p.descricao}{p.limite_contabilizado ? ` (máx. ${p.limite_contabilizado})` : ''}</span>
-              {editando === p.item ? (
+              {editando === p.item && ehGestor ? (
                 <input type="number" step="0.5" autoFocus defaultValue={p.peso}
                   onBlur={e => salvarPeso(p.item, Number(e.target.value))}
                   onKeyDown={e => { if (e.key === 'Enter') salvarPeso(p.item, Number(e.target.value)); }}
                   style={{ width: 60, padding: '4px 6px', borderRadius: 5, border: `1px solid ${T.line}`, fontSize: 13 }} />
               ) : (
-                <span onClick={() => setEditando(p.item)} style={{ fontSize: 13, fontWeight: 700, color: T.terracottaText, cursor: 'pointer', padding: '2px 8px' }} title="Clique para editar">
+                <span onClick={() => ehGestor && setEditando(p.item)} style={{ fontSize: 13, fontWeight: 700, color: T.terracottaText, cursor: ehGestor ? 'pointer' : 'default', padding: '2px 8px' }} title={ehGestor ? 'Clique para editar' : ''}>
                   Peso {p.peso}
                 </span>
               )}
@@ -8860,9 +8869,7 @@ function PainelMetas() {
           ))}
         </div>
       </Panel>
-
-      <RankingPontuacao />
-    </>
+    </div>
   );
 }
 
@@ -8972,7 +8979,6 @@ function Admin({ currentUser }) {
   return (
     <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 18, maxWidth: 1100 }}>
       {ehGestor && <PermissoesManager />}
-      {ehGestor && <PainelMetas />}
       {!ehGestor && (
         <div style={{ fontSize: 13, color: T.inkFaint, padding: '10px 4px' }}>
           Gerenciamento de permissões disponível apenas para usuários com papel "gestor".
