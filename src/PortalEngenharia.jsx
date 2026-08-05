@@ -110,7 +110,7 @@ const FLUXO_ORDEM = ['rascunho', 'em_revisao_tecnica', 'aguardando_aprovacao', '
 // (3209 = simples faturamento p/ entrega futura, 3216 = exportação, 3229 = venda de
 // serviços padrão nacional — faltavam antes e deixavam de fora faturamento real.)
 // Qualquer outro TOP (ex.: 3213, devoluções, remessas) não deve entrar na conta de faturamento.
-const TOPS_FATURAMENTO_VALIDOS = [3200, 3201, 3209, 3214, 3216, 3220, 3227, 3229];
+const TOPS_FATURAMENTO_VALIDOS = [3200, 3201, 3209, 3214, 3216, 3219, 3220, 3227, 3229]; // 3219 = VENDA DE SERVIÇOS
 // Ano em que o portal opera hoje. O campo 'mes' das propostas só guarda o nome
 // do mês (sem ano) — sem esse filtro, dados antigos de outro ano (ex: uma
 // proposta de setembro/2025) se misturam com o mesmo mês do ano corrente.
