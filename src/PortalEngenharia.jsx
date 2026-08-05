@@ -457,6 +457,7 @@ function PortalConteudo({ currentUser, session }) {
           {renderTab('preco_compra', <TabErrorBoundary tab="Preço de Compra"><PrecoCompra /></TabErrorBoundary>)}
           {renderTab('almoxarifado', <TabErrorBoundary tab="Almoxarifado"><Almoxarifado /></TabErrorBoundary>)}
           {renderTab('equipamentos', <TabErrorBoundary tab="Equipamentos de Terceiros"><EquipamentosTerceiros /></TabErrorBoundary>)}
+          {renderTab('acompanhamento_servico', <TabErrorBoundary tab="Acompanhamento de Serviço"><AcompanhamentoServico /></TabErrorBoundary>)}
           {renderTab('pedidosvale', <PedidosVale />)}
           {renderTab('aberturacotacao', <TabErrorBoundary tab="Abertura de Cotação"><AberturaCotacao currentUser={currentUser} /></TabErrorBoundary>)}
           {renderTab('ranking', <TabErrorBoundary tab="Ranking"><RankingPontuacao /></TabErrorBoundary>)}
@@ -506,6 +507,7 @@ function Sidebar({ view, setView, pendCount, papel, telasPermitidas }) {
     { id: 'preco_compra',  label: 'Preço de Compra',        icon: DollarSign },
     { id: 'almoxarifado', label: 'Almoxarifado',           icon: Package },
     { id: 'equipamentos', label: 'Equip. Terceiros',       icon: Webhook },
+    { id: 'acompanhamento_servico', label: 'Falta Nota de Serviço', icon: AlertTriangle },
     { id: 'pedidosvale',  label: 'Pedidos Vale',           icon: FileWarning },
     { id: 'aberturacotacao', label: 'Abertura de Cotação',  icon: FileStack },
     { id: 'ranking',      label: 'Ranking de Pontuação',    icon: TrendingUp },
@@ -2528,6 +2530,251 @@ function NfsAgrupadasCard({ itens, fmtData, fmtMoedaCompacta }) {
           </div>
         </div>
       ))}
+    </div>
+  );
+}
+
+function AcompanhamentoServico() {
+  const [linhas, setLinhas] = useState([]); // uma por BR: { br, cliente, itensServicoPendentes: [...], valorPendente, dataPedidoMaisAntiga }
+  const [loading, setLoading] = useState(true);
+  const [erro, setErro] = useState(null);
+  const [busca, setBusca] = useState('');
+  const [sortCol, setSortCol] = useState('diasAberto');
+  const [sortDir, setSortDir] = useState('desc');
+  const [detalhe, setDetalhe] = useState(null);
+
+  const ehServico = (descricao) => (descricao || '').toUpperCase().includes('SERVIÇO') || (descricao || '').toUpperCase().includes('SERVICO');
+
+  const carregar = useCallback(async () => {
+    setLoading(true);
+    setErro(null);
+
+    // 1) BRs válidos que têm equipamento de terceiro (origem do rastreio)
+    const { data: equip, error: eqErr } = await supabase
+      .from('equipamentos_terceiros')
+      .select('br_referencia')
+      .not('br_referencia', 'is', null)
+      .neq('br_referencia', '<SEM PROJETO>');
+    if (eqErr) { setErro(eqErr.message); setLoading(false); return; }
+    const brs = [...new Set((equip || []).map(e => e.br_referencia))];
+    if (!brs.length) { setLinhas([]); setLoading(false); return; }
+
+    // 2) Itens pedidos x itens já faturados, pra cada BR (busca em lotes pra evitar limite de URL/IN)
+    const buscarEmLotes = async (tabela, campos) => {
+      let resultado = [];
+      for (let i = 0; i < brs.length; i += 200) {
+        const lote = brs.slice(i, i + 200);
+        const { data, error } = await supabase.from(tabela).select(campos).in('br', lote);
+        if (error) throw error;
+        resultado = resultado.concat(data || []);
+      }
+      return resultado;
+    };
+
+    try {
+      const [pedidos, notas] = await Promise.all([
+        buscarEmLotes('pedidos_itens', 'br,cliente_nome,produto_descricao,quantidade,valor_liquido,data_neg,numero_pedido,vendedor_nome'),
+        buscarEmLotes('nota_venda_itens', 'br,produto_descricao,quantidade,data_faturamento'),
+      ]);
+
+      // Agrupa por BR + descrição do produto (soma quantidades)
+      const pedidoPorBrItem = {};
+      pedidos.forEach(p => {
+        const chave = `${p.br}|||${p.produto_descricao}`;
+        if (!pedidoPorBrItem[chave]) pedidoPorBrItem[chave] = { ...p, quantidade: 0, valor_liquido: 0 };
+        pedidoPorBrItem[chave].quantidade += Number(p.quantidade) || 0;
+        pedidoPorBrItem[chave].valor_liquido += Number(p.valor_liquido) || 0;
+        if (p.data_neg < pedidoPorBrItem[chave].data_neg) pedidoPorBrItem[chave].data_neg = p.data_neg;
+      });
+      const faturadoPorBrItem = {};
+      notas.forEach(n => {
+        const chave = `${n.br}|||${n.produto_descricao}`;
+        faturadoPorBrItem[chave] = (faturadoPorBrItem[chave] || 0) + (Number(n.quantidade) || 0);
+      });
+
+      // Pra cada BR, calcula quais itens do pedido NÃO estão totalmente faturados
+      const porBr = {};
+      Object.values(pedidoPorBrItem).forEach(item => {
+        const chave = `${item.br}|||${item.produto_descricao}`;
+        const faturado = faturadoPorBrItem[chave] || 0;
+        const pendente = item.quantidade - faturado > 0.001;
+        if (!porBr[item.br]) porBr[item.br] = { br: item.br, cliente: item.cliente_nome, vendedor: item.vendedor_nome, itensPendentes: [], dataPedidoMaisAntiga: item.data_neg, numeroPedido: item.numero_pedido };
+        if (item.data_neg < porBr[item.br].dataPedidoMaisAntiga) porBr[item.br].dataPedidoMaisAntiga = item.data_neg;
+        if (pendente) porBr[item.br].itensPendentes.push({ descricao: item.produto_descricao, quantidade: item.quantidade - faturado, valor: item.valor_liquido });
+      });
+
+      // Filtra: só os BRs onde TODOS os itens pendentes são de SERVIÇO (nenhum item de material em aberto)
+      const resultado = Object.values(porBr)
+        .filter(b => b.itensPendentes.length > 0 && b.itensPendentes.every(i => ehServico(i.descricao)))
+        .map(b => ({
+          ...b,
+          valorPendente: b.itensPendentes.reduce((s, i) => s + i.valor, 0),
+          diasAberto: b.dataPedidoMaisAntiga ? Math.floor((Date.now() - new Date(b.dataPedidoMaisAntiga).getTime()) / 86400000) : null,
+        }));
+
+      setLinhas(resultado);
+    } catch (e) {
+      setErro(String(e?.message || e));
+    }
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { carregar(); }, [carregar]);
+
+  // Auto-refresh a cada 30 minutos.
+  useEffect(() => {
+    const id = setInterval(carregar, 30 * 60 * 1000);
+    return () => clearInterval(id);
+  }, [carregar]);
+
+  const filtradas = useMemo(() => {
+    return linhas
+      .filter(l => !busca ||
+        l.br.toLowerCase().includes(busca.toLowerCase()) ||
+        (l.cliente || '').toLowerCase().includes(busca.toLowerCase()))
+      .sort((a, b) => {
+        let va = a[sortCol] ?? 0, vb = b[sortCol] ?? 0;
+        if (typeof va === 'string') va = va.toLowerCase();
+        if (typeof vb === 'string') vb = vb.toLowerCase();
+        if (va < vb) return sortDir === 'asc' ? -1 : 1;
+        if (va > vb) return sortDir === 'asc' ? 1 : -1;
+        return 0;
+      });
+  }, [linhas, busca, sortCol, sortDir]);
+
+  const kpis = useMemo(() => ({
+    total: linhas.length,
+    valorTotal: linhas.reduce((s, l) => s + l.valorPendente, 0),
+    mais30dias: linhas.filter(l => (l.diasAberto || 0) > 30).length,
+  }), [linhas]);
+
+  const handleSort = (col) => {
+    if (sortCol === col) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+    else { setSortCol(col); setSortDir('desc'); }
+  };
+
+  const LocalSortTh = ({ label, col, right }) => {
+    const active = sortCol === col;
+    return (
+      <th onClick={() => handleSort(col)} style={{ ...thFat(0, right ? 'right' : 'left'), cursor: 'pointer', whiteSpace: 'nowrap' }}>
+        <span style={{ color: active ? T.terracotta : T.inkFaint }}>{label}{active ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''}</span>
+      </th>
+    );
+  };
+
+  const fmtData = (iso) => !iso ? '—' : new Date(iso + 'T00:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: '2-digit' });
+
+  return (
+    <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+
+      <div style={{ fontSize: 12.5, color: T.inkFaint, background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 8, padding: '10px 14px' }}>
+        Compara item por item o que foi pedido vs. o que já foi faturado, por BR (equipamentos de terceiros).
+        Mostra só os casos em que <strong>todo o material já foi faturado</strong> e o que falta é <strong>exclusivamente o item de serviço</strong> —
+        ou seja, casos prontos pra cobrar/emitir a nota de serviço, sem ambiguidade de material pendente junto.
+      </div>
+
+      {erro && (
+        <div style={{ background: T.rustSoft, color: T.rustText, borderRadius: 8, padding: '10px 14px', fontSize: 12.5, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <AlertTriangle size={14} /> {erro}
+        </div>
+      )}
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(170px,1fr))', gap: 12 }}>
+        <Kpi label="BRs com só serviço pendente" value={loading ? '…' : kpis.total} icon={AlertTriangle} tone="amber"
+          sub="material 100% faturado, falta só o serviço" />
+        <Kpi label="Valor de serviço pendente" value={loading ? '…' : fmtMoedaCompacta(kpis.valorTotal)} icon={DollarSign} tone="rust"
+          sub="soma do valor dos itens de serviço em aberto" />
+        <Kpi label="Em aberto há mais de 30 dias" value={loading ? '…' : kpis.mais30dias} icon={Clock3} tone="rust"
+          sub="prioridade de cobrança" />
+      </div>
+
+      <Panel>
+        <FiltroCampoFat label="Buscar BR ou cliente">
+          <div style={{ position: 'relative' }}>
+            <Search size={13} style={{ position: 'absolute', left: 9, top: 9, color: T.inkFaint }} />
+            <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Ex: BR14148, Vale…"
+              style={{ ...selectStyleFat(280), paddingLeft: 28 }} />
+          </div>
+        </FiltroCampoFat>
+      </Panel>
+
+      <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+            <thead>
+              <tr style={{ background: T.panelAlt, borderBottom: `1px solid ${T.line}` }}>
+                <LocalSortTh label="BR" col="br" />
+                <th style={thFat(0)}>Cliente</th>
+                <th style={thFat(0)}>Item de serviço pendente</th>
+                <LocalSortTh label="Valor" col="valorPendente" right />
+                <LocalSortTh label="Pedido" col="dataPedidoMaisAntiga" />
+                <LocalSortTh label="Dias em aberto" col="diasAberto" right />
+                <th style={{ ...thFat(90), textAlign: 'center' }}>Detalhe</th>
+              </tr>
+            </thead>
+            <tbody>
+              {loading ? (
+                <tr><td colSpan={7} style={{ padding: 40, textAlign: 'center', color: T.inkFaint }}>Carregando…</td></tr>
+              ) : filtradas.length === 0 ? (
+                <tr><td colSpan={7} style={{ padding: 30, textAlign: 'center', color: T.oliveText, fontWeight: 600 }}>✓ Nenhum caso — tudo faturado ou pendências ainda têm material em aberto também.</td></tr>
+              ) : filtradas.map(l => (
+                <tr key={l.br} style={{ borderBottom: `1px solid ${T.lineSoft}`, background: (l.diasAberto || 0) > 30 ? T.rustSoft : 'transparent' }}
+                  onMouseEnter={e => e.currentTarget.style.background = T.panelAlt}
+                  onMouseLeave={e => e.currentTarget.style.background = (l.diasAberto || 0) > 30 ? T.rustSoft : 'transparent'}>
+                  <td style={{ padding: '9px 12px', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText, whiteSpace: 'nowrap' }}>{l.br}</td>
+                  <td style={{ padding: '9px 12px', fontWeight: 600, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={l.cliente}>{l.cliente || '—'}</td>
+                  <td style={{ padding: '9px 12px', maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={l.itensPendentes.map(i => i.descricao).join(' · ')}>
+                    {l.itensPendentes.map(i => i.descricao).join(' · ')}
+                  </td>
+                  <td style={{ padding: '9px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.rustText }}>{fmtMoeda(l.valorPendente)}</td>
+                  <td style={{ padding: '9px 12px', color: T.inkDim, whiteSpace: 'nowrap' }}>{fmtData(l.dataPedidoMaisAntiga)}</td>
+                  <td style={{ padding: '9px 12px', textAlign: 'right', fontWeight: 700, color: (l.diasAberto || 0) > 30 ? T.rustText : T.inkDim }}>{l.diasAberto ?? '—'}</td>
+                  <td style={{ padding: '9px 12px', textAlign: 'center' }}>
+                    <button onClick={() => setDetalhe(l)}
+                      style={{ fontSize: 11, color: T.blueText, background: T.blueSoft, border: 'none', borderRadius: 5, padding: '4px 10px', cursor: 'pointer', fontWeight: 600 }}>
+                      Ver
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div style={{ padding: '10px 16px', borderTop: `1px solid ${T.line}`, fontSize: 11, color: T.inkFaint, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span>{filtradas.length} BR{filtradas.length !== 1 ? 's' : ''} · linhas em vermelho = mais de 30 dias em aberto</span>
+          <BotaoExportar small onClick={() => exportCSV(filtradas.map(l => ({ ...l, itens: l.itensPendentes.map(i => i.descricao).join(' | ') })), 'servico_pendente.csv',
+            ['br','cliente','itens','valorPendente','dataPedidoMaisAntiga','diasAberto'])} />
+        </div>
+      </div>
+
+      {detalhe && (
+        <Overlay onClose={() => setDetalhe(null)}>
+          <div className="scale-in" style={{
+            background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, width: '100%', maxWidth: 560,
+            boxShadow: '0 24px 60px rgba(0,0,0,.18)', overflow: 'hidden',
+          }}>
+            <div style={{ padding: '18px 22px', borderBottom: `1px solid ${T.line}`, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+              <div>
+                <div style={{ fontFamily: FONT_DISPLAY, fontSize: 17, fontWeight: 700, color: T.ink }}>{detalhe.br}</div>
+                <div style={{ fontSize: 12, color: T.inkFaint, marginTop: 2 }}>{detalhe.cliente} · vendedor: {detalhe.vendedor || '—'}</div>
+              </div>
+              <button onClick={() => setDetalhe(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.inkFaint }}><X size={18} /></button>
+            </div>
+            <div style={{ padding: '16px 22px' }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: T.inkFaint, textTransform: 'uppercase', marginBottom: 8 }}>Itens de serviço pendentes de faturamento</div>
+              {detalhe.itensPendentes.map((it, i) => (
+                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: `1px solid ${T.lineSoft}` }}>
+                  <span style={{ fontSize: 12.5 }}>{it.descricao}</span>
+                  <span style={{ fontSize: 12.5, fontWeight: 700, color: T.rustText, fontFamily: FONT_DISPLAY }}>{fmtMoeda(it.valor)}</span>
+                </div>
+              ))}
+              <div style={{ marginTop: 14, fontSize: 12, color: T.inkFaint }}>
+                Pedido em {fmtData(detalhe.dataPedidoMaisAntiga)} · {detalhe.diasAberto} dias em aberto
+              </div>
+            </div>
+          </div>
+        </Overlay>
+      )}
     </div>
   );
 }
@@ -8685,6 +8932,7 @@ const TELAS_CATALOGO = [
   { id: 'preco_compra', label: 'Preço de Compra' },
   { id: 'almoxarifado', label: 'Almoxarifado' },
   { id: 'equipamentos', label: 'Equip. Terceiros' },
+  { id: 'acompanhamento_servico', label: 'Falta Nota de Serviço' },
   { id: 'pedidosvale',  label: 'Pedidos Vale' },
   { id: 'aberturacotacao', label: 'Abertura de Cotação' },
   { id: 'ranking',      label: 'Ranking de Pontuação' },
