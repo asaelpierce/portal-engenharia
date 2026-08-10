@@ -5070,6 +5070,7 @@ function BarraClicavel({ nome, valor, max, cor, onClick }) {
 function DrillDownPedidos({ titulo, itens, loading, onClose, campoValor = 'valor_liquido' }) {
   const total = itens.reduce((s, p) => s + Number(p[campoValor] || 0), 0);
   const labelValor = campoValor === 'valor_bruto' ? 'Valor bruto' : 'Valor líquido';
+  const projetosDistintos = new Set(itens.map(p => p.br).filter(Boolean)).size;
   return (
     <Overlay onClose={onClose}>
       <div className="scale-in" style={{
@@ -5079,7 +5080,9 @@ function DrillDownPedidos({ titulo, itens, loading, onClose, campoValor = 'valor
         <div style={{ padding: '18px 22px', borderBottom: `1px solid ${T.line}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div>
             <h2 style={{ fontFamily: FONT_DISPLAY, fontSize: 19, fontWeight: 600, margin: 0 }}>{titulo}</h2>
-            <p style={{ fontSize: 12, color: T.inkFaint, margin: '3px 0 0' }}>{itens.length} itens · {fmtMoeda(total)} no total</p>
+            <p style={{ fontSize: 12, color: T.inkFaint, margin: '3px 0 0' }}>
+              {itens.length} itens (linhas de produto) · {projetosDistintos} projeto{projetosDistintos !== 1 ? 's' : ''} (BR) distinto{projetosDistintos !== 1 ? 's' : ''} · {fmtMoeda(total)} no total
+            </p>
           </div>
           <button onClick={onClose} style={{ background: 'transparent', border: 'none', color: T.inkFaint }}><X size={20} /></button>
         </div>
