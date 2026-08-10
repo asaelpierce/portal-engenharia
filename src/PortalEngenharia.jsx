@@ -2615,11 +2615,17 @@ function MonitoramentoOP() {
       }
     });
 
-    const PRIORIDADE_STATUS = { sem_op: 0, producao_generica: 1, op_planejada: 2, em_producao: 3 };
+    const PRIORIDADE_STATUS = { sem_op: 0, producao_generica: 1, op_planejada: 2, em_producao: 3, servico: 4 };
     return {
       semBR: semBR.length,
       lista: Object.values(porBR).map(p => {
-        const piorStatus = p.itens.reduce((pior, i) => PRIORIDADE_STATUS[i.status] < PRIORIDADE_STATUS[pior] ? i.status : pior, 'em_producao');
+        // Itens de serviço não entram no cálculo do "pior status" — um projeto não deve
+        // aparecer como "em produção" só porque tem um item de mão de obra, nem como
+        // "sem OP" por causa de serviço (serviço nunca tem OP mesmo, é esperado).
+        const itensProducao = p.itens.filter(i => i.status !== 'servico');
+        const piorStatus = itensProducao.length
+          ? itensProducao.reduce((pior, i) => PRIORIDADE_STATUS[i.status] < PRIORIDADE_STATUS[pior] ? i.status : pior, 'em_producao')
+          : 'servico'; // projeto 100% serviço (ex: só mão de obra) — não é relevante pra análise de OP
         const itensSemOp = p.itens.filter(i => i.status === 'sem_op').length;
         return {
           br: p.br,
@@ -2682,6 +2688,7 @@ function MonitoramentoOP() {
     op_planejada:       { label: '◑ OP criada, não iniciada', cor: T.blueText, bg: T.blueSoft },
     producao_generica:  { label: '◐ Produção genérica',   cor: T.amberText, bg: T.amberSoft },
     sem_op:             { label: '⚠ Sem OP',               cor: T.rustText,  bg: T.rustSoft },
+    servico:            { label: '— Serviço (N/A)',        cor: T.inkFaint,  bg: T.lineSoft },
   }[status] || { label: status, cor: T.inkFaint, bg: T.lineSoft });
 
   return (
@@ -2690,11 +2697,13 @@ function MonitoramentoOP() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
         <div style={{ fontSize: 12.5, color: T.inkFaint, background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 8, padding: '10px 14px', flex: 1, minWidth: 280 }}>
           Verifica, por <strong>projeto (BR)</strong>, se todos os itens pedidos têm Ordem de Produção
-          vinculada no Sankhya — em dois níveis: 1) vínculo formal (NUNOTA → Processo → Atividade → OP)
-          e 2) se não achar isso, se existe alguma produção do mesmo produto perto da data do pedido
-          (pode ser produção pra estoque, vendida depois). Um projeto entra como <strong>"Sem OP"</strong>{' '}
-          se <strong>pelo menos um item dele</strong> não tiver nenhum dos dois — clique num projeto pra
-          ver quais itens específicos estão pendentes. Cobre os últimos 180 dias.
+          vinculada no Sankhya — em três níveis: 1) a OP existe e a produção já foi iniciada, 2) a OP existe
+          mas a produção ainda não começou, ou 3) não existe OP nem produção próxima do mesmo produto
+          (pode ser produção pra estoque, vendida depois). Itens de <strong>serviço</strong> (mão de obra
+          etc.) nunca passam por produção interna — ficam numa categoria própria, fora dessa análise. Um
+          projeto entra como <strong>"Sem OP"</strong> se pelo menos um item (não-serviço) dele não tiver
+          nada disso — clique num projeto pra ver quais itens específicos estão pendentes. Cobre os
+          últimos 180 dias.
         </div>
         <button onClick={handleAtualizar} disabled={syncing} style={{
           display: 'flex', alignItems: 'center', gap: 8, background: T.terracotta, color: '#fff', border: 'none',
@@ -2763,6 +2772,7 @@ function MonitoramentoOP() {
                   <option value="producao_generica">◐ Só produção genérica</option>
                   <option value="op_planejada">◑ OP criada, não iniciada</option>
                   <option value="em_producao">✓ Em produção</option>
+                  <option value="servico">— Só serviço (N/A)</option>
                   <option value="todos">Todos</option>
                 </select>
                 <ChevronDown size={13} style={chevronStyleFat} />
