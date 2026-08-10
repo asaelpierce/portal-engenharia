@@ -2542,11 +2542,12 @@ function MonitoramentoOP() {
   const [erro, setErro] = useState(null);
   const [busca, setBusca] = useState('');
   const [statusFiltro, setStatusFiltro] = useState('sem_op');
-  const [sortCol, setSortCol] = useState('data_pedido');
+  const [sortCol, setSortCol] = useState('diasAberto');
   const [sortDir, setSortDir] = useState('desc');
   const [syncing, setSyncing] = useState(false);
   const [syncStatus, setSyncStatus] = useState(null);
   const [ultimoSync, setUltimoSync] = useState(null);
+  const [drillBR, setDrillBR] = useState(null); // BR selecionado — mostra os itens dele
 
   const carregar = useCallback(async () => {
     setLoading(true);
@@ -2597,37 +2598,71 @@ function MonitoramentoOP() {
     }
   };
 
-  const filtradas = useMemo(() => {
-    return linhas
-      .filter(l => statusFiltro === 'todos' || l.status === statusFiltro)
-      .filter(l => !busca ||
-        (l.br || '').toLowerCase().includes(busca.toLowerCase()) ||
-        (l.cliente_nome || '').toLowerCase().includes(busca.toLowerCase()) ||
-        (l.produto_descricao || '').toLowerCase().includes(busca.toLowerCase()) ||
-        (l.cod_produto || '').toLowerCase().includes(busca.toLowerCase()))
+  const fmtData = (iso) => !iso ? '—' : new Date(iso + 'T00:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: '2-digit' });
+  const diasEmAberto = (iso) => !iso ? null : Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
+
+  // Agrupa por BR — a "pior" situação entre os itens de um projeto define o status do projeto
+  // inteiro (se pelo menos 1 item está 'sem_op', o projeto conta como 'sem_op', mesmo que os
+  // outros itens estejam ok).
+  const projetos = useMemo(() => {
+    const semBR = linhas.filter(l => !l.br);
+    const porBR = {};
+    linhas.filter(l => l.br).forEach(l => {
+      if (!porBR[l.br]) porBR[l.br] = { br: l.br, cliente: l.cliente_nome, itens: [], dataMaisAntiga: l.data_pedido };
+      porBR[l.br].itens.push(l);
+      if (l.data_pedido && (!porBR[l.br].dataMaisAntiga || l.data_pedido < porBR[l.br].dataMaisAntiga)) {
+        porBR[l.br].dataMaisAntiga = l.data_pedido;
+      }
+    });
+
+    const PRIORIDADE_STATUS = { sem_op: 0, producao_generica: 1, op_planejada: 2, em_producao: 3 };
+    return {
+      semBR: semBR.length,
+      lista: Object.values(porBR).map(p => {
+        const piorStatus = p.itens.reduce((pior, i) => PRIORIDADE_STATUS[i.status] < PRIORIDADE_STATUS[pior] ? i.status : pior, 'em_producao');
+        const itensSemOp = p.itens.filter(i => i.status === 'sem_op').length;
+        return {
+          br: p.br,
+          cliente: p.cliente,
+          totalItens: p.itens.length,
+          itensSemOp,
+          status: piorStatus,
+          dataMaisAntiga: p.dataMaisAntiga,
+          diasAberto: diasEmAberto(p.dataMaisAntiga),
+          itens: [...p.itens].sort((a, b) => PRIORIDADE_STATUS[a.status] - PRIORIDADE_STATUS[b.status]),
+        };
+      }),
+    };
+  }, [linhas]);
+
+  const filtrados = useMemo(() => {
+    return projetos.lista
+      .filter(p => statusFiltro === 'todos' || p.status === statusFiltro)
+      .filter(p => !busca ||
+        p.br.toLowerCase().includes(busca.toLowerCase()) ||
+        (p.cliente || '').toLowerCase().includes(busca.toLowerCase()))
       .sort((a, b) => {
-        let va = a[sortCol] ?? '', vb = b[sortCol] ?? '';
+        let va = a[sortCol] ?? 0, vb = b[sortCol] ?? 0;
         if (typeof va === 'string') va = va.toLowerCase();
         if (typeof vb === 'string') vb = vb.toLowerCase();
         if (va < vb) return sortDir === 'asc' ? -1 : 1;
         if (va > vb) return sortDir === 'asc' ? 1 : -1;
         return 0;
       });
-  }, [linhas, busca, statusFiltro, sortCol, sortDir]);
+  }, [projetos, busca, statusFiltro, sortCol, sortDir]);
 
-  const kpis = useMemo(() => ({
-    total: linhas.length,
-    semOp: linhas.filter(l => l.status === 'sem_op').length,
-    producaoGenerica: linhas.filter(l => l.status === 'producao_generica').length,
-    ok: linhas.filter(l => l.status === 'ok').length,
-    diasMedioSemOp: (() => {
-      const semOp = linhas.filter(l => l.status === 'sem_op' && l.data_pedido);
-      if (!semOp.length) return 0;
-      const hoje = Date.now();
-      const soma = semOp.reduce((s, l) => s + Math.floor((hoje - new Date(l.data_pedido).getTime()) / 86400000), 0);
-      return Math.round(soma / semOp.length);
-    })(),
-  }), [linhas]);
+  const kpis = useMemo(() => {
+    const semOp = projetos.lista.filter(p => p.status === 'sem_op');
+    return {
+      totalProjetos: projetos.lista.length,
+      semOp: semOp.length,
+      producaoGenerica: projetos.lista.filter(p => p.status === 'producao_generica').length,
+      opPlanejada: projetos.lista.filter(p => p.status === 'op_planejada').length,
+      emProducao: projetos.lista.filter(p => p.status === 'em_producao').length,
+      diasMedioSemOp: semOp.length ? Math.round(semOp.reduce((s, p) => s + (p.diasAberto || 0), 0) / semOp.length) : 0,
+      semBR: projetos.semBR,
+    };
+  }, [projetos]);
 
   const handleSort = (col) => {
     if (sortCol === col) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
@@ -2642,13 +2677,11 @@ function MonitoramentoOP() {
     );
   };
 
-  const fmtData = (iso) => !iso ? '—' : new Date(iso + 'T00:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: '2-digit' });
-  const diasEmAberto = (iso) => !iso ? null : Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
-
   const statusInfo = (status) => ({
-    ok:                 { label: '✓ Tem OP vinculada',   cor: T.oliveText, bg: T.oliveSoft },
-    producao_generica:  { label: '◐ Produção genérica',  cor: T.amberText, bg: T.amberSoft },
-    sem_op:             { label: '⚠ Sem OP',              cor: T.rustText,  bg: T.rustSoft },
+    em_producao:        { label: '✓ Em produção',         cor: T.oliveText, bg: T.oliveSoft },
+    op_planejada:       { label: '◑ OP criada, não iniciada', cor: T.blueText, bg: T.blueSoft },
+    producao_generica:  { label: '◐ Produção genérica',   cor: T.amberText, bg: T.amberSoft },
+    sem_op:             { label: '⚠ Sem OP',               cor: T.rustText,  bg: T.rustSoft },
   }[status] || { label: status, cor: T.inkFaint, bg: T.lineSoft });
 
   return (
@@ -2656,11 +2689,12 @@ function MonitoramentoOP() {
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
         <div style={{ fontSize: 12.5, color: T.inkFaint, background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 8, padding: '10px 14px', flex: 1, minWidth: 280 }}>
-          Verifica, item por item, se cada pedido de venda tem Ordem de Produção vinculada no Sankhya —
-          em dois níveis: 1) vínculo formal (NUNOTA → Processo → Atividade → OP) e 2) se não achar isso,
-          se existe alguma produção do mesmo produto perto da data do pedido (pode ser produção pra
-          estoque, vendida depois). Só marca como <strong>"Sem OP"</strong> quando nenhum dos dois existe —
-          é aí que está o risco real de não ter sido fabricado ainda. Cobre os últimos 180 dias.
+          Verifica, por <strong>projeto (BR)</strong>, se todos os itens pedidos têm Ordem de Produção
+          vinculada no Sankhya — em dois níveis: 1) vínculo formal (NUNOTA → Processo → Atividade → OP)
+          e 2) se não achar isso, se existe alguma produção do mesmo produto perto da data do pedido
+          (pode ser produção pra estoque, vendida depois). Um projeto entra como <strong>"Sem OP"</strong>{' '}
+          se <strong>pelo menos um item dele</strong> não tiver nenhum dos dois — clique num projeto pra
+          ver quais itens específicos estão pendentes. Cobre os últimos 180 dias.
         </div>
         <button onClick={handleAtualizar} disabled={syncing} style={{
           display: 'flex', alignItems: 'center', gap: 8, background: T.terracotta, color: '#fff', border: 'none',
@@ -2688,22 +2722,34 @@ function MonitoramentoOP() {
       )}
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(170px,1fr))', gap: 12 }}>
-        <Kpi label="Itens analisados" value={loading ? '…' : kpis.total} icon={Package} tone="blue"
-          sub="últimos 180 dias · pedidos de venda" />
+        <Kpi label="Projetos analisados" value={loading ? '…' : kpis.totalProjetos} icon={Package} tone="blue"
+          sub="últimos 180 dias · com BR vinculado" />
         <Kpi label="Sem OP (risco real)" value={loading ? '…' : kpis.semOp} icon={AlertTriangle} tone="rust"
-          sub="nenhuma produção encontrada, nem vinculada nem genérica" />
-        <Kpi label="Produção genérica" value={loading ? '…' : kpis.producaoGenerica} icon={Clock3} tone="amber"
-          sub="produzido perto da data, mas sem vínculo formal (provável estoque)" />
-        <Kpi label="Com OP vinculada" value={loading ? '…' : kpis.ok} icon={CheckCircle2} tone="olive"
-          sub="vínculo formal completo no Sankhya" />
-        <Kpi label="Média de dias em aberto" value={loading ? '…' : kpis.diasMedioSemOp} icon={Gauge}
-          sub="só entre os itens 'Sem OP'" />
+          sub="pelo menos 1 item sem nenhuma produção nem OP criada" />
+        <Kpi label="Só produção genérica" value={loading ? '…' : kpis.producaoGenerica} icon={Clock3} tone="amber"
+          sub="produção próxima encontrada, mas sem OP formal criada" />
+        <Kpi label="OP criada, não iniciada" value={loading ? '…' : kpis.opPlanejada} icon={Gauge}
+          sub="a OP existe no Sankhya, mas a produção ainda não começou" />
+        <Kpi label="Em produção" value={loading ? '…' : kpis.emProducao} icon={CheckCircle2} tone="olive"
+          sub="OP criada e produção já iniciada" />
       </div>
+
+      {kpis.semOp > 0 && (
+        <div style={{ fontSize: 11.5, color: T.inkFaint, background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 8, padding: '8px 14px' }}>
+          Média de {kpis.diasMedioSemOp} dia{kpis.diasMedioSemOp !== 1 ? 's' : ''} em aberto entre os projetos "Sem OP".
+        </div>
+      )}
+
+      {kpis.semBR > 0 && (
+        <div style={{ fontSize: 11.5, color: T.inkFaint, background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 8, padding: '8px 14px' }}>
+          {kpis.semBR} item{kpis.semBR !== 1 ? 's' : ''} sem BR vinculado no Sankhya (não entram na contagem por projeto acima).
+        </div>
+      )}
 
       <Panel>
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end', justifyContent: 'space-between' }}>
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-            <FiltroCampoFat label="Buscar BR, cliente ou produto">
+            <FiltroCampoFat label="Buscar BR ou cliente">
               <div style={{ position: 'relative' }}>
                 <Search size={13} style={{ position: 'absolute', left: 9, top: 9, color: T.inkFaint }} />
                 <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Ex: BR14331, Vale…"
@@ -2712,10 +2758,11 @@ function MonitoramentoOP() {
             </FiltroCampoFat>
             <FiltroCampoFat label="Status">
               <div style={{ position: 'relative' }}>
-                <select value={statusFiltro} onChange={e => setStatusFiltro(e.target.value)} style={selectStyleFat(200)}>
+                <select value={statusFiltro} onChange={e => setStatusFiltro(e.target.value)} style={selectStyleFat(240)}>
                   <option value="sem_op">⚠ Sem OP (risco real)</option>
-                  <option value="producao_generica">◐ Produção genérica</option>
-                  <option value="ok">✓ Tem OP vinculada</option>
+                  <option value="producao_generica">◐ Só produção genérica</option>
+                  <option value="op_planejada">◑ OP criada, não iniciada</option>
+                  <option value="em_producao">✓ Em produção</option>
                   <option value="todos">Todos</option>
                 </select>
                 <ChevronDown size={13} style={chevronStyleFat} />
@@ -2733,35 +2780,40 @@ function MonitoramentoOP() {
               <tr style={{ background: T.panelAlt, borderBottom: `1px solid ${T.line}` }}>
                 <SortTh label="BR" col="br" />
                 <th style={thFat(0)}>Cliente</th>
-                <th style={thFat(0)}>Produto</th>
-                <SortTh label="Qtd" col="quantidade" right />
-                <SortTh label="Data pedido" col="data_pedido" />
-                <th style={{ ...thFat(90), textAlign: 'right' }}>Dias aberto</th>
-                <th style={{ ...thFat(170), textAlign: 'center' }}>Status</th>
+                <SortTh label="Itens sem OP" col="itensSemOp" right />
+                <SortTh label="Total de itens" col="totalItens" right />
+                <SortTh label="Pedido mais antigo" col="dataMaisAntiga" />
+                <SortTh label="Dias aberto" col="diasAberto" right />
+                <th style={{ ...thFat(190), textAlign: 'center' }}>Status</th>
+                <th style={{ ...thFat(90), textAlign: 'center' }}>Detalhe</th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={7} style={{ padding: 40, textAlign: 'center', color: T.inkFaint }}>Carregando…</td></tr>
-              ) : filtradas.length === 0 ? (
-                <tr><td colSpan={7} style={{ padding: 30, textAlign: 'center', color: T.oliveText, fontWeight: 600 }}>✓ Nenhum item encontrado com esse filtro.</td></tr>
-              ) : filtradas.map((l, i) => {
-                const st = statusInfo(l.status);
-                const dias = diasEmAberto(l.data_pedido);
+                <tr><td colSpan={8} style={{ padding: 40, textAlign: 'center', color: T.inkFaint }}>Carregando…</td></tr>
+              ) : filtrados.length === 0 ? (
+                <tr><td colSpan={8} style={{ padding: 30, textAlign: 'center', color: T.oliveText, fontWeight: 600 }}>✓ Nenhum projeto encontrado com esse filtro.</td></tr>
+              ) : filtrados.map(p => {
+                const st = statusInfo(p.status);
                 return (
-                  <tr key={`${l.nunota}-${l.cod_produto}-${i}`} style={{ borderBottom: `1px solid ${T.lineSoft}`, background: l.status === 'sem_op' && dias > 30 ? T.rustSoft : 'transparent' }}
+                  <tr key={p.br} style={{ borderBottom: `1px solid ${T.lineSoft}`, background: p.status === 'sem_op' && p.diasAberto > 30 ? T.rustSoft : 'transparent', cursor: 'pointer' }}
+                    onClick={() => setDrillBR(p)}
                     onMouseEnter={e => e.currentTarget.style.background = T.panelAlt}
-                    onMouseLeave={e => e.currentTarget.style.background = (l.status === 'sem_op' && dias > 30) ? T.rustSoft : 'transparent'}>
-                    <td style={{ padding: '9px 12px', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText, whiteSpace: 'nowrap' }}>{l.br || '—'}</td>
-                    <td style={{ padding: '9px 12px', fontWeight: 600, maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={l.cliente_nome}>{l.cliente_nome || '—'}</td>
-                    <td style={{ padding: '9px 12px', maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={l.produto_descricao}>
-                      <span style={{ color: T.inkFaint, fontFamily: FONT_DISPLAY, marginRight: 6 }}>{l.cod_produto}</span>{l.produto_descricao}
-                    </td>
-                    <td style={{ padding: '9px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY }}>{l.quantidade}</td>
-                    <td style={{ padding: '9px 12px', color: T.inkDim, whiteSpace: 'nowrap' }}>{fmtData(l.data_pedido)}</td>
-                    <td style={{ padding: '9px 12px', textAlign: 'right', fontWeight: 700, color: dias > 30 ? T.rustText : T.inkDim }}>{dias ?? '—'}</td>
+                    onMouseLeave={e => e.currentTarget.style.background = (p.status === 'sem_op' && p.diasAberto > 30) ? T.rustSoft : 'transparent'}>
+                    <td style={{ padding: '9px 12px', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText, whiteSpace: 'nowrap' }}>{p.br}</td>
+                    <td style={{ padding: '9px 12px', fontWeight: 600, maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={p.cliente}>{p.cliente || '—'}</td>
+                    <td style={{ padding: '9px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 700, color: p.itensSemOp > 0 ? T.rustText : T.inkFaint }}>{p.itensSemOp || '—'}</td>
+                    <td style={{ padding: '9px 12px', textAlign: 'right', color: T.inkDim }}>{p.totalItens}</td>
+                    <td style={{ padding: '9px 12px', color: T.inkDim, whiteSpace: 'nowrap' }}>{fmtData(p.dataMaisAntiga)}</td>
+                    <td style={{ padding: '9px 12px', textAlign: 'right', fontWeight: 700, color: p.diasAberto > 30 ? T.rustText : T.inkDim }}>{p.diasAberto ?? '—'}</td>
                     <td style={{ padding: '9px 12px', textAlign: 'center' }}>
                       <span style={{ fontSize: 10.5, fontWeight: 700, color: st.cor, background: st.bg, padding: '3px 8px', borderRadius: 4, whiteSpace: 'nowrap' }}>{st.label}</span>
+                    </td>
+                    <td style={{ padding: '9px 12px', textAlign: 'center' }}>
+                      <button onClick={(e) => { e.stopPropagation(); setDrillBR(p); }}
+                        style={{ fontSize: 11, color: T.blueText, background: T.blueSoft, border: 'none', borderRadius: 5, padding: '4px 10px', cursor: 'pointer', fontWeight: 600 }}>
+                        Ver itens
+                      </button>
                     </td>
                   </tr>
                 );
@@ -2770,11 +2822,60 @@ function MonitoramentoOP() {
           </table>
         </div>
         <div style={{ padding: '10px 16px', borderTop: `1px solid ${T.line}`, fontSize: 11, color: T.inkFaint, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span>{filtradas.length} item{filtradas.length !== 1 ? 's' : ''} · linhas em vermelho = "Sem OP" há mais de 30 dias</span>
-          <BotaoExportar small onClick={() => exportCSV(filtradas, 'monitoramento_op_pedidos.csv',
-            ['br','cliente_nome','cod_produto','produto_descricao','quantidade','data_pedido','status'])} />
+          <span>{filtrados.length} projeto{filtrados.length !== 1 ? 's' : ''} · linhas em vermelho = "Sem OP" há mais de 30 dias</span>
+          <BotaoExportar small onClick={() => exportCSV(filtrados.map(p => ({ ...p, itens: p.itens.map(i => `${i.cod_produto} (${i.status})`).join(' | ') })), 'monitoramento_op_por_projeto.csv',
+            ['br','cliente','itensSemOp','totalItens','dataMaisAntiga','diasAberto','status','itens'])} />
         </div>
       </div>
+
+      {/* Modal: itens do projeto selecionado */}
+      {drillBR && (
+        <Overlay onClose={() => setDrillBR(null)}>
+          <div className="scale-in" style={{
+            background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, width: '100%', maxWidth: 720,
+            maxHeight: '85vh', display: 'flex', flexDirection: 'column', overflow: 'hidden', boxShadow: '0 24px 60px rgba(0,0,0,.18)',
+          }}>
+            <div style={{ padding: '18px 22px', borderBottom: `1px solid ${T.line}`, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+              <div>
+                <div style={{ fontFamily: FONT_DISPLAY, fontSize: 17, fontWeight: 700, color: T.ink }}>{drillBR.br}</div>
+                <div style={{ fontSize: 12, color: T.inkFaint, marginTop: 2 }}>{drillBR.cliente} · {drillBR.totalItens} item{drillBR.totalItens !== 1 ? 's' : ''}</div>
+              </div>
+              <button onClick={() => setDrillBR(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.inkFaint }}><X size={18} /></button>
+            </div>
+            <div style={{ overflow: 'auto', flex: 1 }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                <thead>
+                  <tr style={{ borderBottom: `1px solid ${T.line}`, position: 'sticky', top: 0, background: T.panel }}>
+                    <th style={thFat(0)}>Produto</th>
+                    <th style={{ ...thFat(70), textAlign: 'right' }}>Qtd</th>
+                    <th style={thFat(100)}>Data pedido</th>
+                    <th style={{ ...thFat(90), textAlign: 'center' }}>Nº OP</th>
+                    <th style={{ ...thFat(170), textAlign: 'center' }}>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {drillBR.itens.map((it, i) => {
+                    const st = statusInfo(it.status);
+                    return (
+                      <tr key={i} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                        <td style={{ padding: '9px 12px' }}>
+                          <div style={{ fontWeight: 600 }}>{it.cod_produto} — {it.produto_descricao}</div>
+                        </td>
+                        <td style={{ padding: '9px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY }}>{it.quantidade}</td>
+                        <td style={{ padding: '9px 12px', color: T.inkFaint, whiteSpace: 'nowrap' }}>{fmtData(it.data_pedido)}</td>
+                        <td style={{ padding: '9px 12px', textAlign: 'center', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText }}>{it.nro_ordem_producao || '—'}</td>
+                        <td style={{ padding: '9px 12px', textAlign: 'center' }}>
+                          <span style={{ fontSize: 10.5, fontWeight: 700, color: st.cor, background: st.bg, padding: '3px 8px', borderRadius: 4, whiteSpace: 'nowrap' }}>{st.label}</span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </Overlay>
+      )}
     </div>
   );
 }
