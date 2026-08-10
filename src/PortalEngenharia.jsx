@@ -458,6 +458,7 @@ function PortalConteudo({ currentUser, session }) {
           {renderTab('almoxarifado', <TabErrorBoundary tab="Almoxarifado"><Almoxarifado /></TabErrorBoundary>)}
           {renderTab('equipamentos', <TabErrorBoundary tab="Equipamentos de Terceiros"><EquipamentosTerceiros /></TabErrorBoundary>)}
           {renderTab('acompanhamento_servico', <TabErrorBoundary tab="Acompanhamento de Serviço"><AcompanhamentoServico /></TabErrorBoundary>)}
+          {renderTab('monitoramento_op', <TabErrorBoundary tab="Monitoramento OP"><MonitoramentoOP /></TabErrorBoundary>)}
           {renderTab('pedidosvale', <PedidosVale />)}
           {renderTab('aberturacotacao', <TabErrorBoundary tab="Abertura de Cotação"><AberturaCotacao currentUser={currentUser} /></TabErrorBoundary>)}
           {renderTab('ranking', <TabErrorBoundary tab="Ranking"><RankingPontuacao /></TabErrorBoundary>)}
@@ -508,6 +509,7 @@ function Sidebar({ view, setView, pendCount, papel, telasPermitidas }) {
     { id: 'almoxarifado', label: 'Almoxarifado',           icon: Package },
     { id: 'equipamentos', label: 'Equip. Terceiros',       icon: Webhook },
     { id: 'acompanhamento_servico', label: 'Falta Nota de Serviço', icon: AlertTriangle },
+    { id: 'monitoramento_op', label: 'Monitoramento OP', icon: Gauge },
     { id: 'pedidosvale',  label: 'Pedidos Vale',           icon: FileWarning },
     { id: 'aberturacotacao', label: 'Abertura de Cotação',  icon: FileStack },
     { id: 'ranking',      label: 'Ranking de Pontuação',    icon: TrendingUp },
@@ -2530,6 +2532,249 @@ function NfsAgrupadasCard({ itens, fmtData, fmtMoedaCompacta }) {
           </div>
         </div>
       ))}
+    </div>
+  );
+}
+
+function MonitoramentoOP() {
+  const [linhas, setLinhas] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [erro, setErro] = useState(null);
+  const [busca, setBusca] = useState('');
+  const [statusFiltro, setStatusFiltro] = useState('sem_op');
+  const [sortCol, setSortCol] = useState('data_pedido');
+  const [sortDir, setSortDir] = useState('desc');
+  const [syncing, setSyncing] = useState(false);
+  const [syncStatus, setSyncStatus] = useState(null);
+  const [ultimoSync, setUltimoSync] = useState(null);
+
+  const carregar = useCallback(async () => {
+    setLoading(true);
+    setErro(null);
+    const TAMANHO_LOTE = 1000;
+    let todas = [];
+    let pagina = 0;
+    while (true) {
+      const { data, error } = await supabase.from('monitoramento_op_pedidos')
+        .select('*')
+        .order('data_pedido', { ascending: false })
+        .range(pagina * TAMANHO_LOTE, (pagina + 1) * TAMANHO_LOTE - 1);
+      if (error) { setErro(error.message); setLoading(false); return; }
+      todas = todas.concat(data || []);
+      if (!data || data.length < TAMANHO_LOTE) break;
+      pagina += 1;
+      if (pagina > 50) break;
+    }
+    setLinhas(todas);
+    if (todas.length) setUltimoSync(todas[0].sincronizado_em);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { carregar(); }, [carregar]);
+
+  useEffect(() => {
+    const id = setInterval(carregar, 30 * 60 * 1000);
+    return () => clearInterval(id);
+  }, [carregar]);
+
+  const handleAtualizar = async () => {
+    setSyncing(true);
+    setSyncStatus(null);
+    try {
+      const res = await fetch(`${SUPABASE_URL}/functions/v1/sankhya-monitorar-op-pedidos`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+      }).then(r => r.json());
+      if (res.ok) {
+        setSyncStatus({ ok: true, message: `Analisado: ${res.total} itens de pedido · ${res.sem_op} sem OP · ${res.producao_generica} com produção genérica (últimos 180 dias).` });
+        await carregar();
+      } else {
+        setSyncStatus({ ok: false, message: res.erro || 'Erro desconhecido.' });
+      }
+    } catch (err) {
+      setSyncStatus({ ok: false, message: String(err) });
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  const filtradas = useMemo(() => {
+    return linhas
+      .filter(l => statusFiltro === 'todos' || l.status === statusFiltro)
+      .filter(l => !busca ||
+        (l.br || '').toLowerCase().includes(busca.toLowerCase()) ||
+        (l.cliente_nome || '').toLowerCase().includes(busca.toLowerCase()) ||
+        (l.produto_descricao || '').toLowerCase().includes(busca.toLowerCase()) ||
+        (l.cod_produto || '').toLowerCase().includes(busca.toLowerCase()))
+      .sort((a, b) => {
+        let va = a[sortCol] ?? '', vb = b[sortCol] ?? '';
+        if (typeof va === 'string') va = va.toLowerCase();
+        if (typeof vb === 'string') vb = vb.toLowerCase();
+        if (va < vb) return sortDir === 'asc' ? -1 : 1;
+        if (va > vb) return sortDir === 'asc' ? 1 : -1;
+        return 0;
+      });
+  }, [linhas, busca, statusFiltro, sortCol, sortDir]);
+
+  const kpis = useMemo(() => ({
+    total: linhas.length,
+    semOp: linhas.filter(l => l.status === 'sem_op').length,
+    producaoGenerica: linhas.filter(l => l.status === 'producao_generica').length,
+    ok: linhas.filter(l => l.status === 'ok').length,
+    diasMedioSemOp: (() => {
+      const semOp = linhas.filter(l => l.status === 'sem_op' && l.data_pedido);
+      if (!semOp.length) return 0;
+      const hoje = Date.now();
+      const soma = semOp.reduce((s, l) => s + Math.floor((hoje - new Date(l.data_pedido).getTime()) / 86400000), 0);
+      return Math.round(soma / semOp.length);
+    })(),
+  }), [linhas]);
+
+  const handleSort = (col) => {
+    if (sortCol === col) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+    else { setSortCol(col); setSortDir('desc'); }
+  };
+  const SortTh = ({ label, col, right }) => {
+    const active = sortCol === col;
+    return (
+      <th onClick={() => handleSort(col)} style={{ ...thFat(0, right ? 'right' : 'left'), cursor: 'pointer', whiteSpace: 'nowrap' }}>
+        <span style={{ color: active ? T.terracotta : T.inkFaint }}>{label}{active ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''}</span>
+      </th>
+    );
+  };
+
+  const fmtData = (iso) => !iso ? '—' : new Date(iso + 'T00:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: '2-digit' });
+  const diasEmAberto = (iso) => !iso ? null : Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
+
+  const statusInfo = (status) => ({
+    ok:                 { label: '✓ Tem OP vinculada',   cor: T.oliveText, bg: T.oliveSoft },
+    producao_generica:  { label: '◐ Produção genérica',  cor: T.amberText, bg: T.amberSoft },
+    sem_op:             { label: '⚠ Sem OP',              cor: T.rustText,  bg: T.rustSoft },
+  }[status] || { label: status, cor: T.inkFaint, bg: T.lineSoft });
+
+  return (
+    <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
+        <div style={{ fontSize: 12.5, color: T.inkFaint, background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 8, padding: '10px 14px', flex: 1, minWidth: 280 }}>
+          Verifica, item por item, se cada pedido de venda tem Ordem de Produção vinculada no Sankhya —
+          em dois níveis: 1) vínculo formal (NUNOTA → Processo → Atividade → OP) e 2) se não achar isso,
+          se existe alguma produção do mesmo produto perto da data do pedido (pode ser produção pra
+          estoque, vendida depois). Só marca como <strong>"Sem OP"</strong> quando nenhum dos dois existe —
+          é aí que está o risco real de não ter sido fabricado ainda. Cobre os últimos 180 dias.
+        </div>
+        <button onClick={handleAtualizar} disabled={syncing} style={{
+          display: 'flex', alignItems: 'center', gap: 8, background: T.terracotta, color: '#fff', border: 'none',
+          borderRadius: 8, padding: '10px 18px', fontSize: 13, fontWeight: 700, opacity: syncing ? 0.7 : 1, flexShrink: 0,
+        }}>
+          <RefreshCw size={15} className={syncing ? 'spin' : ''} />
+          {syncing ? 'Analisando… (pode levar 1min)' : 'Atualizar do Sankhya'}
+        </button>
+      </div>
+
+      {syncStatus && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', borderRadius: 8,
+          background: syncStatus.ok ? T.oliveSoft : T.rustSoft, border: `1px solid ${syncStatus.ok ? T.olive : T.rust}33`,
+        }}>
+          {syncStatus.ok ? <CheckCircle2 size={14} color={T.oliveText} /> : <AlertTriangle size={14} color={T.rustText} />}
+          <span style={{ fontSize: 12.5, color: syncStatus.ok ? T.oliveText : T.rustText }}>{syncStatus.message}</span>
+        </div>
+      )}
+
+      {erro && (
+        <div style={{ background: T.rustSoft, color: T.rustText, borderRadius: 8, padding: '10px 14px', fontSize: 12.5, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <AlertTriangle size={14} /> {erro}
+        </div>
+      )}
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(170px,1fr))', gap: 12 }}>
+        <Kpi label="Itens analisados" value={loading ? '…' : kpis.total} icon={Package} tone="blue"
+          sub="últimos 180 dias · pedidos de venda" />
+        <Kpi label="Sem OP (risco real)" value={loading ? '…' : kpis.semOp} icon={AlertTriangle} tone="rust"
+          sub="nenhuma produção encontrada, nem vinculada nem genérica" />
+        <Kpi label="Produção genérica" value={loading ? '…' : kpis.producaoGenerica} icon={Clock3} tone="amber"
+          sub="produzido perto da data, mas sem vínculo formal (provável estoque)" />
+        <Kpi label="Com OP vinculada" value={loading ? '…' : kpis.ok} icon={CheckCircle2} tone="olive"
+          sub="vínculo formal completo no Sankhya" />
+        <Kpi label="Média de dias em aberto" value={loading ? '…' : kpis.diasMedioSemOp} icon={Gauge}
+          sub="só entre os itens 'Sem OP'" />
+      </div>
+
+      <Panel>
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end', justifyContent: 'space-between' }}>
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+            <FiltroCampoFat label="Buscar BR, cliente ou produto">
+              <div style={{ position: 'relative' }}>
+                <Search size={13} style={{ position: 'absolute', left: 9, top: 9, color: T.inkFaint }} />
+                <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Ex: BR14331, Vale…"
+                  style={{ ...selectStyleFat(260), paddingLeft: 28 }} />
+              </div>
+            </FiltroCampoFat>
+            <FiltroCampoFat label="Status">
+              <div style={{ position: 'relative' }}>
+                <select value={statusFiltro} onChange={e => setStatusFiltro(e.target.value)} style={selectStyleFat(200)}>
+                  <option value="sem_op">⚠ Sem OP (risco real)</option>
+                  <option value="producao_generica">◐ Produção genérica</option>
+                  <option value="ok">✓ Tem OP vinculada</option>
+                  <option value="todos">Todos</option>
+                </select>
+                <ChevronDown size={13} style={chevronStyleFat} />
+              </div>
+            </FiltroCampoFat>
+          </div>
+          {ultimoSync && <div style={{ fontSize: 11, color: T.inkFaint }}>Última análise: {new Date(ultimoSync).toLocaleString('pt-BR')}</div>}
+        </div>
+      </Panel>
+
+      <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+            <thead>
+              <tr style={{ background: T.panelAlt, borderBottom: `1px solid ${T.line}` }}>
+                <SortTh label="BR" col="br" />
+                <th style={thFat(0)}>Cliente</th>
+                <th style={thFat(0)}>Produto</th>
+                <SortTh label="Qtd" col="quantidade" right />
+                <SortTh label="Data pedido" col="data_pedido" />
+                <th style={{ ...thFat(90), textAlign: 'right' }}>Dias aberto</th>
+                <th style={{ ...thFat(170), textAlign: 'center' }}>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {loading ? (
+                <tr><td colSpan={7} style={{ padding: 40, textAlign: 'center', color: T.inkFaint }}>Carregando…</td></tr>
+              ) : filtradas.length === 0 ? (
+                <tr><td colSpan={7} style={{ padding: 30, textAlign: 'center', color: T.oliveText, fontWeight: 600 }}>✓ Nenhum item encontrado com esse filtro.</td></tr>
+              ) : filtradas.map((l, i) => {
+                const st = statusInfo(l.status);
+                const dias = diasEmAberto(l.data_pedido);
+                return (
+                  <tr key={`${l.nunota}-${l.cod_produto}-${i}`} style={{ borderBottom: `1px solid ${T.lineSoft}`, background: l.status === 'sem_op' && dias > 30 ? T.rustSoft : 'transparent' }}
+                    onMouseEnter={e => e.currentTarget.style.background = T.panelAlt}
+                    onMouseLeave={e => e.currentTarget.style.background = (l.status === 'sem_op' && dias > 30) ? T.rustSoft : 'transparent'}>
+                    <td style={{ padding: '9px 12px', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText, whiteSpace: 'nowrap' }}>{l.br || '—'}</td>
+                    <td style={{ padding: '9px 12px', fontWeight: 600, maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={l.cliente_nome}>{l.cliente_nome || '—'}</td>
+                    <td style={{ padding: '9px 12px', maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={l.produto_descricao}>
+                      <span style={{ color: T.inkFaint, fontFamily: FONT_DISPLAY, marginRight: 6 }}>{l.cod_produto}</span>{l.produto_descricao}
+                    </td>
+                    <td style={{ padding: '9px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY }}>{l.quantidade}</td>
+                    <td style={{ padding: '9px 12px', color: T.inkDim, whiteSpace: 'nowrap' }}>{fmtData(l.data_pedido)}</td>
+                    <td style={{ padding: '9px 12px', textAlign: 'right', fontWeight: 700, color: dias > 30 ? T.rustText : T.inkDim }}>{dias ?? '—'}</td>
+                    <td style={{ padding: '9px 12px', textAlign: 'center' }}>
+                      <span style={{ fontSize: 10.5, fontWeight: 700, color: st.cor, background: st.bg, padding: '3px 8px', borderRadius: 4, whiteSpace: 'nowrap' }}>{st.label}</span>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        <div style={{ padding: '10px 16px', borderTop: `1px solid ${T.line}`, fontSize: 11, color: T.inkFaint, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span>{filtradas.length} item{filtradas.length !== 1 ? 's' : ''} · linhas em vermelho = "Sem OP" há mais de 30 dias</span>
+          <BotaoExportar small onClick={() => exportCSV(filtradas, 'monitoramento_op_pedidos.csv',
+            ['br','cliente_nome','cod_produto','produto_descricao','quantidade','data_pedido','status'])} />
+        </div>
+      </div>
     </div>
   );
 }
@@ -5070,7 +5315,6 @@ function BarraClicavel({ nome, valor, max, cor, onClick }) {
 function DrillDownPedidos({ titulo, itens, loading, onClose, campoValor = 'valor_liquido' }) {
   const total = itens.reduce((s, p) => s + Number(p[campoValor] || 0), 0);
   const labelValor = campoValor === 'valor_bruto' ? 'Valor bruto' : 'Valor líquido';
-  const projetosDistintos = new Set(itens.map(p => p.br).filter(Boolean)).size;
   return (
     <Overlay onClose={onClose}>
       <div className="scale-in" style={{
@@ -5080,9 +5324,7 @@ function DrillDownPedidos({ titulo, itens, loading, onClose, campoValor = 'valor
         <div style={{ padding: '18px 22px', borderBottom: `1px solid ${T.line}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div>
             <h2 style={{ fontFamily: FONT_DISPLAY, fontSize: 19, fontWeight: 600, margin: 0 }}>{titulo}</h2>
-            <p style={{ fontSize: 12, color: T.inkFaint, margin: '3px 0 0' }}>
-              {itens.length} itens (linhas de produto) · {projetosDistintos} projeto{projetosDistintos !== 1 ? 's' : ''} (BR) distinto{projetosDistintos !== 1 ? 's' : ''} · {fmtMoeda(total)} no total
-            </p>
+            <p style={{ fontSize: 12, color: T.inkFaint, margin: '3px 0 0' }}>{itens.length} itens · {fmtMoeda(total)} no total</p>
           </div>
           <button onClick={onClose} style={{ background: 'transparent', border: 'none', color: T.inkFaint }}><X size={20} /></button>
         </div>
@@ -8936,6 +9178,7 @@ const TELAS_CATALOGO = [
   { id: 'almoxarifado', label: 'Almoxarifado' },
   { id: 'equipamentos', label: 'Equip. Terceiros' },
   { id: 'acompanhamento_servico', label: 'Falta Nota de Serviço' },
+  { id: 'monitoramento_op', label: 'Monitoramento OP' },
   { id: 'pedidosvale',  label: 'Pedidos Vale' },
   { id: 'aberturacotacao', label: 'Abertura de Cotação' },
   { id: 'ranking',      label: 'Ranking de Pontuação' },
