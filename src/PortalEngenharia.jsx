@@ -3177,6 +3177,8 @@ function AcompanhamentoServico() {
   const [sortCol, setSortCol] = useState('diasAberto');
   const [sortDir, setSortDir] = useState('desc');
   const [detalhe, setDetalhe] = useState(null);
+  const [exclusoes, setExclusoes] = useState({}); // br -> { motivo, excluido_por, excluido_em }
+  const [modalExcluir, setModalExcluir] = useState(null); // br sendo excluído agora
 
   const ehServico = (descricao) => (descricao || '').toUpperCase().includes('SERVIÇO') || (descricao || '').toUpperCase().includes('SERVICO');
 
@@ -3234,13 +3236,15 @@ function AcompanhamentoServico() {
 
       const notas = await buscarEmLotesPorBR('nota_venda_itens', 'br,produto_descricao,quantidade,data_faturamento');
 
-      // 3) BRs com equipamento/material enviado a terceiro (remessa p/ industrialização/
-      // conserto) SEM retorno ainda — enquanto não voltar, não conta como pendência de
-      // serviço faturável. Ex: BR14251/26 (Ternium) — confirmado pelo time que esse caso
-      // não deve aparecer aqui.
-      const { data: equipAbertos } = await supabase.from('equipamentos_terceiros')
-        .select('br_referencia').is('nunota_retorno', null).not('br_referencia', 'is', null).neq('br_referencia', '<SEM PROJETO>');
-      const brsComRemessaAberta = new Set((equipAbertos || []).map(e => e.br_referencia));
+      // 3) BRs excluídos MANUALMENTE pelo time (tabela falta_servico_exclusoes) — a
+      // checagem automática via equipamentos_terceiros (remessa/retorno a terceiro) não é
+      // confiável: o mesmo padrão de "remessa em aberto" aparece em casos que devem ser
+      // excluídos (ex: BR14251/26) e em casos que NÃO devem (ex: BR13724/25) — por isso
+      // isso agora é decisão manual, com motivo registrado.
+      const { data: exclusoesData } = await supabase.from('falta_servico_exclusoes').select('*');
+      const exclusoesMap = {};
+      (exclusoesData || []).forEach(e => { exclusoesMap[e.br] = e; });
+      setExclusoes(exclusoesMap);
 
       // Agrupa por BR + descrição do produto (soma quantidades)
       const pedidoPorBrItem = {};
@@ -3269,9 +3273,9 @@ function AcompanhamentoServico() {
       });
 
       // Filtra: só os BRs onde TODOS os itens pendentes são de SERVIÇO (nenhum item de
-      // material em aberto) E que não estão com remessa a terceiro ainda aberta.
+      // material em aberto) E que não foram excluídos manualmente pelo time.
       const resultado = Object.values(porBr)
-        .filter(b => b.itensPendentes.length > 0 && b.itensPendentes.every(i => ehServico(i.descricao)) && !brsComRemessaAberta.has(b.br))
+        .filter(b => b.itensPendentes.length > 0 && b.itensPendentes.every(i => ehServico(i.descricao)) && !exclusoesMap[b.br])
         .map(b => ({
           ...b,
           valorPendente: b.itensPendentes.reduce((s, i) => s + i.valor, 0),
@@ -3284,6 +3288,17 @@ function AcompanhamentoServico() {
     }
     setLoading(false);
   }, []);
+
+  const excluirBr = async (br, motivo) => {
+    await supabase.from('falta_servico_exclusoes').upsert({ br, motivo, excluido_por: 'time' }, { onConflict: 'br' });
+    setModalExcluir(null);
+    await carregar();
+  };
+
+  const reincluirBr = async (br) => {
+    await supabase.from('falta_servico_exclusoes').delete().eq('br', br);
+    await carregar();
+  };
 
   useEffect(() => { carregar(); }, [carregar]);
 
@@ -3376,13 +3391,14 @@ function AcompanhamentoServico() {
                 <LocalSortTh label="Pedido" col="dataPedidoMaisAntiga" />
                 <LocalSortTh label="Dias em aberto" col="diasAberto" right />
                 <th style={{ ...thFat(90), textAlign: 'center' }}>Detalhe</th>
+                <th style={{ ...thFat(90), textAlign: 'center' }}>Excluir</th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={7} style={{ padding: 40, textAlign: 'center', color: T.inkFaint }}>Carregando…</td></tr>
+                <tr><td colSpan={8} style={{ padding: 40, textAlign: 'center', color: T.inkFaint }}>Carregando…</td></tr>
               ) : filtradas.length === 0 ? (
-                <tr><td colSpan={7} style={{ padding: 30, textAlign: 'center', color: T.oliveText, fontWeight: 600 }}>✓ Nenhum caso — tudo faturado ou pendências ainda têm material em aberto também.</td></tr>
+                <tr><td colSpan={8} style={{ padding: 30, textAlign: 'center', color: T.oliveText, fontWeight: 600 }}>✓ Nenhum caso — tudo faturado ou pendências ainda têm material em aberto também.</td></tr>
               ) : filtradas.map(l => (
                 <tr key={l.br} style={{ borderBottom: `1px solid ${T.lineSoft}`, background: (l.diasAberto || 0) > 30 ? T.rustSoft : 'transparent' }}
                   onMouseEnter={e => e.currentTarget.style.background = T.panelAlt}
@@ -3399,6 +3415,12 @@ function AcompanhamentoServico() {
                     <button onClick={() => setDetalhe(l)}
                       style={{ fontSize: 11, color: T.blueText, background: T.blueSoft, border: 'none', borderRadius: 5, padding: '4px 10px', cursor: 'pointer', fontWeight: 600 }}>
                       Ver
+                    </button>
+                  </td>
+                  <td style={{ padding: '9px 12px', textAlign: 'center' }}>
+                    <button onClick={() => setModalExcluir(l.br)} title="Marcar como 'não solicitar ainda' (com motivo)"
+                      style={{ fontSize: 11, color: T.inkFaint, background: 'transparent', border: `1px solid ${T.line}`, borderRadius: 5, padding: '4px 10px', cursor: 'pointer', fontWeight: 600 }}>
+                      Ocultar
                     </button>
                   </td>
                 </tr>
@@ -3440,6 +3462,49 @@ function AcompanhamentoServico() {
             </div>
           </div>
         </Overlay>
+      )}
+
+      {/* Modal: excluir BR manualmente, com motivo obrigatório */}
+      {modalExcluir && (
+        <Overlay onClose={() => setModalExcluir(null)}>
+          <div className="scale-in" style={{
+            background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, width: '100%', maxWidth: 460,
+            boxShadow: '0 24px 60px rgba(0,0,0,.18)', overflow: 'hidden',
+          }}>
+            <div style={{ padding: '18px 22px', borderBottom: `1px solid ${T.line}` }}>
+              <div style={{ fontFamily: FONT_DISPLAY, fontSize: 16, fontWeight: 700, color: T.ink }}>Ocultar {modalExcluir}</div>
+              <div style={{ fontSize: 12, color: T.inkFaint, marginTop: 3 }}>Explica por que esse BR não deve aparecer aqui ainda (fica registrado, e pode reincluir depois).</div>
+            </div>
+            <div style={{ padding: '18px 22px' }}>
+              <textarea id="motivo-exclusao" rows={3} placeholder="Ex: equipamento ainda com subcontratada, aguardando retorno pro cliente…"
+                style={{ ...inputStyle(), fontSize: 12.5, width: '100%' }} />
+              <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
+                <button onClick={() => setModalExcluir(null)} style={{ ...ghostBtn(T.inkFaint), flex: 1, justifyContent: 'center' }}>Cancelar</button>
+                <button onClick={() => excluirBr(modalExcluir, document.getElementById('motivo-exclusao').value)}
+                  style={{ ...solidBtn(T.terracotta, true), flex: 1, justifyContent: 'center' }}>Ocultar</button>
+              </div>
+            </div>
+          </div>
+        </Overlay>
+      )}
+
+      {/* BRs ocultados manualmente — pra poder reincluir se precisar */}
+      {Object.keys(exclusoes).length > 0 && (
+        <Panel title="BRs ocultados manualmente" subtitle="Marcados pelo time como 'não solicitar faturamento ainda' — clique em Reincluir se a situação mudou">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {Object.values(exclusoes).map(e => (
+              <div key={e.br} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', padding: '10px 12px', background: T.panelAlt, borderRadius: 8, gap: 12 }}>
+                <div>
+                  <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText, fontSize: 12.5 }}>{e.br}</div>
+                  {e.motivo && <div style={{ fontSize: 11.5, color: T.inkFaint, marginTop: 3 }}>{e.motivo}</div>}
+                </div>
+                <button onClick={() => reincluirBr(e.br)} style={{ fontSize: 11, color: T.oliveText, background: T.oliveSoft, border: 'none', borderRadius: 5, padding: '4px 10px', cursor: 'pointer', fontWeight: 600, flexShrink: 0 }}>
+                  Reincluir
+                </button>
+              </div>
+            ))}
+          </div>
+        </Panel>
       )}
     </div>
   );
