@@ -2561,7 +2561,7 @@ function VerificacaoProjetos({ currentUser }) {
 
     const brs = (projetos || []).map(p => p.identificacao).filter(Boolean);
     const { data: propostas, error: eProp } = brs.length
-      ? await supabase.from('propostas').select('br,status,conhecimento_pedido,data_conhecimento_pedido,responsavel,data_abertura').in('br', brs)
+      ? await supabase.from('propostas').select('br,status,conhecimento_pedido,data_conhecimento_pedido,responsavel_id,data_abertura').in('br', brs)
       : { data: [], error: null };
     if (eProp) { setErro(eProp.message); setLoading(false); return; }
 
