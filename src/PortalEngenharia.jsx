@@ -3184,33 +3184,51 @@ function AcompanhamentoServico() {
     setLoading(true);
     setErro(null);
 
-    // 1) BRs válidos que têm equipamento de terceiro (origem do rastreio)
-    const { data: equip, error: eqErr } = await supabase
-      .from('equipamentos_terceiros')
-      .select('br_referencia')
-      .not('br_referencia', 'is', null)
-      .neq('br_referencia', '<SEM PROJETO>');
-    if (eqErr) { setErro(eqErr.message); setLoading(false); return; }
-    const brs = [...new Set((equip || []).map(e => e.br_referencia))];
-    if (!brs.length) { setLinhas([]); setLoading(false); return; }
-
-    // 2) Itens pedidos x itens já faturados, pra cada BR (busca em lotes pra evitar limite de URL/IN)
-    const buscarEmLotes = async (tabela, campos) => {
+    // Busca em lotes pra evitar limite de linhas do Supabase (~1000 por resposta).
+    const buscarTudoEmLotes = async (tabela, campos, filtros) => {
+      const TAMANHO_LOTE = 1000;
       let resultado = [];
-      for (let i = 0; i < brs.length; i += 200) {
-        const lote = brs.slice(i, i + 200);
-        const { data, error } = await supabase.from(tabela).select(campos).in('br', lote);
+      let pagina = 0;
+      while (true) {
+        let q = supabase.from(tabela).select(campos);
+        if (filtros) q = filtros(q);
+        const { data, error } = await q.range(pagina * TAMANHO_LOTE, (pagina + 1) * TAMANHO_LOTE - 1);
         if (error) throw error;
         resultado = resultado.concat(data || []);
+        if (!data || data.length < TAMANHO_LOTE) break;
+        pagina += 1;
+        if (pagina > 50) break;
       }
       return resultado;
     };
 
     try {
-      const [pedidos, notas] = await Promise.all([
-        buscarEmLotes('pedidos_itens', 'br,cliente_nome,produto_descricao,quantidade,valor_liquido,data_neg,numero_pedido,vendedor_nome'),
-        buscarEmLotes('nota_venda_itens', 'br,produto_descricao,quantidade,data_faturamento'),
-      ]);
+      // 1) TODOS os pedidos com BR válido — antes isso ficava restrito só aos BRs que
+      // tinham equipamento de terceiro vinculado (equipamentos_terceiros), o que deixava
+      // de fora qualquer projeto sem empréstimo de equipamento (ex: BR14100, que tem
+      // material faturado e serviço pendente, mas nenhum equipamento envolvido).
+      const pedidos = await buscarTudoEmLotes(
+        'pedidos_itens',
+        'br,cliente_nome,produto_descricao,quantidade,valor_liquido,data_neg,numero_pedido,vendedor_nome',
+        q => q.not('br', 'is', null).neq('br', '<SEM PROJETO>'),
+      );
+
+      const brs = [...new Set(pedidos.map(p => p.br))];
+      if (!brs.length) { setLinhas([]); setLoading(false); return; }
+
+      // 2) Itens já faturados, pra cada BR (busca em lotes pra evitar limite de URL/IN)
+      const buscarEmLotesPorBR = async (tabela, campos) => {
+        let resultado = [];
+        for (let i = 0; i < brs.length; i += 200) {
+          const lote = brs.slice(i, i + 200);
+          const { data, error } = await supabase.from(tabela).select(campos).in('br', lote);
+          if (error) throw error;
+          resultado = resultado.concat(data || []);
+        }
+        return resultado;
+      };
+
+      const notas = await buscarEmLotesPorBR('nota_venda_itens', 'br,produto_descricao,quantidade,data_faturamento');
 
       // Agrupa por BR + descrição do produto (soma quantidades)
       const pedidoPorBrItem = {};
