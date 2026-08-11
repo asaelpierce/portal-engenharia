@@ -3207,10 +3207,12 @@ function AcompanhamentoServico() {
       // tinham equipamento de terceiro vinculado (equipamentos_terceiros), o que deixava
       // de fora qualquer projeto sem empréstimo de equipamento (ex: BR14100, que tem
       // material faturado e serviço pendente, mas nenhum equipamento envolvido).
+      // codtipoper != 3104 exclui "PEDIDO DE VENDA - RETRABALHO", que não deve contar
+      // como pendência de nota de serviço.
       const pedidos = await buscarTudoEmLotes(
         'pedidos_itens',
-        'br,cliente_nome,produto_descricao,quantidade,valor_liquido,data_neg,numero_pedido,vendedor_nome',
-        q => q.not('br', 'is', null).neq('br', '<SEM PROJETO>'),
+        'br,cliente_nome,produto_descricao,quantidade,valor_liquido,data_neg,numero_pedido,vendedor_nome,codtipoper',
+        q => q.not('br', 'is', null).neq('br', '<SEM PROJETO>').or('codtipoper.neq.3104,codtipoper.is.null'),
       );
 
       const brs = [...new Set(pedidos.map(p => p.br))];
@@ -3379,9 +3381,9 @@ function AcompanhamentoServico() {
                   <td style={{ padding: '9px 12px', maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={l.itensPendentes.map(i => i.descricao).join(' · ')}>
                     {l.itensPendentes.map(i => i.descricao).join(' · ')}
                   </td>
-                  <td style={{ padding: '9px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.rustText }}>{fmtMoeda(l.valorPendente)}</td>
+                  <td style={{ padding: '9px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.ink }}>{fmtMoeda(l.valorPendente)}</td>
                   <td style={{ padding: '9px 12px', color: T.inkDim, whiteSpace: 'nowrap' }}>{fmtData(l.dataPedidoMaisAntiga)}</td>
-                  <td style={{ padding: '9px 12px', textAlign: 'right', fontWeight: 700, color: (l.diasAberto || 0) > 30 ? T.rustText : T.inkDim }}>{l.diasAberto ?? '—'}</td>
+                  <td style={{ padding: '9px 12px', textAlign: 'right', fontWeight: 700, color: T.inkDim }}>{l.diasAberto ?? '—'}</td>
                   <td style={{ padding: '9px 12px', textAlign: 'center' }}>
                     <button onClick={() => setDetalhe(l)}
                       style={{ fontSize: 11, color: T.blueText, background: T.blueSoft, border: 'none', borderRadius: 5, padding: '4px 10px', cursor: 'pointer', fontWeight: 600 }}>
@@ -3418,7 +3420,7 @@ function AcompanhamentoServico() {
               {detalhe.itensPendentes.map((it, i) => (
                 <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: `1px solid ${T.lineSoft}` }}>
                   <span style={{ fontSize: 12.5 }}>{it.descricao}</span>
-                  <span style={{ fontSize: 12.5, fontWeight: 700, color: T.rustText, fontFamily: FONT_DISPLAY }}>{fmtMoeda(it.valor)}</span>
+                  <span style={{ fontSize: 12.5, fontWeight: 700, color: T.ink, fontFamily: FONT_DISPLAY }}>{fmtMoeda(it.valor)}</span>
                 </div>
               ))}
               <div style={{ marginTop: 14, fontSize: 12, color: T.inkFaint }}>
