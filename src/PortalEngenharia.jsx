@@ -459,6 +459,7 @@ function PortalConteudo({ currentUser, session }) {
           {renderTab('equipamentos', <TabErrorBoundary tab="Equipamentos de Terceiros"><EquipamentosTerceiros /></TabErrorBoundary>)}
           {renderTab('acompanhamento_servico', <TabErrorBoundary tab="Acompanhamento de Serviço"><AcompanhamentoServico /></TabErrorBoundary>)}
           {renderTab('monitoramento_op', <TabErrorBoundary tab="Monitoramento OP"><MonitoramentoOP /></TabErrorBoundary>)}
+          {renderTab('verificacao_projetos', <TabErrorBoundary tab="Verificação de Projetos"><VerificacaoProjetos currentUser={currentUser} /></TabErrorBoundary>)}
           {renderTab('pedidosvale', <PedidosVale />)}
           {renderTab('aberturacotacao', <TabErrorBoundary tab="Abertura de Cotação"><AberturaCotacao currentUser={currentUser} /></TabErrorBoundary>)}
           {renderTab('ranking', <TabErrorBoundary tab="Ranking"><RankingPontuacao /></TabErrorBoundary>)}
@@ -510,6 +511,7 @@ function Sidebar({ view, setView, pendCount, papel, telasPermitidas }) {
     { id: 'equipamentos', label: 'Equip. Terceiros',       icon: Webhook },
     { id: 'acompanhamento_servico', label: 'Falta Nota de Serviço', icon: AlertTriangle },
     { id: 'monitoramento_op', label: 'Monitoramento OP', icon: Gauge },
+    { id: 'verificacao_projetos', label: 'Verificação de Projetos', icon: ClipboardCheck },
     { id: 'pedidosvale',  label: 'Pedidos Vale',           icon: FileWarning },
     { id: 'aberturacotacao', label: 'Abertura de Cotação',  icon: FileStack },
     { id: 'ranking',      label: 'Ranking de Pontuação',    icon: TrendingUp },
@@ -2532,6 +2534,280 @@ function NfsAgrupadasCard({ itens, fmtData, fmtMoedaCompacta }) {
           </div>
         </div>
       ))}
+    </div>
+  );
+}
+
+function VerificacaoProjetos({ currentUser }) {
+  const podeEditar = APROVADORES_POOL.includes(currentUser?.nome);
+  const [projetosSemana, setProjetosSemana] = useState([]);
+  const [propostasMap, setPropostasMap] = useState({}); // br -> proposta
+  const [manuaisMap, setManuaisMap] = useState({}); // `${codproj}-${item}` -> registro manual
+  const [loading, setLoading] = useState(true);
+  const [erro, setErro] = useState(null);
+  const [busca, setBusca] = useState('');
+  const [syncing, setSyncing] = useState(false);
+  const [syncStatus, setSyncStatus] = useState(null);
+  const [ultimoSync, setUltimoSync] = useState(null);
+  const [observacaoAberta, setObservacaoAberta] = useState(null); // { codproj, item }
+
+  const carregar = useCallback(async () => {
+    setLoading(true);
+    setErro(null);
+
+    const { data: projetos, error: eProj } = await supabase.from('projetos_sankhya_semana')
+      .select('*').order('dhalter', { ascending: false });
+    if (eProj) { setErro(eProj.message); setLoading(false); return; }
+
+    const brs = (projetos || []).map(p => p.identificacao).filter(Boolean);
+    const { data: propostas, error: eProp } = brs.length
+      ? await supabase.from('propostas').select('br,status,conhecimento_pedido,data_conhecimento_pedido,responsavel,data_abertura').in('br', brs)
+      : { data: [], error: null };
+    if (eProp) { setErro(eProp.message); setLoading(false); return; }
+
+    const { data: manuais, error: eManual } = await supabase.from('verificacao_projetos_manual').select('*');
+    if (eManual) { setErro(eManual.message); setLoading(false); return; }
+
+    const pMap = {};
+    (propostas || []).forEach(p => { if (!pMap[p.br]) pMap[p.br] = p; });
+    const mMap = {};
+    (manuais || []).forEach(m => { mMap[`${m.codproj}-${m.item}`] = m; });
+
+    setProjetosSemana(projetos || []);
+    setPropostasMap(pMap);
+    setManuaisMap(mMap);
+    if (projetos?.length) setUltimoSync(projetos[0].sincronizado_em);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { carregar(); }, [carregar]);
+
+  useEffect(() => {
+    const id = setInterval(carregar, 15 * 60 * 1000);
+    return () => clearInterval(id);
+  }, [carregar]);
+
+  const handleAtualizar = async () => {
+    setSyncing(true);
+    setSyncStatus(null);
+    try {
+      const res = await fetch(`${SUPABASE_URL}/functions/v1/sankhya-projetos-semana-sync`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+      }).then(r => r.json());
+      if (res.ok) {
+        setSyncStatus({ ok: true, message: `${res.gravados} projeto${res.gravados !== 1 ? 's' : ''} encontrado${res.gravados !== 1 ? 's' : ''} nessa semana.` });
+        await carregar();
+      } else {
+        setSyncStatus({ ok: false, message: res.erro || 'Erro desconhecido.' });
+      }
+    } catch (err) {
+      setSyncStatus({ ok: false, message: String(err) });
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  const marcarManual = async (codproj, item, concluido, observacao = null) => {
+    if (!podeEditar) return; // só Edson, Felipe e João Victor podem marcar/desmarcar
+    const { error } = await supabase.from('verificacao_projetos_manual')
+      .upsert({ codproj, item, concluido, observacao, marcado_por: currentUser?.nome, marcado_em: new Date().toISOString() }, { onConflict: 'codproj,item' });
+    if (!error) await carregar();
+  };
+
+  // Monta o checklist de cada projeto: o "concluído" É SEMPRE a marcação manual (é o controle
+  // do time, não pode ser automático) — o dado da tabela `propostas` aparece só como SUGESTÃO,
+  // pra ajudar quem for marcar, mas nunca marca a caixinha por conta própria.
+  const projetos = useMemo(() => {
+    return projetosSemana.map(p => {
+      const proposta = propostasMap[p.identificacao];
+      const manualProposta = manuaisMap[`${p.codproj}-proposta_criada`];
+      const manualConhecimento = manuaisMap[`${p.codproj}-conhecimento_pedido`];
+
+      const propostaCriada = manualProposta?.concluido ?? false;
+      const conhecimentoPedido = manualConhecimento?.concluido ?? false;
+      const sugestaoProposta = !!proposta; // indício automático, não conta como confirmado
+      const sugestaoConhecimento = !!proposta?.conhecimento_pedido;
+
+      const pendencias = (propostaCriada ? 0 : 1) + (conhecimentoPedido ? 0 : 1);
+
+      return {
+        ...p,
+        proposta,
+        propostaCriada,
+        sugestaoProposta,
+        marcadoPorProposta: manualProposta?.marcado_por || null,
+        marcadoEmProposta: manualProposta?.marcado_em || null,
+        conhecimentoPedido,
+        sugestaoConhecimento,
+        marcadoPorConhecimento: manualConhecimento?.marcado_por || null,
+        marcadoEmConhecimento: manualConhecimento?.marcado_em || null,
+        pendencias,
+      };
+    });
+  }, [projetosSemana, propostasMap, manuaisMap]);
+
+  const filtrados = useMemo(() => {
+    return projetos
+      .filter(p => !busca ||
+        p.identificacao.toLowerCase().includes(busca.toLowerCase()) ||
+        (p.abreviatura || '').toLowerCase().includes(busca.toLowerCase()))
+      .sort((a, b) => b.pendencias - a.pendencias || (b.dhalter || '').localeCompare(a.dhalter || ''));
+  }, [projetos, busca]);
+
+  const kpis = useMemo(() => ({
+    total: projetos.length,
+    semProposta: projetos.filter(p => !p.propostaCriada).length,
+    semConhecimento: projetos.filter(p => !p.conhecimentoPedido).length,
+    completos: projetos.filter(p => p.propostaCriada && p.conhecimentoPedido).length,
+  }), [projetos]);
+
+  const fmtData = (iso) => !iso ? '—' : new Date(iso).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' });
+  const fmtDataHora = (iso) => !iso ? '—' : new Date(iso).toLocaleString('pt-BR', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+
+  const ChecklistItem = ({ ok, label, sugestao, marcadoPor, marcadoEm, podeEditar, onToggle }) => (
+    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+      <button
+        onClick={podeEditar ? onToggle : undefined}
+        disabled={!podeEditar}
+        title={!podeEditar ? 'Só Edson, Felipe e João Victor podem confirmar isso' : (ok ? 'Marcado — clique pra desmarcar' : 'Clique pra confirmar manualmente')}
+        style={{
+          width: 20, height: 20, borderRadius: 5, border: `1.5px solid ${ok ? T.oliveText : T.line}`,
+          background: ok ? T.oliveText : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center',
+          cursor: podeEditar ? 'pointer' : 'not-allowed', flexShrink: 0, marginTop: 1, opacity: podeEditar ? 1 : 0.6,
+        }}>
+        {ok && <CheckCircle2 size={13} color="#fff" strokeWidth={3} />}
+      </button>
+      <div>
+        <div style={{ fontSize: 12, color: ok ? T.ink : T.inkFaint, fontWeight: ok ? 600 : 400 }}>{label}</div>
+        {ok && marcadoPor && (
+          <div style={{ fontSize: 10.5, color: T.oliveText, marginTop: 2 }}>por {marcadoPor}{marcadoEm ? ` · ${fmtDataHora(marcadoEm)}` : ''}</div>
+        )}
+        {!ok && sugestao && (
+          <div style={{ fontSize: 10.5, color: T.blueText, marginTop: 2 }}>💡 sugestão: {sugestao}</div>
+        )}
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
+        <div style={{ fontSize: 12.5, color: T.inkFaint, background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 8, padding: '10px 14px', flex: 1, minWidth: 280 }}>
+          Lista os projetos (BRs) criados ou alterados no Sankhya <strong>nesta semana</strong>, pra você confirmar
+          manualmente se cada um já tem <strong>proposta criada</strong> e <strong>conhecimento de pedido confirmado</strong>.
+          A marcação é sempre manual (é o controle do time) — o portal só mostra uma 💡 sugestão ao lado, quando encontra
+          algo na tabela de propostas, pra ajudar na hora de confirmar.
+        </div>
+        <button onClick={handleAtualizar} disabled={syncing} style={{
+          display: 'flex', alignItems: 'center', gap: 8, background: T.terracotta, color: '#fff', border: 'none',
+          borderRadius: 8, padding: '10px 18px', fontSize: 13, fontWeight: 700, opacity: syncing ? 0.7 : 1, flexShrink: 0,
+        }}>
+          <RefreshCw size={15} className={syncing ? 'spin' : ''} />
+          {syncing ? 'Atualizando…' : 'Atualizar do Sankhya'}
+        </button>
+      </div>
+
+      {!podeEditar && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', borderRadius: 8, background: T.amberSoft, border: `1px solid ${T.amber}33` }}>
+          <AlertTriangle size={14} color={T.amberText} />
+          <span style={{ fontSize: 12.5, color: T.amberText }}>
+            Modo somente leitura — só Edson, Felipe e João Victor podem confirmar os itens do checklist.
+          </span>
+        </div>
+      )}
+
+      {syncStatus && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', borderRadius: 8,
+          background: syncStatus.ok ? T.oliveSoft : T.rustSoft, border: `1px solid ${syncStatus.ok ? T.olive : T.rust}33`,
+        }}>
+          {syncStatus.ok ? <CheckCircle2 size={14} color={T.oliveText} /> : <AlertTriangle size={14} color={T.rustText} />}
+          <span style={{ fontSize: 12.5, color: syncStatus.ok ? T.oliveText : T.rustText }}>{syncStatus.message}</span>
+        </div>
+      )}
+
+      {erro && (
+        <div style={{ background: T.rustSoft, color: T.rustText, borderRadius: 8, padding: '10px 14px', fontSize: 12.5, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <AlertTriangle size={14} /> {erro}
+        </div>
+      )}
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(170px,1fr))', gap: 12 }}>
+        <Kpi label="Projetos nessa semana" value={loading ? '…' : kpis.total} icon={Package} tone="blue"
+          sub="criados ou alterados no Sankhya" />
+        <Kpi label="Sem proposta" value={loading ? '…' : kpis.semProposta} icon={AlertTriangle} tone="rust"
+          sub="ainda não tem proposta cadastrada no portal" />
+        <Kpi label="Sem conhecimento de pedido" value={loading ? '…' : kpis.semConhecimento} icon={Clock3} tone="amber"
+          sub="proposta existe, mas conhecimento não confirmado" />
+        <Kpi label="Checklist completo" value={loading ? '…' : kpis.completos} icon={CheckCircle2} tone="olive"
+          sub="proposta + conhecimento de pedido, os dois ok" />
+      </div>
+
+      <Panel>
+        <FiltroCampoFat label="Buscar BR ou abreviatura">
+          <div style={{ position: 'relative' }}>
+            <Search size={13} style={{ position: 'absolute', left: 9, top: 9, color: T.inkFaint }} />
+            <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Ex: BR14410…"
+              style={{ ...selectStyleFat(280), paddingLeft: 28 }} />
+          </div>
+        </FiltroCampoFat>
+      </Panel>
+
+      <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+            <thead>
+              <tr style={{ background: T.panelAlt, borderBottom: `1px solid ${T.line}` }}>
+                <th style={thFat(0)}>BR / Abreviatura</th>
+                <th style={thFat(100)}>Alterado em</th>
+                <th style={thFat(90)}>Ativo</th>
+                <th style={thFat(220)}>Proposta criada</th>
+                <th style={thFat(240)}>Conhecimento de pedido</th>
+              </tr>
+            </thead>
+            <tbody>
+              {loading ? (
+                <tr><td colSpan={5} style={{ padding: 40, textAlign: 'center', color: T.inkFaint }}>Carregando…</td></tr>
+              ) : filtrados.length === 0 ? (
+                <tr><td colSpan={5} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Nenhum projeto encontrado nessa semana. Clique em "Atualizar do Sankhya".</td></tr>
+              ) : filtrados.map(p => (
+                <tr key={p.codproj} style={{ borderBottom: `1px solid ${T.lineSoft}`, background: p.pendencias > 0 ? T.amberSoft : 'transparent' }}
+                  onMouseEnter={e => e.currentTarget.style.background = T.panelAlt}
+                  onMouseLeave={e => e.currentTarget.style.background = p.pendencias > 0 ? T.amberSoft : 'transparent'}>
+                  <td style={{ padding: '10px 12px' }}>
+                    <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText }}>{p.identificacao}</div>
+                    {p.abreviatura && <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 2 }}>{p.abreviatura}</div>}
+                  </td>
+                  <td style={{ padding: '10px 12px', color: T.inkDim, whiteSpace: 'nowrap' }}>{fmtDataHora(p.dhalter)}</td>
+                  <td style={{ padding: '10px 12px' }}>
+                    {p.ativo ? <span style={{ color: T.oliveText, fontWeight: 600, fontSize: 11 }}>Sim</span> : <span style={{ color: T.inkFaint, fontSize: 11 }}>Não</span>}
+                  </td>
+                  <td style={{ padding: '10px 12px' }}>
+                    <ChecklistItem ok={p.propostaCriada} podeEditar={podeEditar}
+                      label={p.propostaCriada ? 'Confirmado' : 'Pendente de confirmação'}
+                      sugestao={p.sugestaoProposta ? `existe proposta (${p.proposta?.status || 'cadastrada'})` : null}
+                      marcadoPor={p.marcadoPorProposta} marcadoEm={p.marcadoEmProposta}
+                      onToggle={() => marcarManual(p.codproj, 'proposta_criada', !p.propostaCriada)} />
+                  </td>
+                  <td style={{ padding: '10px 12px' }}>
+                    <ChecklistItem ok={p.conhecimentoPedido} podeEditar={podeEditar}
+                      label={p.conhecimentoPedido ? 'Confirmado' : 'Pendente de confirmação'}
+                      sugestao={p.sugestaoConhecimento ? `sistema indica confirmado ${p.proposta?.data_conhecimento_pedido ? 'em ' + fmtData(p.proposta.data_conhecimento_pedido) : ''}` : null}
+                      marcadoPor={p.marcadoPorConhecimento} marcadoEm={p.marcadoEmConhecimento}
+                      onToggle={() => marcarManual(p.codproj, 'conhecimento_pedido', !p.conhecimentoPedido)} />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div style={{ padding: '10px 16px', borderTop: `1px solid ${T.line}`, fontSize: 11, color: T.inkFaint, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span>{filtrados.length} projeto{filtrados.length !== 1 ? 's' : ''} · linhas em âmbar = tem pendência no checklist{ultimoSync && ` · última sincronização: ${new Date(ultimoSync).toLocaleString('pt-BR')}`}</span>
+          <BotaoExportar small onClick={() => exportCSV(filtrados, 'verificacao_projetos.csv',
+            ['identificacao','abreviatura','dhalter','propostaCriada','conhecimentoPedido'])} />
+        </div>
+      </div>
     </div>
   );
 }
@@ -9290,6 +9566,7 @@ const TELAS_CATALOGO = [
   { id: 'equipamentos', label: 'Equip. Terceiros' },
   { id: 'acompanhamento_servico', label: 'Falta Nota de Serviço' },
   { id: 'monitoramento_op', label: 'Monitoramento OP' },
+  { id: 'verificacao_projetos', label: 'Verificação de Projetos' },
   { id: 'pedidosvale',  label: 'Pedidos Vale' },
   { id: 'aberturacotacao', label: 'Abertura de Cotação' },
   { id: 'ranking',      label: 'Ranking de Pontuação' },
