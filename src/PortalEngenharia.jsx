@@ -3209,10 +3209,12 @@ function AcompanhamentoServico() {
       // material faturado e serviço pendente, mas nenhum equipamento envolvido).
       // codtipoper != 3104 exclui "PEDIDO DE VENDA - RETRABALHO", que não deve contar
       // como pendência de nota de serviço.
+      // data_neg >= 2026-01-01 exclui tudo de 2025 (casos antigos demais, resolvidos ou
+      // já não são acionáveis — o time só quer ver pendências recentes).
       const pedidos = await buscarTudoEmLotes(
         'pedidos_itens',
         'br,cliente_nome,produto_descricao,quantidade,valor_liquido,data_neg,numero_pedido,vendedor_nome,codtipoper',
-        q => q.not('br', 'is', null).neq('br', '<SEM PROJETO>').or('codtipoper.neq.3104,codtipoper.is.null'),
+        q => q.not('br', 'is', null).neq('br', '<SEM PROJETO>').or('codtipoper.neq.3104,codtipoper.is.null').gte('data_neg', '2026-01-01'),
       );
 
       const brs = [...new Set(pedidos.map(p => p.br))];
@@ -3231,6 +3233,14 @@ function AcompanhamentoServico() {
       };
 
       const notas = await buscarEmLotesPorBR('nota_venda_itens', 'br,produto_descricao,quantidade,data_faturamento');
+
+      // 3) BRs com equipamento/material enviado a terceiro (remessa p/ industrialização/
+      // conserto) SEM retorno ainda — enquanto não voltar, não conta como pendência de
+      // serviço faturável. Ex: BR14251/26 (Ternium) — confirmado pelo time que esse caso
+      // não deve aparecer aqui.
+      const { data: equipAbertos } = await supabase.from('equipamentos_terceiros')
+        .select('br_referencia').is('nunota_retorno', null).not('br_referencia', 'is', null).neq('br_referencia', '<SEM PROJETO>');
+      const brsComRemessaAberta = new Set((equipAbertos || []).map(e => e.br_referencia));
 
       // Agrupa por BR + descrição do produto (soma quantidades)
       const pedidoPorBrItem = {};
@@ -3258,9 +3268,10 @@ function AcompanhamentoServico() {
         if (pendente) porBr[item.br].itensPendentes.push({ descricao: item.produto_descricao, quantidade: item.quantidade - faturado, valor: item.valor_liquido });
       });
 
-      // Filtra: só os BRs onde TODOS os itens pendentes são de SERVIÇO (nenhum item de material em aberto)
+      // Filtra: só os BRs onde TODOS os itens pendentes são de SERVIÇO (nenhum item de
+      // material em aberto) E que não estão com remessa a terceiro ainda aberta.
       const resultado = Object.values(porBr)
-        .filter(b => b.itensPendentes.length > 0 && b.itensPendentes.every(i => ehServico(i.descricao)))
+        .filter(b => b.itensPendentes.length > 0 && b.itensPendentes.every(i => ehServico(i.descricao)) && !brsComRemessaAberta.has(b.br))
         .map(b => ({
           ...b,
           valorPendente: b.itensPendentes.reduce((s, i) => s + i.valor, 0),
