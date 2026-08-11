@@ -355,18 +355,21 @@ function PortalConteudo({ currentUser, session }) {
       case 'reprovar_final': update.status = 'reprovada'; update.comentario_decisao = comentario; break;
       case 'concluir': update.status = 'concluida'; update.data_conclusao = agora; break;
       case 'validar_sankhya': update.validado_pelo_engenheiro = true; break;
-      default: return;
+      default: return { ok: false, message: `Ação desconhecida: ${acao}` };
     }
 
     const { error } = await supabase.from('propostas').update(update).eq('id', propostaId);
     if (error) {
       console.error('Erro ao atualizar proposta:', error.message);
-      return;
+      // Antes essa falha ficava só no console — o usuário via o botão "não fazer nada".
+      // Agora devolve pro modal mostrar a mensagem de verdade na tela.
+      return { ok: false, message: error.message };
     }
     await carregarPropostas();
     // Atualiza o "selected" (modal aberto) com os dados recém-recarregados.
     const { data: atualizado } = await supabase.from('v_propostas_completo').select('*').eq('id', propostaId).maybeSingle();
     if (atualizado) setSelected({ ...atualizado, responsavel: atualizado.responsavel_nome, aprovador_pool: atualizado.aprovador_pool_nome });
+    return { ok: true };
   };
 
   return (
@@ -10230,6 +10233,20 @@ function ModalDetalhe({ proposta, usuario, onClose, onAction }) {
   const [comentarios, setComentarios] = useState([]);
   const [novoComentario, setNovoComentario] = useState('');
   const [enviandoComentario, setEnviandoComentario] = useState(false);
+  const [acaoErro, setAcaoErro] = useState(null);
+  const [executandoAcao, setExecutandoAcao] = useState(false);
+
+  // Envolve onAction pra capturar erro e mostrar na tela — antes, uma falha na atualização
+  // (RLS, constraint etc.) só aparecia no console, e o botão "parecia" não fazer nada.
+  const executarAcao = async (acao) => {
+    setExecutandoAcao(true);
+    setAcaoErro(null);
+    const resultado = await onAction(proposta.id, acao, comentario);
+    if (resultado && resultado.ok === false) {
+      setAcaoErro(resultado.message || 'Erro desconhecido ao executar a ação.');
+    }
+    setExecutandoAcao(false);
+  };
 
   const isRascunho = proposta.status === 'rascunho' || proposta.status === 'reprovada';
   const sankhyaPendente = proposta.origem_dados === 'sankhya' && !proposta.validado_pelo_engenheiro;
@@ -10310,7 +10327,7 @@ function ModalDetalhe({ proposta, usuario, onClose, onAction }) {
                 title="Integração Sankhya"
                 sub={proposta.validado_pelo_engenheiro ? 'Dados validados pelo engenheiro responsável.' : 'Aguardando validação dos dados importados.'}
                 action={canValidateSankhya && (
-                  <button onClick={() => onAction(proposta.id, 'validar_sankhya')} style={solidBtn(T.amberText)}>Validar dados</button>
+                  <button onClick={() => executarAcao('validar_sankhya')} disabled={executandoAcao} style={solidBtn(T.amberText)}>Validar dados</button>
                 )}
               />
             )}
@@ -10353,6 +10370,12 @@ function ModalDetalhe({ proposta, usuario, onClose, onAction }) {
             </div>
 
             <div style={{ borderTop: `1px solid ${T.line}`, paddingTop: 18, marginTop: 10 }}>
+              {acaoErro && (
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, background: T.rustSoft, color: T.rustText, borderRadius: 8, padding: '10px 12px', fontSize: 12, marginBottom: 12 }}>
+                  <AlertTriangle size={14} style={{ flexShrink: 0, marginTop: 1 }} />
+                  <span>{acaoErro}</span>
+                </div>
+              )}
               {(canReview || canApprove) && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                   <span style={{ fontSize: 11, fontWeight: 700, color: T.inkFaint, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
@@ -10361,13 +10384,13 @@ function ModalDetalhe({ proposta, usuario, onClose, onAction }) {
                   <textarea rows={2} placeholder="Comentário (obrigatório ao reprovar)…" value={comentario} onChange={e => setComentario(e.target.value)}
                     style={{ ...inputStyle(), fontSize: 12.5 }} />
                   <div style={{ display: 'flex', gap: 8 }}>
-                    <button onClick={() => onAction(proposta.id, canReview ? 'reprovar_revisao' : 'reprovar_final', comentario)} style={{ ...ghostBtn(T.rustText), flex: 1, justifyContent: 'center' }}>Reprovar</button>
-                    <button onClick={() => onAction(proposta.id, canReview ? 'aprovar_revisao' : 'aprovar_final', comentario)} style={{ ...solidBtn(T.oliveText), flex: 1, justifyContent: 'center' }}>Aprovar</button>
+                    <button onClick={() => executarAcao(canReview ? 'reprovar_revisao' : 'reprovar_final')} disabled={executandoAcao} style={{ ...ghostBtn(T.rustText), flex: 1, justifyContent: 'center', opacity: executandoAcao ? 0.6 : 1 }}>Reprovar</button>
+                    <button onClick={() => executarAcao(canReview ? 'aprovar_revisao' : 'aprovar_final')} disabled={executandoAcao} style={{ ...solidBtn(T.oliveText), flex: 1, justifyContent: 'center', opacity: executandoAcao ? 0.6 : 1 }}>{executandoAcao ? 'Enviando…' : 'Aprovar'}</button>
                   </div>
                 </div>
               )}
-              {canSendToReview && <button onClick={() => onAction(proposta.id, 'enviar_revisao')} style={{ ...solidBtn(T.terracotta, true), width: '100%', justifyContent: 'center' }}>Enviar para revisão técnica</button>}
-              {canFinish && <button onClick={() => onAction(proposta.id, 'concluir')} style={{ ...solidBtn(T.ink, true), width: '100%', justifyContent: 'center' }}>Marcar como concluída</button>}
+              {canSendToReview && <button onClick={() => executarAcao('enviar_revisao')} disabled={executandoAcao} style={{ ...solidBtn(T.terracotta, true), width: '100%', justifyContent: 'center' }}>Enviar para revisão técnica</button>}
+              {canFinish && <button onClick={() => executarAcao('concluir')} disabled={executandoAcao} style={{ ...solidBtn(T.ink, true), width: '100%', justifyContent: 'center' }}>Marcar como concluída</button>}
               {!canReview && !canApprove && !canSendToReview && !canFinish && !canValidateSankhya && (
                 <p style={{ fontSize: 12, color: T.inkFaint, textAlign: 'center', margin: 0 }}>Nenhuma ação pendente para o seu perfil neste momento.</p>
               )}
