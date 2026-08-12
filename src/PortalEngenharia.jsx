@@ -2553,8 +2553,10 @@ function AnaliseComercial() {
   const [buscaSemFechar, setBuscaSemFechar] = useState('');
   const [periodo, setPeriodo] = useState(() => {
     const hoje = new Date();
-    const anoAtras = new Date(hoje); anoAtras.setMonth(anoAtras.getMonth() - 12);
-    return { dataIni: anoAtras.toISOString().slice(0, 10), dataFim: hoje.toISOString().slice(0, 10) };
+    // Objetivo da aba é remarketing — precisa do máximo de histórico possível pra
+    // identificar clientes de compra única/pouco frequentes. Sincronizamos o histórico
+    // completo do Sankhya (nota_venda_itens vai até 2023), então o padrão cobre tudo.
+    return { dataIni: '2023-01-01', dataFim: hoje.toISOString().slice(0, 10) };
   });
 
   const carregar = useCallback(async () => {
