@@ -2584,7 +2584,7 @@ function AnaliseComercial() {
         buscarTudoEmLotes('nota_venda_itens', 'nunota,br,cliente_nome,produto_descricao,quantidade,valor_bruto,data_faturamento,data_neg',
           q => q.gte('data_neg', periodo.dataIni).lte('data_neg', periodo.dataFim)),
         buscarTudoEmLotes('propostas', 'br,cliente,status,valor_liquido,data_abertura',
-          q => q.gte('data_abertura', periodo.dataIni).lte('data_abertura', periodo.dataFim)),
+          q => q.gte('data_abertura', periodo.dataIni).lte('data_abertura', periodo.dataFim).not('br', 'ilike', 'BRV%')),
       ]);
 
       setNotas(notasData);
