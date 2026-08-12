@@ -2756,6 +2756,13 @@ function AnaliseComercial() {
     recorrente: { titulo: 'Clientes recorrentes (4+)', cor: T.oliveText, bg: T.oliveSoft, lista: funil.recorrente },
   };
 
+  const [abaAtiva, setAbaAtiva] = useState('visao_geral');
+  const ABAS = [
+    { id: 'visao_geral', label: 'Visão geral' },
+    { id: 'sem_fechar', label: `Propostas sem fechar${semFechar.length ? ` (${semFechar.length})` : ''}` },
+    { id: 'prioritarios', label: `Clientes prioritários${kpisEnriq.total ? ` (${kpisEnriq.total})` : ''}` },
+  ];
+
   return (
     <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
 
@@ -2779,6 +2786,21 @@ function AnaliseComercial() {
         </div>
       )}
 
+      <div style={{ display: 'flex', gap: 4, borderBottom: `1px solid ${T.line}` }}>
+        {ABAS.map(aba => (
+          <button key={aba.id} onClick={() => setAbaAtiva(aba.id)}
+            style={{
+              background: 'none', border: 'none', cursor: 'pointer', padding: '10px 16px', fontSize: 13, fontWeight: 600,
+              color: abaAtiva === aba.id ? T.terracotta : T.inkFaint,
+              borderBottom: `2px solid ${abaAtiva === aba.id ? T.terracotta : 'transparent'}`, marginBottom: -1,
+            }}>
+            {aba.label}
+          </button>
+        ))}
+      </div>
+
+      {abaAtiva === 'visao_geral' && (
+      <>
       {/* ── FUNIL ────────────────────────────────────────────────────────── */}
       <Panel title="Funil de clientes por frequência de compra" subtitle="Clique num segmento pra ver a lista de clientes">
         {loading ? (
@@ -2846,7 +2868,11 @@ function AnaliseComercial() {
           </div>
         </Panel>
       )}
+      </>
+      )}
 
+      {abaAtiva === 'sem_fechar' && (
+      <>
       {/* ── PROPOSTAS SEM PEDIDO FECHADO ─────────────────────────────────── */}
       <Panel title="Propostas sem pedido fechado" subtitle="BRs com proposta cadastrada, mas sem nenhuma nota de venda emitida até hoje">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12, marginBottom: 14 }}>
@@ -2902,6 +2928,8 @@ function AnaliseComercial() {
             ['br', 'cliente', 'status', 'valor_liquido', 'data_abertura', 'diasAberto'])} />
         </div>
       </Panel>
+      </>
+      )}
 
       {/* ── DETALHE DE UM CLIENTE (o que comprou, quando) ────────────────── */}
       {clienteAberto && (
@@ -2947,6 +2975,8 @@ function AnaliseComercial() {
         </Overlay>
       )}
 
+      {abaAtiva === 'prioritarios' && (
+      <>
       {/* ── CLIENTES PRIORITÁRIOS PRA REMARKETING/FOLLOW-UP ──────────────── */}
       <Panel title="Clientes prioritários (remarketing e follow-up)"
         subtitle="Proposta sem fechar, poucas compras, ou sem proposta nova há 45+ dias — contato do Sankhya + pesquisa de mercado">
@@ -3021,6 +3051,8 @@ function AnaliseComercial() {
             ['cliente','categoria','setor','telefone','email','valor_referencia','pesquisado'])} />
         </div>
       </Panel>
+      </>
+      )}
     </div>
   );
 }
