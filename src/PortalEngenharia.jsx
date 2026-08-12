@@ -463,6 +463,7 @@ function PortalConteudo({ currentUser, session }) {
           {renderTab('acompanhamento_servico', <TabErrorBoundary tab="Acompanhamento de Serviço"><AcompanhamentoServico /></TabErrorBoundary>)}
           {renderTab('monitoramento_op', <TabErrorBoundary tab="Monitoramento OP"><MonitoramentoOP /></TabErrorBoundary>)}
           {renderTab('verificacao_projetos', <TabErrorBoundary tab="Verificação de Projetos"><VerificacaoProjetos currentUser={currentUser} /></TabErrorBoundary>)}
+          {renderTab('analise_comercial', <TabErrorBoundary tab="Análise Comercial"><AnaliseComercial /></TabErrorBoundary>)}
           {renderTab('pedidosvale', <PedidosVale />)}
           {renderTab('aberturacotacao', <TabErrorBoundary tab="Abertura de Cotação"><AberturaCotacao currentUser={currentUser} /></TabErrorBoundary>)}
           {renderTab('ranking', <TabErrorBoundary tab="Ranking"><RankingPontuacao /></TabErrorBoundary>)}
@@ -515,6 +516,7 @@ function Sidebar({ view, setView, pendCount, papel, telasPermitidas }) {
     { id: 'acompanhamento_servico', label: 'Falta Nota de Serviço', icon: AlertTriangle },
     { id: 'monitoramento_op', label: 'Monitoramento OP', icon: Gauge },
     { id: 'verificacao_projetos', label: 'Verificação de Projetos', icon: ClipboardCheck },
+    { id: 'analise_comercial', label: 'Análise Comercial', icon: TrendingUp },
     { id: 'pedidosvale',  label: 'Pedidos Vale',           icon: FileWarning },
     { id: 'aberturacotacao', label: 'Abertura de Cotação',  icon: FileStack },
     { id: 'ranking',      label: 'Ranking de Pontuação',    icon: TrendingUp },
@@ -2541,6 +2543,307 @@ function NfsAgrupadasCard({ itens, fmtData, fmtMoedaCompacta }) {
   );
 }
 
+function AnaliseComercial() {
+  const [notas, setNotas] = useState([]);
+  const [propostas, setPropostas] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [erro, setErro] = useState(null);
+  const [segmentoAberto, setSegmentoAberto] = useState(null); // 'unica' | 'poucas' | 'recorrente' | null
+  const [clienteAberto, setClienteAberto] = useState(null); // detalhe de um cliente específico
+  const [buscaSemFechar, setBuscaSemFechar] = useState('');
+  const [periodo, setPeriodo] = useState(() => {
+    const hoje = new Date();
+    const anoAtras = new Date(hoje); anoAtras.setMonth(anoAtras.getMonth() - 12);
+    return { dataIni: anoAtras.toISOString().slice(0, 10), dataFim: hoje.toISOString().slice(0, 10) };
+  });
+
+  const carregar = useCallback(async () => {
+    setLoading(true);
+    setErro(null);
+    try {
+      const buscarTudoEmLotes = async (tabela, campos, filtros) => {
+        const TAMANHO_LOTE = 1000;
+        let resultado = [];
+        let pagina = 0;
+        while (true) {
+          let q = supabase.from(tabela).select(campos);
+          if (filtros) q = filtros(q);
+          const { data, error } = await q.range(pagina * TAMANHO_LOTE, (pagina + 1) * TAMANHO_LOTE - 1);
+          if (error) throw error;
+          resultado = resultado.concat(data || []);
+          if (!data || data.length < TAMANHO_LOTE) break;
+          pagina += 1;
+          if (pagina > 50) break;
+        }
+        return resultado;
+      };
+
+      const [notasData, propostasData] = await Promise.all([
+        buscarTudoEmLotes('nota_venda_itens', 'nunota,br,cliente_nome,produto_descricao,quantidade,valor_bruto,data_faturamento,data_neg',
+          q => q.gte('data_neg', periodo.dataIni).lte('data_neg', periodo.dataFim)),
+        buscarTudoEmLotes('propostas', 'br,cliente,status,valor_liquido,data_abertura',
+          q => q.gte('data_abertura', periodo.dataIni).lte('data_abertura', periodo.dataFim)),
+      ]);
+
+      setNotas(notasData);
+      setPropostas(propostasData);
+    } catch (e) {
+      setErro(String(e?.message || e));
+    }
+    setLoading(false);
+  }, [periodo]);
+
+  useEffect(() => { carregar(); }, [carregar]);
+
+  // ── Funil de clientes por frequência de compra ──────────────────────────
+  const funil = useMemo(() => {
+    const porCliente = {};
+    notas.forEach(n => {
+      const cliente = n.cliente_nome || 'Sem nome';
+      if (!porCliente[cliente]) porCliente[cliente] = { cliente, nunotas: new Set(), itens: [], valorTotal: 0, primeiraCompra: n.data_neg, ultimaCompra: n.data_neg };
+      porCliente[cliente].nunotas.add(n.nunota);
+      porCliente[cliente].itens.push(n);
+      porCliente[cliente].valorTotal += Number(n.valor_bruto) || 0;
+      if (n.data_neg < porCliente[cliente].primeiraCompra) porCliente[cliente].primeiraCompra = n.data_neg;
+      if (n.data_neg > porCliente[cliente].ultimaCompra) porCliente[cliente].ultimaCompra = n.data_neg;
+    });
+
+    const clientes = Object.values(porCliente).map(c => ({
+      cliente: c.cliente,
+      totalCompras: c.nunotas.size,
+      valorTotal: c.valorTotal,
+      primeiraCompra: c.primeiraCompra,
+      ultimaCompra: c.ultimaCompra,
+      itens: c.itens.sort((a, b) => (b.data_neg || '').localeCompare(a.data_neg || '')),
+    }));
+
+    const unica = clientes.filter(c => c.totalCompras === 1).sort((a, b) => b.valorTotal - a.valorTotal);
+    const poucas = clientes.filter(c => c.totalCompras >= 2 && c.totalCompras <= 3).sort((a, b) => b.valorTotal - a.valorTotal);
+    const recorrente = clientes.filter(c => c.totalCompras >= 4).sort((a, b) => b.valorTotal - a.valorTotal);
+
+    return { total: clientes.length, unica, poucas, recorrente };
+  }, [notas]);
+
+  // ── Propostas sem pedido fechado (BR sem nenhuma nota de venda) ─────────
+  const semFechar = useMemo(() => {
+    const brsComVenda = new Set(notas.map(n => n.br));
+    return propostas
+      .filter(p => p.br && !brsComVenda.has(p.br) && p.status !== 'reprovada')
+      .map(p => ({
+        ...p,
+        diasAberto: p.data_abertura ? Math.floor((Date.now() - new Date(p.data_abertura).getTime()) / 86400000) : null,
+      }))
+      .filter(p => !buscaSemFechar ||
+        p.br.toLowerCase().includes(buscaSemFechar.toLowerCase()) ||
+        (p.cliente || '').toLowerCase().includes(buscaSemFechar.toLowerCase()))
+      .sort((a, b) => (b.diasAberto || 0) - (a.diasAberto || 0));
+  }, [notas, propostas, buscaSemFechar]);
+
+  const valorSemFechar = useMemo(() => semFechar.reduce((s, p) => s + (Number(p.valor_liquido) || 0), 0), [semFechar]);
+
+  const fmtData = (iso) => !iso ? '—' : new Date(iso + 'T00:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: '2-digit' });
+
+  const statusPropostaLabel = (s) => ({
+    rascunho: 'Aguardando confirmação', em_revisao_tecnica: 'Revisão técnica', aguardando_aprovacao: 'Aguardando aprovação',
+    aprovada: 'Aprovada', concluida: 'Concluída', reprovada: 'Reprovada',
+  }[s] || s);
+
+  const segmentoInfo = {
+    unica: { titulo: 'Compraram só 1 vez', cor: T.rustText, bg: T.rustSoft, lista: funil.unica },
+    poucas: { titulo: 'Compraram 2-3 vezes', cor: T.amberText, bg: T.amberSoft, lista: funil.poucas },
+    recorrente: { titulo: 'Clientes recorrentes (4+)', cor: T.oliveText, bg: T.oliveSoft, lista: funil.recorrente },
+  };
+
+  return (
+    <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', flexWrap: 'wrap', gap: 12 }}>
+        <div style={{ fontSize: 12.5, color: T.inkFaint, background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 8, padding: '10px 14px', flex: 1, minWidth: 280 }}>
+          Funil de clientes por frequência de compra (fonte: Nota de Venda) e propostas que nunca resultaram em pedido faturado.
+        </div>
+        <div style={{ display: 'flex', gap: 10 }}>
+          <FiltroCampoFat label="De">
+            <input type="date" value={periodo.dataIni} onChange={e => setPeriodo(p => ({ ...p, dataIni: e.target.value }))} style={selectStyleFat(140)} />
+          </FiltroCampoFat>
+          <FiltroCampoFat label="Até">
+            <input type="date" value={periodo.dataFim} onChange={e => setPeriodo(p => ({ ...p, dataFim: e.target.value }))} style={selectStyleFat(140)} />
+          </FiltroCampoFat>
+        </div>
+      </div>
+
+      {erro && (
+        <div style={{ background: T.rustSoft, color: T.rustText, borderRadius: 8, padding: '10px 14px', fontSize: 12.5, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <AlertTriangle size={14} /> {erro}
+        </div>
+      )}
+
+      {/* ── FUNIL ────────────────────────────────────────────────────────── */}
+      <Panel title="Funil de clientes por frequência de compra" subtitle="Clique num segmento pra ver a lista de clientes">
+        {loading ? (
+          <div style={{ textAlign: 'center', padding: 30, color: T.inkFaint, fontSize: 12.5 }}>Carregando…</div>
+        ) : (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(220px,1fr))', gap: 14 }}>
+            {['recorrente', 'poucas', 'unica'].map(key => {
+              const info = segmentoInfo[key];
+              const pct = funil.total ? (info.lista.length / funil.total * 100) : 0;
+              return (
+                <div key={key} onClick={() => setSegmentoAberto(segmentoAberto === key ? null : key)}
+                  style={{
+                    cursor: 'pointer', border: `1.5px solid ${segmentoAberto === key ? info.cor : T.line}`, borderRadius: 10,
+                    padding: '16px 18px', background: segmentoAberto === key ? info.bg : T.panel,
+                  }}>
+                  <div style={{ fontSize: 11.5, fontWeight: 700, color: info.cor, textTransform: 'uppercase', letterSpacing: '0.03em' }}>{info.titulo}</div>
+                  <div style={{ fontFamily: FONT_DISPLAY, fontSize: 30, fontWeight: 700, color: T.ink, marginTop: 8 }}>{info.lista.length}</div>
+                  <div style={{ fontSize: 11.5, color: T.inkFaint, marginTop: 4 }}>{pct.toFixed(0)}% dos {funil.total} clientes · {fmtMoedaCompacta(info.lista.reduce((s, c) => s + c.valorTotal, 0))}</div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </Panel>
+
+      {/* ── LISTA DO SEGMENTO SELECIONADO ────────────────────────────────── */}
+      {segmentoAberto && (
+        <Panel title={segmentoInfo[segmentoAberto].titulo} subtitle="Clique num cliente pra ver o que comprou e quando"
+          right={<button onClick={() => setSegmentoAberto(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.inkFaint }}><X size={16} /></button>}>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+              <thead>
+                <tr style={{ background: T.panelAlt, borderBottom: `1px solid ${T.line}` }}>
+                  <th style={thFat(0)}>Cliente</th>
+                  <th style={{ ...thFat(90), textAlign: 'right' }}>Compras</th>
+                  <th style={{ ...thFat(120), textAlign: 'right' }}>Valor total</th>
+                  <th style={thFat(110)}>1ª compra</th>
+                  <th style={thFat(110)}>Última compra</th>
+                </tr>
+              </thead>
+              <tbody>
+                {segmentoInfo[segmentoAberto].lista.map(c => (
+                  <tr key={c.cliente} style={{ borderBottom: `1px solid ${T.lineSoft}`, cursor: 'pointer' }}
+                    onClick={() => setClienteAberto(c)}
+                    onMouseEnter={e => e.currentTarget.style.background = T.panelAlt}
+                    onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                    <td style={{ padding: '9px 12px', fontWeight: 600 }}>{c.cliente}</td>
+                    <td style={{ padding: '9px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 700 }}>{c.totalCompras}</td>
+                    <td style={{ padding: '9px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 700 }}>{fmtMoeda(c.valorTotal)}</td>
+                    <td style={{ padding: '9px 12px', color: T.inkDim }}>{fmtData(c.primeiraCompra)}</td>
+                    <td style={{ padding: '9px 12px', color: T.inkDim }}>{fmtData(c.ultimaCompra)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ padding: '10px 0 0', fontSize: 11, color: T.inkFaint, display: 'flex', justifyContent: 'space-between' }}>
+            <span>{segmentoInfo[segmentoAberto].lista.length} clientes</span>
+            <BotaoExportar small onClick={() => exportCSV(segmentoInfo[segmentoAberto].lista, `clientes_${segmentoAberto}.csv`,
+              ['cliente', 'totalCompras', 'valorTotal', 'primeiraCompra', 'ultimaCompra'])} />
+          </div>
+        </Panel>
+      )}
+
+      {/* ── PROPOSTAS SEM PEDIDO FECHADO ─────────────────────────────────── */}
+      <Panel title="Propostas sem pedido fechado" subtitle="BRs com proposta cadastrada, mas sem nenhuma nota de venda emitida até hoje">
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12, marginBottom: 14 }}>
+          <div style={{ position: 'relative' }}>
+            <Search size={13} style={{ position: 'absolute', left: 9, top: 9, color: T.inkFaint }} />
+            <input value={buscaSemFechar} onChange={e => setBuscaSemFechar(e.target.value)} placeholder="Buscar BR ou cliente…"
+              style={{ ...selectStyleFat(260), paddingLeft: 28 }} />
+          </div>
+          <div style={{ display: 'flex', gap: 20 }}>
+            <div>
+              <div style={{ fontSize: 11, color: T.inkFaint }}>Propostas sem fechar</div>
+              <div style={{ fontFamily: FONT_DISPLAY, fontSize: 20, fontWeight: 700, color: T.rustText }}>{loading ? '…' : semFechar.length}</div>
+            </div>
+            <div>
+              <div style={{ fontSize: 11, color: T.inkFaint }}>Valor em risco</div>
+              <div style={{ fontFamily: FONT_DISPLAY, fontSize: 20, fontWeight: 700, color: T.rustText }}>{loading ? '…' : fmtMoedaCompacta(valorSemFechar)}</div>
+            </div>
+          </div>
+        </div>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+            <thead>
+              <tr style={{ background: T.panelAlt, borderBottom: `1px solid ${T.line}` }}>
+                <th style={thFat(0)}>BR</th>
+                <th style={thFat(0)}>Cliente</th>
+                <th style={thFat(140)}>Status da proposta</th>
+                <th style={{ ...thFat(120), textAlign: 'right' }}>Valor</th>
+                <th style={thFat(110)}>Abertura</th>
+                <th style={{ ...thFat(100), textAlign: 'right' }}>Dias</th>
+              </tr>
+            </thead>
+            <tbody>
+              {loading ? (
+                <tr><td colSpan={6} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Carregando…</td></tr>
+              ) : semFechar.length === 0 ? (
+                <tr><td colSpan={6} style={{ padding: 30, textAlign: 'center', color: T.oliveText, fontWeight: 600 }}>✓ Todas as propostas do período resultaram em pedido faturado.</td></tr>
+              ) : semFechar.map(p => (
+                <tr key={p.br} style={{ borderBottom: `1px solid ${T.lineSoft}`, background: (p.diasAberto || 0) > 60 ? T.rustSoft : 'transparent' }}>
+                  <td style={{ padding: '9px 12px', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText }}>{p.br}</td>
+                  <td style={{ padding: '9px 12px', fontWeight: 600 }}>{p.cliente || '—'}</td>
+                  <td style={{ padding: '9px 12px', color: T.inkDim }}>{statusPropostaLabel(p.status)}</td>
+                  <td style={{ padding: '9px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 700 }}>{fmtMoeda(p.valor_liquido)}</td>
+                  <td style={{ padding: '9px 12px', color: T.inkDim }}>{fmtData(p.data_abertura)}</td>
+                  <td style={{ padding: '9px 12px', textAlign: 'right', fontWeight: 700, color: (p.diasAberto || 0) > 60 ? T.rustText : T.inkDim }}>{p.diasAberto ?? '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div style={{ padding: '10px 0 0', fontSize: 11, color: T.inkFaint, display: 'flex', justifyContent: 'space-between' }}>
+          <span>Linhas em vermelho = aberta há mais de 60 dias sem fechar</span>
+          <BotaoExportar small onClick={() => exportCSV(semFechar, 'propostas_sem_fechar.csv',
+            ['br', 'cliente', 'status', 'valor_liquido', 'data_abertura', 'diasAberto'])} />
+        </div>
+      </Panel>
+
+      {/* ── DETALHE DE UM CLIENTE (o que comprou, quando) ────────────────── */}
+      {clienteAberto && (
+        <Overlay onClose={() => setClienteAberto(null)}>
+          <div className="scale-in" style={{
+            background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, width: '100%', maxWidth: 700,
+            maxHeight: '85vh', display: 'flex', flexDirection: 'column', overflow: 'hidden', boxShadow: '0 24px 60px rgba(0,0,0,.18)',
+          }}>
+            <div style={{ padding: '18px 22px', borderBottom: `1px solid ${T.line}`, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+              <div>
+                <div style={{ fontFamily: FONT_DISPLAY, fontSize: 17, fontWeight: 700, color: T.ink }}>{clienteAberto.cliente}</div>
+                <div style={{ fontSize: 12, color: T.inkFaint, marginTop: 2 }}>
+                  {clienteAberto.totalCompras} compra{clienteAberto.totalCompras !== 1 ? 's' : ''} · {fmtMoeda(clienteAberto.valorTotal)} no total
+                </div>
+              </div>
+              <button onClick={() => setClienteAberto(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.inkFaint }}><X size={18} /></button>
+            </div>
+            <div style={{ overflow: 'auto', flex: 1 }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                <thead>
+                  <tr style={{ borderBottom: `1px solid ${T.line}`, position: 'sticky', top: 0, background: T.panel }}>
+                    <th style={thFat(0)}>Produto</th>
+                    <th style={thFat(90)}>BR</th>
+                    <th style={{ ...thFat(70), textAlign: 'right' }}>Qtd</th>
+                    <th style={{ ...thFat(100), textAlign: 'right' }}>Valor</th>
+                    <th style={thFat(100)}>Data</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {clienteAberto.itens.map((it, i) => (
+                    <tr key={i} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                      <td style={{ padding: '9px 12px', maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={it.produto_descricao}>{it.produto_descricao}</td>
+                      <td style={{ padding: '9px 12px', fontFamily: FONT_DISPLAY, color: T.blueText }}>{it.br || '—'}</td>
+                      <td style={{ padding: '9px 12px', textAlign: 'right' }}>{it.quantidade}</td>
+                      <td style={{ padding: '9px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 700 }}>{fmtMoeda(it.valor_bruto)}</td>
+                      <td style={{ padding: '9px 12px', color: T.inkFaint, whiteSpace: 'nowrap' }}>{fmtData(it.data_neg)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </Overlay>
+      )}
+    </div>
+  );
+}
+
 function VerificacaoProjetos({ currentUser }) {
   const podeEditar = APROVADORES_POOL.includes(currentUser?.nome);
   const [projetosSemana, setProjetosSemana] = useState([]);
@@ -3236,24 +3539,31 @@ function AcompanhamentoServico() {
 
       const notas = await buscarEmLotesPorBR('nota_venda_itens', 'br,produto_descricao,quantidade,data_faturamento');
 
-      // 3) BRs excluídos MANUALMENTE pelo time (tabela falta_servico_exclusoes) — a
-      // checagem automática via equipamentos_terceiros (remessa/retorno a terceiro) não é
-      // confiável: o mesmo padrão de "remessa em aberto" aparece em casos que devem ser
-      // excluídos (ex: BR14251/26) e em casos que NÃO devem (ex: BR13724/25) — por isso
-      // isso agora é decisão manual, com motivo registrado.
+      // 3) Equipamentos de terceiro (entrada/retorno) — usado só na REGRA 2 (BR que só tem
+      // Pedido de Venda de Serviços, sem Pedido de Venda - Consumo nenhum).
+      const { data: equipData } = await supabase.from('equipamentos_terceiros')
+        .select('projeto_br,projeto_br_retorno,fornecedor,nunota_retorno');
+
+      // 4) Exclusões manuais do time (tabela falta_servico_exclusoes) — sempre tem
+      // prioridade sobre as regras automáticas, pro time poder corrigir casos específicos.
       const { data: exclusoesData } = await supabase.from('falta_servico_exclusoes').select('*');
       const exclusoesMap = {};
       (exclusoesData || []).forEach(e => { exclusoesMap[e.br] = e; });
       setExclusoes(exclusoesMap);
 
-      // Agrupa por BR + descrição do produto (soma quantidades)
+      // Agrupa pedidos por BR (pra saber quais TOPs cada BR tem) e por BR+item (quantidade)
       const pedidoPorBrItem = {};
+      const topsPorBr = {};
+      const clientePorBr = {};
       pedidos.forEach(p => {
         const chave = `${p.br}|||${p.produto_descricao}`;
         if (!pedidoPorBrItem[chave]) pedidoPorBrItem[chave] = { ...p, quantidade: 0, valor_liquido: 0 };
         pedidoPorBrItem[chave].quantidade += Number(p.quantidade) || 0;
         pedidoPorBrItem[chave].valor_liquido += Number(p.valor_liquido) || 0;
         if (p.data_neg < pedidoPorBrItem[chave].data_neg) pedidoPorBrItem[chave].data_neg = p.data_neg;
+        if (!topsPorBr[p.br]) topsPorBr[p.br] = new Set();
+        topsPorBr[p.br].add(Number(p.codtipoper));
+        clientePorBr[p.br] = p.cliente_nome;
       });
       const faturadoPorBrItem = {};
       notas.forEach(n => {
@@ -3272,10 +3582,32 @@ function AcompanhamentoServico() {
         if (pendente) porBr[item.br].itensPendentes.push({ descricao: item.produto_descricao, quantidade: item.quantidade - faturado, valor: item.valor_liquido });
       });
 
-      // Filtra: só os BRs onde TODOS os itens pendentes são de SERVIÇO (nenhum item de
-      // material em aberto) E que não foram excluídos manualmente pelo time.
+      // REGRA 1: BR tem Pedido de Venda - Consumo (TOP 3100) E Pedido de Venda de Serviços
+      // (TOP 3103) juntos. Se o material (Consumo) já está tudo faturado (não pendente) e
+      // sobrou item de serviço sem nota — significa que tem que solicitar a nota de serviço.
+      // Isso já é exatamente o que o cálculo de "itensPendentes" acima resolve: se o material
+      // não aparece em itensPendentes (foi todo faturado) e o serviço aparece, é a Regra 1.
+      //
+      // REGRA 2: BR tem SÓ Pedido de Venda de Serviços (TOP 3103), sem nenhum Consumo (3100)
+      // — normalmente equipamento de terceiro pra conserto. Só conta como pendência se
+      // existir uma nota de RETORNO de equipamento (equipamentos_terceiros) com o MESMO BR
+      // e o MESMO CLIENTE do pedido de serviço — isso confirma que o equipamento já voltou
+      // pro cliente, e por isso já dá pra cobrar o serviço. Sem essa confirmação, não inclui
+      // (ex: BR14251/26 — o retorno que existe ficou com um BR diferente por erro de
+      // cadastro no Sankhya, então não confirma nada pra esse BR específico).
+      const temRetornoConfirmado = (br, cliente) => (equipData || []).some(e =>
+        e.nunota_retorno != null && e.fornecedor === cliente && (e.projeto_br === br || e.projeto_br_retorno === br)
+      );
+
       const resultado = Object.values(porBr)
-        .filter(b => b.itensPendentes.length > 0 && b.itensPendentes.every(i => ehServico(i.descricao)) && !exclusoesMap[b.br])
+        .filter(b => {
+          if (exclusoesMap[b.br]) return false; // exclusão manual sempre vence
+          if (!(b.itensPendentes.length > 0 && b.itensPendentes.every(i => ehServico(i.descricao)))) return false;
+          const tops = topsPorBr[b.br] || new Set();
+          const temConsumo = tops.has(3100);
+          if (temConsumo) return true; // Regra 1: já resolvido pelo cálculo de faturamento acima
+          return temRetornoConfirmado(b.br, clientePorBr[b.br]); // Regra 2
+        })
         .map(b => ({
           ...b,
           valorPendente: b.itensPendentes.reduce((s, i) => s + i.valor, 0),
@@ -9666,6 +9998,7 @@ const TELAS_CATALOGO = [
   { id: 'acompanhamento_servico', label: 'Falta Nota de Serviço' },
   { id: 'monitoramento_op', label: 'Monitoramento OP' },
   { id: 'verificacao_projetos', label: 'Verificação de Projetos' },
+  { id: 'analise_comercial', label: 'Análise Comercial' },
   { id: 'pedidosvale',  label: 'Pedidos Vale' },
   { id: 'aberturacotacao', label: 'Abertura de Cotação' },
   { id: 'ranking',      label: 'Ranking de Pontuação' },
