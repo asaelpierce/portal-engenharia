@@ -2543,6 +2543,45 @@ function NfsAgrupadasCard({ itens, fmtData, fmtMoedaCompacta }) {
   );
 }
 
+// Funil visual de verdade (trapézios afunilando), clicável por segmento.
+function FunilVisualSVG({ segmentos, total, ativo, onClick }) {
+  const W = 680;
+  const tierH = 92;
+  const gapY = 6;
+  const topY = 16;
+  const maxWidth = 480;
+  const minWidth = 180;
+  const H = topY + segmentos.length * (tierH + gapY) + 20;
+
+  return (
+    <svg width="100%" viewBox={`0 0 ${W} ${H}`} role="img">
+      <title>Funil de clientes por frequência de compra</title>
+      <desc>Segmentos de clientes do mais recorrente ao de compra única, com quantidade e valor de cada um</desc>
+      {segmentos.map((seg, i) => {
+        const wTop = minWidth + (maxWidth - minWidth) * (segmentos.length - i) / segmentos.length;
+        const wBottom = minWidth + (maxWidth - minWidth) * (segmentos.length - i - 1) / segmentos.length;
+        const y = topY + i * (tierH + gapY);
+        const xTopL = (W - wTop) / 2, xTopR = (W + wTop) / 2;
+        const xBotL = (W - wBottom) / 2, xBotR = (W + wBottom) / 2;
+        const isAtivo = ativo === seg.key;
+        const pct = total ? Math.round(seg.qtd / total * 100) : 0;
+        return (
+          <g key={seg.key} style={{ cursor: 'pointer' }} onClick={() => onClick(seg.key)}>
+            <polygon points={`${xTopL},${y} ${xTopR},${y} ${xBotR},${y + tierH} ${xBotL},${y + tierH}`}
+              fill={isAtivo ? seg.cor : seg.bg} stroke={seg.cor} strokeWidth={isAtivo ? 2 : 0.5} />
+            <text x={W / 2} y={y + tierH / 2 - 11} textAnchor="middle" style={{ fontSize: 15, fontWeight: 700, fill: isAtivo ? '#fff' : seg.cor, fontFamily: FONT_DISPLAY }}>
+              {seg.titulo}
+            </text>
+            <text x={W / 2} y={y + tierH / 2 + 12} textAnchor="middle" style={{ fontSize: 12.5, fill: isAtivo ? '#fff' : seg.cor }}>
+              {seg.qtd} clientes ({pct}%) · {fmtMoedaCompacta(seg.valor)}
+            </text>
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
 function AnaliseComercial() {
   const [notas, setNotas] = useState([]);
   const [propostas, setPropostas] = useState([]);
@@ -2584,7 +2623,7 @@ function AnaliseComercial() {
         buscarTudoEmLotes('nota_venda_itens', 'nunota,br,cliente_nome,produto_descricao,quantidade,valor_bruto,data_faturamento,data_neg',
           q => q.gte('data_neg', periodo.dataIni).lte('data_neg', periodo.dataFim)),
         buscarTudoEmLotes('propostas', 'br,cliente,status,valor_liquido,data_abertura',
-          q => q.gte('data_abertura', periodo.dataIni).lte('data_abertura', periodo.dataFim).not('br', 'ilike', 'BRV%')),
+          q => q.gte('data_abertura', periodo.dataIni).lte('data_abertura', periodo.dataFim)),
       ]);
 
       setNotas(notasData);
@@ -2596,6 +2635,67 @@ function AnaliseComercial() {
   }, [periodo]);
 
   useEffect(() => { carregar(); }, [carregar]);
+
+  // ── Enriquecimento: clientes prioritários pra remarketing/follow-up ────
+  const [enriquecimento, setEnriquecimento] = useState([]);
+  const [filtroCategoria, setFiltroCategoria] = useState('pesquisar');
+  const [buscaEnriq, setBuscaEnriq] = useState('');
+  const carregarEnriquecimento = useCallback(async () => {
+    const TAMANHO_LOTE = 1000;
+    let resultado = [];
+    let pagina = 0;
+    while (true) {
+      const { data, error } = await supabase.from('analise_comercial_enriquecimento')
+        .select('*').order('valor_referencia', { ascending: false })
+        .range(pagina * TAMANHO_LOTE, (pagina + 1) * TAMANHO_LOTE - 1);
+      if (error) break;
+      resultado = resultado.concat(data || []);
+      if (!data || data.length < TAMANHO_LOTE) break;
+      pagina += 1;
+    }
+    setEnriquecimento(resultado);
+  }, []);
+  useEffect(() => { carregarEnriquecimento(); }, [carregarEnriquecimento]);
+
+  const enriquecimentoFiltrado = useMemo(() => {
+    return enriquecimento
+      .filter(e => filtroCategoria === 'todos' || e.categoria === filtroCategoria)
+      .filter(e => !buscaEnriq || e.cliente.toLowerCase().includes(buscaEnriq.toLowerCase()));
+  }, [enriquecimento, filtroCategoria, buscaEnriq]);
+
+  const kpisEnriq = useMemo(() => ({
+    total: enriquecimento.length,
+    pesquisar: enriquecimento.filter(e => e.categoria === 'pesquisar').length,
+    pesquisados: enriquecimento.filter(e => e.categoria === 'pesquisar' && e.pesquisado).length,
+    grandeConhecido: enriquecimento.filter(e => e.categoria === 'grande_conhecido').length,
+  }), [enriquecimento]);
+
+  // ── Distribuição por setor (a partir do texto pesquisado de cada cliente) ─
+  const categorizarSetor = (setor, categoria) => {
+    const s = (setor || '').toLowerCase();
+    if (s.includes('mineração') || s.includes('mineracao') || s.includes('minério') || s.includes('minerio')) return 'Mineração';
+    if (s.includes('cimento') || s.includes('concreto') || s.includes(' cal,') || s.includes('calcário')) return 'Cimento/Concreto';
+    if (s.includes('siderúr') || s.includes('siderur') || s.includes('aço') || s.includes('metal') || s.includes('caldeiraria') || s.includes('usinagem')) return 'Metalúrgica/Siderúrgica';
+    if (s.includes('porto') || s.includes('portuár') || s.includes('terminal') || s.includes('granel')) return 'Portuário/Logística';
+    if (s.includes('agro') || s.includes('etanol') || s.includes('grão') || s.includes('grao')) return 'Agronegócio';
+    if (s.includes('vidro')) return 'Vidros';
+    if (s.includes('equipamento') || s.includes('máquina') || s.includes('maquina')) return 'Equipamentos Industriais';
+    if (s.includes('engenharia') || s.includes('montagem') || s.includes('construç') || s.includes('construc')) return 'Engenharia/Montagem';
+    if (categoria === 'grande_conhecido') return 'Grande conhecido (diverso)';
+    return 'Outros';
+  };
+  const setoresDist = useMemo(() => {
+    const grupos = {};
+    enriquecimento.forEach(e => {
+      const cat = categorizarSetor(e.setor, e.categoria);
+      if (!grupos[cat]) grupos[cat] = { setor: cat, qtd: 0, valor: 0 };
+      grupos[cat].qtd += 1;
+      grupos[cat].valor += Number(e.valor_referencia) || 0;
+    });
+    const lista = Object.values(grupos).sort((a, b) => b.valor - a.valor);
+    const maxValor = Math.max(...lista.map(g => g.valor), 1);
+    return lista.map(g => ({ ...g, pctBarra: (g.valor / maxValor) * 100 }));
+  }, [enriquecimento]);
 
   // ── Funil de clientes por frequência de compra ──────────────────────────
   const funil = useMemo(() => {
@@ -2684,24 +2784,28 @@ function AnaliseComercial() {
         {loading ? (
           <div style={{ textAlign: 'center', padding: 30, color: T.inkFaint, fontSize: 12.5 }}>Carregando…</div>
         ) : (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(220px,1fr))', gap: 14 }}>
-            {['recorrente', 'poucas', 'unica'].map(key => {
-              const info = segmentoInfo[key];
-              const pct = funil.total ? (info.lista.length / funil.total * 100) : 0;
-              return (
-                <div key={key} onClick={() => setSegmentoAberto(segmentoAberto === key ? null : key)}
-                  style={{
-                    cursor: 'pointer', border: `1.5px solid ${segmentoAberto === key ? info.cor : T.line}`, borderRadius: 10,
-                    padding: '16px 18px', background: segmentoAberto === key ? info.bg : T.panel,
-                  }}>
-                  <div style={{ fontSize: 11.5, fontWeight: 700, color: info.cor, textTransform: 'uppercase', letterSpacing: '0.03em' }}>{info.titulo}</div>
-                  <div style={{ fontFamily: FONT_DISPLAY, fontSize: 30, fontWeight: 700, color: T.ink, marginTop: 8 }}>{info.lista.length}</div>
-                  <div style={{ fontSize: 11.5, color: T.inkFaint, marginTop: 4 }}>{pct.toFixed(0)}% dos {funil.total} clientes · {fmtMoedaCompacta(info.lista.reduce((s, c) => s + c.valorTotal, 0))}</div>
-                </div>
-              );
-            })}
-          </div>
+          <FunilVisualSVG segmentos={['recorrente', 'poucas', 'unica'].map(key => ({
+            key, ...segmentoInfo[key], qtd: segmentoInfo[key].lista.length,
+            valor: segmentoInfo[key].lista.reduce((s, c) => s + c.valorTotal, 0),
+          }))} total={funil.total} ativo={segmentoAberto} onClick={k => setSegmentoAberto(segmentoAberto === k ? null : k)} />
         )}
+      </Panel>
+
+      {/* ── DISTRIBUIÇÃO POR SETOR ───────────────────────────────────────── */}
+      <Panel title="Distribuição por setor" subtitle="Clientes prioritários (256) agrupados por setor de atuação — quanto de oportunidade tem em cada um">
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {setoresDist.map(g => (
+            <div key={g.setor} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <div style={{ width: 190, fontSize: 12, fontWeight: 600, color: T.ink, flexShrink: 0, textAlign: 'right' }}>{g.setor}</div>
+              <div style={{ flex: 1, background: T.panelAlt, borderRadius: 6, height: 26, position: 'relative', overflow: 'hidden' }}>
+                <div style={{ width: `${g.pctBarra}%`, height: '100%', background: T.blueSoft, borderRadius: 6, borderRight: `2px solid ${T.blueText}` }} />
+              </div>
+              <div style={{ width: 150, fontSize: 11.5, color: T.inkFaint, flexShrink: 0, whiteSpace: 'nowrap' }}>
+                {g.qtd} cliente{g.qtd !== 1 ? 's' : ''} · {fmtMoedaCompacta(g.valor)}
+              </div>
+            </div>
+          ))}
+        </div>
       </Panel>
 
       {/* ── LISTA DO SEGMENTO SELECIONADO ────────────────────────────────── */}
@@ -2842,6 +2946,81 @@ function AnaliseComercial() {
           </div>
         </Overlay>
       )}
+
+      {/* ── CLIENTES PRIORITÁRIOS PRA REMARKETING/FOLLOW-UP ──────────────── */}
+      <Panel title="Clientes prioritários (remarketing e follow-up)"
+        subtitle="Proposta sem fechar, poucas compras, ou sem proposta nova há 45+ dias — contato do Sankhya + pesquisa de mercado">
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(170px,1fr))', gap: 12, marginBottom: 16 }}>
+          <Kpi label="Total de clientes" value={kpisEnriq.total} icon={Users} tone="blue" sub="propostas/compras que precisam atenção" />
+          <Kpi label="Pra pesquisar" value={kpisEnriq.pesquisar} icon={Search} tone="amber" sub="pequenas/médias, pesquisa de mercado agrega valor" />
+          <Kpi label="Já pesquisados" value={kpisEnriq.pesquisados} icon={CheckCircle2} tone="olive" sub={`${kpisEnriq.pesquisar ? Math.round(kpisEnriq.pesquisados / kpisEnriq.pesquisar * 100) : 0}% da fila concluído`} />
+          <Kpi label="Grandes já conhecidos" value={kpisEnriq.grandeConhecido} icon={Package} sub="Vale, ArcelorMittal etc — só follow-up interno" />
+        </div>
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: 14 }}>
+          <FiltroCampoFat label="Buscar cliente">
+            <div style={{ position: 'relative' }}>
+              <Search size={13} style={{ position: 'absolute', left: 9, top: 9, color: T.inkFaint }} />
+              <input value={buscaEnriq} onChange={e => setBuscaEnriq(e.target.value)} placeholder="Nome do cliente…"
+                style={{ ...selectStyleFat(240), paddingLeft: 28 }} />
+            </div>
+          </FiltroCampoFat>
+          <FiltroCampoFat label="Categoria">
+            <div style={{ position: 'relative' }}>
+              <select value={filtroCategoria} onChange={e => setFiltroCategoria(e.target.value)} style={selectStyleFat(240)}>
+                <option value="pesquisar">Pequenas/médias (pesquisar)</option>
+                <option value="grande_conhecido">Grandes já conhecidos</option>
+                <option value="todos">Todos</option>
+              </select>
+              <ChevronDown size={13} style={chevronStyleFat} />
+            </div>
+          </FiltroCampoFat>
+        </div>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+            <thead>
+              <tr style={{ background: T.panelAlt, borderBottom: `1px solid ${T.line}` }}>
+                <th style={thFat(0)}>Cliente</th>
+                <th style={thFat(0)}>Setor / contexto</th>
+                <th style={thFat(150)}>Contato</th>
+                <th style={{ ...thFat(110), textAlign: 'right' }}>Valor ref.</th>
+                <th style={{ ...thFat(90), textAlign: 'center' }}>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {enriquecimentoFiltrado.length === 0 ? (
+                <tr><td colSpan={5} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Nenhum cliente encontrado.</td></tr>
+              ) : enriquecimentoFiltrado.slice(0, 100).map(e => (
+                <tr key={e.cliente} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                  <td style={{ padding: '9px 12px', fontWeight: 600, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={e.cliente}>{e.cliente}</td>
+                  <td style={{ padding: '9px 12px', maxWidth: 280, color: e.setor ? T.inkDim : T.inkFaint, fontSize: 11.5 }} title={e.setor}>
+                    {e.setor || (e.categoria === 'grande_conhecido' ? 'Cliente grande já conhecido — sem pesquisa necessária' : 'Ainda não pesquisado')}
+                  </td>
+                  <td style={{ padding: '9px 12px', fontSize: 11 }}>
+                    {e.telefone && e.telefone !== '000000000000' && <div style={{ color: T.blueText }}>{e.telefone}</div>}
+                    {e.email && <div style={{ color: T.blueText }}>{e.email}</div>}
+                    {(!e.telefone || e.telefone === '000000000000') && !e.email && <span style={{ color: T.inkFaint }}>—</span>}
+                  </td>
+                  <td style={{ padding: '9px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 700 }}>{fmtMoedaCompacta(e.valor_referencia)}</td>
+                  <td style={{ padding: '9px 12px', textAlign: 'center' }}>
+                    {e.categoria === 'grande_conhecido' ? (
+                      <span style={{ fontSize: 10, fontWeight: 700, color: T.inkFaint, background: T.lineSoft, padding: '3px 7px', borderRadius: 4 }}>follow-up</span>
+                    ) : e.pesquisado ? (
+                      <span style={{ fontSize: 10, fontWeight: 700, color: T.oliveText, background: T.oliveSoft, padding: '3px 7px', borderRadius: 4 }}>pesquisado</span>
+                    ) : (
+                      <span style={{ fontSize: 10, fontWeight: 700, color: T.amberText, background: T.amberSoft, padding: '3px 7px', borderRadius: 4 }}>pendente</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div style={{ padding: '10px 0 0', fontSize: 11, color: T.inkFaint, display: 'flex', justifyContent: 'space-between' }}>
+          <span>{enriquecimentoFiltrado.length} clientes (mostrando até 100) · pesquisa de mercado sendo completada progressivamente</span>
+          <BotaoExportar small onClick={() => exportCSV(enriquecimentoFiltrado, 'clientes_prioritarios.csv',
+            ['cliente','categoria','setor','telefone','email','valor_referencia','pesquisado'])} />
+        </div>
+      </Panel>
     </div>
   );
 }
