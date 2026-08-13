@@ -1123,6 +1123,7 @@ function InfoTip({ texto }) {
 }
 
 function Kpi({ label, value, icon: Icon, tone, sub, onClick, info }) {
+  const IconeSeguro = Icon || CircleDot;
   const toneColor = tone === 'amber' ? T.amberText : tone === 'rust' ? T.rustText : tone === 'olive' ? T.oliveText : tone === 'blue' ? T.blueText : T.ink;
   const toneSoft = tone === 'amber' ? T.amberSoft : tone === 'rust' ? T.rustSoft : tone === 'olive' ? T.oliveSoft : tone === 'blue' ? T.blueSoft : T.terracottaSoft;
   const toneAccent = tone === 'amber' ? T.amber : tone === 'rust' ? T.rust : tone === 'olive' ? T.olive : tone === 'blue' ? T.blue : T.terracotta;
@@ -1142,7 +1143,7 @@ function Kpi({ label, value, icon: Icon, tone, sub, onClick, info }) {
           {info && <InfoTip texto={info} />}
         </span>
         <div style={{ width: 30, height: 30, borderRadius: 8, background: toneSoft, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-          <Icon size={15} color={toneColor} strokeWidth={2.2} />
+          <IconeSeguro size={15} color={toneColor} strokeWidth={2.2} />
         </div>
       </div>
       <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, color: toneColor, marginTop: 15, fontSize: 32, letterSpacing: '-0.015em', lineHeight: 1 }}>{value}</div>
@@ -2746,7 +2747,7 @@ function ProspeccaoClientes() {
         <Kpi label="Novos" value={loading ? '…' : kpis.novo} icon={Bell} tone="blue" sub="ainda não revisados" />
         <Kpi label="Em análise" value={loading ? '…' : kpis.em_analise} icon={Clock3} tone="amber" />
         <Kpi label="Contatados" value={loading ? '…' : kpis.contatado} icon={CheckCircle2} tone="olive" />
-        <Kpi label="Descartados" value={loading ? '…' : kpis.descartado} sub="não eram bons prospects" />
+        <Kpi label="Descartados" value={loading ? '…' : kpis.descartado} icon={X} sub="não eram bons prospects" />
       </div>
 
       <Panel>
