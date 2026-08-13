@@ -8,6 +8,7 @@ import {
   Filter, FileWarning, Stamp, ArrowUpRight, ArrowDownRight, Minus, Zap,
   CircleDot, ShieldCheck, MessageSquareWarning, ListFilter, Webhook, Users,
   RefreshCw, TrendingUp, DollarSign, CheckCircle2, Package, Layers, Bell, BarChart2, Download, History,
+  Trophy, Repeat, UserPlus,
 } from 'lucide-react';
 
 /* ============================================================================
@@ -464,6 +465,7 @@ function PortalConteudo({ currentUser, session }) {
           {renderTab('monitoramento_op', <TabErrorBoundary tab="Monitoramento OP"><MonitoramentoOP /></TabErrorBoundary>)}
           {renderTab('verificacao_projetos', <TabErrorBoundary tab="Verificação de Projetos"><VerificacaoProjetos currentUser={currentUser} /></TabErrorBoundary>)}
           {renderTab('analise_comercial', <TabErrorBoundary tab="Análise Comercial"><AnaliseComercial /></TabErrorBoundary>)}
+          {renderTab('prospeccao_clientes', <TabErrorBoundary tab="Prospecção de Clientes"><ProspeccaoClientes /></TabErrorBoundary>)}
           {renderTab('pedidosvale', <PedidosVale />)}
           {renderTab('aberturacotacao', <TabErrorBoundary tab="Abertura de Cotação"><AberturaCotacao currentUser={currentUser} /></TabErrorBoundary>)}
           {renderTab('ranking', <TabErrorBoundary tab="Ranking"><RankingPontuacao /></TabErrorBoundary>)}
@@ -517,6 +519,7 @@ function Sidebar({ view, setView, pendCount, papel, telasPermitidas }) {
     { id: 'monitoramento_op', label: 'Monitoramento OP', icon: Gauge },
     { id: 'verificacao_projetos', label: 'Verificação de Projetos', icon: ClipboardCheck },
     { id: 'analise_comercial', label: 'Análise Comercial', icon: TrendingUp },
+    { id: 'prospeccao_clientes', label: 'Prospecção de Clientes', icon: UserPlus },
     { id: 'pedidosvale',  label: 'Pedidos Vale',           icon: FileWarning },
     { id: 'aberturacotacao', label: 'Abertura de Cotação',  icon: FileStack },
     { id: 'ranking',      label: 'Ranking de Pontuação',    icon: TrendingUp },
@@ -2546,39 +2549,270 @@ function NfsAgrupadasCard({ itens, fmtData, fmtMoedaCompacta }) {
 // Funil visual de verdade (trapézios afunilando), clicável por segmento.
 function FunilVisualSVG({ segmentos, total, ativo, onClick }) {
   const W = 680;
-  const tierH = 92;
-  const gapY = 6;
-  const topY = 16;
-  const maxWidth = 480;
-  const minWidth = 180;
-  const H = topY + segmentos.length * (tierH + gapY) + 20;
+  const tierH = 110;
+  const topY = 20;
+  const maxWidth = 460;
+  const minWidth = 210;
+  const n = segmentos.length;
+  const H = topY + n * tierH + 20;
+  const icones = { recorrente: Trophy, poucas: Repeat, unica: UserPlus };
+
+  // Larguras de cada nível — o fundo de um nível é exatamente o topo do próximo,
+  // então os trapézios encaixam perfeitamente, sem espaço entre eles.
+  const bounds = segmentos.map((seg, i) => {
+    const wTop = minWidth + (maxWidth - minWidth) * (n - i) / n;
+    const wBottom = minWidth + (maxWidth - minWidth) * (n - i - 1) / n;
+    const y = topY + i * tierH;
+    return { xTopL: (W - wTop) / 2, xTopR: (W + wTop) / 2, xBotL: (W - wBottom) / 2, xBotR: (W + wBottom) / 2, y, yBot: y + tierH };
+  });
+
+  // Contorno único do funil inteiro (desce pela borda direita, sobe pela esquerda).
+  const rightPts = bounds.map(b => `${b.xTopR},${b.y}`);
+  rightPts.push(`${bounds[n - 1].xBotR},${bounds[n - 1].yBot}`);
+  const leftPts = bounds.map(b => `${b.xTopL},${b.y}`);
+  leftPts.push(`${bounds[n - 1].xBotL},${bounds[n - 1].yBot}`);
+  const outline = `M ${rightPts.join(' L ')} L ${[...leftPts].reverse().join(' L ')} Z`;
 
   return (
     <svg width="100%" viewBox={`0 0 ${W} ${H}`} role="img">
       <title>Funil de clientes por frequência de compra</title>
       <desc>Segmentos de clientes do mais recorrente ao de compra única, com quantidade e valor de cada um</desc>
-      {segmentos.map((seg, i) => {
-        const wTop = minWidth + (maxWidth - minWidth) * (segmentos.length - i) / segmentos.length;
-        const wBottom = minWidth + (maxWidth - minWidth) * (segmentos.length - i - 1) / segmentos.length;
-        const y = topY + i * (tierH + gapY);
-        const xTopL = (W - wTop) / 2, xTopR = (W + wTop) / 2;
-        const xBotL = (W - wBottom) / 2, xBotR = (W + wBottom) / 2;
+      <style>{`
+        .funil-tier { transition: transform 0.18s ease, filter 0.18s ease; transform-box: fill-box; transform-origin: center; cursor: pointer; }
+        .funil-tier:hover { transform: scale(1.015); filter: brightness(1.04); }
+        .funil-tier-g { animation: funilEntrada 0.5s ease backwards; }
+        @keyframes funilEntrada { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: translateY(0); } }
+      `}</style>
+      <defs>
+        {segmentos.map(seg => (
+          <linearGradient key={seg.key} id={`grad-${seg.key}`} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={seg.corClara || seg.cor} stopOpacity={ativo === seg.key ? 1 : 0.16} />
+            <stop offset="100%" stopColor={seg.cor} stopOpacity={ativo === seg.key ? 1 : 0.08} />
+          </linearGradient>
+        ))}
+        <filter id="funilShadow" x="-20%" y="-20%" width="140%" height="140%">
+          <feDropShadow dx="0" dy="2" stdDeviation="3" floodOpacity="0.12" />
+        </filter>
+      </defs>
+      {bounds.map((b, i) => {
+        const seg = segmentos[i];
+        const isAtivo = ativo === seg.key;
+        return (
+          <g key={seg.key} className="funil-tier-g" style={{ animationDelay: `${i * 90}ms` }}>
+            <polygon className="funil-tier" points={`${b.xTopL},${b.y} ${b.xTopR},${b.y} ${b.xBotR},${b.yBot} ${b.xBotL},${b.yBot}`}
+              fill={`url(#grad-${seg.key})`} filter={isAtivo ? 'url(#funilShadow)' : undefined} onClick={() => onClick(seg.key)} />
+          </g>
+        );
+      })}
+      <path d={outline} fill="none" stroke={T.line} strokeWidth={1} />
+      {bounds.slice(0, -1).map((b, i) => (
+        <line key={i} x1={b.xBotL} y1={b.yBot} x2={b.xBotR} y2={b.yBot} stroke={T.line} strokeWidth={1} />
+      ))}
+      {bounds.map((b, i) => {
+        const seg = segmentos[i];
         const isAtivo = ativo === seg.key;
         const pct = total ? Math.round(seg.qtd / total * 100) : 0;
+        const midY = (b.y + b.yBot) / 2;
+        const Icone = icones[seg.key];
         return (
-          <g key={seg.key} style={{ cursor: 'pointer' }} onClick={() => onClick(seg.key)}>
-            <polygon points={`${xTopL},${y} ${xTopR},${y} ${xBotR},${y + tierH} ${xBotL},${y + tierH}`}
-              fill={isAtivo ? seg.cor : seg.bg} stroke={seg.cor} strokeWidth={isAtivo ? 2 : 0.5} />
-            <text x={W / 2} y={y + tierH / 2 - 11} textAnchor="middle" style={{ fontSize: 15, fontWeight: 700, fill: isAtivo ? '#fff' : seg.cor, fontFamily: FONT_DISPLAY }}>
+          <g key={seg.key} style={{ cursor: 'pointer', pointerEvents: 'none' }}>
+            {Icone && (
+              <foreignObject x={W / 2 - 11} y={midY - 40} width={22} height={22} style={{ pointerEvents: 'none' }}>
+                <Icone size={22} color={isAtivo ? seg.cor : seg.cor} strokeWidth={2} />
+              </foreignObject>
+            )}
+            <text x={W / 2} y={midY - 4} textAnchor="middle" dominantBaseline="central"
+              style={{ fontSize: 16, fontWeight: 700, fill: seg.cor, fontFamily: FONT_DISPLAY }}>
               {seg.titulo}
             </text>
-            <text x={W / 2} y={y + tierH / 2 + 12} textAnchor="middle" style={{ fontSize: 12.5, fill: isAtivo ? '#fff' : seg.cor }}>
-              {seg.qtd} clientes ({pct}%) · {fmtMoedaCompacta(seg.valor)}
+            <text x={W / 2} y={midY + 20} textAnchor="middle" dominantBaseline="central"
+              style={{ fontSize: 13, fill: T.inkFaint }}>
+              {seg.qtd} clientes · {pct}% do total · {fmtMoedaCompacta(seg.valor)}
             </text>
           </g>
         );
       })}
     </svg>
+  );
+}
+
+function ProspeccaoClientes() {
+  const [prospects, setProspects] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [erro, setErro] = useState(null);
+  const [busca, setBusca] = useState('');
+  const [filtroStatus, setFiltroStatus] = useState('novo');
+  const [buscando, setBuscando] = useState(false);
+  const [buscaStatus, setBuscaStatus] = useState(null);
+
+  const carregar = useCallback(async () => {
+    setLoading(true);
+    setErro(null);
+    const { data, error } = await supabase.from('prospeccao_novos_clientes').select('*').order('gerado_em', { ascending: false });
+    if (error) { setErro(error.message); setLoading(false); return; }
+    setProspects(data || []);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { carregar(); }, [carregar]);
+
+  const handleBuscarAgora = async () => {
+    setBuscando(true);
+    setBuscaStatus(null);
+    try {
+      const res = await fetch(`${SUPABASE_URL}/functions/v1/prospectar-novos-clientes`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ qtd: 15 }),
+      }).then(r => r.json());
+      if (res.ok) {
+        setBuscaStatus({ ok: true, message: `${res.inseridos} novo${res.inseridos !== 1 ? 's' : ''} prospect${res.inseridos !== 1 ? 's' : ''} adicionado${res.inseridos !== 1 ? 's' : ''} (${res.filtrados_por_duplicidade} já eram conhecidos e foram ignorados).` });
+        await carregar();
+      } else {
+        setBuscaStatus({ ok: false, message: res.erro || 'Erro desconhecido.' });
+      }
+    } catch (err) {
+      setBuscaStatus({ ok: false, message: String(err) });
+    } finally {
+      setBuscando(false);
+    }
+  };
+
+  const atualizarStatus = async (id, status) => {
+    await supabase.from('prospeccao_novos_clientes').update({ status, atualizado_em: new Date().toISOString() }).eq('id', id);
+    await carregar();
+  };
+
+  const filtrados = useMemo(() => {
+    return prospects
+      .filter(p => filtroStatus === 'todos' || p.status === filtroStatus)
+      .filter(p => !busca ||
+        p.empresa.toLowerCase().includes(busca.toLowerCase()) ||
+        (p.setor_sugerido || '').toLowerCase().includes(busca.toLowerCase()));
+  }, [prospects, filtroStatus, busca]);
+
+  const kpis = useMemo(() => ({
+    total: prospects.length,
+    novo: prospects.filter(p => p.status === 'novo').length,
+    em_analise: prospects.filter(p => p.status === 'em_analise').length,
+    contatado: prospects.filter(p => p.status === 'contatado').length,
+    descartado: prospects.filter(p => p.status === 'descartado').length,
+  }), [prospects]);
+
+  const fmtData = (iso) => !iso ? '—' : new Date(iso).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: '2-digit' });
+
+  const statusInfo = {
+    novo: { label: 'Novo', cor: T.blueText, bg: T.blueSoft },
+    em_analise: { label: 'Em análise', cor: T.amberText, bg: T.amberSoft },
+    contatado: { label: 'Contatado', cor: T.oliveText, bg: T.oliveSoft },
+    descartado: { label: 'Descartado', cor: T.inkFaint, bg: T.lineSoft },
+  };
+
+  return (
+    <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
+        <div style={{ fontSize: 12.5, color: T.inkFaint, background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 8, padding: '10px 14px', flex: 1, minWidth: 280 }}>
+          Agente de IA (ChatGPT) sugere empresas novas toda segunda-feira, com base nos setores que já funcionam bem pra Kalenborn.
+          <strong> Importante:</strong> são sugestões geradas por conhecimento do modelo, não uma busca ao vivo — sempre confirme
+          se a empresa existe de verdade e ache o contato atualizado antes de abordar.
+        </div>
+        <button onClick={handleBuscarAgora} disabled={buscando} style={{
+          display: 'flex', alignItems: 'center', gap: 8, background: T.terracotta, color: '#fff', border: 'none',
+          borderRadius: 8, padding: '10px 18px', fontSize: 13, fontWeight: 700, opacity: buscando ? 0.7 : 1, flexShrink: 0,
+        }}>
+          <RefreshCw size={15} className={buscando ? 'spin' : ''} />
+          {buscando ? 'Buscando…' : 'Buscar novos prospects agora'}
+        </button>
+      </div>
+
+      {buscaStatus && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', borderRadius: 8,
+          background: buscaStatus.ok ? T.oliveSoft : T.rustSoft, border: `1px solid ${buscaStatus.ok ? T.olive : T.rust}33`,
+        }}>
+          {buscaStatus.ok ? <CheckCircle2 size={14} color={T.oliveText} /> : <AlertTriangle size={14} color={T.rustText} />}
+          <span style={{ fontSize: 12.5, color: buscaStatus.ok ? T.oliveText : T.rustText }}>{buscaStatus.message}</span>
+        </div>
+      )}
+
+      {erro && (
+        <div style={{ background: T.rustSoft, color: T.rustText, borderRadius: 8, padding: '10px 14px', fontSize: 12.5, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <AlertTriangle size={14} /> {erro}
+        </div>
+      )}
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 12 }}>
+        <Kpi label="Total de prospects" value={loading ? '…' : kpis.total} icon={UserPlus} tone="blue" />
+        <Kpi label="Novos" value={loading ? '…' : kpis.novo} icon={Bell} tone="blue" sub="ainda não revisados" />
+        <Kpi label="Em análise" value={loading ? '…' : kpis.em_analise} icon={Clock3} tone="amber" />
+        <Kpi label="Contatados" value={loading ? '…' : kpis.contatado} icon={CheckCircle2} tone="olive" />
+        <Kpi label="Descartados" value={loading ? '…' : kpis.descartado} sub="não eram bons prospects" />
+      </div>
+
+      <Panel>
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+          <FiltroCampoFat label="Buscar empresa ou setor">
+            <div style={{ position: 'relative' }}>
+              <Search size={13} style={{ position: 'absolute', left: 9, top: 9, color: T.inkFaint }} />
+              <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Ex: Ternium, mineração…"
+                style={{ ...selectStyleFat(260), paddingLeft: 28 }} />
+            </div>
+          </FiltroCampoFat>
+          <FiltroCampoFat label="Status">
+            <div style={{ position: 'relative' }}>
+              <select value={filtroStatus} onChange={e => setFiltroStatus(e.target.value)} style={selectStyleFat(180)}>
+                <option value="novo">Novo</option>
+                <option value="em_analise">Em análise</option>
+                <option value="contatado">Contatado</option>
+                <option value="descartado">Descartado</option>
+                <option value="todos">Todos</option>
+              </select>
+              <ChevronDown size={13} style={chevronStyleFat} />
+            </div>
+          </FiltroCampoFat>
+        </div>
+      </Panel>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        {loading ? (
+          <div style={{ textAlign: 'center', padding: 30, color: T.inkFaint, fontSize: 12.5 }}>Carregando…</div>
+        ) : filtrados.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: 30, color: T.inkFaint, fontSize: 12.5, background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10 }}>
+            Nenhum prospect encontrado com esse filtro. Clique em "Buscar novos prospects agora".
+          </div>
+        ) : filtrados.map(p => {
+          const st = statusInfo[p.status] || statusInfo.novo;
+          return (
+            <div key={p.id} style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '14px 18px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
+                <div style={{ flex: 1, minWidth: 240 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
+                    <span style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 15, color: T.ink }}>{p.empresa}</span>
+                    <span style={{ fontSize: 10.5, fontWeight: 700, color: st.cor, background: st.bg, padding: '3px 8px', borderRadius: 4 }}>{st.label}</span>
+                  </div>
+                  <div style={{ fontSize: 12, color: T.inkFaint, marginBottom: 6 }}>
+                    {p.setor_sugerido || 'Setor não informado'}{p.localizacao_sugerida ? ` · ${p.localizacao_sugerida}` : ''} · sugerido em {fmtData(p.gerado_em)}
+                  </div>
+                  {p.motivo && <div style={{ fontSize: 12.5, color: T.inkDim, marginBottom: 4 }}>{p.motivo}</div>}
+                  {p.produtos_sugeridos && <div style={{ fontSize: 11.5, color: T.blueText }}>💡 {p.produtos_sugeridos}</div>}
+                </div>
+                <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                  {p.status !== 'em_analise' && <button onClick={() => atualizarStatus(p.id, 'em_analise')} style={{ fontSize: 11, color: T.amberText, background: T.amberSoft, border: 'none', borderRadius: 5, padding: '5px 10px', cursor: 'pointer', fontWeight: 600 }}>Em análise</button>}
+                  {p.status !== 'contatado' && <button onClick={() => atualizarStatus(p.id, 'contatado')} style={{ fontSize: 11, color: T.oliveText, background: T.oliveSoft, border: 'none', borderRadius: 5, padding: '5px 10px', cursor: 'pointer', fontWeight: 600 }}>Contatado</button>}
+                  {p.status !== 'descartado' && <button onClick={() => atualizarStatus(p.id, 'descartado')} style={{ fontSize: 11, color: T.inkFaint, background: T.lineSoft, border: 'none', borderRadius: 5, padding: '5px 10px', cursor: 'pointer', fontWeight: 600 }}>Descartar</button>}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div style={{ fontSize: 11, color: T.inkFaint, display: 'flex', justifyContent: 'space-between' }}>
+        <span>{filtrados.length} prospect{filtrados.length !== 1 ? 's' : ''}</span>
+        <BotaoExportar small onClick={() => exportCSV(filtrados, 'prospeccao_novos_clientes.csv',
+          ['empresa', 'setor_sugerido', 'localizacao_sugerida', 'motivo', 'produtos_sugeridos', 'status', 'gerado_em'])} />
+      </div>
+    </div>
   );
 }
 
@@ -10212,6 +10446,7 @@ const TELAS_CATALOGO = [
   { id: 'monitoramento_op', label: 'Monitoramento OP' },
   { id: 'verificacao_projetos', label: 'Verificação de Projetos' },
   { id: 'analise_comercial', label: 'Análise Comercial' },
+  { id: 'prospeccao_clientes', label: 'Prospecção de Clientes' },
   { id: 'pedidosvale',  label: 'Pedidos Vale' },
   { id: 'aberturacotacao', label: 'Abertura de Cotação' },
   { id: 'ranking',      label: 'Ranking de Pontuação' },
