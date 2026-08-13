@@ -7909,7 +7909,7 @@ function PrecoCompra() {
       setLoadingAnalise(true);
       const { data, error } = await supabaseSupply
         .from('v_analise_compras')
-        .select('codigo_produto,descricao_produto,total_compras,valor_total_gasto,quantidade_total,data_ultima_compra,preco_recente,fornecedor_recente,preco_anterior,variacao_pct');
+        .select('codigo_produto,descricao_produto,total_compras,valor_total_gasto,quantidade_total,data_ultima_compra,preco_recente,fornecedor_recente,preco_anterior,variacao_pct,valor_total_gasto_liquido,preco_recente_liquido,preco_anterior_liquido,variacao_pct_liquido');
       if (!error) setAnalise(data || []);
       setLoadingAnalise(false);
     };
@@ -7917,13 +7917,13 @@ function PrecoCompra() {
   }, []);
 
   const rankings = useMemo(() => {
-    const validos = analise.filter(a => a.valor_total_gasto != null);
-    const comVariacao = analise.filter(a => a.variacao_pct != null);
+    const validos = analise.filter(a => a.valor_total_gasto_liquido != null);
+    const comVariacao = analise.filter(a => a.variacao_pct_liquido != null);
     return {
-      maisGastos: [...validos].sort((a, b) => b.valor_total_gasto - a.valor_total_gasto).slice(0, 10),
+      maisGastos: [...validos].sort((a, b) => b.valor_total_gasto_liquido - a.valor_total_gasto_liquido).slice(0, 10),
       maisRecorrentes: [...validos].sort((a, b) => b.total_compras - a.total_compras).slice(0, 10),
-      maioresAltas: [...comVariacao].filter(a => a.variacao_pct > 0).sort((a, b) => b.variacao_pct - a.variacao_pct).slice(0, 8),
-      maioresQuedas: [...comVariacao].filter(a => a.variacao_pct < 0).sort((a, b) => a.variacao_pct - b.variacao_pct).slice(0, 8),
+      maioresAltas: [...comVariacao].filter(a => a.variacao_pct_liquido > 0).sort((a, b) => b.variacao_pct_liquido - a.variacao_pct_liquido).slice(0, 8),
+      maioresQuedas: [...comVariacao].filter(a => a.variacao_pct_liquido < 0).sort((a, b) => a.variacao_pct_liquido - b.variacao_pct_liquido).slice(0, 8),
     };
   }, [analise]);
 
@@ -7935,7 +7935,7 @@ function PrecoCompra() {
 
     let query = supabaseSupply
       .from('v_ultimas_compras')
-      .select('descricao_produto,fornecedor,cod_fornecedor,data_recebimento,numero_nf,quantidade_recebida,valor_total_linha,preco_unitario,ordem_recencia')
+      .select('descricao_produto,fornecedor,cod_fornecedor,data_recebimento,numero_nf,quantidade_recebida,valor_total_linha,preco_unitario,ordem_recencia,valor_liquido_item,preco_unitario_liquido,valor_icms,valor_ipi,valor_icms_st')
       .eq('codigo_produto', codigo)
       .order('ordem_recencia', { ascending: true });
     if (limite !== 'todas') query = query.lte('ordem_recencia', limite);
@@ -7973,8 +7973,8 @@ function PrecoCompra() {
 
   const variacaoPreco = useMemo(() => {
     if (historico.length < 2) return null;
-    const maisRecente = historico[0]?.preco_unitario;
-    const maisAntiga = historico[historico.length - 1]?.preco_unitario;
+    const maisRecente = historico[0]?.preco_unitario_liquido;
+    const maisAntiga = historico[historico.length - 1]?.preco_unitario_liquido;
     if (maisRecente == null || maisAntiga == null || maisAntiga === 0) return null;
     return ((maisRecente - maisAntiga) / maisAntiga) * 100;
   }, [historico]);
@@ -7984,7 +7984,8 @@ function PrecoCompra() {
 
       <div style={{ fontSize: 12.5, color: T.inkFaint, background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 8, padding: '10px 14px' }}>
         Busca pelo histórico real de compras (Notas Fiscais de entrada) — fonte: Supply Chain. Digite qualquer termo da descrição
-        (não precisa ser exato) e veja as últimas 3 compras de cada item, com fornecedor, quantidade e preço unitário.
+        (não precisa ser exato) e veja as últimas 3 compras de cada item, com fornecedor, quantidade e preço. Os valores
+        <strong> líquidos</strong> já têm ICMS, IPI e ICMS-ST subtraídos (o bruto, que vem da nota, tem o imposto embutido).
       </div>
 
       <Panel title="Buscar item" subtitle="Digite uma descrição genérica (ex: 'ventilador', 'chapa aço', 'rolamento') — a busca acha por similaridade">
@@ -8053,8 +8054,8 @@ function PrecoCompra() {
           ) : (
             <>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(170px,1fr))', gap: 12 }}>
-                <Kpi label="Preço mais recente" value={fmtMoeda(historico[0]?.preco_unitario)} icon={DollarSign} tone="rust"
-                  sub={`${fmtData(historico[0]?.data_recebimento)} · ${historico[0]?.fornecedor || '—'}`} />
+                <Kpi label="Preço líquido mais recente" value={fmtMoeda(historico[0]?.preco_unitario_liquido)} icon={DollarSign} tone="rust"
+                  sub={`bruto: ${fmtMoeda(historico[0]?.preco_unitario)} · ${fmtData(historico[0]?.data_recebimento)} · ${historico[0]?.fornecedor || '—'}`} />
                 <Kpi label="Compras mostradas" value={historico.length} icon={Package} tone="blue"
                   sub={qtdCompras === 'todas' ? 'histórico completo' : `das últimas ${qtdCompras}`} />
                 {variacaoPreco != null && (
@@ -8082,8 +8083,9 @@ function PrecoCompra() {
                         <th style={thFat(180)}>Contato</th>
                         <th style={thFat(100)}>NF</th>
                         <th style={{ ...thFat(90), textAlign: 'right' }}>Qtd</th>
-                        <th style={{ ...thFat(120), textAlign: 'right' }}>Vlr. total NF</th>
-                        <th style={{ ...thFat(120), textAlign: 'right' }}>Preço unitário</th>
+                        <th style={{ ...thFat(110), textAlign: 'right' }}>Vlr. bruto NF</th>
+                        <th style={{ ...thFat(110), textAlign: 'right' }}>Preço unit. bruto</th>
+                        <th style={{ ...thFat(120), textAlign: 'right' }}>Preço unit. líquido</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -8101,8 +8103,9 @@ function PrecoCompra() {
                             </td>
                             <td style={{ padding: '10px 12px', color: T.inkFaint }}>{h.numero_nf || '—'}</td>
                             <td style={{ padding: '10px 12px', textAlign: 'right' }}>{fmtQtd(h.quantidade_recebida)}</td>
-                            <td style={{ padding: '10px 12px', textAlign: 'right', color: T.inkDim }}>{fmtMoeda(h.valor_total_linha)}</td>
-                            <td style={{ padding: '10px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.rustText }}>{fmtMoeda(h.preco_unitario)}</td>
+                            <td style={{ padding: '10px 12px', textAlign: 'right', color: T.inkFaint }}>{fmtMoeda(h.valor_total_linha)}</td>
+                            <td style={{ padding: '10px 12px', textAlign: 'right', color: T.inkFaint }}>{fmtMoeda(h.preco_unitario)}</td>
+                            <td style={{ padding: '10px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.rustText }}>{fmtMoeda(h.preco_unitario_liquido)}</td>
                           </tr>
                         );
                       })}
@@ -8110,9 +8113,9 @@ function PrecoCompra() {
                   </table>
                 </div>
                 <div style={{ padding: '10px 16px', borderTop: `1px solid ${T.line}`, fontSize: 11, color: T.inkFaint, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span>Preço unitário = valor total da linha na NF ÷ quantidade recebida · fonte: Supply Chain (nfs_entrada + cadastro de fornecedores)</span>
+                  <span>Preço líquido = (valor da linha − ICMS − IPI − ICMS-ST) ÷ quantidade recebida · fonte: Supply Chain (nfs_entrada + cadastro de fornecedores)</span>
                   <BotaoExportar small onClick={() => exportCSV(historico, `historico_${itemSelecionado.codigo}.csv`,
-                    ['data_recebimento','fornecedor','numero_nf','quantidade_recebida','valor_total_linha','preco_unitario'])} />
+                    ['data_recebimento','fornecedor','numero_nf','quantidade_recebida','valor_total_linha','preco_unitario','valor_liquido_item','preco_unitario_liquido','valor_icms','valor_ipi','valor_icms_st'])} />
                 </div>
               </div>
             </>
@@ -8129,20 +8132,21 @@ function PrecoCompra() {
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(170px,1fr))', gap: 12 }}>
                 <Kpi label="Itens com histórico" value={analise.length} icon={Package} tone="blue"
                   sub="códigos distintos já comprados" />
-                <Kpi label="Total gasto (todo o histórico)" value={fmtMoeda(analise.reduce((s, a) => s + (a.valor_total_gasto || 0), 0))} icon={DollarSign} tone="rust" />
-                <Kpi label="Itens com alta de preço" value={rankings.maioresAltas.length ? analise.filter(a => a.variacao_pct > 0).length : 0} icon={ArrowUpRight} tone="amber"
-                  sub="entre a última e a penúltima compra" />
-                <Kpi label="Itens com queda de preço" value={analise.filter(a => a.variacao_pct < 0).length} icon={ArrowDownRight} tone="olive"
-                  sub="entre a última e a penúltima compra" />
+                <Kpi label="Total gasto líquido (todo o histórico)" value={fmtMoeda(analise.reduce((s, a) => s + (a.valor_total_gasto_liquido || 0), 0))} icon={DollarSign} tone="rust"
+                  sub={`bruto: ${fmtMoeda(analise.reduce((s, a) => s + (a.valor_total_gasto || 0), 0))}`} />
+                <Kpi label="Itens com alta de preço" value={rankings.maioresAltas.length ? analise.filter(a => a.variacao_pct_liquido > 0).length : 0} icon={ArrowUpRight} tone="amber"
+                  sub="entre a última e a penúltima compra (líquido)" />
+                <Kpi label="Itens com queda de preço" value={analise.filter(a => a.variacao_pct_liquido < 0).length} icon={ArrowDownRight} tone="olive"
+                  sub="entre a última e a penúltima compra (líquido)" />
               </div>
 
               <div className="grid-2col">
-                <Panel title="Maior gasto acumulado" subtitle="Itens em que mais investimos, no histórico todo — clique pra ver o detalhe">
+                <Panel title="Maior gasto acumulado (líquido)" subtitle="Itens em que mais investimos, no histórico todo — clique pra ver o detalhe">
                   {rankings.maisGastos.length === 0 ? (
                     <div style={{ textAlign: 'center', padding: 20, color: T.inkFaint, fontSize: 12.5 }}>Sem dados.</div>
                   ) : rankings.maisGastos.map(a => (
-                    <RankingBarPreco key={a.codigo_produto} label={String(a.codigo_produto)} sub={a.descricao_produto} valor={a.valor_total_gasto}
-                      max={rankings.maisGastos[0]?.valor_total_gasto || 1} fmt={fmtMoeda}
+                    <RankingBarPreco key={a.codigo_produto} label={String(a.codigo_produto)} sub={a.descricao_produto} valor={a.valor_total_gasto_liquido}
+                      max={rankings.maisGastos[0]?.valor_total_gasto_liquido || 1} fmt={fmtMoeda}
                       onClick={() => { setBusca(`${a.codigo_produto} — ${a.descricao_produto}`); selecionarItem(a.codigo_produto, a.descricao_produto); }} />
                   ))}
                 </Panel>
@@ -8159,7 +8163,7 @@ function PrecoCompra() {
               </div>
 
               <div className="grid-2col">
-                <Panel title="Maiores altas de preço" subtitle="Itens que mais subiram de preço na última compra vs a anterior">
+                <Panel title="Maiores altas de preço (líquido)" subtitle="Itens que mais subiram de preço na última compra vs a anterior">
                   {rankings.maioresAltas.length === 0 ? (
                     <div style={{ textAlign: 'center', padding: 20, color: T.inkFaint, fontSize: 12.5 }}>Nenhuma alta registrada.</div>
                   ) : rankings.maioresAltas.map(a => (
@@ -8171,14 +8175,14 @@ function PrecoCompra() {
                         <div style={{ fontSize: 12, fontWeight: 600, color: T.ink, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={a.descricao_produto}>
                           <span style={{ color: T.blueText, fontFamily: FONT_DISPLAY }}>{a.codigo_produto}</span> — {a.descricao_produto}
                         </div>
-                        <div style={{ fontSize: 10.5, color: T.inkFaint }}>{fmtMoeda(a.preco_anterior)} → {fmtMoeda(a.preco_recente)}</div>
+                        <div style={{ fontSize: 10.5, color: T.inkFaint }}>{fmtMoeda(a.preco_anterior_liquido)} → {fmtMoeda(a.preco_recente_liquido)}</div>
                       </div>
-                      <span style={{ fontSize: 13, fontWeight: 700, color: T.rustText, fontFamily: FONT_DISPLAY, flexShrink: 0, marginLeft: 10 }}>+{a.variacao_pct.toFixed(1)}%</span>
+                      <span style={{ fontSize: 13, fontWeight: 700, color: T.rustText, fontFamily: FONT_DISPLAY, flexShrink: 0, marginLeft: 10 }}>+{a.variacao_pct_liquido.toFixed(1)}%</span>
                     </div>
                   ))}
                 </Panel>
 
-                <Panel title="Maiores quedas de preço" subtitle="Itens que mais baixaram de preço na última compra vs a anterior">
+                <Panel title="Maiores quedas de preço (líquido)" subtitle="Itens que mais baixaram de preço na última compra vs a anterior">
                   {rankings.maioresQuedas.length === 0 ? (
                     <div style={{ textAlign: 'center', padding: 20, color: T.inkFaint, fontSize: 12.5 }}>Nenhuma queda registrada.</div>
                   ) : rankings.maioresQuedas.map(a => (
@@ -8190,9 +8194,9 @@ function PrecoCompra() {
                         <div style={{ fontSize: 12, fontWeight: 600, color: T.ink, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={a.descricao_produto}>
                           <span style={{ color: T.blueText, fontFamily: FONT_DISPLAY }}>{a.codigo_produto}</span> — {a.descricao_produto}
                         </div>
-                        <div style={{ fontSize: 10.5, color: T.inkFaint }}>{fmtMoeda(a.preco_anterior)} → {fmtMoeda(a.preco_recente)}</div>
+                        <div style={{ fontSize: 10.5, color: T.inkFaint }}>{fmtMoeda(a.preco_anterior_liquido)} → {fmtMoeda(a.preco_recente_liquido)}</div>
                       </div>
-                      <span style={{ fontSize: 13, fontWeight: 700, color: T.oliveText, fontFamily: FONT_DISPLAY, flexShrink: 0, marginLeft: 10 }}>{a.variacao_pct.toFixed(1)}%</span>
+                      <span style={{ fontSize: 13, fontWeight: 700, color: T.oliveText, fontFamily: FONT_DISPLAY, flexShrink: 0, marginLeft: 10 }}>{a.variacao_pct_liquido.toFixed(1)}%</span>
                     </div>
                   ))}
                 </Panel>
@@ -8206,17 +8210,17 @@ function PrecoCompra() {
 }
 
 function GraficoPrecoHistorico({ pontos, fmtMoeda, fmtData }) {
-  const validos = pontos.filter(p => p.preco_unitario != null);
+  const validos = pontos.filter(p => p.preco_unitario_liquido != null);
   if (validos.length < 2) return <div style={{ textAlign: 'center', padding: 20, color: T.inkFaint, fontSize: 12.5 }}>Sem dados suficientes pra gráfico.</div>;
 
   const W = 900, H = 200, PAD_L = 80, PAD_R = 20, PAD_T = 20, PAD_B = 34;
-  const valores = validos.map(p => p.preco_unitario);
+  const valores = validos.map(p => p.preco_unitario_liquido);
   const min = Math.min(...valores), max = Math.max(...valores);
   const span = max - min || 1;
   const passo = (W - PAD_L - PAD_R) / (validos.length - 1);
   const coordX = (i) => PAD_L + i * passo;
   const coordY = (v) => PAD_T + (H - PAD_T - PAD_B) * (1 - (v - min) / span);
-  const linha = validos.map((p, i) => `${coordX(i)},${coordY(p.preco_unitario)}`).join(' ');
+  const linha = validos.map((p, i) => `${coordX(i)},${coordY(p.preco_unitario_liquido)}`).join(' ');
 
   return (
     <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 'auto', overflow: 'visible' }}>
@@ -8228,8 +8232,8 @@ function GraficoPrecoHistorico({ pontos, fmtMoeda, fmtData }) {
       ))}
       <polyline points={linha} fill="none" stroke={T.terracotta} strokeWidth={2.5} />
       {validos.map((p, i) => (
-        <circle key={i} cx={coordX(i)} cy={coordY(p.preco_unitario)} r={4} fill={T.panel} stroke={T.terracotta} strokeWidth={2}>
-          <title>{fmtData(p.data_recebimento)} · {p.fornecedor}: {fmtMoeda(p.preco_unitario)}</title>
+        <circle key={i} cx={coordX(i)} cy={coordY(p.preco_unitario_liquido)} r={4} fill={T.panel} stroke={T.terracotta} strokeWidth={2}>
+          <title>{fmtData(p.data_recebimento)} · {p.fornecedor}: {fmtMoeda(p.preco_unitario_liquido)} líquido</title>
         </circle>
       ))}
       {validos.filter((_, i) => i === 0 || i === validos.length - 1 || i === Math.floor(validos.length / 2)).map((p) => {
