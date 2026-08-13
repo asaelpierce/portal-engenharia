@@ -2790,12 +2790,29 @@ function ProspeccaoClientes() {
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
                     <span style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 15, color: T.ink }}>{p.empresa}</span>
                     <span style={{ fontSize: 10.5, fontWeight: 700, color: st.cor, background: st.bg, padding: '3px 8px', borderRadius: 4 }}>{st.label}</span>
+                    {p.observacao ? (
+                      <span style={{ fontSize: 10.5, fontWeight: 700, color: T.oliveText, background: T.oliveSoft, padding: '3px 8px', borderRadius: 4 }}>✓ verificado manualmente</span>
+                    ) : (
+                      <span style={{ fontSize: 10.5, fontWeight: 700, color: T.rustText, background: T.rustSoft, padding: '3px 8px', borderRadius: 4 }}>⚠ não verificado ainda</span>
+                    )}
                   </div>
                   <div style={{ fontSize: 12, color: T.inkFaint, marginBottom: 6 }}>
                     {p.setor_sugerido || 'Setor não informado'}{p.localizacao_sugerida ? ` · ${p.localizacao_sugerida}` : ''} · sugerido em {fmtData(p.gerado_em)}
                   </div>
                   {p.motivo && <div style={{ fontSize: 12.5, color: T.inkDim, marginBottom: 4 }}>{p.motivo}</div>}
-                  {p.produtos_sugeridos && <div style={{ fontSize: 11.5, color: T.blueText }}>💡 {p.produtos_sugeridos}</div>}
+                  {p.produtos_sugeridos && <div style={{ fontSize: 11.5, color: T.blueText, marginBottom: 6 }}>💡 {p.produtos_sugeridos}</div>}
+                  {(p.telefone || p.email || p.site) && (
+                    <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', fontSize: 11.5, color: T.oliveText, marginBottom: 6 }}>
+                      {p.telefone && <span>📞 {p.telefone}</span>}
+                      {p.email && <span>✉️ {p.email}</span>}
+                      {p.site && <span>🌐 {p.site}</span>}
+                    </div>
+                  )}
+                  {p.observacao && (
+                    <div style={{ fontSize: 11, color: T.inkFaint, background: T.panelAlt, borderRadius: 6, padding: '6px 10px', marginTop: 4 }}>
+                      🔍 {p.observacao}
+                    </div>
+                  )}
                 </div>
                 <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
                   {p.status !== 'em_analise' && <button onClick={() => atualizarStatus(p.id, 'em_analise')} style={{ fontSize: 11, color: T.amberText, background: T.amberSoft, border: 'none', borderRadius: 5, padding: '5px 10px', cursor: 'pointer', fontWeight: 600 }}>Em análise</button>}
