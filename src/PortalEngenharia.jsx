@@ -3733,6 +3733,65 @@ function MonitoramentoOP() {
   const [syncStatus, setSyncStatus] = useState(null);
   const [ultimoSync, setUltimoSync] = useState(null);
   const [drillBR, setDrillBR] = useState(null); // BR selecionado — mostra os itens dele
+  const [tagsCatalogo, setTagsCatalogo] = useState([]);
+  const [tagsPorBr, setTagsPorBr] = useState({}); // br -> [tag_id, ...]
+  const [anotacoesPorBr, setAnotacoesPorBr] = useState({}); // br -> { observacao, data_referencia }
+  const [novaTagNome, setNovaTagNome] = useState('');
+  const [novaTagCor, setNovaTagCor] = useState('#e07a5f');
+  const [salvandoAnotacao, setSalvandoAnotacao] = useState(false);
+
+  const carregarEtiquetasEAnotacoes = useCallback(async () => {
+    const [{ data: tags }, { data: vinculos }, { data: anotacoes }] = await Promise.all([
+      supabase.from('monitoramento_op_tags').select('*').order('nome'),
+      supabase.from('monitoramento_op_br_tags').select('*'),
+      supabase.from('monitoramento_op_anotacoes').select('*'),
+    ]);
+    setTagsCatalogo(tags || []);
+    const porBr = {};
+    (vinculos || []).forEach(v => { if (!porBr[v.br]) porBr[v.br] = []; porBr[v.br].push(v.tag_id); });
+    setTagsPorBr(porBr);
+    const anotMap = {};
+    (anotacoes || []).forEach(a => { anotMap[a.br] = a; });
+    setAnotacoesPorBr(anotMap);
+  }, []);
+
+  useEffect(() => { carregarEtiquetasEAnotacoes(); }, [carregarEtiquetasEAnotacoes]);
+
+  const criarNovaTag = async () => {
+    if (!novaTagNome.trim()) return;
+    const { error } = await supabase.from('monitoramento_op_tags').insert({ nome: novaTagNome.trim(), cor: novaTagCor });
+    if (!error) { setNovaTagNome(''); await carregarEtiquetasEAnotacoes(); }
+  };
+
+  const alternarTagNoBr = async (br, tagId) => {
+    const jaTem = (tagsPorBr[br] || []).includes(tagId);
+    if (jaTem) {
+      await supabase.from('monitoramento_op_br_tags').delete().eq('br', br).eq('tag_id', tagId);
+    } else {
+      await supabase.from('monitoramento_op_br_tags').insert({ br, tag_id: tagId });
+    }
+    await carregarEtiquetasEAnotacoes();
+  };
+
+  const salvarAnotacao = async (br, observacao, dataReferencia) => {
+    setSalvandoAnotacao(true);
+    await supabase.from('monitoramento_op_anotacoes').upsert(
+      { br, observacao, data_referencia: dataReferencia || null, atualizado_em: new Date().toISOString() },
+      { onConflict: 'br' }
+    );
+    await carregarEtiquetasEAnotacoes();
+    setSalvandoAnotacao(false);
+  };
+
+  const [observacaoEdit, setObservacaoEdit] = useState('');
+  const [dataEdit, setDataEdit] = useState('');
+  useEffect(() => {
+    if (drillBR) {
+      const a = anotacoesPorBr[drillBR.br];
+      setObservacaoEdit(a?.observacao || '');
+      setDataEdit(a?.data_referencia || '');
+    }
+  }, [drillBR?.br]);
 
   const carregar = useCallback(async () => {
     setLoading(true);
@@ -3983,16 +4042,19 @@ function MonitoramentoOP() {
                 <SortTh label="Pedido mais antigo" col="dataMaisAntiga" />
                 <SortTh label="Dias aberto" col="diasAberto" right />
                 <th style={{ ...thFat(190), textAlign: 'center' }}>Status</th>
+                <th style={thFat(160)}>Etiquetas / Observação</th>
                 <th style={{ ...thFat(90), textAlign: 'center' }}>Detalhe</th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={8} style={{ padding: 40, textAlign: 'center', color: T.inkFaint }}>Carregando…</td></tr>
+                <tr><td colSpan={9} style={{ padding: 40, textAlign: 'center', color: T.inkFaint }}>Carregando…</td></tr>
               ) : filtrados.length === 0 ? (
-                <tr><td colSpan={8} style={{ padding: 30, textAlign: 'center', color: T.oliveText, fontWeight: 600 }}>✓ Nenhum projeto encontrado com esse filtro.</td></tr>
+                <tr><td colSpan={9} style={{ padding: 30, textAlign: 'center', color: T.oliveText, fontWeight: 600 }}>✓ Nenhum projeto encontrado com esse filtro.</td></tr>
               ) : filtrados.map(p => {
                 const st = statusInfo(p.status);
+                const tagsDoBr = (tagsPorBr[p.br] || []).map(id => tagsCatalogo.find(t => t.id === id)).filter(Boolean);
+                const anotacao = anotacoesPorBr[p.br];
                 return (
                   <tr key={p.br} style={{ borderBottom: `1px solid ${T.lineSoft}`, background: p.status === 'sem_op' && p.diasAberto > 30 ? T.rustSoft : 'transparent', cursor: 'pointer' }}
                     onClick={() => setDrillBR(p)}
@@ -4006,6 +4068,18 @@ function MonitoramentoOP() {
                     <td style={{ padding: '9px 12px', textAlign: 'right', fontWeight: 700, color: p.diasAberto > 30 ? T.rustText : T.inkDim }}>{p.diasAberto ?? '—'}</td>
                     <td style={{ padding: '9px 12px', textAlign: 'center' }}>
                       <span style={{ fontSize: 10.5, fontWeight: 700, color: st.cor, background: st.bg, padding: '3px 8px', borderRadius: 4, whiteSpace: 'nowrap' }}>{st.label}</span>
+                    </td>
+                    <td style={{ padding: '9px 12px' }}>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3, marginBottom: anotacao?.observacao ? 4 : 0 }}>
+                        {tagsDoBr.map(tag => (
+                          <span key={tag.id} style={{ fontSize: 9.5, fontWeight: 700, color: '#fff', background: tag.cor, padding: '2px 7px', borderRadius: 10, whiteSpace: 'nowrap' }}>{tag.nome}</span>
+                        ))}
+                      </div>
+                      {anotacao?.observacao && (
+                        <div style={{ fontSize: 10.5, color: T.inkFaint, maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={anotacao.observacao}>
+                          📝 {anotacao.observacao}{anotacao.data_referencia ? ` (${fmtData(anotacao.data_referencia)})` : ''}
+                        </div>
+                      )}
                     </td>
                     <td style={{ padding: '9px 12px', textAlign: 'center' }}>
                       <button onClick={(e) => { e.stopPropagation(); setDrillBR(p); }}
@@ -4070,6 +4144,48 @@ function MonitoramentoOP() {
                   })}
                 </tbody>
               </table>
+            </div>
+
+            {/* ── ETIQUETAS + OBSERVAÇÃO ────────────────────────────────── */}
+            <div style={{ borderTop: `1px solid ${T.line}`, padding: '16px 22px', flexShrink: 0 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: T.inkFaint, textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 8 }}>Etiquetas</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 10 }}>
+                {tagsCatalogo.map(tag => {
+                  const marcado = (tagsPorBr[drillBR.br] || []).includes(tag.id);
+                  return (
+                    <button key={tag.id} onClick={() => alternarTagNoBr(drillBR.br, tag.id)}
+                      style={{
+                        fontSize: 11, fontWeight: 700, padding: '4px 11px', borderRadius: 12, cursor: 'pointer',
+                        border: `1.5px solid ${tag.cor}`, background: marcado ? tag.cor : 'transparent', color: marcado ? '#fff' : tag.cor,
+                      }}>
+                      {marcado ? '✓ ' : '+ '}{tag.nome}
+                    </button>
+                  );
+                })}
+              </div>
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 16 }}>
+                <input value={novaTagNome} onChange={e => setNovaTagNome(e.target.value)} placeholder="Nova etiqueta…"
+                  style={{ ...inputStyle(), fontSize: 12, flex: 1, padding: '6px 10px' }} />
+                <input type="color" value={novaTagCor} onChange={e => setNovaTagCor(e.target.value)}
+                  style={{ width: 32, height: 32, border: `1px solid ${T.line}`, borderRadius: 6, padding: 2, cursor: 'pointer' }} />
+                <button onClick={criarNovaTag} style={{ ...ghostBtn(T.inkFaint), padding: '6px 12px', fontSize: 12 }}>Criar</button>
+              </div>
+
+              <div style={{ fontSize: 11, fontWeight: 700, color: T.inkFaint, textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 8 }}>Observação</div>
+              <textarea rows={3} value={observacaoEdit} onChange={e => setObservacaoEdit(e.target.value)}
+                placeholder="Ex: aguardando retorno do cliente sobre o desenho técnico — cobrar comercial se não voltar até a data abaixo."
+                style={{ ...inputStyle(), fontSize: 12.5, width: '100%', resize: 'vertical' }} />
+              <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginTop: 8 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ fontSize: 11.5, color: T.inkFaint }}>Retomar em:</span>
+                  <input type="date" value={dataEdit || ''} onChange={e => setDataEdit(e.target.value)}
+                    style={{ ...inputStyle(), fontSize: 12, padding: '5px 8px' }} />
+                </div>
+                <button onClick={() => salvarAnotacao(drillBR.br, observacaoEdit, dataEdit)} disabled={salvandoAnotacao}
+                  style={{ ...solidBtn(T.terracotta, true), marginLeft: 'auto', opacity: salvandoAnotacao ? 0.7 : 1 }}>
+                  {salvandoAnotacao ? 'Salvando…' : 'Salvar observação'}
+                </button>
+              </div>
             </div>
           </div>
         </Overlay>
