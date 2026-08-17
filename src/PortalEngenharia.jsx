@@ -148,6 +148,99 @@ const fmtData = (iso) => !iso ? '—' : new Date(iso + 'T00:00:00').toLocaleDate
 const fmtMoeda = (v) => v == null ? '—' : new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(v);
 const fmtMoedaCompacta = (v) => new Intl.NumberFormat('pt-BR', { notation: 'compact', compactDisplay: 'short', maximumFractionDigits: 1 }).format(v);
 
+// Link direto pra abrir uma nota/pedido no Sankhya web. A tela (classe) e o
+// TIPOPORTAL mudam por tipo de movimento — confirmados: C (Compra/Nota de
+// Entrada) e V/P (Venda — nota e pedido usam a mesma tela "Central de Vendas").
+// Falta confirmar: OP (usa NUAPO, não NUNOTA — precisa de outro exemplo).
+const SANKHYA_SERVIDOR = 'https://snkbrp01667.ativy.com';
+const SANKHYA_CONFIG_POR_TIPMOV = {
+  C: { classe: 'br.com.sankhya.com.mov.CentralNotas_COMPRA', tipoportal: 'PC' },
+  V: { classe: 'br.com.sankhya.com.mov.CentralNotas_VENDA', tipoportal: 'PV' },
+  P: { classe: 'br.com.sankhya.com.mov.CentralNotas_VENDA', tipoportal: 'PV' },
+};
+function base64Utf8(texto) {
+  return btoa(unescape(encodeURIComponent(texto)));
+}
+function linkSankhyaNota({ nunota, tipmov, codtipoper }) {
+  const cfg = SANKHYA_CONFIG_POR_TIPMOV[tipmov];
+  if (!cfg || !nunota) return null; // tipo ainda não mapeado, ou sem NUNOTA — não mostra o link
+  const agora = Date.now();
+  const parametros = {
+    NUNOTA: Number(nunota),
+    TIPMOV: tipmov,
+    ehPedidoW: false,
+    CODTIPOPER: Number(codtipoper) || 0,
+    TIPOPORTAL: cfg.tipoportal,
+    forceNewHash: agora,
+  };
+  const blocoA = base64Utf8(cfg.classe);
+  const blocoB = base64Utf8(JSON.stringify(parametros));
+  return `${SANKHYA_SERVIDOR}/mge/system.jsp#app/${blocoA}/${blocoB}&pk-refresh=${agora}`;
+}
+// Botão pequeno reutilizável — só renderiza se o link puder ser montado (tipo mapeado + nunota presente)
+function BotaoAbrirSankhya({ nunota, tipmov, codtipoper, label }) {
+  const link = linkSankhyaNota({ nunota, tipmov, codtipoper });
+  if (!link) return null;
+  return (
+    <a href={link} target="_blank" rel="noopener noreferrer"
+      onClick={e => e.stopPropagation()}
+      style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10.5, color: T.blueText, textDecoration: 'none', fontWeight: 600, whiteSpace: 'nowrap' }}>
+      <ArrowUpRight size={11} /> {label || 'Abrir no Sankhya'}
+    </a>
+  );
+}
+
+// Telas que o Sankhya SÓ abre de forma genérica (sem parâmetro pra registro específico) —
+// confirmado com o usuário que essas duas não aceitam NUAPO/filtro pela URL, então só dá pra
+// abrir a tela geral e a pessoa busca manualmente lá dentro.
+const SANKHYA_TELAS_GENERICAS = {
+  ordensProducao: base64Utf8('br.com.sankhya.prod.OrdensProducaoHTML'),
+  orcamentos: base64Utf8('br.com.sankhya.menu.adicional.AD_ORCPRECO'),
+};
+function linkSankhyaTelaGenerica(chave) {
+  const blocoA = SANKHYA_TELAS_GENERICAS[chave];
+  if (!blocoA) return null;
+  return `${SANKHYA_SERVIDOR}/mge/system.jsp#app/${blocoA}`;
+}
+function BotaoAbrirTelaSankhya({ tela, label }) {
+  const link = linkSankhyaTelaGenerica(tela);
+  if (!link) return null;
+  return (
+    <a href={link} target="_blank" rel="noopener noreferrer"
+      onClick={e => e.stopPropagation()}
+      style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10.5, color: T.blueText, textDecoration: 'none', fontWeight: 600, whiteSpace: 'nowrap' }}>
+      <ArrowUpRight size={11} /> {label}
+    </a>
+  );
+}
+
+// Link ESPECÍFICO pro relatório do orçamento (AD_ORCPRECO), via ReportLauncher_27 +
+// PK_NUREG — achado clicando na setinha da proposta no Sankhya. Só funciona se a
+// proposta já tiver sido casada com o NUREG do Sankhya (campo nureg_sankhya, casado
+// pelo BR via sankhya-vincular-nureg-propostas).
+const SANKHYA_REPORT_LAUNCHER_27 = base64Utf8('br.com.sankhya.controls.ReportLauncher_27');
+function linkSankhyaRelatorioOrcamento(nureg) {
+  if (!nureg) return null;
+  const agora = Date.now();
+  const parametros = {
+    PK_NUREG: { type: 'I', value: String(nureg) },
+    pks: { '0': { fields: { '0': { nome: 'PK_NUREG', tipo: 'I', valor: Number(nureg) } } } },
+  };
+  const blocoB = base64Utf8(JSON.stringify(parametros));
+  return `${SANKHYA_SERVIDOR}/mge/system.jsp#app/${SANKHYA_REPORT_LAUNCHER_27}/${blocoB}&pk-refresh=${agora}`;
+}
+function BotaoAbrirOrcamentoSankhya({ nureg }) {
+  const link = linkSankhyaRelatorioOrcamento(nureg);
+  if (!link) return <BotaoAbrirTelaSankhya tela="orcamentos" label="Abrir Orçamentos no Sankhya (buscar manual)" />;
+  return (
+    <a href={link} target="_blank" rel="noopener noreferrer"
+      onClick={e => e.stopPropagation()}
+      style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10.5, color: T.oliveText, textDecoration: 'none', fontWeight: 700, whiteSpace: 'nowrap' }}>
+      <ArrowUpRight size={11} /> Abrir esse orçamento no Sankhya
+    </a>
+  );
+}
+
 /* ── Exportação CSV ─────────────────────────────────────────────────────────── */
 function exportCSV(rows, filename, colunas) {
   if (!rows?.length) return;
@@ -3797,13 +3890,16 @@ function MonitoramentoOP() {
           nada disso — clique num projeto pra ver quais itens específicos estão pendentes. Cobre os
           últimos 180 dias.
         </div>
-        <button onClick={handleAtualizar} disabled={syncing} style={{
-          display: 'flex', alignItems: 'center', gap: 8, background: T.terracotta, color: '#fff', border: 'none',
-          borderRadius: 8, padding: '10px 18px', fontSize: 13, fontWeight: 700, opacity: syncing ? 0.7 : 1, flexShrink: 0,
-        }}>
-          <RefreshCw size={15} className={syncing ? 'spin' : ''} />
-          {syncing ? 'Analisando… (pode levar 1min)' : 'Atualizar do Sankhya'}
-        </button>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-end', flexShrink: 0 }}>
+          <button onClick={handleAtualizar} disabled={syncing} style={{
+            display: 'flex', alignItems: 'center', gap: 8, background: T.terracotta, color: '#fff', border: 'none',
+            borderRadius: 8, padding: '10px 18px', fontSize: 13, fontWeight: 700, opacity: syncing ? 0.7 : 1, flexShrink: 0,
+          }}>
+            <RefreshCw size={15} className={syncing ? 'spin' : ''} />
+            {syncing ? 'Analisando… (pode levar 1min)' : 'Atualizar do Sankhya'}
+          </button>
+          <BotaoAbrirTelaSankhya tela="ordensProducao" label="Abrir tela de OPs no Sankhya (buscar manual)" />
+        </div>
       </div>
 
       {syncStatus && (
@@ -5967,7 +6063,7 @@ function Faturamento() {
       dataCompleta = dataCompleta.concat(data || []);
       if (!data || data.length < 1000) break;
     }
-    setDrillDown({ titulo, itens: dataCompleta, campoValor: 'valor_liquido' });
+    setDrillDown({ titulo, itens: dataCompleta, campoValor: 'valor_liquido', tipmov: 'P' });
     setDrillLoading(false);
   }, [filtros]);
 
@@ -5990,7 +6086,7 @@ function Faturamento() {
       dataCompleta = dataCompleta.concat(data || []);
       if (!data || data.length < 1000) break;
     }
-    setDrillDown({ titulo, itens: dataCompleta, campoValor: 'valor_bruto' });
+    setDrillDown({ titulo, itens: dataCompleta, campoValor: 'valor_bruto', tipmov: 'V' });
     setDrillLoading(false);
   }, [filtros]);
 
@@ -6414,7 +6510,7 @@ function Faturamento() {
           onClose={() => setDrillDown(null)}
         />
       ) : drillDown ? (
-        <DrillDownPedidos titulo={drillDown.titulo} itens={drillDown.itens} loading={drillLoading} onClose={() => setDrillDown(null)} campoValor={drillDown.campoValor} />
+        <DrillDownPedidos titulo={drillDown.titulo} itens={drillDown.itens} loading={drillLoading} onClose={() => setDrillDown(null)} campoValor={drillDown.campoValor} tipmov={drillDown.tipmov} />
       ) : null}
     </div>
   );
@@ -6640,7 +6736,7 @@ function BarraClicavel({ nome, valor, max, cor, onClick }) {
   );
 }
 
-function DrillDownPedidos({ titulo, itens, loading, onClose, campoValor = 'valor_liquido' }) {
+function DrillDownPedidos({ titulo, itens, loading, onClose, campoValor = 'valor_liquido', tipmov }) {
   const total = itens.reduce((s, p) => s + Number(p[campoValor] || 0), 0);
   const labelValor = campoValor === 'valor_bruto' ? 'Valor bruto' : 'Valor líquido';
   return (
@@ -6666,13 +6762,14 @@ function DrillDownPedidos({ titulo, itens, loading, onClose, campoValor = 'valor
                 <th style={thFat()}>Vendedor</th>
                 <th style={thFat()}>Produto</th>
                 <th style={thFat(0, 'right')}>{labelValor}</th>
+                <th style={thFat(90)}>Sankhya</th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={6} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Carregando…</td></tr>
+                <tr><td colSpan={7} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Carregando…</td></tr>
               ) : itens.length === 0 ? (
-                <tr><td colSpan={6} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Sem itens no período.</td></tr>
+                <tr><td colSpan={7} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Sem itens no período.</td></tr>
               ) : itens.map(p => (
                 <tr key={p.id} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
                   <td style={{ padding: '9px 12px', color: T.inkDim, whiteSpace: 'nowrap' }}>{fmtData(p.data_neg)}</td>
@@ -6681,6 +6778,9 @@ function DrillDownPedidos({ titulo, itens, loading, onClose, campoValor = 'valor
                   <td style={{ padding: '9px 12px', color: T.inkDim, whiteSpace: 'nowrap' }}>{p.vendedor_nome || '—'}</td>
                   <td style={{ padding: '9px 12px', color: T.inkDim, maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={p.produto_descricao}>{p.produto_descricao}</td>
                   <td style={{ padding: '9px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 600 }}>{fmtMoeda(p[campoValor])}</td>
+                  <td style={{ padding: '9px 12px', textAlign: 'center' }}>
+                    <BotaoAbrirSankhya nunota={p.nunota} tipmov={tipmov} codtipoper={p.codtipoper} label="Abrir" />
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -7980,7 +8080,7 @@ function PrecoCompra() {
 
     let query = supabaseSupply
       .from('v_ultimas_compras')
-      .select('descricao_produto,fornecedor,cod_fornecedor,data_recebimento,numero_nf,quantidade_recebida,valor_total_linha,preco_unitario,ordem_recencia,valor_liquido_item,preco_unitario_liquido,valor_icms,valor_ipi,valor_icms_st')
+      .select('descricao_produto,fornecedor,cod_fornecedor,data_recebimento,numero_nf,quantidade_recebida,valor_total_linha,preco_unitario,ordem_recencia,valor_liquido_item,preco_unitario_liquido,valor_icms,valor_ipi,valor_icms_st,nunota,tipmov,codtipoper_nota,numero_pedido_oc,nunota_pedido_oc')
       .eq('codigo_produto', codigo)
       .order('ordem_recencia', { ascending: true });
     if (limite !== 'todas') query = query.lte('ordem_recencia', limite);
@@ -8146,7 +8246,13 @@ function PrecoCompra() {
                               {contato?.telefone ? <div style={{ color: T.inkFaint }}>{contato.telefone}</div> : null}
                               {!contato?.email && !contato?.telefone && <span style={{ color: T.inkFaint }}>—</span>}
                             </td>
-                            <td style={{ padding: '10px 12px', color: T.inkFaint }}>{h.numero_nf || '—'}</td>
+                            <td style={{ padding: '10px 12px', color: T.inkFaint }}>
+                              <div>{h.numero_nf || '—'}</div>
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: 2, marginTop: 3 }}>
+                                <BotaoAbrirSankhya nunota={h.nunota} tipmov={h.tipmov} codtipoper={h.codtipoper_nota} label="Ver nota" />
+                                {h.numero_pedido_oc && <BotaoAbrirSankhya nunota={h.nunota_pedido_oc} tipmov="C" codtipoper={h.codtipoper_nota} label={`Ver pedido ${h.numero_pedido_oc}`} />}
+                              </div>
+                            </td>
                             <td style={{ padding: '10px 12px', textAlign: 'right' }}>{fmtQtd(h.quantidade_recebida)}</td>
                             <td style={{ padding: '10px 12px', textAlign: 'right', color: T.inkFaint }}>{fmtMoeda(h.valor_total_linha)}</td>
                             <td style={{ padding: '10px 12px', textAlign: 'right', color: T.inkFaint }}>{fmtMoeda(h.preco_unitario)}</td>
@@ -11243,6 +11349,9 @@ function ModalDetalhe({ proposta, usuario, onClose, onAction }) {
               </span>
             </div>
             <p style={{ color: T.inkFaint, fontSize: 13, margin: '5px 0 0', fontWeight: 500 }}>{proposta.cliente} · {proposta.escopo}</p>
+            <div style={{ marginTop: 8 }}>
+              <BotaoAbrirOrcamentoSankhya nureg={proposta.nureg_sankhya} />
+            </div>
           </div>
           <button onClick={onClose} style={{ background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 8, color: T.inkFaint, padding: 7, height: 'fit-content' }}><X size={18} /></button>
         </div>
