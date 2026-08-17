@@ -2683,6 +2683,25 @@ function ProspeccaoClientes() {
     await carregar();
   };
 
+  const [pesquisandoId, setPesquisandoId] = useState(null);
+  const [erroPesquisaId, setErroPesquisaId] = useState(null);
+  const pesquisarMaisAFundo = async (id) => {
+    setPesquisandoId(id);
+    setErroPesquisaId(null);
+    try {
+      const res = await fetch(`${SUPABASE_URL}/functions/v1/pesquisar-prospect-individual`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id }),
+      }).then(r => r.json());
+      if (!res.ok) throw new Error(res.erro || 'Erro desconhecido.');
+      await carregar();
+    } catch (err) {
+      setErroPesquisaId({ id, mensagem: String(err.message || err) });
+    } finally {
+      setPesquisandoId(null);
+    }
+  };
+
   const filtrados = useMemo(() => {
     return prospects
       .filter(p => filtroStatus === 'todos' || p.status === filtroStatus)
@@ -2827,11 +2846,23 @@ function ProspeccaoClientes() {
                       📝 {p.observacao}
                     </div>
                   )}
+                  {erroPesquisaId?.id === p.id && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: T.rustText, background: T.rustSoft, borderRadius: 6, padding: '6px 10px', marginTop: 4 }}>
+                      <AlertTriangle size={12} /> {erroPesquisaId.mensagem}
+                    </div>
+                  )}
                 </div>
-                <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
-                  {p.status !== 'em_analise' && <button onClick={() => atualizarStatus(p.id, 'em_analise')} style={{ fontSize: 11, color: T.amberText, background: T.amberSoft, border: 'none', borderRadius: 5, padding: '5px 10px', cursor: 'pointer', fontWeight: 600 }}>Em análise</button>}
-                  {p.status !== 'contatado' && <button onClick={() => atualizarStatus(p.id, 'contatado')} style={{ fontSize: 11, color: T.oliveText, background: T.oliveSoft, border: 'none', borderRadius: 5, padding: '5px 10px', cursor: 'pointer', fontWeight: 600 }}>Contatado</button>}
-                  {p.status !== 'descartado' && <button onClick={() => atualizarStatus(p.id, 'descartado')} style={{ fontSize: 11, color: T.inkFaint, background: T.lineSoft, border: 'none', borderRadius: 5, padding: '5px 10px', cursor: 'pointer', fontWeight: 600 }}>Descartar</button>}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flexShrink: 0, alignItems: 'flex-end' }}>
+                  <button onClick={() => pesquisarMaisAFundo(p.id)} disabled={pesquisandoId === p.id}
+                    style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: '#fff', background: T.terracotta, border: 'none', borderRadius: 5, padding: '5px 10px', cursor: 'pointer', fontWeight: 700, opacity: pesquisandoId === p.id ? 0.6 : 1 }}>
+                    <Search size={12} className={pesquisandoId === p.id ? 'spin' : ''} />
+                    {pesquisandoId === p.id ? 'Pesquisando…' : 'Pesquisar mais a fundo'}
+                  </button>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    {p.status !== 'em_analise' && <button onClick={() => atualizarStatus(p.id, 'em_analise')} style={{ fontSize: 11, color: T.amberText, background: T.amberSoft, border: 'none', borderRadius: 5, padding: '5px 10px', cursor: 'pointer', fontWeight: 600 }}>Em análise</button>}
+                    {p.status !== 'contatado' && <button onClick={() => atualizarStatus(p.id, 'contatado')} style={{ fontSize: 11, color: T.oliveText, background: T.oliveSoft, border: 'none', borderRadius: 5, padding: '5px 10px', cursor: 'pointer', fontWeight: 600 }}>Contatado</button>}
+                    {p.status !== 'descartado' && <button onClick={() => atualizarStatus(p.id, 'descartado')} style={{ fontSize: 11, color: T.inkFaint, background: T.lineSoft, border: 'none', borderRadius: 5, padding: '5px 10px', cursor: 'pointer', fontWeight: 600 }}>Descartar</button>}
+                  </div>
                 </div>
               </div>
             </div>
