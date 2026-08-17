@@ -2713,9 +2713,9 @@ function ProspeccaoClientes() {
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
         <div style={{ fontSize: 12.5, color: T.inkFaint, background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 8, padding: '10px 14px', flex: 1, minWidth: 280 }}>
-          Agente de IA (ChatGPT) sugere empresas novas toda segunda-feira, com base nos setores que já funcionam bem pra Kalenborn.
-          <strong> Importante:</strong> são sugestões geradas por conhecimento do modelo, não uma busca ao vivo — sempre confirme
-          se a empresa existe de verdade e ache o contato atualizado antes de abordar.
+          Agente de IA sugere empresas novas toda segunda-feira, cruzando contra TODA a nossa carteira (não repete cliente
+          existente nem recorrente), e faz uma <strong>pesquisa profunda com busca real na web</strong> pra cada uma —
+          site, LinkedIn, contato de compras quando encontrar. Mesmo assim, sempre confirme antes de abordar.
         </div>
         <button onClick={handleBuscarAgora} disabled={buscando} style={{
           display: 'flex', alignItems: 'center', gap: 8, background: T.terracotta, color: '#fff', border: 'none',
@@ -2787,13 +2787,13 @@ function ProspeccaoClientes() {
             <div key={p.id} style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '14px 18px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
                 <div style={{ flex: 1, minWidth: 240 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4, flexWrap: 'wrap' }}>
                     <span style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 15, color: T.ink }}>{p.empresa}</span>
                     <span style={{ fontSize: 10.5, fontWeight: 700, color: st.cor, background: st.bg, padding: '3px 8px', borderRadius: 4 }}>{st.label}</span>
-                    {p.observacao ? (
-                      <span style={{ fontSize: 10.5, fontWeight: 700, color: T.oliveText, background: T.oliveSoft, padding: '3px 8px', borderRadius: 4 }}>✓ verificado manualmente</span>
+                    {p.pesquisado ? (
+                      <span style={{ fontSize: 10.5, fontWeight: 700, color: T.oliveText, background: T.oliveSoft, padding: '3px 8px', borderRadius: 4 }}>✓ pesquisa profunda (web)</span>
                     ) : (
-                      <span style={{ fontSize: 10.5, fontWeight: 700, color: T.rustText, background: T.rustSoft, padding: '3px 8px', borderRadius: 4 }}>⚠ não verificado ainda</span>
+                      <span style={{ fontSize: 10.5, fontWeight: 700, color: T.rustText, background: T.rustSoft, padding: '3px 8px', borderRadius: 4 }}>⚠ só sugestão, sem pesquisa</span>
                     )}
                   </div>
                   <div style={{ fontSize: 12, color: T.inkFaint, marginBottom: 6 }}>
@@ -2801,16 +2801,30 @@ function ProspeccaoClientes() {
                   </div>
                   {p.motivo && <div style={{ fontSize: 12.5, color: T.inkDim, marginBottom: 4 }}>{p.motivo}</div>}
                   {p.produtos_sugeridos && <div style={{ fontSize: 11.5, color: T.blueText, marginBottom: 6 }}>💡 {p.produtos_sugeridos}</div>}
-                  {(p.telefone || p.email || p.site) && (
+
+                  {(p.telefone || p.email || p.site || p.linkedin_url || p.contato_comprador) && (
                     <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', fontSize: 11.5, color: T.oliveText, marginBottom: 6 }}>
+                      {p.contato_comprador && <span>👤 {p.contato_comprador}</span>}
                       {p.telefone && <span>📞 {p.telefone}</span>}
                       {p.email && <span>✉️ {p.email}</span>}
-                      {p.site && <span>🌐 {p.site}</span>}
+                      {p.site && <a href={p.site.startsWith('http') ? p.site : `https://${p.site}`} target="_blank" rel="noopener noreferrer" style={{ color: T.oliveText, textDecoration: 'none' }}>🌐 site</a>}
+                      {p.linkedin_url && <a href={p.linkedin_url} target="_blank" rel="noopener noreferrer" style={{ color: T.oliveText, textDecoration: 'none' }}>🔗 LinkedIn</a>}
+                    </div>
+                  )}
+
+                  {p.resumo_pesquisa_profunda && (
+                    <div style={{ fontSize: 11.5, color: T.inkDim, background: T.panelAlt, borderRadius: 6, padding: '8px 10px', marginTop: 4 }}>
+                      🔎 {p.resumo_pesquisa_profunda}
+                    </div>
+                  )}
+                  {p.fontes_pesquisa && (
+                    <div style={{ fontSize: 10, color: T.inkFaint, marginTop: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={p.fontes_pesquisa}>
+                      Fontes: {p.fontes_pesquisa}
                     </div>
                   )}
                   {p.observacao && (
                     <div style={{ fontSize: 11, color: T.inkFaint, background: T.panelAlt, borderRadius: 6, padding: '6px 10px', marginTop: 4 }}>
-                      🔍 {p.observacao}
+                      📝 {p.observacao}
                     </div>
                   )}
                 </div>
