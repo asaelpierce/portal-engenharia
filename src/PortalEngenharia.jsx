@@ -559,6 +559,7 @@ function PortalConteudo({ currentUser, session }) {
           {renderTab('verificacao_projetos', <TabErrorBoundary tab="Verificação de Projetos"><VerificacaoProjetos currentUser={currentUser} /></TabErrorBoundary>)}
           {renderTab('analise_comercial', <TabErrorBoundary tab="Análise Comercial"><AnaliseComercial /></TabErrorBoundary>)}
           {renderTab('prospeccao_clientes', <TabErrorBoundary tab="Prospecção de Clientes"><ProspeccaoClientes /></TabErrorBoundary>)}
+          {renderTab('almoxarifado_fluxo', <TabErrorBoundary tab="Fluxo de Materiais"><AlmoxarifadoFluxo /></TabErrorBoundary>)}
           {renderTab('pedidosvale', <PedidosVale />)}
           {renderTab('aberturacotacao', <TabErrorBoundary tab="Abertura de Cotação"><AberturaCotacao currentUser={currentUser} /></TabErrorBoundary>)}
           {renderTab('ranking', <TabErrorBoundary tab="Ranking"><RankingPontuacao /></TabErrorBoundary>)}
@@ -613,6 +614,7 @@ function Sidebar({ view, setView, pendCount, papel, telasPermitidas }) {
     { id: 'verificacao_projetos', label: 'Verificação de Projetos', icon: ClipboardCheck },
     { id: 'analise_comercial', label: 'Análise Comercial', icon: TrendingUp },
     { id: 'prospeccao_clientes', label: 'Prospecção de Clientes', icon: UserPlus },
+    { id: 'almoxarifado_fluxo', label: 'Fluxo de Materiais', icon: Package },
     { id: 'pedidosvale',  label: 'Pedidos Vale',           icon: FileWarning },
     { id: 'aberturacotacao', label: 'Abertura de Cotação',  icon: FileStack },
     { id: 'ranking',      label: 'Ranking de Pontuação',    icon: TrendingUp },
@@ -2727,6 +2729,245 @@ function FunilVisualSVG({ segmentos, total, ativo, onClick }) {
         );
       })}
     </svg>
+  );
+}
+
+function AlmoxarifadoFluxo() {
+  const [projetos, setProjetos] = useState([]);
+  const [perdas, setPerdas] = useState([]);
+  const [valoresPerda, setValoresPerda] = useState({}); // movimentacao_id -> valor
+  const [loading, setLoading] = useState(true);
+  const [busca, setBusca] = useState('');
+  const [abaAtiva, setAbaAtiva] = useState('projetos');
+  const [drillBr, setDrillBr] = useState(null);
+  const [itensDrill, setItensDrill] = useState([]);
+
+  const carregar = useCallback(async () => {
+    setLoading(true);
+    const [{ data: proj }, { data: perd }, { data: valores }] = await Promise.all([
+      supabase.from('v_almoxarifado_projetos').select('*').order('ultima_movimentacao', { ascending: false }),
+      supabase.from('v_almoxarifado_perdas').select('*').order('carimbo_data_hora', { ascending: false }),
+      supabase.from('almoxarifado_perdas_valor').select('*'),
+    ]);
+    setProjetos(proj || []);
+    setPerdas(perd || []);
+    const vMap = {};
+    (valores || []).forEach(v => { vMap[v.movimentacao_id] = v.valor; });
+    setValoresPerda(vMap);
+    setLoading(false);
+  }, []);
+  useEffect(() => { carregar(); }, [carregar]);
+
+  const abrirDrill = async (br) => {
+    setDrillBr(br);
+    const { data } = await supabase.from('almoxarifado_movimentacoes').select('*').eq('br_normalizado', br).order('carimbo_data_hora');
+    setItensDrill(data || []);
+  };
+
+  const salvarValorPerda = async (movimentacaoId, valor) => {
+    await supabase.from('almoxarifado_perdas_valor').upsert(
+      { movimentacao_id: movimentacaoId, valor: valor === '' ? null : Number(valor), atualizado_em: new Date().toISOString() },
+      { onConflict: 'movimentacao_id' }
+    );
+    setValoresPerda(prev => ({ ...prev, [movimentacaoId]: valor === '' ? null : Number(valor) }));
+  };
+
+  const projetosFiltrados = useMemo(() => {
+    if (!busca.trim()) return projetos;
+    const b = busca.toLowerCase();
+    return projetos.filter(p => (p.br || '').toLowerCase().includes(b) || (p.ops || '').toLowerCase().includes(b));
+  }, [projetos, busca]);
+
+  const kpis = useMemo(() => {
+    const comFaturamento = projetos.filter(p => p.dias_em_producao != null);
+    const mediaDias = comFaturamento.length ? Math.round(comFaturamento.reduce((s, p) => s + p.dias_em_producao, 0) / comFaturamento.length) : 0;
+    const comDivergencia = projetos.filter(p => p.divergencia_dias_faturamento != null && Math.abs(p.divergencia_dias_faturamento) > 2);
+    const totalPerdasValor = Object.values(valoresPerda).reduce((s, v) => s + (Number(v) || 0), 0);
+    return {
+      totalProjetos: projetos.length,
+      mediaDias,
+      comDivergencia: comDivergencia.length,
+      totalOcorrenciasPerda: perdas.length,
+      totalPerdasValor,
+    };
+  }, [projetos, perdas, valoresPerda]);
+
+  const fmtDataHora = (iso) => !iso ? '—' : new Date(iso).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' });
+
+  return (
+    <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+      <div style={{ fontSize: 12.5, color: T.inkFaint, background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 8, padding: '10px 14px' }}>
+        Controle de movimentação de material por projeto/OP — histórico migrado do formulário + novos registros via Power Automate.
+        A data de faturamento é cruzada automaticamente com o Sankhya (não depende de digitar certo no formulário).
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(160px,1fr))', gap: 12 }}>
+        <Kpi label="Projetos no histórico" value={loading ? '…' : kpis.totalProjetos} icon={Package} tone="blue" />
+        <Kpi label="Dias médios em produção" value={loading ? '…' : kpis.mediaDias} icon={Clock3} tone="amber" sub="do início até faturado" />
+        <Kpi label="Divergência de data > 2 dias" value={loading ? '…' : kpis.comDivergencia} icon={AlertTriangle} tone="rust" sub="formulário vs Sankhya real" />
+        <Kpi label="Ocorrências de perda" value={loading ? '…' : kpis.totalOcorrenciasPerda} icon={FileWarning} sub="Divergência/Perca/Serviço" />
+        <Kpi label="Valor de perda lançado" value={fmtMoeda(kpis.totalPerdasValor)} icon={DollarSign} tone="rust" sub="preenchido manualmente" />
+      </div>
+
+      <div style={{ display: 'flex', gap: 4, borderBottom: `1px solid ${T.line}` }}>
+        {[{ id: 'projetos', label: `Projetos (${projetos.length})` }, { id: 'perdas', label: `Perdas (${perdas.length})` }].map(aba => (
+          <button key={aba.id} onClick={() => setAbaAtiva(aba.id)}
+            style={{
+              background: 'none', border: 'none', cursor: 'pointer', padding: '10px 16px', fontSize: 13, fontWeight: 600,
+              color: abaAtiva === aba.id ? T.terracotta : T.inkFaint,
+              borderBottom: `2px solid ${abaAtiva === aba.id ? T.terracotta : 'transparent'}`, marginBottom: -1,
+            }}>
+            {aba.label}
+          </button>
+        ))}
+      </div>
+
+      {abaAtiva === 'projetos' && (
+        <Panel>
+          <div style={{ marginBottom: 14 }}>
+            <FiltroCampoFat label="Buscar BR ou OP">
+              <div style={{ position: 'relative' }}>
+                <Search size={13} style={{ position: 'absolute', left: 9, top: 9, color: T.inkFaint }} />
+                <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Ex: BR14105/26"
+                  style={{ ...selectStyleFat(240), paddingLeft: 28 }} />
+              </div>
+            </FiltroCampoFat>
+          </div>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+              <thead>
+                <tr style={{ background: T.panelAlt, borderBottom: `1px solid ${T.line}` }}>
+                  <th style={thFat(120)}>BR</th>
+                  <th style={thFat(0)}>OPs</th>
+                  <th style={thFat(100)}>Início</th>
+                  <th style={{ ...thFat(110), textAlign: 'center' }}>Dias produção</th>
+                  <th style={thFat(100)}>Faturado (Sankhya)</th>
+                  <th style={{ ...thFat(100), textAlign: 'center' }}>Divergência</th>
+                  <th style={{ ...thFat(100), textAlign: 'right' }}>Produtividade</th>
+                  <th style={{ ...thFat(80), textAlign: 'center' }}>Perdas</th>
+                </tr>
+              </thead>
+              <tbody>
+                {loading ? (
+                  <tr><td colSpan={8} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Carregando…</td></tr>
+                ) : projetosFiltrados.length === 0 ? (
+                  <tr><td colSpan={8} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Nenhum projeto encontrado.</td></tr>
+                ) : projetosFiltrados.slice(0, 150).map(p => {
+                  const divergenciaAlta = p.divergencia_dias_faturamento != null && Math.abs(p.divergencia_dias_faturamento) > 2;
+                  return (
+                    <tr key={p.br} onClick={() => abrirDrill(p.br)}
+                      style={{ borderBottom: `1px solid ${T.lineSoft}`, cursor: 'pointer' }}
+                      onMouseEnter={e => e.currentTarget.style.background = T.panelAlt}
+                      onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                      <td style={{ padding: '9px 12px', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText }}>{p.br}</td>
+                      <td style={{ padding: '9px 12px', color: T.inkFaint, maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={p.ops}>{p.ops}</td>
+                      <td style={{ padding: '9px 12px', color: T.inkDim, whiteSpace: 'nowrap' }}>{fmtData(p.primeira_movimentacao)}</td>
+                      <td style={{ padding: '9px 12px', textAlign: 'center', fontWeight: 700 }}>{p.dias_em_producao ?? '—'}</td>
+                      <td style={{ padding: '9px 12px', color: T.inkDim, whiteSpace: 'nowrap' }}>{fmtData(p.data_faturamento_real)}</td>
+                      <td style={{ padding: '9px 12px', textAlign: 'center' }}>
+                        {p.divergencia_dias_faturamento == null ? <span style={{ color: T.inkFaint }}>—</span> : (
+                          <span style={{ fontSize: 10.5, fontWeight: 700, padding: '3px 7px', borderRadius: 4, color: divergenciaAlta ? T.rustText : T.oliveText, background: divergenciaAlta ? T.rustSoft : T.oliveSoft }}>
+                            {p.divergencia_dias_faturamento > 0 ? '+' : ''}{p.divergencia_dias_faturamento}d
+                          </span>
+                        )}
+                      </td>
+                      <td style={{ padding: '9px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY }}>{p.produtividade_pc_dia ? `${p.produtividade_pc_dia} pç/d` : '—'}</td>
+                      <td style={{ padding: '9px 12px', textAlign: 'center' }}>
+                        {p.qtd_ocorrencias_perda > 0 ? (
+                          <span style={{ fontSize: 10.5, fontWeight: 700, color: T.rustText, background: T.rustSoft, padding: '3px 7px', borderRadius: 4 }}>{p.qtd_ocorrencias_perda}</span>
+                        ) : <span style={{ color: T.inkFaint }}>—</span>}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ padding: '10px 0 0', fontSize: 11, color: T.inkFaint, display: 'flex', justifyContent: 'space-between' }}>
+            <span>{projetosFiltrados.length} projetos (mostrando até 150) · clique numa linha pra ver a linha do tempo completa</span>
+            <BotaoExportar small onClick={() => exportCSV(projetosFiltrados, 'almoxarifado_projetos.csv',
+              ['br', 'primeira_movimentacao', 'dias_em_producao', 'data_faturamento_real', 'divergencia_dias_faturamento', 'produtividade_pc_dia', 'qtd_ocorrencias_perda'])} />
+          </div>
+        </Panel>
+      )}
+
+      {abaAtiva === 'perdas' && (
+        <Panel subtitle="Ocorrências de 'Gerou nova necessidade' (Divergência, Perca de Processo, Serviço) — preencha o valor quando souber, pra acompanhar o total de perda">
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+              <thead>
+                <tr style={{ background: T.panelAlt, borderBottom: `1px solid ${T.line}` }}>
+                  <th style={thFat(90)}>Data</th>
+                  <th style={thFat(110)}>BR</th>
+                  <th style={thFat(0)}>Material</th>
+                  <th style={thFat(150)}>Tipo</th>
+                  <th style={thFat(0)}>Observação</th>
+                  <th style={{ ...thFat(120), textAlign: 'right' }}>Valor</th>
+                </tr>
+              </thead>
+              <tbody>
+                {loading ? (
+                  <tr><td colSpan={6} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Carregando…</td></tr>
+                ) : perdas.length === 0 ? (
+                  <tr><td colSpan={6} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Nenhuma perda registrada.</td></tr>
+                ) : perdas.map(p => (
+                  <tr key={p.id} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                    <td style={{ padding: '9px 12px', color: T.inkDim, whiteSpace: 'nowrap' }}>{fmtData(p.carimbo_data_hora)}</td>
+                    <td style={{ padding: '9px 12px', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText }}>{p.br || '—'}</td>
+                    <td style={{ padding: '9px 12px', maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={p.material}>{p.material}</td>
+                    <td style={{ padding: '9px 12px', fontSize: 11, color: T.rustText }}>{p.tipo_perda}</td>
+                    <td style={{ padding: '9px 12px', color: T.inkFaint, maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={p.observacao}>{p.observacao || '—'}</td>
+                    <td style={{ padding: '9px 12px', textAlign: 'right' }}>
+                      <input type="number" step="0.01" placeholder="R$"
+                        defaultValue={valoresPerda[p.id] ?? ''}
+                        onBlur={e => salvarValorPerda(p.id, e.target.value)}
+                        style={{ ...inputStyle(), width: 90, fontSize: 12, textAlign: 'right', padding: '4px 8px' }} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ padding: '10px 0 0', fontSize: 11, color: T.inkFaint, display: 'flex', justifyContent: 'space-between' }}>
+            <span>{perdas.length} ocorrências · total lançado: {fmtMoeda(kpis.totalPerdasValor)}</span>
+            <BotaoExportar small onClick={() => exportCSV(perdas, 'almoxarifado_perdas.csv',
+              ['carimbo_data_hora', 'br', 'material', 'setor', 'tipo_perda', 'observacao'])} />
+          </div>
+        </Panel>
+      )}
+
+      {drillBr && (
+        <Overlay onClose={() => setDrillBr(null)}>
+          <div className="scale-in" style={{
+            background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, width: '100%', maxWidth: 800,
+            maxHeight: '85vh', display: 'flex', flexDirection: 'column', overflow: 'hidden', boxShadow: '0 24px 60px rgba(0,0,0,.18)',
+          }}>
+            <div style={{ padding: '18px 22px', borderBottom: `1px solid ${T.line}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <h2 style={{ fontFamily: FONT_DISPLAY, fontSize: 19, fontWeight: 700, margin: 0, color: T.ink }}>{drillBr}</h2>
+              <button onClick={() => setDrillBr(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.inkFaint }}><X size={18} /></button>
+            </div>
+            <div style={{ overflow: 'auto', flex: 1, padding: '16px 22px' }}>
+              {itensDrill.map((it, i) => (
+                <div key={it.id} style={{ display: 'flex', gap: 12, paddingBottom: 14, marginBottom: 14, borderBottom: i < itensDrill.length - 1 ? `1px solid ${T.lineSoft}` : 'none' }}>
+                  <div style={{ flexShrink: 0, width: 8, height: 8, borderRadius: '50%', marginTop: 5, background: it.setor === 'Projeto Faturado' ? T.oliveText : it.gerou_nova_necessidade ? T.rustText : T.blueText }} />
+                  <div style={{ flex: 1 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11.5, color: T.inkFaint, marginBottom: 3 }}>
+                      <span>{fmtDataHora(it.carimbo_data_hora)}</span>
+                      <span>OP {it.op || '—'}</span>
+                    </div>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: T.ink }}>{it.setor}</div>
+                    <div style={{ fontSize: 12, color: T.inkDim }}>{it.material}</div>
+                    {it.gerou_nova_necessidade && <div style={{ fontSize: 11.5, color: T.rustText, marginTop: 2 }}>⚠ {it.gerou_nova_necessidade}</div>}
+                    {it.material_pendente && <div style={{ fontSize: 11.5, color: T.amberText, marginTop: 2 }}>Pendente: {it.material_pendente}</div>}
+                    {it.observacao && <div style={{ fontSize: 11.5, color: T.inkFaint, marginTop: 2 }}>📝 {it.observacao}</div>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </Overlay>
+      )}
+    </div>
   );
 }
 
@@ -10736,6 +10977,7 @@ const TELAS_CATALOGO = [
   { id: 'verificacao_projetos', label: 'Verificação de Projetos' },
   { id: 'analise_comercial', label: 'Análise Comercial' },
   { id: 'prospeccao_clientes', label: 'Prospecção de Clientes' },
+  { id: 'almoxarifado_fluxo', label: 'Fluxo de Materiais' },
   { id: 'pedidosvale',  label: 'Pedidos Vale' },
   { id: 'aberturacotacao', label: 'Abertura de Cotação' },
   { id: 'ranking',      label: 'Ranking de Pontuação' },
