@@ -2735,28 +2735,137 @@ function FunilVisualSVG({ segmentos, total, ativo, onClick }) {
 function AlmoxarifadoFluxo() {
   const [projetos, setProjetos] = useState([]);
   const [perdas, setPerdas] = useState([]);
+  const [detalhado, setDetalhado] = useState([]);
+  const [faturadoMes, setFaturadoMes] = useState([]);
   const [valoresPerda, setValoresPerda] = useState({}); // movimentacao_id -> valor
   const [loading, setLoading] = useState(true);
   const [busca, setBusca] = useState('');
-  const [abaAtiva, setAbaAtiva] = useState('projetos');
+  const [buscaDetalhado, setBuscaDetalhado] = useState('');
+  const [mesFiltro, setMesFiltro] = useState('');
+  const [abaAtiva, setAbaAtiva] = useState('registrar');
   const [drillBr, setDrillBr] = useState(null);
   const [itensDrill, setItensDrill] = useState([]);
 
   const carregar = useCallback(async () => {
     setLoading(true);
-    const [{ data: proj }, { data: perd }, { data: valores }] = await Promise.all([
+    const [{ data: proj }, { data: perd }, { data: valores }, { data: det }, { data: fatMes }] = await Promise.all([
       supabase.from('v_almoxarifado_projetos').select('*').order('ultima_movimentacao', { ascending: false }),
       supabase.from('v_almoxarifado_perdas').select('*').order('carimbo_data_hora', { ascending: false }),
       supabase.from('almoxarifado_perdas_valor').select('*'),
+      supabase.from('v_almoxarifado_detalhado').select('*').order('carimbo_data_hora', { ascending: false }).limit(500),
+      supabase.from('v_almoxarifado_faturado_mes').select('*'),
     ]);
     setProjetos(proj || []);
     setPerdas(perd || []);
+    setDetalhado(det || []);
+    setFaturadoMes(fatMes || []);
     const vMap = {};
     (valores || []).forEach(v => { vMap[v.movimentacao_id] = v.valor; });
     setValoresPerda(vMap);
     setLoading(false);
   }, []);
   useEffect(() => { carregar(); }, [carregar]);
+
+  const detalhadoFiltrado = useMemo(() => {
+    if (!buscaDetalhado.trim()) return detalhado;
+    const b = buscaDetalhado.toLowerCase();
+    return detalhado.filter(d => (d.br || '').toLowerCase().includes(b) || (d.op || '').toLowerCase().includes(b) || (d.material || '').toLowerCase().includes(b));
+  }, [detalhado, buscaDetalhado]);
+
+  const mesesDisponiveis = useMemo(() => {
+    const set = new Set(faturadoMes.map(f => f.mes_referencia));
+    return [...set].filter(Boolean).sort().reverse();
+  }, [faturadoMes]);
+
+  const faturadoMesFiltrado = useMemo(() => {
+    if (!mesFiltro) return faturadoMes;
+    return faturadoMes.filter(f => f.mes_referencia === mesFiltro);
+  }, [faturadoMes, mesFiltro]);
+
+  const resumoPorLinha = useMemo(() => {
+    const grupos = {};
+    faturadoMesFiltrado.forEach(f => {
+      const chave = f.linha;
+      if (!grupos[chave]) grupos[chave] = { linha: chave, itens: 0, brsUnicos: new Set() };
+      grupos[chave].itens += 1;
+      grupos[chave].brsUnicos.add(f.br);
+    });
+    return Object.values(grupos).map(g => ({ linha: g.linha, itens: g.itens, projetos: g.brsUnicos.size }));
+  }, [faturadoMesFiltrado]);
+
+  // ── Situação atual (o que está parado em cada setor agora) + form de nova movimentação ──
+  const SETORES_FLUXO = ['Ponto de Estoque', 'Corte', 'Vulcanização', 'Pintura', 'Caldeiraria', 'Revestimento', 'Expedição', 'Material 100% em produção', 'Projeto Faturado'];
+  const [situacaoAtual, setSituacaoAtual] = useState([]);
+  const [novoMov, setNovoMov] = useState({ projeto: '', op: '', material: '', setor: 'Ponto de Estoque', gerou_nova_necessidade: '', material_pendente: '', observacao: '' });
+  const [salvandoMov, setSalvandoMov] = useState(false);
+  const [mensagemMov, setMensagemMov] = useState(null);
+  const [materiaisSugeridos, setMateriaisSugeridos] = useState([]);
+  const [buscandoMateriais, setBuscandoMateriais] = useState(false);
+
+  const carregarSituacaoAtual = useCallback(async () => {
+    const { data } = await supabase.from('v_almoxarifado_situacao_atual').select('*');
+    setSituacaoAtual(data || []);
+  }, []);
+  useEffect(() => { carregarSituacaoAtual(); }, [carregarSituacaoAtual]);
+
+  const situacaoPorSetor = useMemo(() => {
+    const grupos = {};
+    SETORES_FLUXO.forEach(s => { grupos[s] = []; });
+    situacaoAtual.forEach(s => { if (grupos[s.setor]) grupos[s.setor].push(s); });
+    return grupos;
+  }, [situacaoAtual]);
+
+  const buscarMateriaisDaOp = useCallback(async (op) => {
+    if (!op || !op.trim()) { setMateriaisSugeridos([]); return; }
+    setBuscandoMateriais(true);
+    const { data } = await supabase.from('almoxarifado_op_materiais').select('*').eq('op', op.trim()).order('materia_prima_descricao');
+    setMateriaisSugeridos(data || []);
+    setBuscandoMateriais(false);
+  }, []);
+
+  // Registra a movimentação de UM material específico da lista sugerida, direto (sem passar pelo form principal)
+  const marcarMaterialEntregue = async (materialItem, setor) => {
+    const registro = {
+      carimbo_data_hora: new Date().toISOString(),
+      projeto: novoMov.projeto.trim() || materialItem.br || '',
+      op: materialItem.op,
+      material: materialItem.materia_prima_descricao,
+      setor,
+      origem: 'manual',
+      br_normalizado: novoMov.projeto.trim()
+        ? ('BR' + novoMov.projeto.trim().toUpperCase().replace(/,/g, '/').replace(/^BR/, ''))
+        : materialItem.br,
+    };
+    await supabase.from('almoxarifado_movimentacoes').insert(registro);
+    await Promise.all([carregarSituacaoAtual(), carregar()]);
+  };
+
+  const salvarNovaMovimentacao = async () => {
+    if (!novoMov.projeto.trim()) { setMensagemMov({ ok: false, texto: 'Preencha o projeto (BR).' }); return; }
+    setSalvandoMov(true);
+    setMensagemMov(null);
+    const registro = {
+      carimbo_data_hora: new Date().toISOString(),
+      projeto: novoMov.projeto.trim(),
+      op: novoMov.op || null,
+      material: novoMov.material || null,
+      setor: novoMov.setor || null,
+      gerou_nova_necessidade: novoMov.gerou_nova_necessidade || null,
+      material_pendente: novoMov.material_pendente || null,
+      observacao: novoMov.observacao || null,
+      origem: 'manual',
+      br_normalizado: /^projeto/i.test(novoMov.projeto.trim()) ? null : ('BR' + novoMov.projeto.trim().toUpperCase().replace(/,/g, '/').replace(/^BR/, '')),
+    };
+    const { error } = await supabase.from('almoxarifado_movimentacoes').insert(registro);
+    if (error) {
+      setMensagemMov({ ok: false, texto: error.message });
+    } else {
+      setMensagemMov({ ok: true, texto: 'Movimentação registrada!' });
+      setNovoMov({ projeto: novoMov.projeto, op: novoMov.op, material: '', setor: novoMov.setor, gerou_nova_necessidade: '', material_pendente: '', observacao: '' });
+      await Promise.all([carregarSituacaoAtual(), carregar()]);
+    }
+    setSalvandoMov(false);
+  };
 
   const abrirDrill = async (br) => {
     setDrillBr(br);
@@ -2810,7 +2919,7 @@ function AlmoxarifadoFluxo() {
       </div>
 
       <div style={{ display: 'flex', gap: 4, borderBottom: `1px solid ${T.line}` }}>
-        {[{ id: 'projetos', label: `Projetos (${projetos.length})` }, { id: 'perdas', label: `Perdas (${perdas.length})` }].map(aba => (
+        {[{ id: 'registrar', label: 'Registrar / Situação atual' }, { id: 'detalhado', label: `Detalhado (${detalhado.length})` }, { id: 'faturado_mes', label: 'Faturado por Mês' }, { id: 'projetos', label: `Projetos (${projetos.length})` }, { id: 'perdas', label: `Perdas (${perdas.length})` }].map(aba => (
           <button key={aba.id} onClick={() => setAbaAtiva(aba.id)}
             style={{
               background: 'none', border: 'none', cursor: 'pointer', padding: '10px 16px', fontSize: 13, fontWeight: 600,
@@ -2821,6 +2930,252 @@ function AlmoxarifadoFluxo() {
           </button>
         ))}
       </div>
+
+      {abaAtiva === 'registrar' && (
+        <>
+          <div className="grid-2col" style={{ display: 'grid', gridTemplateColumns: '380px 1fr', gap: 18, alignItems: 'flex-start' }}>
+            <Panel title="Registrar movimentação" subtitle="Preencha e clique em salvar — vira histórico na hora">
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <div>
+                  <label style={{ fontSize: 11, fontWeight: 700, color: T.inkFaint, display: 'block', marginBottom: 4 }}>Projeto (BR) *</label>
+                  <input value={novoMov.projeto} onChange={e => setNovoMov(m => ({ ...m, projeto: e.target.value }))} placeholder="Ex: 14410/26"
+                    style={{ ...inputStyle(), width: '100%' }} />
+                </div>
+                <div>
+                  <label style={{ fontSize: 11, fontWeight: 700, color: T.inkFaint, display: 'block', marginBottom: 4 }}>OP (Ordem de Produção)</label>
+                  <input value={novoMov.op} onChange={e => setNovoMov(m => ({ ...m, op: e.target.value }))}
+                    onBlur={e => buscarMateriaisDaOp(e.target.value)} placeholder="Ex: 7860"
+                    style={{ ...inputStyle(), width: '100%' }} />
+                </div>
+
+                {(buscandoMateriais || materiaisSugeridos.length > 0) && (
+                  <div style={{ background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 8, padding: 12 }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: T.inkFaint, marginBottom: 8 }}>
+                      Matéria-prima dessa OP (puxado do Sankhya) — clica no setor pra marcar entregue direto
+                    </div>
+                    {buscandoMateriais ? (
+                      <div style={{ fontSize: 12, color: T.inkFaint }}>Buscando…</div>
+                    ) : (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                        {materiaisSugeridos.map(mat => (
+                          <div key={mat.id} style={{ background: T.panel, border: `1px solid ${T.lineSoft}`, borderRadius: 6, padding: '8px 10px' }}>
+                            <div style={{ fontSize: 12, fontWeight: 600, color: T.ink, marginBottom: 6 }}>{mat.materia_prima_descricao}</div>
+                            <div style={{ fontSize: 10.5, color: T.inkFaint, marginBottom: 6 }}>Qtd: {mat.quantidade_mp}</div>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                              {['Ponto de Estoque', 'Vulcanização', 'Pintura', 'Caldeiraria', 'Revestimento', 'Expedição'].map(s => (
+                                <button key={s} onClick={() => marcarMaterialEntregue(mat, s)}
+                                  style={{ fontSize: 10, padding: '3px 8px', borderRadius: 4, border: `1px solid ${T.line}`, background: T.panelAlt, color: T.inkDim, cursor: 'pointer' }}>
+                                  {s}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+                <div>
+                  <label style={{ fontSize: 11, fontWeight: 700, color: T.inkFaint, display: 'block', marginBottom: 4 }}>Material</label>
+                  <input value={novoMov.material} onChange={e => setNovoMov(m => ({ ...m, material: e.target.value }))} placeholder="Ex: Placa KLC, Chapa"
+                    style={{ ...inputStyle(), width: '100%' }} />
+                </div>
+                <div>
+                  <label style={{ fontSize: 11, fontWeight: 700, color: T.inkFaint, display: 'block', marginBottom: 4 }}>Entregue para qual setor?</label>
+                  <div style={{ position: 'relative' }}>
+                    <select value={novoMov.setor} onChange={e => setNovoMov(m => ({ ...m, setor: e.target.value }))} style={{ ...inputStyle(), width: '100%', appearance: 'none' }}>
+                      {SETORES_FLUXO.map(s => <option key={s} value={s}>{s}</option>)}
+                    </select>
+                    <ChevronDown size={13} style={{ position: 'absolute', right: 10, top: 12, color: T.inkFaint, pointerEvents: 'none' }} />
+                  </div>
+                </div>
+                <div>
+                  <label style={{ fontSize: 11, fontWeight: 700, color: T.inkFaint, display: 'block', marginBottom: 4 }}>Gerou nova necessidade?</label>
+                  <div style={{ position: 'relative' }}>
+                    <select value={novoMov.gerou_nova_necessidade} onChange={e => setNovoMov(m => ({ ...m, gerou_nova_necessidade: e.target.value }))} style={{ ...inputStyle(), width: '100%', appearance: 'none' }}>
+                      <option value="">Não</option>
+                      <option value="KDB Controle perda, Divergência do Projeto">Divergência do Projeto</option>
+                      <option value="KDB Controle perda, Perca Processo Produtivo">Perca Processo Produtivo</option>
+                      <option value="KDB Controle perda, Serviço">Serviço</option>
+                    </select>
+                    <ChevronDown size={13} style={{ position: 'absolute', right: 10, top: 12, color: T.inkFaint, pointerEvents: 'none' }} />
+                  </div>
+                </div>
+                <div>
+                  <label style={{ fontSize: 11, fontWeight: 700, color: T.inkFaint, display: 'block', marginBottom: 4 }}>Material pendente?</label>
+                  <input value={novoMov.material_pendente} onChange={e => setNovoMov(m => ({ ...m, material_pendente: e.target.value }))} placeholder="Ex: Falta Compra, Falta Corte CNC"
+                    style={{ ...inputStyle(), width: '100%' }} />
+                </div>
+                <div>
+                  <label style={{ fontSize: 11, fontWeight: 700, color: T.inkFaint, display: 'block', marginBottom: 4 }}>Observação</label>
+                  <textarea rows={3} value={novoMov.observacao} onChange={e => setNovoMov(m => ({ ...m, observacao: e.target.value }))} placeholder="Ex: Entrega parcial de 200 peças"
+                    style={{ ...inputStyle(), width: '100%', resize: 'vertical' }} />
+                </div>
+                {mensagemMov && (
+                  <div style={{ fontSize: 12, padding: '8px 12px', borderRadius: 6, color: mensagemMov.ok ? T.oliveText : T.rustText, background: mensagemMov.ok ? T.oliveSoft : T.rustSoft }}>
+                    {mensagemMov.texto}
+                  </div>
+                )}
+                <button onClick={salvarNovaMovimentacao} disabled={salvandoMov}
+                  style={{ ...solidBtn(T.terracotta, true), width: '100%', opacity: salvandoMov ? 0.7 : 1, marginTop: 4 }}>
+                  {salvandoMov ? 'Salvando…' : 'Salvar movimentação'}
+                </button>
+              </div>
+            </Panel>
+
+            <Panel title="Situação atual" subtitle="O que está parado em cada setor agora, entre os projetos ainda não faturados">
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                {SETORES_FLUXO.filter(s => s !== 'Projeto Faturado').map(setor => {
+                  const itens = situacaoPorSetor[setor] || [];
+                  if (itens.length === 0) return null;
+                  return (
+                    <div key={setor}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                        <span style={{ fontSize: 12.5, fontWeight: 700, color: T.ink }}>{setor}</span>
+                        <span style={{ fontSize: 10.5, fontWeight: 700, color: T.blueText, background: T.blueSoft, padding: '2px 7px', borderRadius: 10 }}>{itens.length}</span>
+                      </div>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                        {itens.slice(0, 30).map((it, i) => (
+                          <div key={i} title={`${it.material} · ${fmtData(it.carimbo_data_hora)}${it.observacao ? ' · ' + it.observacao : ''}`}
+                            style={{ fontSize: 11, background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 6, padding: '5px 9px' }}>
+                            <span style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText }}>{it.br}</span>
+                            {it.op && <span style={{ color: T.inkFaint }}> · OP {it.op}</span>}
+                            {it.gerou_nova_necessidade && <span style={{ color: T.rustText }}> ⚠</span>}
+                          </div>
+                        ))}
+                        {itens.length > 30 && <span style={{ fontSize: 11, color: T.inkFaint, alignSelf: 'center' }}>+{itens.length - 30} outros</span>}
+                      </div>
+                    </div>
+                  );
+                })}
+                {situacaoAtual.length === 0 && <div style={{ textAlign: 'center', padding: 20, color: T.inkFaint, fontSize: 12.5 }}>Nada em andamento no momento.</div>}
+              </div>
+            </Panel>
+          </div>
+        </>
+      )}
+
+      {abaAtiva === 'detalhado' && (
+        <Panel subtitle="Log completo de movimentação, com os dias em produção (na linha 'Projeto Faturado') e dias parado no ponto de estoque antes de cada etapa">
+          <div style={{ marginBottom: 14 }}>
+            <FiltroCampoFat label="Buscar BR, OP ou material">
+              <div style={{ position: 'relative' }}>
+                <Search size={13} style={{ position: 'absolute', left: 9, top: 9, color: T.inkFaint }} />
+                <input value={buscaDetalhado} onChange={e => setBuscaDetalhado(e.target.value)} placeholder="Ex: BR14105/26"
+                  style={{ ...selectStyleFat(240), paddingLeft: 28 }} />
+              </div>
+            </FiltroCampoFat>
+          </div>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11.5 }}>
+              <thead>
+                <tr style={{ background: T.panelAlt, borderBottom: `1px solid ${T.line}` }}>
+                  <th style={thFat(100)}>Data</th>
+                  <th style={thFat(100)}>BR</th>
+                  <th style={thFat(70)}>OP</th>
+                  <th style={thFat(0)}>Material</th>
+                  <th style={thFat(140)}>Setor</th>
+                  <th style={{ ...thFat(90), textAlign: 'center' }}>Dias produção</th>
+                  <th style={{ ...thFat(90), textAlign: 'center' }}>Dias parado estoque</th>
+                  <th style={thFat(160)}>Observação</th>
+                </tr>
+              </thead>
+              <tbody>
+                {loading ? (
+                  <tr><td colSpan={8} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Carregando…</td></tr>
+                ) : detalhadoFiltrado.length === 0 ? (
+                  <tr><td colSpan={8} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Nada encontrado.</td></tr>
+                ) : detalhadoFiltrado.slice(0, 300).map(d => (
+                  <tr key={d.id} style={{ borderBottom: `1px solid ${T.lineSoft}`, background: d.setor === 'Projeto Faturado' ? T.oliveSoft : d.gerou_nova_necessidade ? T.rustSoft : 'transparent' }}>
+                    <td style={{ padding: '7px 12px', color: T.inkDim, whiteSpace: 'nowrap' }}>{fmtData(d.carimbo_data_hora)}</td>
+                    <td style={{ padding: '7px 12px', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText }}>{d.br || '—'}</td>
+                    <td style={{ padding: '7px 12px', color: T.inkFaint }}>{d.op || '—'}</td>
+                    <td style={{ padding: '7px 12px', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={d.material}>{d.material}</td>
+                    <td style={{ padding: '7px 12px', fontWeight: 600 }}>{d.setor}</td>
+                    <td style={{ padding: '7px 12px', textAlign: 'center', fontWeight: 700 }}>{d.dias_em_producao ?? '—'}</td>
+                    <td style={{ padding: '7px 12px', textAlign: 'center' }}>{d.dias_parado_ponto_estoque ?? '—'}</td>
+                    <td style={{ padding: '7px 12px', color: T.inkFaint, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={d.observacao}>{d.observacao || '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ padding: '10px 0 0', fontSize: 11, color: T.inkFaint, display: 'flex', justifyContent: 'space-between' }}>
+            <span>{detalhadoFiltrado.length} eventos (mostrando até 300, mais recentes primeiro)</span>
+            <BotaoExportar small onClick={() => exportCSV(detalhadoFiltrado, 'almoxarifado_detalhado.csv',
+              ['carimbo_data_hora', 'br', 'op', 'material', 'setor', 'dias_em_producao', 'dias_parado_ponto_estoque', 'observacao'])} />
+          </div>
+        </Panel>
+      )}
+
+      {abaAtiva === 'faturado_mes' && (
+        <>
+          <Panel subtitle="Produto acabado realmente faturado por projeto — cruzado direto do Sankhya, não depende de digitação manual">
+            <div style={{ display: 'flex', gap: 12, marginBottom: 14, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+              <FiltroCampoFat label="Mês de referência">
+                <div style={{ position: 'relative' }}>
+                  <select value={mesFiltro} onChange={e => setMesFiltro(e.target.value)} style={selectStyleFat(200)}>
+                    <option value="">Todos os meses</option>
+                    {mesesDisponiveis.map(m => (
+                      <option key={m} value={m}>{new Date(m).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })}</option>
+                    ))}
+                  </select>
+                  <ChevronDown size={13} style={chevronStyleFat} />
+                </div>
+              </FiltroCampoFat>
+            </div>
+            <div style={{ fontSize: 11, color: T.inkFaint, marginBottom: 12, background: T.panelAlt, padding: '8px 12px', borderRadius: 6 }}>
+              ⚠ A classificação "Linha" (Kalimpact/Aço/PG1-PG2) é aproximada por regra de texto na descrição — o critério original é mais manual/contextual, então alguns itens podem cair numa linha diferente do que você classificaria à mão.
+            </div>
+            <div style={{ display: 'flex', gap: 12, marginBottom: 14, flexWrap: 'wrap' }}>
+              {resumoPorLinha.map(r => (
+                <div key={r.linha} style={{ background: T.panelAlt, borderRadius: 8, padding: '10px 16px', fontSize: 12.5 }}>
+                  <strong>{r.linha}</strong>: {r.itens} itens · {r.projetos} projetos
+                </div>
+              ))}
+            </div>
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                <thead>
+                  <tr style={{ background: T.panelAlt, borderBottom: `1px solid ${T.line}` }}>
+                    <th style={thFat(100)}>Data fat.</th>
+                    <th style={thFat(100)}>BR</th>
+                    <th style={{ ...thFat(80), textAlign: 'center' }}>Dias prod.</th>
+                    <th style={thFat(0)}>Descrição PA</th>
+                    <th style={{ ...thFat(80), textAlign: 'right' }}>Qtd</th>
+                    <th style={thFat(60)}>Un.</th>
+                    <th style={thFat(100)}>Linha</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {loading ? (
+                    <tr><td colSpan={7} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Carregando…</td></tr>
+                  ) : faturadoMesFiltrado.length === 0 ? (
+                    <tr><td colSpan={7} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Nada encontrado.</td></tr>
+                  ) : faturadoMesFiltrado.slice(0, 300).map((f, i) => (
+                    <tr key={i} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                      <td style={{ padding: '8px 12px', color: T.inkDim, whiteSpace: 'nowrap' }}>{fmtData(f.data_faturamento)}</td>
+                      <td style={{ padding: '8px 12px', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText }}>{f.br}</td>
+                      <td style={{ padding: '8px 12px', textAlign: 'center' }}>{f.dias_em_producao ?? '—'}</td>
+                      <td style={{ padding: '8px 12px', maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={f.produto_descricao}>{f.produto_descricao}</td>
+                      <td style={{ padding: '8px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY }}>{f.quantidade}</td>
+                      <td style={{ padding: '8px 12px', color: T.inkFaint }}>{f.unidade}</td>
+                      <td style={{ padding: '8px 12px' }}>
+                        <span style={{ fontSize: 10.5, fontWeight: 700, padding: '3px 8px', borderRadius: 4, color: T.blueText, background: T.blueSoft }}>{f.linha}</span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div style={{ padding: '10px 0 0', fontSize: 11, color: T.inkFaint, display: 'flex', justifyContent: 'space-between' }}>
+              <span>{faturadoMesFiltrado.length} itens faturados (mostrando até 300)</span>
+              <BotaoExportar small onClick={() => exportCSV(faturadoMesFiltrado, 'almoxarifado_faturado_mes.csv',
+                ['mes_referencia', 'br', 'data_faturamento', 'produto_descricao', 'quantidade', 'unidade', 'linha', 'dias_em_producao'])} />
+            </div>
+          </Panel>
+        </>
+      )}
 
       {abaAtiva === 'projetos' && (
         <Panel>
