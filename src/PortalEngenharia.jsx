@@ -2737,6 +2737,7 @@ function AlmoxarifadoFluxo() {
   const [perdas, setPerdas] = useState([]);
   const [detalhado, setDetalhado] = useState([]);
   const [faturadoMes, setFaturadoMes] = useState([]);
+  const [produtividadeProduto, setProdutividadeProduto] = useState([]);
   const [valoresPerda, setValoresPerda] = useState({}); // movimentacao_id -> valor
   const [loading, setLoading] = useState(true);
   const [busca, setBusca] = useState('');
@@ -2748,17 +2749,19 @@ function AlmoxarifadoFluxo() {
 
   const carregar = useCallback(async () => {
     setLoading(true);
-    const [{ data: proj }, { data: perd }, { data: valores }, { data: det }, { data: fatMes }] = await Promise.all([
+    const [{ data: proj }, { data: perd }, { data: valores }, { data: det }, { data: fatMes }, { data: prodProduto }] = await Promise.all([
       supabase.from('v_almoxarifado_projetos').select('*').order('ultima_movimentacao', { ascending: false }),
       supabase.from('v_almoxarifado_perdas').select('*').order('carimbo_data_hora', { ascending: false }),
       supabase.from('almoxarifado_perdas_valor').select('*'),
       supabase.from('v_almoxarifado_detalhado').select('*').order('carimbo_data_hora', { ascending: false }).limit(500),
       supabase.from('v_almoxarifado_faturado_mes').select('*'),
+      supabase.from('v_almoxarifado_produtividade_por_produto').select('*'),
     ]);
     setProjetos(proj || []);
     setPerdas(perd || []);
     setDetalhado(det || []);
     setFaturadoMes(fatMes || []);
+    setProdutividadeProduto(prodProduto || []);
     const vMap = {};
     (valores || []).forEach(v => { vMap[v.movimentacao_id] = v.valor; });
     setValoresPerda(vMap);
@@ -2801,12 +2804,22 @@ function AlmoxarifadoFluxo() {
   const [mensagemMov, setMensagemMov] = useState(null);
   const [materiaisSugeridos, setMateriaisSugeridos] = useState([]);
   const [buscandoMateriais, setBuscandoMateriais] = useState(false);
+  const [opsAndamento, setOpsAndamento] = useState([]);
+  const [opSelecionada, setOpSelecionada] = useState(null); // { op, br }
+  const [quantidades, setQuantidades] = useState({}); // material_id -> quantidade digitada
+  const [setorEscolhido, setSetorEscolhido] = useState({}); // material_id -> setor escolhido
 
   const carregarSituacaoAtual = useCallback(async () => {
     const { data } = await supabase.from('v_almoxarifado_situacao_atual').select('*');
     setSituacaoAtual(data || []);
   }, []);
   useEffect(() => { carregarSituacaoAtual(); }, [carregarSituacaoAtual]);
+
+  const carregarOpsAndamento = useCallback(async () => {
+    const { data } = await supabase.from('v_almoxarifado_ops_andamento').select('*');
+    setOpsAndamento(data || []);
+  }, []);
+  useEffect(() => { carregarOpsAndamento(); }, [carregarOpsAndamento]);
 
   const situacaoPorSetor = useMemo(() => {
     const grupos = {};
@@ -2815,29 +2828,32 @@ function AlmoxarifadoFluxo() {
     return grupos;
   }, [situacaoAtual]);
 
-  const buscarMateriaisDaOp = useCallback(async (op) => {
-    if (!op || !op.trim()) { setMateriaisSugeridos([]); return; }
+  const selecionarOp = async (opItem) => {
+    setOpSelecionada(opItem);
+    setNovoMov(m => ({ ...m, projeto: opItem.br ? opItem.br.replace(/^BR/, '') : m.projeto, op: opItem.op }));
     setBuscandoMateriais(true);
-    const { data } = await supabase.from('almoxarifado_op_materiais').select('*').eq('op', op.trim()).order('materia_prima_descricao');
+    const { data } = await supabase.from('almoxarifado_op_materiais').select('*').eq('op', opItem.op).order('materia_prima_descricao');
     setMateriaisSugeridos(data || []);
     setBuscandoMateriais(false);
-  }, []);
+  };
 
-  // Registra a movimentação de UM material específico da lista sugerida, direto (sem passar pelo form principal)
-  const marcarMaterialEntregue = async (materialItem, setor) => {
+  // Registra a movimentação de UM material específico, com a quantidade que ela digitou
+  const marcarMaterialEntregue = async (materialItem) => {
+    const setor = setorEscolhido[materialItem.id] || 'Ponto de Estoque';
+    const qtd = quantidades[materialItem.id];
     const registro = {
       carimbo_data_hora: new Date().toISOString(),
-      projeto: novoMov.projeto.trim() || materialItem.br || '',
+      projeto: (opSelecionada?.br || novoMov.projeto).replace(/^BR/, ''),
       op: materialItem.op,
       material: materialItem.materia_prima_descricao,
       setor,
+      observacao: qtd ? `Quantidade entregue: ${qtd} (de ${materialItem.quantidade_mp} total)` : null,
       origem: 'manual',
-      br_normalizado: novoMov.projeto.trim()
-        ? ('BR' + novoMov.projeto.trim().toUpperCase().replace(/,/g, '/').replace(/^BR/, ''))
-        : materialItem.br,
+      br_normalizado: opSelecionada?.br || (novoMov.projeto.trim() ? ('BR' + novoMov.projeto.trim().toUpperCase().replace(/,/g, '/').replace(/^BR/, '')) : materialItem.br),
     };
     await supabase.from('almoxarifado_movimentacoes').insert(registro);
-    await Promise.all([carregarSituacaoAtual(), carregar()]);
+    setQuantidades(q => ({ ...q, [materialItem.id]: '' }));
+    await Promise.all([carregarSituacaoAtual(), carregar(), carregarOpsAndamento()]);
   };
 
   const salvarNovaMovimentacao = async () => {
@@ -2919,7 +2935,7 @@ function AlmoxarifadoFluxo() {
       </div>
 
       <div style={{ display: 'flex', gap: 4, borderBottom: `1px solid ${T.line}` }}>
-        {[{ id: 'registrar', label: 'Registrar / Situação atual' }, { id: 'detalhado', label: `Detalhado (${detalhado.length})` }, { id: 'faturado_mes', label: 'Faturado por Mês' }, { id: 'projetos', label: `Projetos (${projetos.length})` }, { id: 'perdas', label: `Perdas (${perdas.length})` }].map(aba => (
+        {[{ id: 'registrar', label: 'Registrar / Situação atual' }, { id: 'detalhado', label: `Detalhado (${detalhado.length})` }, { id: 'faturado_mes', label: 'Faturado por Mês' }, { id: 'produtividade_produto', label: 'Produtividade por Produto' }, { id: 'projetos', label: `Projetos (${projetos.length})` }, { id: 'perdas', label: `Perdas (${perdas.length})` }].map(aba => (
           <button key={aba.id} onClick={() => setAbaAtiva(aba.id)}
             style={{
               background: 'none', border: 'none', cursor: 'pointer', padding: '10px 16px', fontSize: 13, fontWeight: 600,
@@ -2933,9 +2949,65 @@ function AlmoxarifadoFluxo() {
 
       {abaAtiva === 'registrar' && (
         <>
-          <div className="grid-2col" style={{ display: 'grid', gridTemplateColumns: '380px 1fr', gap: 18, alignItems: 'flex-start' }}>
-            <Panel title="Registrar movimentação" subtitle="Preencha e clique em salvar — vira histórico na hora">
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div className="grid-2col" style={{ display: 'grid', gridTemplateColumns: '340px 1fr', gap: 18, alignItems: 'flex-start' }}>
+            <Panel title="Ordens em andamento" subtitle="Clique numa OP pra ver a matéria-prima dela e registrar a entrega, item por item">
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 460, overflowY: 'auto' }}>
+                {opsAndamento.length === 0 ? (
+                  <div style={{ fontSize: 12, color: T.inkFaint, textAlign: 'center', padding: 20 }}>Nenhuma OP em andamento sincronizada ainda.</div>
+                ) : opsAndamento.map(o => (
+                  <button key={o.op} onClick={() => selecionarOp(o)}
+                    style={{
+                      display: 'flex', justifyContent: 'space-between', alignItems: 'center', textAlign: 'left',
+                      padding: '9px 12px', borderRadius: 7, cursor: 'pointer', fontSize: 12.5,
+                      border: `1px solid ${opSelecionada?.op === o.op ? T.terracotta : T.line}`,
+                      background: opSelecionada?.op === o.op ? T.rustSoft : T.panelAlt,
+                    }}>
+                    <span><strong style={{ color: T.blueText, fontFamily: FONT_DISPLAY }}>{o.br}</strong> · OP {o.op}</span>
+                    <span style={{ fontSize: 10.5, color: T.inkFaint }}>{o.qtd_materiais} itens</span>
+                  </button>
+                ))}
+              </div>
+            </Panel>
+
+            <Panel title={opSelecionada ? `${opSelecionada.br} · OP ${opSelecionada.op}` : 'Selecione uma OP ao lado'}
+              subtitle={opSelecionada ? 'Pra cada item, escolha o setor e (se quiser) a quantidade entregue, e clique em registrar' : ''}>
+              {!opSelecionada ? (
+                <div style={{ textAlign: 'center', padding: 30, color: T.inkFaint, fontSize: 12.5 }}>← Escolha uma OP em andamento na lista ao lado</div>
+              ) : buscandoMateriais ? (
+                <div style={{ textAlign: 'center', padding: 30, color: T.inkFaint }}>Carregando itens…</div>
+              ) : materiaisSugeridos.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: 30, color: T.inkFaint, fontSize: 12.5 }}>Essa OP não tem matéria-prima sincronizada.</div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  {materiaisSugeridos.map(mat => (
+                    <div key={mat.id} style={{ background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 8, padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                      <div style={{ flex: 1, minWidth: 200 }}>
+                        <div style={{ fontSize: 12.5, fontWeight: 600, color: T.ink }}>{mat.materia_prima_descricao}</div>
+                        <div style={{ fontSize: 10.5, color: T.inkFaint }}>Total previsto: {mat.quantidade_mp}</div>
+                      </div>
+                      <div style={{ position: 'relative' }}>
+                        <select value={setorEscolhido[mat.id] || 'Ponto de Estoque'} onChange={e => setSetorEscolhido(s => ({ ...s, [mat.id]: e.target.value }))}
+                          style={{ ...inputStyle(), fontSize: 11.5, padding: '5px 24px 5px 8px', appearance: 'none' }}>
+                          {SETORES_FLUXO.filter(s => s !== 'Projeto Faturado').map(s => <option key={s} value={s}>{s}</option>)}
+                        </select>
+                        <ChevronDown size={11} style={{ position: 'absolute', right: 7, top: 9, color: T.inkFaint, pointerEvents: 'none' }} />
+                      </div>
+                      <input type="number" placeholder="Qtd. entregue" value={quantidades[mat.id] || ''}
+                        onChange={e => setQuantidades(q => ({ ...q, [mat.id]: e.target.value }))}
+                        style={{ ...inputStyle(), width: 110, fontSize: 11.5, padding: '5px 8px' }} />
+                      <button onClick={() => marcarMaterialEntregue(mat)}
+                        style={{ fontSize: 11.5, fontWeight: 700, color: '#fff', background: T.terracotta, border: 'none', borderRadius: 5, padding: '6px 12px', cursor: 'pointer' }}>
+                        Registrar
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </Panel>
+          </div>
+
+          <Panel title="Registro manual (BR fora da lista)" subtitle="Se a OP não está na lista de andamento, registra aqui pelo BR direto">
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 420 }}>
                 <div>
                   <label style={{ fontSize: 11, fontWeight: 700, color: T.inkFaint, display: 'block', marginBottom: 4 }}>Projeto (BR) *</label>
                   <input value={novoMov.projeto} onChange={e => setNovoMov(m => ({ ...m, projeto: e.target.value }))} placeholder="Ex: 14410/26"
@@ -2943,38 +3015,9 @@ function AlmoxarifadoFluxo() {
                 </div>
                 <div>
                   <label style={{ fontSize: 11, fontWeight: 700, color: T.inkFaint, display: 'block', marginBottom: 4 }}>OP (Ordem de Produção)</label>
-                  <input value={novoMov.op} onChange={e => setNovoMov(m => ({ ...m, op: e.target.value }))}
-                    onBlur={e => buscarMateriaisDaOp(e.target.value)} placeholder="Ex: 7860"
+                  <input value={novoMov.op} onChange={e => setNovoMov(m => ({ ...m, op: e.target.value }))} placeholder="Ex: 7860"
                     style={{ ...inputStyle(), width: '100%' }} />
                 </div>
-
-                {(buscandoMateriais || materiaisSugeridos.length > 0) && (
-                  <div style={{ background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 8, padding: 12 }}>
-                    <div style={{ fontSize: 11, fontWeight: 700, color: T.inkFaint, marginBottom: 8 }}>
-                      Matéria-prima dessa OP (puxado do Sankhya) — clica no setor pra marcar entregue direto
-                    </div>
-                    {buscandoMateriais ? (
-                      <div style={{ fontSize: 12, color: T.inkFaint }}>Buscando…</div>
-                    ) : (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                        {materiaisSugeridos.map(mat => (
-                          <div key={mat.id} style={{ background: T.panel, border: `1px solid ${T.lineSoft}`, borderRadius: 6, padding: '8px 10px' }}>
-                            <div style={{ fontSize: 12, fontWeight: 600, color: T.ink, marginBottom: 6 }}>{mat.materia_prima_descricao}</div>
-                            <div style={{ fontSize: 10.5, color: T.inkFaint, marginBottom: 6 }}>Qtd: {mat.quantidade_mp}</div>
-                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-                              {['Ponto de Estoque', 'Vulcanização', 'Pintura', 'Caldeiraria', 'Revestimento', 'Expedição'].map(s => (
-                                <button key={s} onClick={() => marcarMaterialEntregue(mat, s)}
-                                  style={{ fontSize: 10, padding: '3px 8px', borderRadius: 4, border: `1px solid ${T.line}`, background: T.panelAlt, color: T.inkDim, cursor: 'pointer' }}>
-                                  {s}
-                                </button>
-                              ))}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
                 <div>
                   <label style={{ fontSize: 11, fontWeight: 700, color: T.inkFaint, display: 'block', marginBottom: 4 }}>Material</label>
                   <input value={novoMov.material} onChange={e => setNovoMov(m => ({ ...m, material: e.target.value }))} placeholder="Ex: Placa KLC, Chapa"
@@ -3023,7 +3066,7 @@ function AlmoxarifadoFluxo() {
               </div>
             </Panel>
 
-            <Panel title="Situação atual" subtitle="O que está parado em cada setor agora, entre os projetos ainda não faturados">
+            <Panel title="Situação atual" subtitle="Onde cada material está parado agora (a última movimentação registrada), entre projetos ainda não faturados. ⚠ = a última movimentação daquele material teve um problema marcado (perda/divergência). Clique num item pra ver o histórico completo do projeto.">
               <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
                 {SETORES_FLUXO.filter(s => s !== 'Projeto Faturado').map(setor => {
                   const itens = situacaoPorSetor[setor] || [];
@@ -3036,11 +3079,17 @@ function AlmoxarifadoFluxo() {
                       </div>
                       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                         {itens.slice(0, 30).map((it, i) => (
-                          <div key={i} title={`${it.material} · ${fmtData(it.carimbo_data_hora)}${it.observacao ? ' · ' + it.observacao : ''}`}
-                            style={{ fontSize: 11, background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 6, padding: '5px 9px' }}>
-                            <span style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText }}>{it.br}</span>
-                            {it.op && <span style={{ color: T.inkFaint }}> · OP {it.op}</span>}
-                            {it.gerou_nova_necessidade && <span style={{ color: T.rustText }}> ⚠</span>}
+                          <div key={i} onClick={() => abrirDrill(it.br)}
+                            title={`${it.material} · desde ${fmtData(it.carimbo_data_hora)}${it.observacao ? ' · ' + it.observacao : ''} · clique pra ver o histórico completo`}
+                            style={{ fontSize: 11, background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 6, padding: '5px 9px', cursor: 'pointer', maxWidth: 220 }}
+                            onMouseEnter={e => e.currentTarget.style.borderColor = T.terracotta}
+                            onMouseLeave={e => e.currentTarget.style.borderColor = T.line}>
+                            <div>
+                              <span style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText }}>{it.br}</span>
+                              {it.op && <span style={{ color: T.inkFaint }}> · OP {it.op}</span>}
+                              {it.gerou_nova_necessidade && <span style={{ color: T.rustText }} title="Última movimentação teve perda/divergência marcada"> ⚠</span>}
+                            </div>
+                            <div style={{ color: T.inkFaint, fontSize: 10, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.material}</div>
                           </div>
                         ))}
                         {itens.length > 30 && <span style={{ fontSize: 11, color: T.inkFaint, alignSelf: 'center' }}>+{itens.length - 30} outros</span>}
@@ -3051,7 +3100,6 @@ function AlmoxarifadoFluxo() {
                 {situacaoAtual.length === 0 && <div style={{ textAlign: 'center', padding: 20, color: T.inkFaint, fontSize: 12.5 }}>Nada em andamento no momento.</div>}
               </div>
             </Panel>
-          </div>
         </>
       )}
 
@@ -3175,6 +3223,44 @@ function AlmoxarifadoFluxo() {
             </div>
           </Panel>
         </>
+      )}
+
+      {abaAtiva === 'produtividade_produto' && (
+        <Panel subtitle="Média de dias de produção e produtividade por CÓDIGO DE PRODUTO (não por projeto) — considera só movimentações registradas a partir de agora pelo portal, não o histórico importado da planilha">
+          <div style={{ fontSize: 11, color: T.inkFaint, marginBottom: 12, background: T.panelAlt, padding: '8px 12px', borderRadius: 6 }}>
+            💡 Essa tabela começa vazia e vai enchendo conforme o time registra movimentações pelo portal (aba "Registrar"). O histórico antigo da planilha não entra aqui de propósito.
+          </div>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+              <thead>
+                <tr style={{ background: T.panelAlt, borderBottom: `1px solid ${T.line}` }}>
+                  <th style={thFat(100)}>Código</th>
+                  <th style={thFat(0)}>Descrição do produto</th>
+                  <th style={{ ...thFat(90), textAlign: 'center' }}>Projetos</th>
+                  <th style={{ ...thFat(110), textAlign: 'center' }}>Média dias produção</th>
+                  <th style={{ ...thFat(110), textAlign: 'right' }}>Média qtd/projeto</th>
+                  <th style={{ ...thFat(120), textAlign: 'right' }}>Produtividade média</th>
+                </tr>
+              </thead>
+              <tbody>
+                {loading ? (
+                  <tr><td colSpan={6} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Carregando…</td></tr>
+                ) : produtividadeProduto.length === 0 ? (
+                  <tr><td colSpan={6} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Ainda sem dados — vai populando conforme o time registra movimentações novas pelo portal.</td></tr>
+                ) : produtividadeProduto.map((p, i) => (
+                  <tr key={i} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                    <td style={{ padding: '8px 12px', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText }}>{p.cod_produto}</td>
+                    <td style={{ padding: '8px 12px', maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={p.produto_descricao}>{p.produto_descricao}</td>
+                    <td style={{ padding: '8px 12px', textAlign: 'center' }}>{p.qtd_projetos}</td>
+                    <td style={{ padding: '8px 12px', textAlign: 'center', fontWeight: 700 }}>{p.media_dias_producao ?? '—'}</td>
+                    <td style={{ padding: '8px 12px', textAlign: 'right' }}>{p.media_quantidade_por_projeto ?? '—'}</td>
+                    <td style={{ padding: '8px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY }}>{p.media_produtividade_pc_dia ? `${p.media_produtividade_pc_dia} pç/d` : '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Panel>
       )}
 
       {abaAtiva === 'projetos' && (
