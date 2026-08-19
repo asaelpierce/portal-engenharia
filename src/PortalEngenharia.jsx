@@ -2805,9 +2805,12 @@ function AlmoxarifadoFluxo() {
   const [materiaisSugeridos, setMateriaisSugeridos] = useState([]);
   const [buscandoMateriais, setBuscandoMateriais] = useState(false);
   const [opsAndamento, setOpsAndamento] = useState([]);
+  const [buscaOpAndamento, setBuscaOpAndamento] = useState('');
   const [opSelecionada, setOpSelecionada] = useState(null); // { op, br }
   const [quantidades, setQuantidades] = useState({}); // material_id -> quantidade digitada
   const [setorEscolhido, setSetorEscolhido] = useState({}); // material_id -> setor escolhido
+  const [necessidadeItem, setNecessidadeItem] = useState({}); // material_id -> gerou nova necessidade
+  const [pendenteItem, setPendenteItem] = useState({}); // material_id -> material pendente
 
   const carregarSituacaoAtual = useCallback(async () => {
     const { data } = await supabase.from('v_almoxarifado_situacao_atual').select('*');
@@ -2821,12 +2824,79 @@ function AlmoxarifadoFluxo() {
   }, []);
   useEffect(() => { carregarOpsAndamento(); }, [carregarOpsAndamento]);
 
+  const opsAndamentoFiltradas = useMemo(() => {
+    if (!buscaOpAndamento.trim()) return opsAndamento;
+    const b = buscaOpAndamento.toLowerCase().replace(/^br/, '');
+    return opsAndamento.filter(o => (o.br || '').toLowerCase().includes(b) || (o.op || '').toLowerCase().includes(b));
+  }, [opsAndamento, buscaOpAndamento]);
+
   const situacaoPorSetor = useMemo(() => {
     const grupos = {};
     SETORES_FLUXO.forEach(s => { grupos[s] = []; });
     situacaoAtual.forEach(s => { if (grupos[s.setor]) grupos[s.setor].push(s); });
     return grupos;
   }, [situacaoAtual]);
+
+  // ── Dados pros gráficos da aba "Visão Geral" ──
+  const graficoFaturamentoPorMes = useMemo(() => {
+    const grupos = {};
+    projetos.forEach(p => {
+      if (!p.data_faturamento_real) return;
+      const mes = String(p.data_faturamento_real).slice(0, 7); // YYYY-MM
+      if (!grupos[mes]) grupos[mes] = 0;
+      grupos[mes] += 1;
+    });
+    return Object.entries(grupos).sort(([a], [b]) => a.localeCompare(b)).slice(-12).map(([mes, qtd]) => ({ mes, qtd }));
+  }, [projetos]);
+
+  const graficoDiasProducaoPorMes = useMemo(() => {
+    const grupos = {};
+    projetos.forEach(p => {
+      if (!p.data_faturamento_real || p.dias_em_producao == null) return;
+      const mes = String(p.data_faturamento_real).slice(0, 7);
+      if (!grupos[mes]) grupos[mes] = { soma: 0, qtd: 0 };
+      grupos[mes].soma += p.dias_em_producao;
+      grupos[mes].qtd += 1;
+    });
+    return Object.entries(grupos).sort(([a], [b]) => a.localeCompare(b)).slice(-12)
+      .map(([mes, g]) => ({ mes, media: Math.round((g.soma / g.qtd) * 10) / 10 }));
+  }, [projetos]);
+
+  const graficoDistribuicaoLinha = useMemo(() => {
+    const grupos = {};
+    faturadoMes.forEach(f => {
+      if (!grupos[f.linha]) grupos[f.linha] = 0;
+      grupos[f.linha] += 1;
+    });
+    const total = Object.values(grupos).reduce((s, v) => s + v, 0) || 1;
+    const cores = { 'KALIMPACT': T.terracotta, 'AÇO': T.blueText, 'PG1/PG2': T.oliveText };
+    return Object.entries(grupos).map(([linha, qtd]) => ({ linha, qtd, pct: Math.round((qtd / total) * 100), cor: cores[linha] || T.inkFaint }));
+  }, [faturadoMes]);
+
+  const graficoPerdasPorTipo = useMemo(() => {
+    const grupos = {};
+    perdas.forEach(p => {
+      const tipo = (p.tipo_perda || '').replace('KDB Controle perda, ', '');
+      if (!grupos[tipo]) grupos[tipo] = 0;
+      grupos[tipo] += 1;
+    });
+    return Object.entries(grupos).sort(([, a], [, b]) => b - a).map(([tipo, qtd]) => ({ tipo, qtd }));
+  }, [perdas]);
+
+  const graficoSituacaoPorSetor = useMemo(() => {
+    return SETORES_FLUXO.filter(s => s !== 'Projeto Faturado').map(s => ({ setor: s, qtd: (situacaoPorSetor[s] || []).length })).filter(s => s.qtd > 0);
+  }, [situacaoPorSetor]);
+
+  const kpisGeral = useMemo(() => {
+    const faturados = projetos.filter(p => p.tem_marco_faturado);
+    const mediaGeral = faturados.length ? Math.round(faturados.reduce((s, p) => s + (p.dias_em_producao || 0), 0) / faturados.length) : 0;
+    return {
+      totalFaturados: faturados.length,
+      mediaGeral,
+      totalEmAndamento: situacaoAtual.length,
+      totalPerdas: perdas.length,
+    };
+  }, [projetos, situacaoAtual, perdas]);
 
   const selecionarOp = async (opItem) => {
     setOpSelecionada(opItem);
@@ -2841,18 +2911,24 @@ function AlmoxarifadoFluxo() {
   const marcarMaterialEntregue = async (materialItem) => {
     const setor = setorEscolhido[materialItem.id] || 'Ponto de Estoque';
     const qtd = quantidades[materialItem.id];
+    const necessidade = necessidadeItem[materialItem.id] || null;
+    const pendente = pendenteItem[materialItem.id] || null;
     const registro = {
       carimbo_data_hora: new Date().toISOString(),
       projeto: (opSelecionada?.br || novoMov.projeto).replace(/^BR/, ''),
       op: materialItem.op,
       material: materialItem.materia_prima_descricao,
       setor,
+      gerou_nova_necessidade: necessidade,
+      material_pendente: pendente,
       observacao: qtd ? `Quantidade entregue: ${qtd} (de ${materialItem.quantidade_mp} total)` : null,
       origem: 'manual',
       br_normalizado: opSelecionada?.br || (novoMov.projeto.trim() ? ('BR' + novoMov.projeto.trim().toUpperCase().replace(/,/g, '/').replace(/^BR/, '')) : materialItem.br),
     };
     await supabase.from('almoxarifado_movimentacoes').insert(registro);
     setQuantidades(q => ({ ...q, [materialItem.id]: '' }));
+    setNecessidadeItem(n => ({ ...n, [materialItem.id]: '' }));
+    setPendenteItem(p => ({ ...p, [materialItem.id]: '' }));
     await Promise.all([carregarSituacaoAtual(), carregar(), carregarOpsAndamento()]);
   };
 
@@ -2919,6 +2995,106 @@ function AlmoxarifadoFluxo() {
 
   const fmtDataHora = (iso) => !iso ? '—' : new Date(iso).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' });
 
+  const fmtMesCurto = (mes) => {
+    const [y, m] = mes.split('-');
+    return new Date(Number(y), Number(m) - 1, 1).toLocaleDateString('pt-BR', { month: 'short', year: '2-digit' }).replace('.', '');
+  };
+
+  // Gráfico de barras genérico (mês x quantidade) — mesmo padrão visual usado no resto do portal
+  const GraficoBarrasAlmox = ({ dados, campoLabel, campoValor, corBarra = T.terracotta, formatarValor = (v) => v, formatarLabel = (l) => l }) => {
+    if (!dados.length) return <div style={{ textAlign: 'center', padding: 24, color: T.inkFaint, fontSize: 12.5 }}>Sem dados suficientes ainda.</div>;
+    const W = 700, H = 200, PAD_L = 40, PAD_B = 30, PAD_T = 16;
+    const max = Math.max(...dados.map(d => d[campoValor]), 1);
+    const passo = (W - PAD_L - 16) / dados.length;
+    const larguraBarra = Math.min(52, passo - 10);
+    return (
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 'auto', overflow: 'visible' }}>
+        {[0.5, 1].map(f => (
+          <line key={f} x1={PAD_L} x2={W - 10} y1={PAD_T + (H - PAD_B - PAD_T) * (1 - f)} y2={PAD_T + (H - PAD_B - PAD_T) * (1 - f)} stroke={T.lineSoft} strokeWidth={1} />
+        ))}
+        {dados.map((d, i) => {
+          const altura = (d[campoValor] / max) * (H - PAD_B - PAD_T);
+          const x = PAD_L + i * passo + (passo - larguraBarra) / 2;
+          const y = H - PAD_B - altura;
+          return (
+            <g key={i}>
+              <rect x={x} y={y} width={larguraBarra} height={Math.max(altura, 1)} rx={3} fill={corBarra} opacity={0.85}>
+                <title>{formatarLabel(d[campoLabel])}: {formatarValor(d[campoValor])}</title>
+              </rect>
+              <text x={x + larguraBarra / 2} y={H - PAD_B + 15} textAnchor="middle" fontSize={9.5} fill={T.inkFaint}>{formatarLabel(d[campoLabel])}</text>
+              <text x={x + larguraBarra / 2} y={y - 5} textAnchor="middle" fontSize={9.5} fontWeight={700} fill={T.ink}>{formatarValor(d[campoValor])}</text>
+            </g>
+          );
+        })}
+        <line x1={PAD_L} x2={PAD_L} y1={PAD_T} y2={H - PAD_B} stroke={T.line} strokeWidth={1} />
+        <line x1={PAD_L} x2={W - 10} y1={H - PAD_B} y2={H - PAD_B} stroke={T.line} strokeWidth={1} />
+      </svg>
+    );
+  };
+
+  // Gráfico de linha genérico (tendência mês a mês)
+  const GraficoLinhaAlmox = ({ dados, campoLabel, campoValor, cor = T.terracotta, sufixo = '' }) => {
+    if (dados.length < 2) return <div style={{ textAlign: 'center', padding: 24, color: T.inkFaint, fontSize: 12.5 }}>Sem dados suficientes ainda pra traçar tendência.</div>;
+    const W = 700, H = 180, PAD_L = 34, PAD_R = 14, PAD_T = 16, PAD_B = 26;
+    const valores = dados.map(d => d[campoValor]);
+    const min = Math.min(...valores), max = Math.max(...valores);
+    const span = (max - min) || 1;
+    const passo = (W - PAD_L - PAD_R) / (dados.length - 1);
+    const coordX = (i) => PAD_L + i * passo;
+    const coordY = (v) => PAD_T + (H - PAD_T - PAD_B) * (1 - (v - min) / span);
+    const linha = dados.map((d, i) => `${coordX(i)},${coordY(d[campoValor])}`).join(' ');
+    return (
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 'auto', overflow: 'visible' }}>
+        <polyline points={linha} fill="none" stroke={cor} strokeWidth={2.5} />
+        {dados.map((d, i) => (
+          <g key={i}>
+            <circle cx={coordX(i)} cy={coordY(d[campoValor])} r={3.5} fill={T.panel} stroke={cor} strokeWidth={2}>
+              <title>{d[campoLabel]}: {d[campoValor]}{sufixo}</title>
+            </circle>
+            <text x={coordX(i)} y={coordY(d[campoValor]) - 9} textAnchor="middle" fontSize={9} fontWeight={700} fill={T.ink}>{d[campoValor]}{sufixo}</text>
+            <text x={coordX(i)} y={H - PAD_B + 15} textAnchor="middle" fontSize={9} fill={T.inkFaint}>{fmtMesCurto(d[campoLabel])}</text>
+          </g>
+        ))}
+      </svg>
+    );
+  };
+
+  // Gráfico de rosca (donut) simples
+  const GraficoRoscaAlmox = ({ dados }) => {
+    if (!dados.length) return <div style={{ textAlign: 'center', padding: 24, color: T.inkFaint, fontSize: 12.5 }}>Sem dados ainda.</div>;
+    const R = 60, CX = 70, CY = 70, ESP = 22;
+    let anguloAcumulado = -90;
+    const circ = 2 * Math.PI * R;
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 20, flexWrap: 'wrap' }}>
+        <svg width={140} height={140} viewBox="0 0 140 140">
+          {dados.map((d, i) => {
+            const tamanhoArco = (d.pct / 100) * circ;
+            const offset = circ - tamanhoArco;
+            const rotacao = anguloAcumulado;
+            anguloAcumulado += (d.pct / 100) * 360;
+            return (
+              <circle key={i} cx={CX} cy={CY} r={R} fill="none" stroke={d.cor} strokeWidth={ESP}
+                strokeDasharray={`${tamanhoArco} ${circ}`} strokeDashoffset={0}
+                transform={`rotate(${rotacao} ${CX} ${CY})`}>
+                <title>{d.linha}: {d.qtd} itens ({d.pct}%)</title>
+              </circle>
+            );
+          })}
+        </svg>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {dados.map((d, i) => (
+            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+              <span style={{ width: 10, height: 10, borderRadius: 3, background: d.cor, flexShrink: 0 }} />
+              <span style={{ fontWeight: 600 }}>{d.linha}</span>
+              <span style={{ color: T.inkFaint }}>{d.qtd} itens · {d.pct}%</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
       <div style={{ fontSize: 12.5, color: T.inkFaint, background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 8, padding: '10px 14px' }}>
@@ -2935,7 +3111,7 @@ function AlmoxarifadoFluxo() {
       </div>
 
       <div style={{ display: 'flex', gap: 4, borderBottom: `1px solid ${T.line}` }}>
-        {[{ id: 'registrar', label: 'Registrar / Situação atual' }, { id: 'detalhado', label: `Detalhado (${detalhado.length})` }, { id: 'faturado_mes', label: 'Faturado por Mês' }, { id: 'produtividade_produto', label: 'Produtividade por Produto' }, { id: 'projetos', label: `Projetos (${projetos.length})` }, { id: 'perdas', label: `Perdas (${perdas.length})` }].map(aba => (
+        {[{ id: 'visao_geral', label: 'Visão Geral' }, { id: 'registrar', label: 'Registrar / Situação atual' }, { id: 'detalhado', label: `Detalhado (${detalhado.length})` }, { id: 'faturado_mes', label: 'Faturado por Mês' }, { id: 'produtividade_produto', label: 'Produtividade por Produto' }, { id: 'projetos', label: `Projetos (${projetos.length})` }, { id: 'perdas', label: `Perdas (${perdas.length})` }].map(aba => (
           <button key={aba.id} onClick={() => setAbaAtiva(aba.id)}
             style={{
               background: 'none', border: 'none', cursor: 'pointer', padding: '10px 16px', fontSize: 13, fontWeight: 600,
@@ -2947,14 +3123,58 @@ function AlmoxarifadoFluxo() {
         ))}
       </div>
 
+      {abaAtiva === 'visao_geral' && (
+        <>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(160px,1fr))', gap: 12, marginBottom: 18 }}>
+            <Kpi label="Projetos faturados" value={loading ? '…' : kpisGeral.totalFaturados} icon={CheckCircle2} tone="olive" />
+            <Kpi label="Média geral dias produção" value={loading ? '…' : kpisGeral.mediaGeral} icon={Clock3} tone="amber" />
+            <Kpi label="Em andamento agora" value={loading ? '…' : kpisGeral.totalEmAndamento} icon={Package} tone="blue" />
+            <Kpi label="Ocorrências de perda" value={loading ? '…' : kpisGeral.totalPerdas} icon={FileWarning} tone="rust" />
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 18 }}>
+            <Panel title="Projetos faturados por mês" subtitle="Quantidade de projetos com o marco 'Projeto Faturado', últimos 12 meses">
+              <GraficoBarrasAlmox dados={graficoFaturamentoPorMes} campoLabel="mes" campoValor="qtd" corBarra={T.terracotta} formatarLabel={fmtMesCurto} />
+            </Panel>
+
+            <Panel title="Dias médios em produção — tendência" subtitle="Média de dias do início até faturado, por mês de faturamento">
+              <GraficoLinhaAlmox dados={graficoDiasProducaoPorMes} campoLabel="mes" campoValor="media" cor={T.blueText} sufixo="d" />
+            </Panel>
+
+            <Panel title="Distribuição por linha" subtitle="Produto faturado, agrupado por Kalimpact / Aço / PG1-PG2 (classificação aproximada)">
+              <GraficoRoscaAlmox dados={graficoDistribuicaoLinha} />
+            </Panel>
+
+            <Panel title="Perdas por tipo" subtitle="Ocorrências de 'gerou nova necessidade', por motivo">
+              <GraficoBarrasAlmox dados={graficoPerdasPorTipo} campoLabel="tipo" campoValor="qtd" corBarra={T.rustText}
+                formatarLabel={(t) => t.length > 14 ? t.slice(0, 13) + '…' : t} />
+            </Panel>
+
+            <div style={{ gridColumn: '1 / -1' }}>
+              <Panel title="Situação atual por setor" subtitle="Onde está parado o material agora, entre projetos ainda não faturados">
+                <GraficoBarrasAlmox dados={graficoSituacaoPorSetor} campoLabel="setor" campoValor="qtd" corBarra={T.oliveText}
+                  formatarLabel={(s) => s.length > 12 ? s.slice(0, 11) + '…' : s} />
+              </Panel>
+            </div>
+          </div>
+        </>
+      )}
+
       {abaAtiva === 'registrar' && (
         <>
           <div className="grid-2col" style={{ display: 'grid', gridTemplateColumns: '340px 1fr', gap: 18, alignItems: 'flex-start' }}>
             <Panel title="Ordens em andamento" subtitle="Clique numa OP pra ver a matéria-prima dela e registrar a entrega, item por item">
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 460, overflowY: 'auto' }}>
-                {opsAndamento.length === 0 ? (
-                  <div style={{ fontSize: 12, color: T.inkFaint, textAlign: 'center', padding: 20 }}>Nenhuma OP em andamento sincronizada ainda.</div>
-                ) : opsAndamento.map(o => (
+              <div style={{ position: 'relative', marginBottom: 10 }}>
+                <Search size={13} style={{ position: 'absolute', left: 9, top: 9, color: T.inkFaint }} />
+                <input value={buscaOpAndamento} onChange={e => setBuscaOpAndamento(e.target.value)} placeholder="Buscar por BR ou OP…"
+                  style={{ ...inputStyle(), width: '100%', paddingLeft: 28 }} />
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 420, overflowY: 'auto' }}>
+                {opsAndamentoFiltradas.length === 0 ? (
+                  <div style={{ fontSize: 12, color: T.inkFaint, textAlign: 'center', padding: 20 }}>
+                    {opsAndamento.length === 0 ? 'Nenhuma OP em andamento sincronizada ainda.' : 'Nada encontrado pra essa busca.'}
+                  </div>
+                ) : opsAndamentoFiltradas.map(o => (
                   <button key={o.op} onClick={() => selecionarOp(o)}
                     style={{
                       display: 'flex', justifyContent: 'space-between', alignItems: 'center', textAlign: 'left',
@@ -2962,7 +3182,10 @@ function AlmoxarifadoFluxo() {
                       border: `1px solid ${opSelecionada?.op === o.op ? T.terracotta : T.line}`,
                       background: opSelecionada?.op === o.op ? T.rustSoft : T.panelAlt,
                     }}>
-                    <span><strong style={{ color: T.blueText, fontFamily: FONT_DISPLAY }}>{o.br}</strong> · OP {o.op}</span>
+                    <span>
+                      <strong style={{ color: T.blueText, fontFamily: FONT_DISPLAY }}>{o.br || 'Sem BR (estoque)'}</strong> · OP {o.op}
+                      {o.situacao_op === 'P' && <span style={{ marginLeft: 6, fontSize: 9.5, fontWeight: 700, color: T.amberText, background: T.amberSoft, padding: '1px 6px', borderRadius: 8 }}>Sankhya: aberta</span>}
+                    </span>
                     <span style={{ fontSize: 10.5, color: T.inkFaint }}>{o.qtd_materiais} itens</span>
                   </button>
                 ))}
@@ -2980,25 +3203,42 @@ function AlmoxarifadoFluxo() {
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                   {materiaisSugeridos.map(mat => (
-                    <div key={mat.id} style={{ background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 8, padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                      <div style={{ flex: 1, minWidth: 200 }}>
+                    <div key={mat.id} style={{ background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 8, padding: '10px 14px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      <div>
                         <div style={{ fontSize: 12.5, fontWeight: 600, color: T.ink }}>{mat.materia_prima_descricao}</div>
                         <div style={{ fontSize: 10.5, color: T.inkFaint }}>Total previsto: {mat.quantidade_mp}</div>
                       </div>
-                      <div style={{ position: 'relative' }}>
-                        <select value={setorEscolhido[mat.id] || 'Ponto de Estoque'} onChange={e => setSetorEscolhido(s => ({ ...s, [mat.id]: e.target.value }))}
-                          style={{ ...inputStyle(), fontSize: 11.5, padding: '5px 24px 5px 8px', appearance: 'none' }}>
-                          {SETORES_FLUXO.filter(s => s !== 'Projeto Faturado').map(s => <option key={s} value={s}>{s}</option>)}
-                        </select>
-                        <ChevronDown size={11} style={{ position: 'absolute', right: 7, top: 9, color: T.inkFaint, pointerEvents: 'none' }} />
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                        <div style={{ position: 'relative' }}>
+                          <select value={setorEscolhido[mat.id] || 'Ponto de Estoque'} onChange={e => setSetorEscolhido(s => ({ ...s, [mat.id]: e.target.value }))}
+                            style={{ ...inputStyle(), fontSize: 11.5, padding: '5px 24px 5px 8px', appearance: 'none' }}>
+                            {SETORES_FLUXO.filter(s => s !== 'Projeto Faturado').map(s => <option key={s} value={s}>{s}</option>)}
+                          </select>
+                          <ChevronDown size={11} style={{ position: 'absolute', right: 7, top: 9, color: T.inkFaint, pointerEvents: 'none' }} />
+                        </div>
+                        <input type="number" placeholder="Qtd. entregue" value={quantidades[mat.id] || ''}
+                          onChange={e => setQuantidades(q => ({ ...q, [mat.id]: e.target.value }))}
+                          style={{ ...inputStyle(), width: 110, fontSize: 11.5, padding: '5px 8px' }} />
+                        <button onClick={() => marcarMaterialEntregue(mat)}
+                          style={{ fontSize: 11.5, fontWeight: 700, color: '#fff', background: T.terracotta, border: 'none', borderRadius: 5, padding: '6px 12px', cursor: 'pointer' }}>
+                          Registrar
+                        </button>
                       </div>
-                      <input type="number" placeholder="Qtd. entregue" value={quantidades[mat.id] || ''}
-                        onChange={e => setQuantidades(q => ({ ...q, [mat.id]: e.target.value }))}
-                        style={{ ...inputStyle(), width: 110, fontSize: 11.5, padding: '5px 8px' }} />
-                      <button onClick={() => marcarMaterialEntregue(mat)}
-                        style={{ fontSize: 11.5, fontWeight: 700, color: '#fff', background: T.terracotta, border: 'none', borderRadius: 5, padding: '6px 12px', cursor: 'pointer' }}>
-                        Registrar
-                      </button>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', borderTop: `1px solid ${T.lineSoft}`, paddingTop: 8 }}>
+                        <div style={{ position: 'relative' }}>
+                          <select value={necessidadeItem[mat.id] || ''} onChange={e => setNecessidadeItem(n => ({ ...n, [mat.id]: e.target.value }))}
+                            style={{ ...inputStyle(), fontSize: 10.5, padding: '4px 22px 4px 8px', appearance: 'none', color: necessidadeItem[mat.id] ? T.rustText : T.inkFaint }}>
+                            <option value="">Sem problema (padrão)</option>
+                            <option value="KDB Controle perda, Divergência do Projeto">⚠ Divergência do Projeto</option>
+                            <option value="KDB Controle perda, Perca Processo Produtivo">⚠ Perca Processo Produtivo</option>
+                            <option value="KDB Controle perda, Serviço">⚠ Serviço</option>
+                          </select>
+                          <ChevronDown size={10} style={{ position: 'absolute', right: 6, top: 8, color: T.inkFaint, pointerEvents: 'none' }} />
+                        </div>
+                        <input placeholder="Material pendente? (ex: Falta Compra)" value={pendenteItem[mat.id] || ''}
+                          onChange={e => setPendenteItem(p => ({ ...p, [mat.id]: e.target.value }))}
+                          style={{ ...inputStyle(), fontSize: 10.5, padding: '4px 8px', flex: 1, minWidth: 160 }} />
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -3189,6 +3429,7 @@ function AlmoxarifadoFluxo() {
                     <th style={thFat(100)}>Data fat.</th>
                     <th style={thFat(100)}>BR</th>
                     <th style={{ ...thFat(80), textAlign: 'center' }}>Dias prod.</th>
+                    <th style={thFat(90)}>Código PA</th>
                     <th style={thFat(0)}>Descrição PA</th>
                     <th style={{ ...thFat(80), textAlign: 'right' }}>Qtd</th>
                     <th style={thFat(60)}>Un.</th>
@@ -3197,14 +3438,15 @@ function AlmoxarifadoFluxo() {
                 </thead>
                 <tbody>
                   {loading ? (
-                    <tr><td colSpan={7} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Carregando…</td></tr>
+                    <tr><td colSpan={8} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Carregando…</td></tr>
                   ) : faturadoMesFiltrado.length === 0 ? (
-                    <tr><td colSpan={7} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Nada encontrado.</td></tr>
+                    <tr><td colSpan={8} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Nada encontrado.</td></tr>
                   ) : faturadoMesFiltrado.slice(0, 300).map((f, i) => (
                     <tr key={i} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
                       <td style={{ padding: '8px 12px', color: T.inkDim, whiteSpace: 'nowrap' }}>{fmtData(f.data_faturamento)}</td>
                       <td style={{ padding: '8px 12px', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText }}>{f.br}</td>
                       <td style={{ padding: '8px 12px', textAlign: 'center' }}>{f.dias_em_producao ?? '—'}</td>
+                      <td style={{ padding: '8px 12px', color: T.inkFaint, fontFamily: FONT_DISPLAY }}>{f.cod_produto}</td>
                       <td style={{ padding: '8px 12px', maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={f.produto_descricao}>{f.produto_descricao}</td>
                       <td style={{ padding: '8px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY }}>{f.quantidade}</td>
                       <td style={{ padding: '8px 12px', color: T.inkFaint }}>{f.unidade}</td>
@@ -3219,7 +3461,7 @@ function AlmoxarifadoFluxo() {
             <div style={{ padding: '10px 0 0', fontSize: 11, color: T.inkFaint, display: 'flex', justifyContent: 'space-between' }}>
               <span>{faturadoMesFiltrado.length} itens faturados (mostrando até 300)</span>
               <BotaoExportar small onClick={() => exportCSV(faturadoMesFiltrado, 'almoxarifado_faturado_mes.csv',
-                ['mes_referencia', 'br', 'data_faturamento', 'produto_descricao', 'quantidade', 'unidade', 'linha', 'dias_em_producao'])} />
+                ['mes_referencia', 'br', 'data_faturamento', 'cod_produto', 'produto_descricao', 'quantidade', 'unidade', 'linha', 'dias_em_producao'])} />
             </div>
           </Panel>
         </>
@@ -4404,6 +4646,39 @@ function VerificacaoProjetos({ currentUser }) {
 }
 
 function MonitoramentoOP() {
+  const STATUS_PLANNER_LABEL = { notStarted: 'Não iniciado', inProgress: 'Em andamento', completed: 'Concluído' };
+  const [abaMonitoramento, setAbaMonitoramento] = useState('op'); // 'op' | 'cotacao'
+  const [solicitacoes, setSolicitacoes] = useState([]);
+  const [loadingSolic, setLoadingSolic] = useState(true);
+  const [buscaSolic, setBuscaSolic] = useState('');
+  const [filtroPendente, setFiltroPendente] = useState(true); // só mostra as que ainda não pediram card
+
+  const carregarSolicitacoes = useCallback(async () => {
+    setLoadingSolic(true);
+    const { data } = await supabase.from('solicitacoes_compra_planner').select('*').order('data_solicitacao', { ascending: false });
+    setSolicitacoes(data || []);
+    setLoadingSolic(false);
+  }, []);
+  useEffect(() => { if (abaMonitoramento === 'cotacao') carregarSolicitacoes(); }, [abaMonitoramento, carregarSolicitacoes]);
+
+  const solicitacoesFiltradas = useMemo(() => {
+    let lista = solicitacoes;
+    if (filtroPendente) lista = lista.filter(s => !s.card_planner_solicitado);
+    if (buscaSolic.trim()) {
+      const b = buscaSolic.toLowerCase();
+      lista = lista.filter(s => String(s.numnota || '').includes(b) || String(s.numero_cotacao || '').includes(b) || (s.produto_descricao || '').toLowerCase().includes(b) || (s.nome_usuario || '').toLowerCase().includes(b));
+    }
+    return lista;
+  }, [solicitacoes, filtroPendente, buscaSolic]);
+
+  const marcarCardSolicitado = async (id) => {
+    await supabase.from('solicitacoes_compra_planner').update({
+      card_planner_solicitado: true,
+      card_planner_solicitado_em: new Date().toISOString(),
+    }).eq('id', id);
+    await carregarSolicitacoes();
+  };
+
   const [linhas, setLinhas] = useState([]);
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState(null);
@@ -4619,6 +4894,96 @@ function MonitoramentoOP() {
 
   return (
     <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+
+      <div style={{ display: 'flex', gap: 4, borderBottom: `1px solid ${T.line}` }}>
+        {[{ id: 'op', label: 'Monitoramento de OP' }, { id: 'cotacao', label: `Cotação — Card no Planner${solicitacoes.filter(s => !s.card_planner_solicitado).length ? ` (${solicitacoes.filter(s => !s.card_planner_solicitado).length})` : ''}` }].map(aba => (
+          <button key={aba.id} onClick={() => setAbaMonitoramento(aba.id)}
+            style={{
+              background: 'none', border: 'none', cursor: 'pointer', padding: '10px 16px', fontSize: 13, fontWeight: 600,
+              color: abaMonitoramento === aba.id ? T.terracotta : T.inkFaint,
+              borderBottom: `2px solid ${abaMonitoramento === aba.id ? T.terracotta : 'transparent'}`, marginBottom: -1,
+            }}>
+            {aba.label}
+          </button>
+        ))}
+      </div>
+
+      {abaMonitoramento === 'cotacao' && (
+        <Panel subtitle="Solicitações de compra (Kaio.R e Alexandre.P) que precisam ter um Card criado no Microsoft Planner — clique em 'Marcar' e o Power Automate cria o card automaticamente.">
+          {solicitacoes.some(s => s.planner_excluido) && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: T.rustSoft, color: T.rustText, borderRadius: 8, padding: '10px 14px', marginBottom: 14, fontSize: 12.5, fontWeight: 600 }}>
+              <AlertTriangle size={15} />
+              {solicitacoes.filter(s => s.planner_excluido).length} card(s) foram excluídos no Planner depois de criados — verifique se foi intencional.
+            </div>
+          )}
+          <div style={{ display: 'flex', gap: 12, marginBottom: 14, alignItems: 'center', flexWrap: 'wrap' }}>
+            <div style={{ position: 'relative' }}>
+              <Search size={13} style={{ position: 'absolute', left: 9, top: 9, color: T.inkFaint }} />
+              <input value={buscaSolic} onChange={e => setBuscaSolic(e.target.value)} placeholder="Buscar por número, produto ou usuário…"
+                style={{ ...inputStyle(), width: 260, paddingLeft: 28 }} />
+            </div>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, color: T.inkDim, cursor: 'pointer' }}>
+              <input type="checkbox" checked={filtroPendente} onChange={e => setFiltroPendente(e.target.checked)} />
+              Só mostrar as que ainda não pediram Card
+            </label>
+          </div>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+              <thead>
+                <tr style={{ background: T.panelAlt, borderBottom: `1px solid ${T.line}` }}>
+                  <th style={thFat(90)}>Data</th>
+                  <th style={thFat(100)}>Cotação nº</th>
+                  <th style={thFat(80)}>Solicitação</th>
+                  <th style={thFat(150)}>Tipo</th>
+                  <th style={thFat(0)}>Produto</th>
+                  <th style={{ ...thFat(70), textAlign: 'right' }}>Qtd</th>
+                  <th style={thFat(100)}>Solicitante</th>
+                  <th style={{ ...thFat(160), textAlign: 'center' }}>Card no Planner</th>
+                </tr>
+              </thead>
+              <tbody>
+                {loadingSolic ? (
+                  <tr><td colSpan={8} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Carregando…</td></tr>
+                ) : solicitacoesFiltradas.length === 0 ? (
+                  <tr><td colSpan={8} style={{ padding: 30, textAlign: 'center', color: T.oliveText, fontWeight: 600 }}>✓ Nada pendente por aqui.</td></tr>
+                ) : solicitacoesFiltradas.map(s => (
+                  <tr key={s.id} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                    <td style={{ padding: '8px 12px', color: T.inkDim, whiteSpace: 'nowrap' }}>{fmtData(s.data_solicitacao)}</td>
+                    <td style={{ padding: '8px 12px', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.terracotta, fontSize: 13 }}>{s.numero_cotacao || '—'}</td>
+                    <td style={{ padding: '8px 12px', color: T.inkFaint }}>{s.numnota}</td>
+                    <td style={{ padding: '8px 12px', fontSize: 11, color: T.inkFaint }}>{(s.descricao_top || '').replace('SOLICITAÇÃO COMPRA ', '').replace('SOLICITAÇÃO DE COMPRA ', '')}</td>
+                    <td style={{ padding: '8px 12px', maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={s.produto_descricao}>{s.produto_descricao || '—'}</td>
+                    <td style={{ padding: '8px 12px', textAlign: 'right' }}>{s.quantidade ?? '—'}</td>
+                    <td style={{ padding: '8px 12px', color: T.inkDim }}>{(s.nome_usuario || '').replace('.R', '').replace('.P', '')}</td>
+                    <td style={{ padding: '8px 12px', textAlign: 'center' }}>
+                      {s.planner_excluido ? (
+                        <span title={`Excluído em ${fmtData(s.planner_excluido_em)}`}
+                          style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10.5, fontWeight: 700, color: T.rustText, background: T.rustSoft, padding: '3px 8px', borderRadius: 4 }}>
+                          <AlertTriangle size={11} /> Card excluído!
+                        </span>
+                      ) : s.card_planner_criado ? (
+                        <span title={s.planner_titulo ? `"${s.planner_titulo}" · atualizado ${fmtData(s.planner_atualizado_em)}` : ''}
+                          style={{ fontSize: 10.5, fontWeight: 700, color: T.oliveText, background: T.oliveSoft, padding: '3px 8px', borderRadius: 4 }}>
+                          ✓ {STATUS_PLANNER_LABEL[s.planner_status] || 'Criado'}
+                        </span>
+                      ) : s.card_planner_solicitado ? (
+                        <span style={{ fontSize: 10.5, fontWeight: 700, color: T.amberText, background: T.amberSoft, padding: '3px 8px', borderRadius: 4 }}>Aguardando Power Automate</span>
+                      ) : (
+                        <button onClick={() => marcarCardSolicitado(s.id)}
+                          style={{ fontSize: 11, fontWeight: 700, color: '#fff', background: T.terracotta, border: 'none', borderRadius: 5, padding: '5px 12px', cursor: 'pointer' }}>
+                          Marcar pra criar Card
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Panel>
+      )}
+
+      {abaMonitoramento === 'op' && (<>
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
         <div style={{ fontSize: 12.5, color: T.inkFaint, background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 8, padding: '10px 14px', flex: 1, minWidth: 280 }}>
@@ -4872,6 +5237,7 @@ function MonitoramentoOP() {
           </div>
         </Overlay>
       )}
+      </>)}
     </div>
   );
 }
