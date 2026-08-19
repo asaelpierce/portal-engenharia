@@ -4651,7 +4651,9 @@ function MonitoramentoOP() {
   const [solicitacoes, setSolicitacoes] = useState([]);
   const [loadingSolic, setLoadingSolic] = useState(true);
   const [buscaSolic, setBuscaSolic] = useState('');
-  const [filtroPendente, setFiltroPendente] = useState(true); // só mostra as que ainda não pediram card
+  const [filtroStatus, setFiltroStatus] = useState('todos'); // todos | nao_solicitado | aguardando | criado | excluido
+  const [filtroDataInicio, setFiltroDataInicio] = useState('');
+  const [filtroDataFim, setFiltroDataFim] = useState('');
 
   const carregarSolicitacoes = useCallback(async () => {
     setLoadingSolic(true);
@@ -4663,13 +4665,18 @@ function MonitoramentoOP() {
 
   const solicitacoesFiltradas = useMemo(() => {
     let lista = solicitacoes;
-    if (filtroPendente) lista = lista.filter(s => !s.card_planner_solicitado);
+    if (filtroStatus === 'nao_solicitado') lista = lista.filter(s => !s.card_planner_solicitado);
+    else if (filtroStatus === 'aguardando') lista = lista.filter(s => s.card_planner_solicitado && !s.card_planner_criado);
+    else if (filtroStatus === 'criado') lista = lista.filter(s => s.card_planner_criado && !s.planner_excluido);
+    else if (filtroStatus === 'excluido') lista = lista.filter(s => s.planner_excluido);
+    if (filtroDataInicio) lista = lista.filter(s => s.data_solicitacao && s.data_solicitacao >= filtroDataInicio);
+    if (filtroDataFim) lista = lista.filter(s => s.data_solicitacao && s.data_solicitacao <= filtroDataFim);
     if (buscaSolic.trim()) {
       const b = buscaSolic.toLowerCase();
-      lista = lista.filter(s => String(s.numnota || '').includes(b) || String(s.numero_cotacao || '').includes(b) || (s.produto_descricao || '').toLowerCase().includes(b) || (s.nome_usuario || '').toLowerCase().includes(b));
+      lista = lista.filter(s => String(s.numnota || '').includes(b) || String(s.numero_cotacao || '').includes(b) || (s.produto_descricao || '').toLowerCase().includes(b) || (s.nome_usuario || '').toLowerCase().includes(b) || (s.br || '').toLowerCase().includes(b) || (s.cliente_nome || '').toLowerCase().includes(b));
     }
     return lista;
-  }, [solicitacoes, filtroPendente, buscaSolic]);
+  }, [solicitacoes, filtroStatus, filtroDataInicio, filtroDataFim, buscaSolic]);
 
   const marcarCardSolicitado = async (id) => {
     await supabase.from('solicitacoes_compra_planner').update({
@@ -4916,16 +4923,56 @@ function MonitoramentoOP() {
               {solicitacoes.filter(s => s.planner_excluido).length} card(s) foram excluídos no Planner depois de criados — verifique se foi intencional.
             </div>
           )}
+
+          {/* Abas de status, com contagem de cada */}
+          <div style={{ display: 'flex', gap: 6, marginBottom: 14, flexWrap: 'wrap' }}>
+            {[
+              { id: 'todos', label: 'Todos', cor: T.inkDim, qtd: solicitacoes.length },
+              { id: 'nao_solicitado', label: 'Sem Card pedido', cor: T.rustText, qtd: solicitacoes.filter(s => !s.card_planner_solicitado).length },
+              { id: 'aguardando', label: 'Aguardando Power Automate', cor: T.amberText, qtd: solicitacoes.filter(s => s.card_planner_solicitado && !s.card_planner_criado).length },
+              { id: 'criado', label: 'Criado', cor: T.oliveText, qtd: solicitacoes.filter(s => s.card_planner_criado && !s.planner_excluido).length },
+              { id: 'excluido', label: 'Excluído', cor: T.rustText, qtd: solicitacoes.filter(s => s.planner_excluido).length },
+            ].map(f => (
+              <button key={f.id} onClick={() => setFiltroStatus(f.id)}
+                style={{
+                  fontSize: 12, fontWeight: 700, padding: '6px 12px', borderRadius: 6, cursor: 'pointer',
+                  border: `1.5px solid ${filtroStatus === f.id ? f.cor : T.line}`,
+                  background: filtroStatus === f.id ? f.cor : 'transparent',
+                  color: filtroStatus === f.id ? '#fff' : f.cor,
+                }}>
+                {f.label} ({f.qtd})
+              </button>
+            ))}
+          </div>
+
           <div style={{ display: 'flex', gap: 12, marginBottom: 14, alignItems: 'center', flexWrap: 'wrap' }}>
             <div style={{ position: 'relative' }}>
               <Search size={13} style={{ position: 'absolute', left: 9, top: 9, color: T.inkFaint }} />
-              <input value={buscaSolic} onChange={e => setBuscaSolic(e.target.value)} placeholder="Buscar por número, produto ou usuário…"
-                style={{ ...inputStyle(), width: 260, paddingLeft: 28 }} />
+              <input value={buscaSolic} onChange={e => setBuscaSolic(e.target.value)} placeholder="Buscar por número, BR, cliente, produto ou usuário…"
+                style={{ ...inputStyle(), width: 300, paddingLeft: 28 }} />
             </div>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, color: T.inkDim, cursor: 'pointer' }}>
-              <input type="checkbox" checked={filtroPendente} onChange={e => setFiltroPendente(e.target.checked)} />
-              Só mostrar as que ainda não pediram Card
-            </label>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span style={{ fontSize: 11.5, color: T.inkFaint }}>De:</span>
+              <input type="date" value={filtroDataInicio} onChange={e => setFiltroDataInicio(e.target.value)} style={{ ...inputStyle(), fontSize: 12, padding: '5px 8px' }} />
+              <span style={{ fontSize: 11.5, color: T.inkFaint }}>Até:</span>
+              <input type="date" value={filtroDataFim} onChange={e => setFiltroDataFim(e.target.value)} style={{ ...inputStyle(), fontSize: 12, padding: '5px 8px' }} />
+            </div>
+            {(() => {
+              const hoje = new Date().toISOString().slice(0, 10);
+              const ontem = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+              return (
+                <div style={{ display: 'flex', gap: 4 }}>
+                  <button onClick={() => { setFiltroDataInicio(hoje); setFiltroDataFim(hoje); }}
+                    style={{ fontSize: 11, padding: '5px 10px', borderRadius: 5, border: `1px solid ${T.line}`, background: T.panelAlt, color: T.inkDim, cursor: 'pointer' }}>Hoje</button>
+                  <button onClick={() => { setFiltroDataInicio(ontem); setFiltroDataFim(ontem); }}
+                    style={{ fontSize: 11, padding: '5px 10px', borderRadius: 5, border: `1px solid ${T.line}`, background: T.panelAlt, color: T.inkDim, cursor: 'pointer' }}>Ontem</button>
+                  {(filtroDataInicio || filtroDataFim) && (
+                    <button onClick={() => { setFiltroDataInicio(''); setFiltroDataFim(''); }}
+                      style={{ fontSize: 11, padding: '5px 10px', borderRadius: 5, border: `1px solid ${T.line}`, background: 'transparent', color: T.inkFaint, cursor: 'pointer' }}>Limpar data</button>
+                  )}
+                </div>
+              );
+            })()}
           </div>
           <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
