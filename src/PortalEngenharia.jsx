@@ -4952,7 +4952,14 @@ function MonitoramentoOP() {
                     <td style={{ padding: '8px 12px', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.terracotta, fontSize: 13 }}>{s.numero_cotacao || '—'}</td>
                     <td style={{ padding: '8px 12px', color: T.inkFaint }}>{s.numnota}</td>
                     <td style={{ padding: '8px 12px', fontSize: 11, color: T.inkFaint }}>{(s.descricao_top || '').replace('SOLICITAÇÃO COMPRA ', '').replace('SOLICITAÇÃO DE COMPRA ', '')}</td>
-                    <td style={{ padding: '8px 12px', maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={s.produto_descricao}>{s.produto_descricao || '—'}</td>
+                    <td style={{ padding: '8px 12px', maxWidth: 260 }}>
+                      <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={s.produto_descricao}>{s.produto_descricao || '—'}</div>
+                      {s.observacao && (
+                        <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={s.observacao}>
+                          📝 {s.observacao.replace(/\n/g, ' · ')}
+                        </div>
+                      )}
+                    </td>
                     <td style={{ padding: '8px 12px', textAlign: 'right' }}>{s.quantidade ?? '—'}</td>
                     <td style={{ padding: '8px 12px', color: T.inkDim }}>{(s.nome_usuario || '').replace('.R', '').replace('.P', '')}</td>
                     <td style={{ padding: '8px 12px', textAlign: 'center' }}>
