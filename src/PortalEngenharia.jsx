@@ -7,7 +7,7 @@ import {
   ChevronRight, ChevronDown, Building2, CalendarDays, Link2, DownloadCloud,
   Filter, FileWarning, Stamp, ArrowUpRight, ArrowDownRight, Minus, Zap,
   CircleDot, ShieldCheck, MessageSquareWarning, ListFilter, Webhook, Users,
-  RefreshCw, TrendingUp, DollarSign, CheckCircle2, Package, Layers, Bell, BarChart2, Download, History,
+  RefreshCw, TrendingUp, DollarSign, CheckCircle2, Package, Layers, Bell, BarChart2, Download, History, ClipboardList,
   Trophy, Repeat, UserPlus,
 } from 'lucide-react';
 
@@ -300,6 +300,7 @@ export default function PortalEngenharia() {
             id: data.id, nome: data.nome, papel: data.papel,
             email: session.user.email,
             ve_produtividade_completa: data.ve_produtividade_completa,
+            ve_almoxarifado_completo: data.ve_almoxarifado_completo,
             sankhyaUsuario: data.sankhya_usuario,
             // Sem linhas em colaborador_telas = sem restrição cadastrada (mantém acesso total, comportamento antigo).
             // Com linhas = restrição ativa, só essas telas aparecem.
@@ -552,14 +553,15 @@ function PortalConteudo({ currentUser, session }) {
           {renderTab('analitico_mp', <TabErrorBoundary tab="Analítico"><AnaliticoMP /></TabErrorBoundary>)}
           {renderTab('carteira_estoque', <TabErrorBoundary tab="Carteira x Estoque"><CarteiraEstoque /></TabErrorBoundary>)}
           {renderTab('preco_compra', <TabErrorBoundary tab="Preço de Compra"><PrecoCompra /></TabErrorBoundary>)}
-          {renderTab('almoxarifado', <TabErrorBoundary tab="Almoxarifado"><Almoxarifado /></TabErrorBoundary>)}
+          {renderTab('almoxarifado', <TabErrorBoundary tab="Almoxarifado"><Almoxarifado currentUser={currentUser} /></TabErrorBoundary>)}
           {renderTab('equipamentos', <TabErrorBoundary tab="Equipamentos de Terceiros"><EquipamentosTerceiros /></TabErrorBoundary>)}
           {renderTab('acompanhamento_servico', <TabErrorBoundary tab="Acompanhamento de Serviço"><AcompanhamentoServico /></TabErrorBoundary>)}
           {renderTab('monitoramento_op', <TabErrorBoundary tab="Monitoramento OP"><MonitoramentoOP /></TabErrorBoundary>)}
           {renderTab('verificacao_projetos', <TabErrorBoundary tab="Verificação de Projetos"><VerificacaoProjetos currentUser={currentUser} /></TabErrorBoundary>)}
           {renderTab('analise_comercial', <TabErrorBoundary tab="Análise Comercial"><AnaliseComercial /></TabErrorBoundary>)}
           {renderTab('prospeccao_clientes', <TabErrorBoundary tab="Prospecção de Clientes"><ProspeccaoClientes /></TabErrorBoundary>)}
-          {renderTab('almoxarifado_fluxo', <TabErrorBoundary tab="Fluxo de Materiais"><AlmoxarifadoFluxo /></TabErrorBoundary>)}
+          {renderTab('almoxarifado_fluxo', <TabErrorBoundary tab="Fluxo de Materiais"><AlmoxarifadoFluxo currentUser={currentUser} /></TabErrorBoundary>)}
+          {renderTab('almoxarifado_fila_atendimento', <TabErrorBoundary tab="Fila de Atendimento"><FilaAtendimentoAlmoxarifado currentUser={currentUser} /></TabErrorBoundary>)}
           {renderTab('pedidosvale', <PedidosVale />)}
           {renderTab('aberturacotacao', <TabErrorBoundary tab="Abertura de Cotação"><AberturaCotacao currentUser={currentUser} /></TabErrorBoundary>)}
           {renderTab('ranking', <TabErrorBoundary tab="Ranking"><RankingPontuacao /></TabErrorBoundary>)}
@@ -615,6 +617,7 @@ function Sidebar({ view, setView, pendCount, papel, telasPermitidas }) {
     { id: 'analise_comercial', label: 'Análise Comercial', icon: TrendingUp },
     { id: 'prospeccao_clientes', label: 'Prospecção de Clientes', icon: UserPlus },
     { id: 'almoxarifado_fluxo', label: 'Fluxo de Materiais', icon: Package },
+    { id: 'almoxarifado_fila_atendimento', label: 'Fila de Atendimento', icon: ClipboardList },
     { id: 'pedidosvale',  label: 'Pedidos Vale',           icon: FileWarning },
     { id: 'aberturacotacao', label: 'Abertura de Cotação',  icon: FileStack },
     { id: 'ranking',      label: 'Ranking de Pontuação',    icon: TrendingUp },
@@ -2810,6 +2813,13 @@ function AlmoxarifadoFluxo() {
   const [quantidades, setQuantidades] = useState({}); // material_id -> quantidade digitada
   const [setorEscolhido, setSetorEscolhido] = useState({}); // material_id -> setor escolhido
   const [necessidadeItem, setNecessidadeItem] = useState({}); // material_id -> gerou nova necessidade
+  const [chegouEstoquePorMaterial, setChegouEstoquePorMaterial] = useState(new Set());
+  const [minhasSolicitacoes, setMinhasSolicitacoes] = useState([]);
+  const carregarMinhasSolicitacoes = useCallback(async () => {
+    const { data } = await supabase.from('solicitacoes_movimentacao_almoxarifado').select('*').order('solicitado_em', { ascending: false }).limit(50);
+    setMinhasSolicitacoes(data || []);
+  }, []);
+  useEffect(() => { carregarMinhasSolicitacoes(); }, [carregarMinhasSolicitacoes]);
   const [pendenteItem, setPendenteItem] = useState({}); // material_id -> material pendente
 
   const carregarSituacaoAtual = useCallback(async () => {
@@ -2902,34 +2912,42 @@ function AlmoxarifadoFluxo() {
     setOpSelecionada(opItem);
     setNovoMov(m => ({ ...m, projeto: opItem.br ? opItem.br.replace(/^BR/, '') : m.projeto, op: opItem.op }));
     setBuscandoMateriais(true);
-    const { data } = await supabase.from('almoxarifado_op_materiais').select('*').eq('op', opItem.op).order('materia_prima_descricao');
+    const [{ data }, { data: movsEstoque }, { data: solicPendentesEstoque }] = await Promise.all([
+      supabase.from('almoxarifado_op_materiais').select('*').eq('op', opItem.op).order('materia_prima_descricao'),
+      supabase.from('almoxarifado_movimentacoes').select('material').eq('op', opItem.op).eq('setor', 'Ponto de Estoque'),
+      supabase.from('solicitacoes_movimentacao_almoxarifado').select('material').eq('op', opItem.op).eq('tipo', 'para_estoque').neq('status', 'cancelado'),
+    ]);
     setMateriaisSugeridos(data || []);
+    // Marca quais materiais já chegaram (ou já têm solicitação em andamento) no Ponto de Estoque —
+    // regra fixa: tudo tem que passar por ali primeiro antes de ir pra qualquer outro setor.
+    const jaNoEstoque = new Set([...(movsEstoque || []), ...(solicPendentesEstoque || [])].map(m => m.material));
+    setChegouEstoquePorMaterial(jaNoEstoque);
     setBuscandoMateriais(false);
   };
 
-  // Registra a movimentação de UM material específico, com a quantidade que ela digitou
-  const marcarMaterialEntregue = async (materialItem) => {
-    const setor = setorEscolhido[materialItem.id] || 'Ponto de Estoque';
+  // Cria uma SOLICITAÇÃO (não a movimentação em si) — alguém da equipe dela precisa
+  // confirmar que atendeu de verdade antes de virar movimentação real.
+  const criarSolicitacao = async (materialItem) => {
+    const jaNoEstoque = chegouEstoquePorMaterial.has(materialItem.materia_prima_descricao);
+    const tipo = jaNoEstoque ? 'para_setor' : 'para_estoque';
+    const setor = jaNoEstoque ? (setorEscolhido[materialItem.id] || 'Vulcanização') : 'Ponto de Estoque';
     const qtd = quantidades[materialItem.id];
-    const necessidade = necessidadeItem[materialItem.id] || null;
-    const pendente = pendenteItem[materialItem.id] || null;
     const registro = {
-      carimbo_data_hora: new Date().toISOString(),
-      projeto: (opSelecionada?.br || novoMov.projeto).replace(/^BR/, ''),
+      tipo,
+      br: opSelecionada?.br || (novoMov.projeto.trim() ? ('BR' + novoMov.projeto.trim().toUpperCase().replace(/,/g, '/').replace(/^BR/, '')) : materialItem.br),
       op: materialItem.op,
       material: materialItem.materia_prima_descricao,
-      setor,
-      gerou_nova_necessidade: necessidade,
-      material_pendente: pendente,
-      observacao: qtd ? `Quantidade entregue: ${qtd} (de ${materialItem.quantidade_mp} total)` : null,
-      origem: 'manual',
-      br_normalizado: opSelecionada?.br || (novoMov.projeto.trim() ? ('BR' + novoMov.projeto.trim().toUpperCase().replace(/,/g, '/').replace(/^BR/, '')) : materialItem.br),
+      cod_materia_prima: materialItem.cod_materia_prima,
+      quantidade_total_prevista: materialItem.quantidade_mp,
+      quantidade_solicitada: qtd || null,
+      setor_destino: tipo === 'para_setor' ? setor : null,
+      status: 'pendente',
+      solicitado_por: currentUser?.nome || null,
     };
-    await supabase.from('almoxarifado_movimentacoes').insert(registro);
+    await supabase.from('solicitacoes_movimentacao_almoxarifado').insert(registro);
     setQuantidades(q => ({ ...q, [materialItem.id]: '' }));
-    setNecessidadeItem(n => ({ ...n, [materialItem.id]: '' }));
-    setPendenteItem(p => ({ ...p, [materialItem.id]: '' }));
-    await Promise.all([carregarSituacaoAtual(), carregar(), carregarOpsAndamento()]);
+    if (!jaNoEstoque) setChegouEstoquePorMaterial(s => new Set([...s, materialItem.materia_prima_descricao]));
+    await carregarMinhasSolicitacoes();
   };
 
   const salvarNovaMovimentacao = async () => {
@@ -3193,7 +3211,7 @@ function AlmoxarifadoFluxo() {
             </Panel>
 
             <Panel title={opSelecionada ? `${opSelecionada.br} · OP ${opSelecionada.op}` : 'Selecione uma OP ao lado'}
-              subtitle={opSelecionada ? 'Pra cada item, escolha o setor e (se quiser) a quantidade entregue, e clique em registrar' : ''}>
+              subtitle={opSelecionada ? 'Tudo passa pelo Ponto de Estoque primeiro. Você solicita — a equipe confirma quando atender de verdade.' : ''}>
               {!opSelecionada ? (
                 <div style={{ textAlign: 'center', padding: 30, color: T.inkFaint, fontSize: 12.5 }}>← Escolha uma OP em andamento na lista ao lado</div>
               ) : buscandoMateriais ? (
@@ -3202,49 +3220,65 @@ function AlmoxarifadoFluxo() {
                 <div style={{ textAlign: 'center', padding: 30, color: T.inkFaint, fontSize: 12.5 }}>Essa OP não tem matéria-prima sincronizada.</div>
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                  {materiaisSugeridos.map(mat => (
+                  {materiaisSugeridos.map(mat => {
+                    const jaNoEstoque = chegouEstoquePorMaterial.has(mat.materia_prima_descricao);
+                    return (
                     <div key={mat.id} style={{ background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 8, padding: '10px 14px', display: 'flex', flexDirection: 'column', gap: 8 }}>
-                      <div>
-                        <div style={{ fontSize: 12.5, fontWeight: 600, color: T.ink }}>{mat.materia_prima_descricao}</div>
-                        <div style={{ fontSize: 10.5, color: T.inkFaint }}>Total previsto: {mat.quantidade_mp}</div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                        <div>
+                          <div style={{ fontSize: 12.5, fontWeight: 600, color: T.ink }}>{mat.materia_prima_descricao}</div>
+                          <div style={{ fontSize: 10.5, color: T.inkFaint }}>Total previsto: {mat.quantidade_mp}</div>
+                        </div>
+                        <span style={{ fontSize: 10, fontWeight: 700, padding: '3px 8px', borderRadius: 4, color: jaNoEstoque ? T.oliveText : T.amberText, background: jaNoEstoque ? T.oliveSoft : T.amberSoft, whiteSpace: 'nowrap' }}>
+                          {jaNoEstoque ? '✓ já no estoque' : 'aguardando estoque'}
+                        </span>
                       </div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                        <div style={{ position: 'relative' }}>
-                          <select value={setorEscolhido[mat.id] || 'Ponto de Estoque'} onChange={e => setSetorEscolhido(s => ({ ...s, [mat.id]: e.target.value }))}
-                            style={{ ...inputStyle(), fontSize: 11.5, padding: '5px 24px 5px 8px', appearance: 'none' }}>
-                            {SETORES_FLUXO.filter(s => s !== 'Projeto Faturado').map(s => <option key={s} value={s}>{s}</option>)}
-                          </select>
-                          <ChevronDown size={11} style={{ position: 'absolute', right: 7, top: 9, color: T.inkFaint, pointerEvents: 'none' }} />
-                        </div>
-                        <input type="number" placeholder="Qtd. entregue" value={quantidades[mat.id] || ''}
+                        {jaNoEstoque && (
+                          <div style={{ position: 'relative' }}>
+                            <select value={setorEscolhido[mat.id] || 'Vulcanização'} onChange={e => setSetorEscolhido(s => ({ ...s, [mat.id]: e.target.value }))}
+                              style={{ ...inputStyle(), fontSize: 11.5, padding: '5px 24px 5px 8px', appearance: 'none' }}>
+                              {SETORES_FLUXO.filter(s => s !== 'Projeto Faturado' && s !== 'Ponto de Estoque').map(s => <option key={s} value={s}>{s}</option>)}
+                            </select>
+                            <ChevronDown size={11} style={{ position: 'absolute', right: 7, top: 9, color: T.inkFaint, pointerEvents: 'none' }} />
+                          </div>
+                        )}
+                        <input type="number" placeholder="Qtd. solicitada" value={quantidades[mat.id] || ''}
                           onChange={e => setQuantidades(q => ({ ...q, [mat.id]: e.target.value }))}
-                          style={{ ...inputStyle(), width: 110, fontSize: 11.5, padding: '5px 8px' }} />
-                        <button onClick={() => marcarMaterialEntregue(mat)}
+                          style={{ ...inputStyle(), width: 120, fontSize: 11.5, padding: '5px 8px' }} />
+                        <button onClick={() => criarSolicitacao(mat)}
                           style={{ fontSize: 11.5, fontWeight: 700, color: '#fff', background: T.terracotta, border: 'none', borderRadius: 5, padding: '6px 12px', cursor: 'pointer' }}>
-                          Registrar
+                          {jaNoEstoque ? 'Solicitar envio pro setor' : 'Solicitar chegada ao estoque'}
                         </button>
                       </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', borderTop: `1px solid ${T.lineSoft}`, paddingTop: 8 }}>
-                        <div style={{ position: 'relative' }}>
-                          <select value={necessidadeItem[mat.id] || ''} onChange={e => setNecessidadeItem(n => ({ ...n, [mat.id]: e.target.value }))}
-                            style={{ ...inputStyle(), fontSize: 10.5, padding: '4px 22px 4px 8px', appearance: 'none', color: necessidadeItem[mat.id] ? T.rustText : T.inkFaint }}>
-                            <option value="">Sem problema (padrão)</option>
-                            <option value="KDB Controle perda, Divergência do Projeto">⚠ Divergência do Projeto</option>
-                            <option value="KDB Controle perda, Perca Processo Produtivo">⚠ Perca Processo Produtivo</option>
-                            <option value="KDB Controle perda, Serviço">⚠ Serviço</option>
-                          </select>
-                          <ChevronDown size={10} style={{ position: 'absolute', right: 6, top: 8, color: T.inkFaint, pointerEvents: 'none' }} />
-                        </div>
-                        <input placeholder="Material pendente? (ex: Falta Compra)" value={pendenteItem[mat.id] || ''}
-                          onChange={e => setPendenteItem(p => ({ ...p, [mat.id]: e.target.value }))}
-                          style={{ ...inputStyle(), fontSize: 10.5, padding: '4px 8px', flex: 1, minWidth: 160 }} />
-                      </div>
                     </div>
-                  ))}
+                  );})}
                 </div>
               )}
             </Panel>
           </div>
+
+          <Panel title="Minhas solicitações recentes" subtitle="Acompanhe o que já foi atendido pela equipe e o que ainda está esperando">
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 260, overflowY: 'auto' }}>
+              {minhasSolicitacoes.length === 0 ? (
+                <div style={{ fontSize: 12, color: T.inkFaint, textAlign: 'center', padding: 16 }}>Nenhuma solicitação ainda.</div>
+              ) : minhasSolicitacoes.map(s => (
+                <div key={s.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, background: T.panelAlt, borderRadius: 6, padding: '7px 12px', fontSize: 11.5 }}>
+                  <div style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    <strong style={{ color: T.blueText, fontFamily: FONT_DISPLAY }}>{s.br}</strong> · OP {s.op} · {s.material}
+                    <span style={{ color: T.inkFaint }}> → {s.tipo === 'para_estoque' ? 'Ponto de Estoque' : s.setor_destino}</span>
+                  </div>
+                  <span style={{
+                    fontSize: 10, fontWeight: 700, padding: '3px 8px', borderRadius: 4, whiteSpace: 'nowrap',
+                    color: s.status === 'atendido' ? T.oliveText : s.status === 'cancelado' ? T.inkFaint : T.amberText,
+                    background: s.status === 'atendido' ? T.oliveSoft : s.status === 'cancelado' ? T.lineSoft : T.amberSoft,
+                  }}>
+                    {s.status === 'atendido' ? '✓ Atendido' : s.status === 'cancelado' ? 'Cancelado' : 'Aguardando'}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </Panel>
 
           <Panel title="Registro manual (BR fora da lista)" subtitle="Se a OP não está na lista de andamento, registra aqui pelo BR direto">
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 420 }}>
@@ -3445,7 +3479,9 @@ function AlmoxarifadoFluxo() {
                     <tr key={i} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
                       <td style={{ padding: '8px 12px', color: T.inkDim, whiteSpace: 'nowrap' }}>{fmtData(f.data_faturamento)}</td>
                       <td style={{ padding: '8px 12px', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText }}>{f.br}</td>
-                      <td style={{ padding: '8px 12px', textAlign: 'center' }}>{f.dias_em_producao ?? '—'}</td>
+                      <td style={{ padding: '8px 12px', textAlign: 'center' }} title={f.dias_producao_estimado ? 'Estimado via data real do Sankhya — não tinha "Projeto Faturado" registrado no formulário' : ''}>
+                        {f.dias_em_producao ?? '—'}{f.dias_producao_estimado && <span style={{ color: T.amberText }}> *</span>}
+                      </td>
                       <td style={{ padding: '8px 12px', color: T.inkFaint, fontFamily: FONT_DISPLAY }}>{f.cod_produto}</td>
                       <td style={{ padding: '8px 12px', maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={f.produto_descricao}>{f.produto_descricao}</td>
                       <td style={{ padding: '8px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY }}>{f.quantidade}</td>
@@ -3459,7 +3495,7 @@ function AlmoxarifadoFluxo() {
               </table>
             </div>
             <div style={{ padding: '10px 0 0', fontSize: 11, color: T.inkFaint, display: 'flex', justifyContent: 'space-between' }}>
-              <span>{faturadoMesFiltrado.length} itens faturados (mostrando até 300)</span>
+              <span>{faturadoMesFiltrado.length} itens faturados (mostrando até 300) · <span style={{ color: T.amberText }}>*</span> = dias estimados via Sankhya (sem "Projeto Faturado" no formulário)</span>
               <BotaoExportar small onClick={() => exportCSV(faturadoMesFiltrado, 'almoxarifado_faturado_mes.csv',
                 ['mes_referencia', 'br', 'data_faturamento', 'cod_produto', 'produto_descricao', 'quantidade', 'unidade', 'linha', 'dias_em_producao'])} />
             </div>
@@ -5331,6 +5367,158 @@ function MonitoramentoOP() {
         </Overlay>
       )}
       </>)}
+    </div>
+  );
+}
+
+function FilaAtendimentoAlmoxarifado({ currentUser }) {
+  const [solicitacoes, setSolicitacoes] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [abaStatus, setAbaStatus] = useState('pendente'); // pendente | atendido | todos
+  const [necessidadeItem, setNecessidadeItem] = useState({}); // solicitacao_id -> gerou nova necessidade
+  const [pendenteItem, setPendenteItem] = useState({}); // solicitacao_id -> material pendente
+  const [atendendo, setAtendendo] = useState(null); // id em processamento no momento
+
+  const carregar = useCallback(async () => {
+    setLoading(true);
+    const { data } = await supabase.from('solicitacoes_movimentacao_almoxarifado').select('*').order('solicitado_em', { ascending: true }).limit(200);
+    setSolicitacoes(data || []);
+    setLoading(false);
+  }, []);
+  useEffect(() => { carregar(); }, [carregar]);
+  useEffect(() => {
+    const id = setInterval(() => carregar(), 20000);
+    return () => clearInterval(id);
+  }, [carregar]);
+
+  const filtradas = useMemo(() => {
+    if (abaStatus === 'todos') return solicitacoes;
+    return solicitacoes.filter(s => s.status === abaStatus);
+  }, [solicitacoes, abaStatus]);
+
+  const marcarAtendido = async (solic) => {
+    setAtendendo(solic.id);
+    const registroMov = {
+      carimbo_data_hora: new Date().toISOString(),
+      projeto: (solic.br || '').replace(/^BR/, ''),
+      op: solic.op,
+      material: solic.material,
+      setor: solic.tipo === 'para_estoque' ? 'Ponto de Estoque' : solic.setor_destino,
+      gerou_nova_necessidade: necessidadeItem[solic.id] || null,
+      material_pendente: pendenteItem[solic.id] || null,
+      observacao: solic.quantidade_solicitada ? `Quantidade entregue: ${solic.quantidade_solicitada} (de ${solic.quantidade_total_prevista ?? '?'} total)` : null,
+      origem: 'manual',
+      br_normalizado: solic.br,
+    };
+    const { data: movInserida, error } = await supabase.from('almoxarifado_movimentacoes').insert(registroMov).select().single();
+    if (!error && movInserida) {
+      await supabase.from('solicitacoes_movimentacao_almoxarifado').update({
+        status: 'atendido',
+        atendido_por: currentUser?.nome || null,
+        atendido_em: new Date().toISOString(),
+        movimentacao_id: movInserida.id,
+      }).eq('id', solic.id);
+    }
+    setAtendendo(null);
+    await carregar();
+  };
+
+  const cancelarSolicitacao = async (solic) => {
+    await supabase.from('solicitacoes_movimentacao_almoxarifado').update({ status: 'cancelado' }).eq('id', solic.id);
+    await carregar();
+  };
+
+  const fmtDataHora = (iso) => !iso ? '—' : new Date(iso).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+
+  return (
+    <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+      <div style={{ fontSize: 12.5, color: T.inkFaint, background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 8, padding: '10px 14px' }}>
+        Aqui aparecem os pedidos da coordenação — vai buscar/entregar o material de verdade e clica em <strong>"Confirmar atendimento"</strong> quando terminar.
+      </div>
+
+      <div style={{ display: 'flex', gap: 4, borderBottom: `1px solid ${T.line}` }}>
+        {[
+          { id: 'pendente', label: `Aguardando (${solicitacoes.filter(s => s.status === 'pendente').length})` },
+          { id: 'atendido', label: 'Já atendidas' },
+          { id: 'todos', label: 'Todas' },
+        ].map(aba => (
+          <button key={aba.id} onClick={() => setAbaStatus(aba.id)}
+            style={{
+              background: 'none', border: 'none', cursor: 'pointer', padding: '10px 16px', fontSize: 13, fontWeight: 600,
+              color: abaStatus === aba.id ? T.terracotta : T.inkFaint,
+              borderBottom: `2px solid ${abaStatus === aba.id ? T.terracotta : 'transparent'}`, marginBottom: -1,
+            }}>
+            {aba.label}
+          </button>
+        ))}
+      </div>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        {loading ? (
+          <div style={{ textAlign: 'center', padding: 30, color: T.inkFaint }}>Carregando…</div>
+        ) : filtradas.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: 40, color: T.oliveText, fontWeight: 600, fontSize: 13 }}>✓ Nada por aqui.</div>
+        ) : filtradas.map(s => (
+          <div key={s.id} style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 8 }}>
+              <div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: T.ink }}>
+                  <span style={{ fontFamily: FONT_DISPLAY, color: T.blueText }}>{s.br}</span> · OP {s.op}
+                </div>
+                <div style={{ fontSize: 12.5, color: T.inkDim, marginTop: 2 }}>{s.material}</div>
+                <div style={{ fontSize: 11.5, color: T.inkFaint, marginTop: 4 }}>
+                  Levar pra: <strong style={{ color: T.terracotta }}>{s.tipo === 'para_estoque' ? 'Ponto de Estoque' : s.setor_destino}</strong>
+                  {s.quantidade_solicitada ? ` · Qtd: ${s.quantidade_solicitada}` : ''}
+                  {s.quantidade_total_prevista ? ` (de ${s.quantidade_total_prevista} total)` : ''}
+                </div>
+                <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 2 }}>
+                  Pedido por {s.solicitado_por || '—'} em {fmtDataHora(s.solicitado_em)}
+                  {s.status === 'atendido' && ` · Atendido por ${s.atendido_por || '—'} em ${fmtDataHora(s.atendido_em)}`}
+                </div>
+              </div>
+              {s.status === 'pendente' && (
+                <span style={{ fontSize: 10.5, fontWeight: 700, color: T.amberText, background: T.amberSoft, padding: '3px 8px', borderRadius: 4, whiteSpace: 'nowrap' }}>Aguardando</span>
+              )}
+              {s.status === 'atendido' && (
+                <span style={{ fontSize: 10.5, fontWeight: 700, color: T.oliveText, background: T.oliveSoft, padding: '3px 8px', borderRadius: 4, whiteSpace: 'nowrap' }}>✓ Atendido</span>
+              )}
+              {s.status === 'cancelado' && (
+                <span style={{ fontSize: 10.5, fontWeight: 700, color: T.inkFaint, background: T.lineSoft, padding: '3px 8px', borderRadius: 4, whiteSpace: 'nowrap' }}>Cancelado</span>
+              )}
+            </div>
+
+            {s.status === 'pendente' && (
+              <>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', borderTop: `1px solid ${T.lineSoft}`, paddingTop: 10 }}>
+                  <div style={{ position: 'relative' }}>
+                    <select value={necessidadeItem[s.id] || ''} onChange={e => setNecessidadeItem(n => ({ ...n, [s.id]: e.target.value }))}
+                      style={{ ...inputStyle(), fontSize: 10.5, padding: '4px 22px 4px 8px', appearance: 'none', color: necessidadeItem[s.id] ? T.rustText : T.inkFaint }}>
+                      <option value="">Sem problema (padrão)</option>
+                      <option value="KDB Controle perda, Divergência do Projeto">⚠ Divergência do Projeto</option>
+                      <option value="KDB Controle perda, Perca Processo Produtivo">⚠ Perca Processo Produtivo</option>
+                      <option value="KDB Controle perda, Serviço">⚠ Serviço</option>
+                    </select>
+                    <ChevronDown size={10} style={{ position: 'absolute', right: 6, top: 8, color: T.inkFaint, pointerEvents: 'none' }} />
+                  </div>
+                  <input placeholder="Material pendente? (ex: Falta Compra)" value={pendenteItem[s.id] || ''}
+                    onChange={e => setPendenteItem(p => ({ ...p, [s.id]: e.target.value }))}
+                    style={{ ...inputStyle(), fontSize: 10.5, padding: '4px 8px', flex: 1, minWidth: 160 }} />
+                </div>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button onClick={() => marcarAtendido(s)} disabled={atendendo === s.id}
+                    style={{ fontSize: 12, fontWeight: 700, color: '#fff', background: T.oliveText, border: 'none', borderRadius: 6, padding: '8px 16px', cursor: 'pointer', opacity: atendendo === s.id ? 0.6 : 1 }}>
+                    {atendendo === s.id ? 'Confirmando…' : '✓ Confirmar atendimento'}
+                  </button>
+                  <button onClick={() => cancelarSolicitacao(s)} disabled={atendendo === s.id}
+                    style={{ fontSize: 12, fontWeight: 600, color: T.inkFaint, background: 'transparent', border: `1px solid ${T.line}`, borderRadius: 6, padding: '8px 14px', cursor: 'pointer' }}>
+                    Cancelar
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -10800,7 +10988,7 @@ function ConsumoMP() {
 
 
 
-function Almoxarifado() {
+function Almoxarifado({ currentUser }) {
   const [dados, setDados] = useState([]);
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState(null);
@@ -10858,14 +11046,13 @@ function Almoxarifado() {
     return ['Todos', ...destaque, ...resto];
   }, [dados]);
 
-  // Status baseado no que realmente está DISPONÍVEL pra produção usar
-  // (estoque de matéria-prima menos o que já está reservado pra outros projetos)
+  // Status baseado no estoque de matéria-prima e em quanto disso já tem destino certo (reservado)
   const statusItem = (row) => {
-    const disponivel = Number(row.disponivel_mp) || 0;
     const estoqueMp = Number(row.estoque_mp) || 0;
-    if (disponivel <= 0 && estoqueMp <= 0) return 'Zerado';
-    if (disponivel <= 0) return 'Crítico'; // tem estoque, mas está tudo reservado
-    if (estoqueMp > 0 && disponivel < estoqueMp * 0.3) return 'Atenção';
+    const reservadoMp = Number(row.reservado_mp) || 0;
+    if (estoqueMp <= 0) return 'Zerado';
+    if (reservadoMp >= estoqueMp) return 'Crítico'; // já tem reserva pra tudo que existe
+    if (reservadoMp > estoqueMp * 0.7) return 'Atenção';
     return 'OK';
   };
 
@@ -10910,6 +11097,65 @@ function Almoxarifado() {
 
   const fmtQtd = (v) => Number(v || 0).toLocaleString('pt-BR', { maximumFractionDigits: 0 });
 
+  // Visualização limitada: só código, descrição, disponível e reservado — sem
+  // sincronizar, exportar, KPIs administrativos ou detalhes de processamento.
+  const veTudo = currentUser?.ve_almoxarifado_completo !== false;
+  const filtradosSimples = useMemo(() => {
+    return dados.filter(r => !busca ||
+      String(r.codprod).includes(busca) ||
+      (r.descrprod || '').toLowerCase().includes(busca.toLowerCase())
+    ).sort((a, b) => (Number(b.disponivel_mp) || 0) - (Number(a.disponivel_mp) || 0));
+  }, [dados, busca]);
+
+  if (!veTudo) {
+    return (
+      <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 18, maxWidth: 900 }}>
+        {erro && (
+          <div style={{ background: T.rustSoft, border: `1px solid ${T.rust}33`, borderRadius: 8, padding: '12px 16px', display: 'flex', gap: 10, alignItems: 'center' }}>
+            <AlertTriangle size={16} color={T.rustText} />
+            <div style={{ fontSize: 13, color: T.rustText }}>{erro}</div>
+          </div>
+        )}
+        <FiltroCampoFat label="Buscar código ou descrição">
+          <div style={{ position: 'relative' }}>
+            <Search size={13} style={{ position: 'absolute', left: 9, top: 9, color: T.inkFaint }} />
+            <input value={busca} onChange={e => setBusca(e.target.value)}
+              placeholder="Ex: 10988, PLACA, KLC…"
+              style={{ ...selectStyleFat(300), paddingLeft: 28 }} />
+          </div>
+        </FiltroCampoFat>
+        <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+            <thead>
+              <tr style={{ borderBottom: `1px solid ${T.line}`, background: T.panelAlt }}>
+                <th style={{ ...thFat(), width: 74 }}>Código</th>
+                <th style={thFat()}>Descrição</th>
+                <th style={{ ...thFat(60), textAlign: 'center' }}>Un.</th>
+                <th style={{ ...thFat(110), textAlign: 'right' }}>Disponível</th>
+                <th style={{ ...thFat(110), textAlign: 'right' }}>Reservado</th>
+              </tr>
+            </thead>
+            <tbody>
+              {loading ? (
+                <tr><td colSpan={5} style={{ padding: 40, textAlign: 'center', color: T.inkFaint }}>Carregando…</td></tr>
+              ) : filtradosSimples.length === 0 ? (
+                <tr><td colSpan={5} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Nenhum item encontrado.</td></tr>
+              ) : filtradosSimples.map(r => (
+                <tr key={r.codprod} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                  <td style={{ padding: '10px 12px', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.terracotta }}>{r.codprod}</td>
+                  <td style={{ padding: '10px 12px', maxWidth: 340, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.descrprod}>{r.descrprod}</td>
+                  <td style={{ padding: '10px 12px', textAlign: 'center', color: T.inkFaint }}>{r.codvol || '—'}</td>
+                  <td style={{ padding: '10px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 14, color: T.oliveText }}>{fmtQtd(r.disponivel_mp)}</td>
+                  <td style={{ padding: '10px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, color: Number(r.reservado_mp) > 0 ? T.amberText : T.inkFaint }}>{fmtQtd(r.reservado_mp)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 18, maxWidth: 1400 }}>
 
@@ -10924,8 +11170,7 @@ function Almoxarifado() {
       )}
 
       <div style={{ fontSize: 12.5, color: T.inkFaint, background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 8, padding: '10px 14px' }}>
-        <strong>Disponível</strong> = matéria-prima em estoque menos o que já está reservado pra outros projetos — é o que a produção realmente pode usar agora.
-        <strong> Em processamento</strong> = já foi retirado do estoque e está em uso na produção (não conta como disponível).
+        <strong>Disponível</strong> = Estoque de matéria-prima menos o que já está reservado pra algum projeto — é o que realmente sobra livre pra usar. <strong>Em processamento</strong> = já foi retirado do estoque e está em uso na produção.
       </div>
 
       {/* Sync info + botão manual */}
@@ -11809,6 +12054,7 @@ const TELAS_CATALOGO = [
   { id: 'analise_comercial', label: 'Análise Comercial' },
   { id: 'prospeccao_clientes', label: 'Prospecção de Clientes' },
   { id: 'almoxarifado_fluxo', label: 'Fluxo de Materiais' },
+  { id: 'almoxarifado_fila_atendimento', label: 'Fila de Atendimento' },
   { id: 'pedidosvale',  label: 'Pedidos Vale' },
   { id: 'aberturacotacao', label: 'Abertura de Cotação' },
   { id: 'ranking',      label: 'Ranking de Pontuação' },
@@ -11896,6 +12142,14 @@ function PermissoesManager() {
     setSalvando(false);
   };
 
+  const toggleAlmoxarifadoCompleto = async () => {
+    if (!usuario) return;
+    setSalvando(true);
+    await supabase.from('colaboradores').update({ ve_almoxarifado_completo: !usuario.ve_almoxarifado_completo }).eq('id', usuario.id);
+    await carregar();
+    setSalvando(false);
+  };
+
   return (
     <Panel title="Permissões de acesso por usuário" subtitle="Controla quais telas cada colaborador vê e se a produtividade é própria ou de todos">
       <div style={{ display: 'flex', gap: 20, marginTop: 12, flexWrap: 'wrap' }}>
@@ -11942,6 +12196,11 @@ function PermissoesManager() {
               <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, marginTop: 4 }}>
                 <input type="checkbox" checked={!!usuario.ve_produtividade_completa} disabled={salvando} onChange={toggleProdutividadeCompleta} />
                 Vê produtividade de todo mundo (não só a própria)
+              </label>
+
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5 }}>
+                <input type="checkbox" checked={usuario.ve_almoxarifado_completo !== false} disabled={salvando} onChange={toggleAlmoxarifadoCompleto} />
+                Vê a aba Almoxarifado completa (senão, só código/descrição/disponível/reservado)
               </label>
             </div>
           )}
