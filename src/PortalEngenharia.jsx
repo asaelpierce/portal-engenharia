@@ -10807,17 +10807,17 @@ function Almoxarifado() {
   const [busca, setBusca] = useState('');
   const [grupoFiltro, setGrupoFiltro] = useState('Todos');
   const [statusFiltro, setStatusFiltro] = useState('Todos'); // Todos | Zerado | Crítico | OK
-  const [sortBy, setSortBy] = useState('total_saidas');
+  const [sortBy, setSortBy] = useState('disponivel_mp');
   const [sortDir, setSortDir] = useState('desc');
-  const [detalhe, setDetalhe] = useState(null); // produto selecionado para drill-down por local
-  const [locaisDetalhe, setLocaisDetalhe] = useState([]);
+  const [sincronizando, setSincronizando] = useState(false);
+  const [mensagemSync, setMensagemSync] = useState(null);
 
   const carregar = useCallback(() => {
     setLoading(true);
     setErro(null);
-    supabaseSGQ.from('v_almoxarifado_consolidado').select('*')
+    supabaseSGQ.from('almoxarifado_saldo_mp').select('*')
       .then(({ data, error }) => {
-        if (error) { setErro(`Erro SGQ: ${error.message}`); setLoading(false); return; }
+        if (error) { setErro(`Erro: ${error.message}`); setLoading(false); return; }
         setDados(data || []);
         setLoading(false);
       })
@@ -10832,6 +10832,25 @@ function Almoxarifado() {
     return () => clearInterval(id);
   }, [carregar]);
 
+  const sincronizarAgora = async () => {
+    setSincronizando(true);
+    setMensagemSync(null);
+    try {
+      const res = await fetch(`${SUPABASE_SGQ_URL}/functions/v1/almoxarifado-saldo-mp-sync`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+      }).then(r => r.json());
+      if (res.ok) {
+        setMensagemSync({ ok: true, texto: `${res.produtos_sincronizados} produtos atualizados.` });
+        carregar();
+      } else {
+        setMensagemSync({ ok: false, texto: res.erro || 'Erro desconhecido.' });
+      }
+    } catch (err) {
+      setMensagemSync({ ok: false, texto: String(err.message || err) });
+    }
+    setSincronizando(false);
+  };
+
   const grupos = useMemo(() => {
     const set = new Set(dados.map(d => d.descrgrupoprod).filter(Boolean));
     const destaque = GRUPOS_DESTAQUE.filter(g => set.has(g));
@@ -10839,12 +10858,14 @@ function Almoxarifado() {
     return ['Todos', ...destaque, ...resto];
   }, [dados]);
 
+  // Status baseado no que realmente está DISPONÍVEL pra produção usar
+  // (estoque de matéria-prima menos o que já está reservado pra outros projetos)
   const statusItem = (row) => {
-    const total = Number(row.estoque_total) || 0;
-    const reserv = Number(row.qtd_reservado) || 0;
-    if (total <= 0) return 'Zerado';
-    if (reserv >= total) return 'Crítico';
-    if (reserv > total * 0.7) return 'Atenção';
+    const disponivel = Number(row.disponivel_mp) || 0;
+    const estoqueMp = Number(row.estoque_mp) || 0;
+    if (disponivel <= 0 && estoqueMp <= 0) return 'Zerado';
+    if (disponivel <= 0) return 'Crítico'; // tem estoque, mas está tudo reservado
+    if (estoqueMp > 0 && disponivel < estoqueMp * 0.3) return 'Atenção';
     return 'OK';
   };
 
@@ -10852,8 +10873,7 @@ function Almoxarifado() {
     return dados.filter(r => {
       const matchBusca = !busca ||
         String(r.codprod).includes(busca) ||
-        (r.descrprod || '').toLowerCase().includes(busca.toLowerCase()) ||
-        (r.referencia || '').toLowerCase().includes(busca.toLowerCase());
+        (r.descrprod || '').toLowerCase().includes(busca.toLowerCase());
       const matchGrupo = grupoFiltro === 'Todos' || r.descrgrupoprod === grupoFiltro;
       const st = statusItem(r);
       const matchStatus = statusFiltro === 'Todos' || st === statusFiltro;
@@ -10866,12 +10886,12 @@ function Almoxarifado() {
   }, [dados, busca, grupoFiltro, statusFiltro, sortBy, sortDir]);
 
   const totais = useMemo(() => ({
-    skus:        filtrados.length,
-    zerados:     filtrados.filter(r => Number(r.estoque_total) <= 0).length,
-    criticos:    filtrados.filter(r => { const s = statusItem(r); return s === 'Crítico' || s === 'Atenção'; }).length,
-    totalSaidas: filtrados.reduce((s, r) => s + (Number(r.total_saidas) || 0), 0),
-    ultimaSync:  dados.length ? dados.reduce((latest, r) => {
-      const d = new Date(r.ultima_sync);
+    skus:     filtrados.length,
+    zerados:  filtrados.filter(r => statusItem(r) === 'Zerado').length,
+    criticos: filtrados.filter(r => { const s = statusItem(r); return s === 'Crítico' || s === 'Atenção'; }).length,
+    totalDisponivel: filtrados.reduce((s, r) => s + (Number(r.disponivel_mp) || 0), 0),
+    ultimaSync: dados.length ? dados.reduce((latest, r) => {
+      const d = new Date(r.sincronizado_em);
       return d > latest ? d : latest;
     }, new Date(0)) : null,
   }), [filtrados, dados]);
@@ -10879,20 +10899,6 @@ function Almoxarifado() {
   const handleSort = (col) => {
     if (sortBy === col) setSortDir(d => d === 'desc' ? 'asc' : 'desc');
     else { setSortBy(col); setSortDir('desc'); }
-  };
-
-  const abrirDetalhe = async (row) => {
-    setDetalhe(row);
-    setLocaisDetalhe([]);
-    try {
-      const { data, error } = await supabaseSGQ.from('almoxarifado_estoque')
-        .select('descrlocal, estoque_calculado, qtd_reservado, qtd_entrada, qtd_saida, sincronizado_em')
-        .eq('codprod', row.codprod)
-        .neq('descrlocal', '<SEM LOCAL DE ESTOQUE>');
-      setLocaisDetalhe(error ? [] : (data || []));
-    } catch (_) {
-      setLocaisDetalhe([]);
-    }
   };
 
   const statusColor = (st) => ({
@@ -10911,28 +10917,43 @@ function Almoxarifado() {
         <div style={{ background: T.rustSoft, border: `1px solid ${T.rust}33`, borderRadius: 8, padding: '12px 16px', display: 'flex', gap: 10, alignItems: 'center' }}>
           <AlertTriangle size={16} color={T.rustText} />
           <div>
-            <div style={{ fontSize: 13, fontWeight: 600, color: T.rustText }}>Erro ao carregar dados do SGQ</div>
+            <div style={{ fontSize: 13, fontWeight: 600, color: T.rustText }}>Erro ao carregar saldo de matéria-prima</div>
             <div style={{ fontSize: 12, color: T.inkDim, marginTop: 2 }}>{erro}</div>
           </div>
         </div>
       )}
 
-      {/* Sync info */}
-      {totais.ultimaSync && totais.ultimaSync.getTime() > 0 && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11.5, color: T.inkFaint }}>
-          <RefreshCw size={12} />
-          Sincronizado com Sankhya em {totais.ultimaSync.toLocaleString('pt-BR', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })} · atualização automática a cada hora
+      <div style={{ fontSize: 12.5, color: T.inkFaint, background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 8, padding: '10px 14px' }}>
+        <strong>Disponível</strong> = matéria-prima em estoque menos o que já está reservado pra outros projetos — é o que a produção realmente pode usar agora.
+        <strong> Em processamento</strong> = já foi retirado do estoque e está em uso na produção (não conta como disponível).
+      </div>
+
+      {/* Sync info + botão manual */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
+        {totais.ultimaSync && totais.ultimaSync.getTime() > 0 ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11.5, color: T.inkFaint }}>
+            <RefreshCw size={12} />
+            Sincronizado com Sankhya em {totais.ultimaSync.toLocaleString('pt-BR', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })} · atualização automática a cada 2h
+          </div>
+        ) : <div />}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          {mensagemSync && <span style={{ fontSize: 11, color: mensagemSync.ok ? T.oliveText : T.rustText }}>{mensagemSync.texto}</span>}
+          <button onClick={sincronizarAgora} disabled={sincronizando}
+            style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 700, color: '#fff', background: T.terracotta, border: 'none', borderRadius: 6, padding: '7px 14px', cursor: 'pointer', opacity: sincronizando ? 0.7 : 1 }}>
+            <RefreshCw size={13} className={sincronizando ? 'spin' : ''} />
+            {sincronizando ? 'Sincronizando…' : 'Sincronizar agora'}
+          </button>
         </div>
-      )}
+      </div>
 
       {/* KPIs */}
       <div className="grid-kpis-5" style={{ gridTemplateColumns: 'repeat(auto-fit,minmax(155px,1fr))' }}>
         {[
-          { label: 'Total de SKUs',      value: fmtQtd(totais.skus),        color: T.ink,      icon: Package },
-          { label: 'Zerados',            value: fmtQtd(totais.zerados),     color: totais.zerados > 0 ? T.rustText : T.oliveText, icon: AlertTriangle },
-          { label: 'Críticos / Atenção', value: fmtQtd(totais.criticos),    color: totais.criticos > 0 ? T.amberText : T.oliveText, icon: AlertTriangle },
-          { label: 'Total de saídas',    value: fmtQtd(totais.totalSaidas), color: T.ink,      icon: ArrowDownRight },
-          { label: 'Grupos de produto',  value: grupos.length - 1,           color: T.blueText, icon: Layers },
+          { label: 'Total de SKUs',       value: fmtQtd(totais.skus),           color: T.ink,      icon: Package },
+          { label: 'Zerados',             value: fmtQtd(totais.zerados),        color: totais.zerados > 0 ? T.rustText : T.oliveText, icon: AlertTriangle },
+          { label: 'Críticos / Atenção',  value: fmtQtd(totais.criticos),       color: totais.criticos > 0 ? T.amberText : T.oliveText, icon: AlertTriangle },
+          { label: 'Total disponível',    value: fmtQtd(totais.totalDisponivel), color: T.oliveText, icon: CheckCircle2 },
+          { label: 'Grupos de produto',   value: grupos.length - 1,             color: T.blueText, icon: Layers },
         ].map(k => (
           <div key={k.label} style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '14px 16px', boxShadow: SHADOW_SM }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
@@ -10947,7 +10968,7 @@ function Almoxarifado() {
       {/* Filtros */}
       <Panel>
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-          <FiltroCampoFat label="Buscar código, descrição ou ref.">
+          <FiltroCampoFat label="Buscar código ou descrição">
             <div style={{ position: 'relative' }}>
               <Search size={13} style={{ position: 'absolute', left: 9, top: 9, color: T.inkFaint }} />
               <input value={busca} onChange={e => setBusca(e.target.value)}
@@ -10974,11 +10995,9 @@ function Almoxarifado() {
           <FiltroCampoFat label="Ordenar por">
             <div style={{ position: 'relative' }}>
               <select value={sortBy} onChange={e => { setSortBy(e.target.value); setSortDir('desc'); }} style={selectStyleFat(180)}>
-                <option value="total_saidas">Total saídas</option>
-                <option value="total_entradas">Total entradas</option>
-                <option value="estoque_total">Estoque total</option>
-                <option value="qtd_reservado">Qtd reservado</option>
+                <option value="disponivel_mp">Disponível</option>
                 <option value="estoque_mp">Estoque MP</option>
+                <option value="reservado_mp">Reservado</option>
                 <option value="estoque_processamento">Em processamento</option>
               </select>
               <ChevronDown size={13} style={chevronStyleFat} />
@@ -10997,29 +11016,25 @@ function Almoxarifado() {
                 <th style={thFat()}>Descrição</th>
                 <th style={{ ...thFat(100) }}>Grupo</th>
                 <th style={{ ...thFat(42), textAlign: 'center' }}>Un.</th>
-                <AlmoxSortTh label="Estoque total"   col="estoque_total"         sortBy={sortBy} sortDir={sortDir} onClick={handleSort} />
-                <AlmoxSortTh label="Matéria-prima"   col="estoque_mp"            sortBy={sortBy} sortDir={sortDir} onClick={handleSort} />
-                <AlmoxSortTh label="Em process."     col="estoque_processamento" sortBy={sortBy} sortDir={sortDir} onClick={handleSort} />
-                <AlmoxSortTh label="Reservado"       col="qtd_reservado"         sortBy={sortBy} sortDir={sortDir} onClick={handleSort} />
-                <AlmoxSortTh label="↑ Entradas"      col="total_entradas"        sortBy={sortBy} sortDir={sortDir} onClick={handleSort} />
-                <AlmoxSortTh label="↓ Saídas"        col="total_saidas"          sortBy={sortBy} sortDir={sortDir} onClick={handleSort} />
+                <AlmoxSortTh label="Estoque MP"      col="estoque_mp"             sortBy={sortBy} sortDir={sortDir} onClick={handleSort} />
+                <AlmoxSortTh label="Reservado"       col="reservado_mp"           sortBy={sortBy} sortDir={sortDir} onClick={handleSort} />
+                <AlmoxSortTh label="Disponível"      col="disponivel_mp"          sortBy={sortBy} sortDir={sortDir} onClick={handleSort} />
+                <AlmoxSortTh label="Em process."     col="estoque_processamento"  sortBy={sortBy} sortDir={sortDir} onClick={handleSort} />
                 <th style={{ ...thFat(70), textAlign: 'center' }}>Status</th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={11} style={{ padding: 40, textAlign: 'center', color: T.inkFaint }}>Carregando estoque do SGQ…</td></tr>
+                <tr><td colSpan={8} style={{ padding: 40, textAlign: 'center', color: T.inkFaint }}>Carregando saldo…</td></tr>
               ) : filtrados.length === 0 ? (
-                <tr><td colSpan={11} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Nenhum item encontrado.</td></tr>
+                <tr><td colSpan={8} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Nenhum item encontrado.</td></tr>
               ) : filtrados.map(r => {
                 const st = statusItem(r);
                 const [stColor, stBg] = statusColor(st);
                 const isZerado = st === 'Zerado';
                 return (
-                  <tr key={r.codprod} onClick={() => abrirDetalhe(r)}
-                    style={{ borderBottom: `1px solid ${T.lineSoft}`, cursor: 'pointer', background: isZerado ? `${T.rustSoft}44` : 'transparent' }}
-                    onMouseEnter={e => e.currentTarget.style.background = isZerado ? T.rustSoft : T.panelAlt}
-                    onMouseLeave={e => e.currentTarget.style.background = isZerado ? `${T.rustSoft}44` : 'transparent'}
+                  <tr key={r.codprod}
+                    style={{ borderBottom: `1px solid ${T.lineSoft}`, background: isZerado ? `${T.rustSoft}44` : 'transparent' }}
                   >
                     <td style={{ padding: '9px 12px', fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 12.5, color: T.terracotta }}>{r.codprod}</td>
                     <td style={{ padding: '9px 12px', maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 11.5 }} title={r.descrprod}>{r.descrprod}</td>
@@ -11027,12 +11042,10 @@ function Almoxarifado() {
                       <span style={{ fontSize: 10.5, fontWeight: 600, color: T.blueText, background: T.blueSoft, padding: '2px 7px', borderRadius: 4, whiteSpace: 'nowrap' }}>{r.descrgrupoprod || '—'}</span>
                     </td>
                     <td style={{ padding: '9px 12px', textAlign: 'center', fontSize: 11, color: T.inkFaint, fontWeight: 600 }}>{r.codvol || '—'}</td>
-                    <td style={{ padding: '9px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 13, color: isZerado ? T.rustText : T.ink }}>{fmtQtd(r.estoque_total)}</td>
                     <td style={{ padding: '9px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontSize: 12, color: T.inkDim }}>{fmtQtd(r.estoque_mp)}</td>
+                    <td style={{ padding: '9px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontSize: 12, color: Number(r.reservado_mp) > 0 ? T.amberText : T.inkFaint, fontWeight: Number(r.reservado_mp) > 0 ? 600 : 400 }}>{fmtQtd(r.reservado_mp)}</td>
+                    <td style={{ padding: '9px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 13, color: isZerado ? T.rustText : T.oliveText }}>{fmtQtd(r.disponivel_mp)}</td>
                     <td style={{ padding: '9px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontSize: 12, color: T.inkDim }}>{fmtQtd(r.estoque_processamento)}</td>
-                    <td style={{ padding: '9px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontSize: 12, color: Number(r.qtd_reservado) > 0 ? T.amberText : T.inkFaint, fontWeight: Number(r.qtd_reservado) > 0 ? 600 : 400 }}>{fmtQtd(r.qtd_reservado)}</td>
-                    <td style={{ padding: '9px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontSize: 12, color: T.oliveText }}>{fmtQtd(r.total_entradas)}</td>
-                    <td style={{ padding: '9px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontSize: 12, color: T.rustText }}>{fmtQtd(r.total_saidas)}</td>
                     <td style={{ padding: '9px 12px', textAlign: 'center' }}>
                       <span style={{ fontSize: 10, fontWeight: 700, padding: '3px 7px', borderRadius: 4, background: stBg, color: stColor, whiteSpace: 'nowrap' }}>{st}</span>
                     </td>
@@ -11044,96 +11057,14 @@ function Almoxarifado() {
         </div>
         <div style={{ padding: '10px 16px', borderTop: `1px solid ${T.line}`, fontSize: 11, color: T.inkFaint, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <span>
-            {filtrados.length} SKU{filtrados.length !== 1 ? 's' : ''} · Clique em um item para ver movimentação ·
+            {filtrados.length} SKU{filtrados.length !== 1 ? 's' : ''} ·
             <span style={{ color: T.rustText, fontWeight: 600 }}> Zerado</span> ·
             <span style={{ color: T.amberText, fontWeight: 600 }}> Crítico</span> ·
             <span style={{ color: T.oliveText, fontWeight: 600 }}> OK</span>
           </span>
-          <BotaoExportar small onClick={() => exportCSV(filtrados, 'almoxarifado_estoque.csv', ['codprod','descrprod','descrgrupoprod','codvol','estoque_total','estoque_mp','estoque_processamento','qtd_reservado','total_entradas','total_saidas'])} />
+          <BotaoExportar small onClick={() => exportCSV(filtrados, 'almoxarifado_saldo_mp.csv', ['codprod','descrprod','descrgrupoprod','codvol','estoque_mp','reservado_mp','disponivel_mp','estoque_processamento'])} />
         </div>
       </div>
-
-      {/* Modal de detalhe por local */}
-      {detalhe && (
-        <Overlay onClose={() => { setDetalhe(null); setLocaisDetalhe([]); }}>
-          <div className="scale-in" style={{
-            background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, width: '100%', maxWidth: 720,
-            maxHeight: '85vh', display: 'flex', flexDirection: 'column', overflow: 'hidden', boxShadow: SHADOW_XL,
-          }}>
-            <div style={{ padding: '18px 22px', borderBottom: `1px solid ${T.line}`, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-              <div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <span style={{ fontFamily: FONT_DISPLAY, fontSize: 20, fontWeight: 700, color: T.terracotta }}>{detalhe.codprod}</span>
-                  <span style={{ fontSize: 10.5, fontWeight: 700, padding: '3px 8px', borderRadius: 4, background: T.blueSoft, color: T.blueText }}>{detalhe.descrgrupoprod}</span>
-                  <span style={{ fontSize: 11, color: T.inkFaint }}>{detalhe.codvol}</span>
-                </div>
-                <p style={{ fontSize: 12, color: T.inkDim, margin: '5px 0 0', maxWidth: 520 }}>{detalhe.descrprod}</p>
-              </div>
-              <button onClick={() => { setDetalhe(null); setLocaisDetalhe([]); }} style={{ background: 'transparent', border: 'none', color: T.inkFaint }}><X size={20} /></button>
-            </div>
-
-            {/* Totais do produto */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, padding: '16px 22px', borderBottom: `1px solid ${T.line}` }}>
-              {[
-                { label: 'Estoque total',   value: fmtQtd(detalhe.estoque_total),   color: T.ink },
-                { label: 'Reservado',       value: fmtQtd(detalhe.qtd_reservado),   color: T.amberText },
-                { label: 'Total entradas',  value: fmtQtd(detalhe.total_entradas),  color: T.oliveText },
-                { label: 'Total saídas',    value: fmtQtd(detalhe.total_saidas),    color: T.rustText },
-              ].map(k => (
-                <div key={k.label} style={{ textAlign: 'center', background: T.panelAlt, borderRadius: 8, padding: '10px 8px' }}>
-                  <div style={{ fontSize: 10, color: T.inkFaint, fontWeight: 600, marginBottom: 4 }}>{k.label}</div>
-                  <div style={{ fontFamily: FONT_DISPLAY, fontSize: 20, fontWeight: 700, color: k.color }}>{k.value}</div>
-                </div>
-              ))}
-            </div>
-
-            {/* Movimentação por local */}
-            <div style={{ overflow: 'auto', flex: 1, padding: '6px 0' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
-                <thead>
-                  <tr style={{ borderBottom: `1px solid ${T.line}`, position: 'sticky', top: 0, background: T.panel }}>
-                    <th style={thFat()}>Local de estoque</th>
-                    <th style={thFat(0, 'right')}>Calculado</th>
-                    <th style={thFat(0, 'right')}>Reservado</th>
-                    <th style={thFat(0, 'right')}>↑ Entradas</th>
-                    <th style={thFat(0, 'right')}>↓ Saídas</th>
-                    <th style={thFat(0, 'right')}>Giro</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {locaisDetalhe.length === 0 ? (
-                    <tr><td colSpan={6} style={{ padding: 24, textAlign: 'center', color: T.inkFaint }}>Carregando…</td></tr>
-                  ) : locaisDetalhe.map(l => {
-                    const ent = Number(l.qtd_entrada) || 0;
-                    const sai = Math.abs(Number(l.qtd_saida) || 0);
-                    const giro = ent > 0 ? Math.min(Math.round((sai / ent) * 100), 100) : 0;
-                    return (
-                      <tr key={l.descrlocal} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
-                        <td style={{ padding: '11px 12px', fontWeight: 600 }}>{l.descrlocal}</td>
-                        <td style={{ padding: '11px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 700 }}>{fmtQtd(l.estoque_calculado)}</td>
-                        <td style={{ padding: '11px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, color: T.amberText }}>{fmtQtd(l.qtd_reservado)}</td>
-                        <td style={{ padding: '11px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, color: T.oliveText }}>{fmtQtd(ent)}</td>
-                        <td style={{ padding: '11px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, color: T.rustText }}>{fmtQtd(sai)}</td>
-                        <td style={{ padding: '11px 12px' }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                            <div style={{ flex: 1, background: T.lineSoft, height: 5, borderRadius: 3, overflow: 'hidden' }}>
-                              <div style={{ width: `${giro}%`, height: '100%', background: giro > 80 ? T.terracotta : T.olive, borderRadius: 3 }} />
-                            </div>
-                            <span style={{ fontSize: 10.5, fontWeight: 700, color: T.inkDim, width: 32, textAlign: 'right' }}>{giro}%</span>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-            <div style={{ padding: '10px 22px', borderTop: `1px solid ${T.line}`, fontSize: 11, color: T.inkFaint }}>
-              Giro = saídas ÷ entradas acumuladas · Sync: {new Date(detalhe.ultima_sync).toLocaleString('pt-BR')}
-            </div>
-          </div>
-        </Overlay>
-      )}
     </div>
   );
 }
