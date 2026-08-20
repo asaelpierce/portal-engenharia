@@ -4655,13 +4655,40 @@ function MonitoramentoOP() {
   const [filtroDataInicio, setFiltroDataInicio] = useState('');
   const [filtroDataFim, setFiltroDataFim] = useState('');
 
-  const carregarSolicitacoes = useCallback(async () => {
-    setLoadingSolic(true);
+  const carregarSolicitacoes = useCallback(async (silencioso = false) => {
+    if (!silencioso) setLoadingSolic(true);
     const { data } = await supabase.from('solicitacoes_compra_planner').select('*').order('data_solicitacao', { ascending: false });
     setSolicitacoes(data || []);
-    setLoadingSolic(false);
+    if (!silencioso) setLoadingSolic(false);
   }, []);
   useEffect(() => { if (abaMonitoramento === 'cotacao') carregarSolicitacoes(); }, [abaMonitoramento, carregarSolicitacoes]);
+  // Atualização automática da tela a cada 15s, enquanto a aba estiver aberta — sem piscar loading
+  useEffect(() => {
+    if (abaMonitoramento !== 'cotacao') return;
+    const id = setInterval(() => carregarSolicitacoes(true), 15000);
+    return () => clearInterval(id);
+  }, [abaMonitoramento, carregarSolicitacoes]);
+
+  const [sincronizandoSankhya, setSincronizandoSankhya] = useState(false);
+  const [mensagemSyncSankhya, setMensagemSyncSankhya] = useState(null);
+  const sincronizarComSankhya = async () => {
+    setSincronizandoSankhya(true);
+    setMensagemSyncSankhya(null);
+    try {
+      const res = await fetch(`${SUPABASE_URL}/functions/v1/sync-solicitacoes-compra-planner`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+      }).then(r => r.json());
+      if (res.ok) {
+        setMensagemSyncSankhya({ ok: true, texto: `${res.registros_unicos} solicitações no Sankhya, ${res.upserts} atualizadas.` });
+        await carregarSolicitacoes();
+      } else {
+        setMensagemSyncSankhya({ ok: false, texto: res.erro || 'Erro desconhecido.' });
+      }
+    } catch (err) {
+      setMensagemSyncSankhya({ ok: false, texto: String(err.message || err) });
+    }
+    setSincronizandoSankhya(false);
+  };
 
   const solicitacoesFiltradas = useMemo(() => {
     let lista = solicitacoes;
@@ -4916,7 +4943,19 @@ function MonitoramentoOP() {
       </div>
 
       {abaMonitoramento === 'cotacao' && (
-        <Panel subtitle="Solicitações de compra (Kaio.R e Alexandre.P) que precisam ter um Card criado no Microsoft Planner — clique em 'Marcar' e o Power Automate cria o card automaticamente.">
+        <Panel subtitle="Solicitações de compra (Kaio.R e Alexandre.P) que precisam ter um Card criado no Microsoft Planner — clique em 'Marcar' e o Power Automate cria o card automaticamente. A lista atualiza sozinha a cada 15s."
+          right={
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
+              <button onClick={sincronizarComSankhya} disabled={sincronizandoSankhya}
+                style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 700, color: '#fff', background: T.terracotta, border: 'none', borderRadius: 6, padding: '7px 14px', cursor: 'pointer', opacity: sincronizandoSankhya ? 0.7 : 1 }}>
+                <RefreshCw size={13} className={sincronizandoSankhya ? 'spin' : ''} />
+                {sincronizandoSankhya ? 'Buscando…' : 'Sincronizar com Sankhya agora'}
+              </button>
+              {mensagemSyncSankhya && (
+                <span style={{ fontSize: 10.5, color: mensagemSyncSankhya.ok ? T.oliveText : T.rustText }}>{mensagemSyncSankhya.texto}</span>
+              )}
+            </div>
+          }>
           {solicitacoes.some(s => s.planner_excluido) && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: T.rustSoft, color: T.rustText, borderRadius: 8, padding: '10px 14px', marginBottom: 14, fontSize: 12.5, fontWeight: 600 }}>
               <AlertTriangle size={15} />
