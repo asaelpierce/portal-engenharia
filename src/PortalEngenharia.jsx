@@ -557,7 +557,7 @@ function PortalConteudo({ currentUser, session }) {
           {renderTab('almoxarifado', <TabErrorBoundary tab="Almoxarifado"><Almoxarifado currentUser={currentUser} /></TabErrorBoundary>)}
           {renderTab('equipamentos', <TabErrorBoundary tab="Equipamentos de Terceiros"><EquipamentosTerceiros /></TabErrorBoundary>)}
           {renderTab('acompanhamento_servico', <TabErrorBoundary tab="Acompanhamento de Serviço"><AcompanhamentoServico /></TabErrorBoundary>)}
-          {renderTab('monitoramento_op', <TabErrorBoundary tab="Monitoramento OP"><MonitoramentoOP /></TabErrorBoundary>)}
+          {renderTab('monitoramento_op', <TabErrorBoundary tab="Monitoramento OP"><MonitoramentoOP currentUser={currentUser} /></TabErrorBoundary>)}
           {renderTab('verificacao_projetos', <TabErrorBoundary tab="Verificação de Projetos"><VerificacaoProjetos currentUser={currentUser} /></TabErrorBoundary>)}
           {renderTab('analise_comercial', <TabErrorBoundary tab="Análise Comercial"><AnaliseComercial /></TabErrorBoundary>)}
           {renderTab('prospeccao_clientes', <TabErrorBoundary tab="Prospecção de Clientes"><ProspeccaoClientes /></TabErrorBoundary>)}
@@ -4791,7 +4791,7 @@ function VerificacaoProjetos({ currentUser }) {
   );
 }
 
-function MonitoramentoOP() {
+function MonitoramentoOP({ currentUser }) {
   const STATUS_PLANNER_LABEL = { notStarted: 'Não iniciado', inProgress: 'Em andamento', completed: 'Concluído' };
   // IDs reais dos buckets do quadro "Gestão Comercial" no Planner — o portal
   // manda o ID direto na solicitação de mover card, sem precisar o Power
@@ -4883,7 +4883,20 @@ function MonitoramentoOP() {
     }
     setCardsConhecPronto(lista);
     setLoadingConhecPronto(false);
-  }, []);
+
+    // Marca "visto" automaticamente (igual WhatsApp) pra quem ainda não foi visto —
+    // não espera clique nenhum, só de aparecer na tela já conta.
+    const naoVistos = lista.filter(c => !c.visto_em && !c.data_finalizado);
+    if (naoVistos.length) {
+      const agora = new Date().toISOString();
+      await supabase.from('monitoramento_op_cards_planner')
+        .update({ visto_em: agora, visto_por: currentUser?.nome || null })
+        .in('id', naoVistos.map(c => c.id));
+      setCardsConhecPronto(prev => prev.map(c =>
+        naoVistos.some(nv => nv.id === c.id) ? { ...c, visto_em: agora, visto_por: currentUser?.nome || null } : c
+      ));
+    }
+  }, [currentUser]);
   useEffect(() => { if (abaMonitoramento === 'conhecimento_pronto') carregarConhecPronto(); }, [abaMonitoramento, carregarConhecPronto]);
   useEffect(() => {
     if (abaMonitoramento !== 'conhecimento_pronto') return;
@@ -5513,8 +5526,11 @@ function MonitoramentoOP() {
                   <div style={{ fontSize: 12, color: T.inkDim, marginTop: 2 }}>{c.planner_titulo}</div>
                   <div style={{ fontSize: 11, color: T.inkFaint, marginTop: 4 }}>
                     {c.data_abertura_cp && `Aberto em ${fmtData(c.data_abertura_cp)} · `}
-                    {c.ciente_em && `Ciente em ${fmtData(c.ciente_em)} (${c.ciente_por || '?'}) · `}
-                    {c.data_iniciado ? `Iniciado em ${fmtData(c.data_iniciado)}` : c.ciente_em ? 'Aguardando iniciar' : 'Ainda não visto'}
+                    {c.visto_em && (
+                      <span title={`Visto por ${c.visto_por || '?'}`}>👁 Visto em {fmtData(c.visto_em)} · </span>
+                    )}
+                    {c.ciente_em && `✓ Ciente em ${fmtData(c.ciente_em)} (${c.ciente_por || '?'}) · `}
+                    {c.data_iniciado ? `Iniciado em ${fmtData(c.data_iniciado)}` : c.ciente_em ? 'Aguardando iniciar' : c.visto_em ? 'Visto, aguardando confirmação' : 'Ainda não visto'}
                     {c.projetista && ` · Projetista: ${c.projetista}`}
                     {c.data_prevista_finalizacao && ` · Previsto: ${fmtData(c.data_prevista_finalizacao)}`}
                     {c.data_finalizado && ` · Finalizado em ${fmtData(c.data_finalizado)} · Tempo: ${fmtHoras(c.horas_gastas)}`}
