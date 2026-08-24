@@ -4823,6 +4823,30 @@ function MonitoramentoOP() {
     return lista;
   }, [cardsBrOp, filtroCardBrOp, buscaCardBrOp]);
 
+  // ── Candidatos a ter a OP escrita na observação — nada acontece sem confirmação manual ──
+  const [candidatosObs, setCandidatosObs] = useState([]);
+  const [loadingCandidatosObs, setLoadingCandidatosObs] = useState(true);
+  const [confirmandoObs, setConfirmandoObs] = useState(null);
+  const carregarCandidatosObs = useCallback(async () => {
+    setLoadingCandidatosObs(true);
+    const { data } = await supabase.from('v_candidatos_atualizar_observacao').select('*');
+    setCandidatosObs(data || []);
+    setLoadingCandidatosObs(false);
+  }, []);
+  useEffect(() => { if (abaMonitoramento === 'cards_br_op') carregarCandidatosObs(); }, [abaMonitoramento, carregarCandidatosObs]);
+
+  const confirmarAdicionarOp = async (candidato) => {
+    setConfirmandoObs(candidato.planner_task_id);
+    await supabase.from('solicitacoes_atualizar_observacao_planner').insert({
+      planner_task_id: candidato.planner_task_id,
+      br: candidato.br,
+      op_para_adicionar: candidato.ops_encontradas,
+      status: 'pendente',
+    });
+    await carregarCandidatosObs();
+    setConfirmandoObs(null);
+  };
+
   // ── Aba "Conhecimento Pronto" — fluxo Iniciar → Finalizar → move card automático ──
   const [cardsConhecPronto, setCardsConhecPronto] = useState([]);
   const [loadingConhecPronto, setLoadingConhecPronto] = useState(true);
@@ -4874,6 +4898,113 @@ function MonitoramentoOP() {
     if (h == null) return '—';
     if (h < 1) return `${Math.round(h * 60)} min`;
     return `${h.toFixed(1)} h`;
+  };
+
+  const [cardsTravados, setCardsTravados] = useState([]);
+  const carregarCardsTravados = useCallback(async () => {
+    const { data } = await supabase.from('v_cards_movimentacao_travada').select('*');
+    setCardsTravados(data || []);
+  }, []);
+  useEffect(() => { if (abaMonitoramento === 'conhecimento_pronto') carregarCardsTravados(); }, [abaMonitoramento, carregarCardsTravados]);
+
+  // ── Aba "Verificação de OP's Geradas" — Iniciar/Pausar/Finalizar + mostra as OPs reais do BR ──
+  const [cardsOpsGeradas, setCardsOpsGeradas] = useState([]);
+  const [loadingOpsGeradas, setLoadingOpsGeradas] = useState(true);
+  const [opsPorBr, setOpsPorBr] = useState({}); // br -> [ops]
+  const [modalPendencia, setModalPendencia] = useState(null);
+  const [tick, setTick] = useState(0); // força recálculo do tempo ao vivo a cada segundo
+  const carregarOpsGeradas = useCallback(async () => {
+    setLoadingOpsGeradas(true);
+    const { data } = await supabase.from('v_monitoramento_op_cards_planner').select('*')
+      .eq('bucket_atual', "OP's Geradas").eq('planner_excluido', false)
+      .order('br');
+    setCardsOpsGeradas(data || []);
+    const brs = [...new Set((data || []).map(c => c.br).filter(Boolean))];
+    if (brs.length) {
+      const { data: ops } = await supabase.from('almoxarifado_op_materiais').select('br,op').in('br', brs);
+      const agrupado = {};
+      (ops || []).forEach(o => { (agrupado[o.br] = agrupado[o.br] || new Set()).add(o.op); });
+      setOpsPorBr(Object.fromEntries(Object.entries(agrupado).map(([br, s]) => [br, [...s]])));
+    }
+    setLoadingOpsGeradas(false);
+  }, []);
+  useEffect(() => { if (abaMonitoramento === 'conhecimento_pronto') carregarOpsGeradas(); }, [abaMonitoramento, carregarOpsGeradas]);
+  useEffect(() => {
+    if (abaMonitoramento !== 'conhecimento_pronto') return;
+    const id = setInterval(() => carregarOpsGeradas(), 30000);
+    return () => clearInterval(id);
+  }, [abaMonitoramento, carregarOpsGeradas]);
+  // Ticker de 1s só pra atualizar o cronômetro visual dos que estão "em andamento"
+  useEffect(() => {
+    if (abaMonitoramento !== 'conhecimento_pronto') return;
+    const id = setInterval(() => setTick(t => t + 1), 1000);
+    return () => clearInterval(id);
+  }, [abaMonitoramento]);
+
+  const iniciarOuRetomarVerificacao = async (card) => {
+    await supabase.from('monitoramento_op_cards_planner').update({
+      status_verificacao_op: 'em_andamento',
+      ultimo_inicio_verificacao: new Date().toISOString(),
+    }).eq('id', card.id);
+    await carregarOpsGeradas();
+  };
+
+  const pausarVerificacao = async (card) => {
+    const segundosRodados = card.ultimo_inicio_verificacao ? Math.floor((Date.now() - new Date(card.ultimo_inicio_verificacao).getTime()) / 1000) : 0;
+    await supabase.from('monitoramento_op_cards_planner').update({
+      status_verificacao_op: 'pausado',
+      tempo_acumulado_segundos: (card.tempo_acumulado_segundos || 0) + segundosRodados,
+      ultimo_inicio_verificacao: null,
+    }).eq('id', card.id);
+    await carregarOpsGeradas();
+  };
+
+  const finalizarVerificacao = async (card) => {
+    const segundosRodados = card.ultimo_inicio_verificacao ? Math.floor((Date.now() - new Date(card.ultimo_inicio_verificacao).getTime()) / 1000) : 0;
+    await supabase.from('monitoramento_op_cards_planner').update({
+      status_verificacao_op: 'finalizado',
+      tempo_acumulado_segundos: (card.tempo_acumulado_segundos || 0) + segundosRodados,
+      ultimo_inicio_verificacao: null,
+      finalizado_verificacao_em: new Date().toISOString(),
+    }).eq('id', card.id);
+    await supabase.from('solicitacoes_mover_card_planner').insert({
+      planner_task_id: card.planner_task_id,
+      br: card.br,
+      bucket_destino: 'Finaliza processo',
+      status: 'pendente',
+    });
+    await carregarOpsGeradas();
+  };
+
+  const sinalizarPendencia = async (card, observacao) => {
+    const segundosRodados = card.ultimo_inicio_verificacao ? Math.floor((Date.now() - new Date(card.ultimo_inicio_verificacao).getTime()) / 1000) : 0;
+    await supabase.from('monitoramento_op_cards_planner').update({
+      status_verificacao_op: 'pendencia',
+      tempo_acumulado_segundos: (card.tempo_acumulado_segundos || 0) + segundosRodados,
+      ultimo_inicio_verificacao: null,
+      observacao_duvida: observacao || null,
+    }).eq('id', card.id);
+    await supabase.from('solicitacoes_mover_card_planner').insert({
+      planner_task_id: card.planner_task_id,
+      br: card.br,
+      bucket_destino: 'Dúvidas Técnicas',
+      status: 'pendente',
+    });
+    setModalPendencia(null);
+    await carregarOpsGeradas();
+  };
+
+  const fmtCronometro = (segundos) => {
+    const s = Math.max(0, Math.floor(segundos));
+    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
+  };
+  const tempoAoVivo = (card) => {
+    const base = card.tempo_acumulado_segundos || 0;
+    if (card.status_verificacao_op === 'em_andamento' && card.ultimo_inicio_verificacao) {
+      return base + Math.floor((Date.now() - new Date(card.ultimo_inicio_verificacao).getTime()) / 1000);
+    }
+    return base;
   };
 
   const carregarSolicitacoes = useCallback(async (silencioso = false) => {
@@ -5151,7 +5282,7 @@ function MonitoramentoOP() {
     <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
 
       <div style={{ display: 'flex', gap: 4, borderBottom: `1px solid ${T.line}` }}>
-        {[{ id: 'op', label: 'Monitoramento de OP' }, { id: 'cotacao', label: `Cotação — Card no Planner${solicitacoes.filter(s => !s.card_planner_solicitado).length ? ` (${solicitacoes.filter(s => !s.card_planner_solicitado).length})` : ''}` }, { id: 'cards_br_op', label: `Cards BR/OP (Comercial)${cardsBrOp.filter(c => !c.op).length ? ` (${cardsBrOp.filter(c => !c.op).length} sem OP)` : ''}` }, { id: 'conhecimento_pronto', label: `Conhecimento Pronto${cardsConhecPronto.filter(c => !c.data_finalizado).length ? ` (${cardsConhecPronto.filter(c => !c.data_finalizado).length})` : ''}` }].map(aba => (
+        {[{ id: 'op', label: 'Monitoramento de OP' }, { id: 'cotacao', label: `Cotação — Card no Planner${solicitacoes.filter(s => !s.card_planner_solicitado).length ? ` (${solicitacoes.filter(s => !s.card_planner_solicitado).length})` : ''}` }, { id: 'cards_br_op', label: `Cards BR/OP (Comercial)${cardsBrOp.filter(c => !c.op).length ? ` (${cardsBrOp.filter(c => !c.op).length} sem OP)` : ''}` }, { id: 'conhecimento_pronto', label: `Conhecimento Pronto${(cardsConhecPronto.filter(c => !c.data_finalizado).length + cardsOpsGeradas.filter(c => c.status_verificacao_op !== 'finalizado').length) ? ` (${cardsConhecPronto.filter(c => !c.data_finalizado).length + cardsOpsGeradas.filter(c => c.status_verificacao_op !== 'finalizado').length})` : ''}` }].map(aba => (
           <button key={aba.id} onClick={() => setAbaMonitoramento(aba.id)}
             style={{
               background: 'none', border: 'none', cursor: 'pointer', padding: '10px 16px', fontSize: 13, fontWeight: 600,
@@ -5299,6 +5430,21 @@ function MonitoramentoOP() {
 
       {abaMonitoramento === 'conhecimento_pronto' && (
         <Panel subtitle="Cards na coluna 'Engenharia - Conhecimento Pronto' — clica em Iniciar quando começar o projeto, e Finalizar quando terminar. Ao finalizar, o card é movido automaticamente no Planner (via Power Automate).">
+          {cardsTravados.length > 0 && (
+            <div style={{ background: T.rustSoft, border: `1px solid ${T.rust}33`, borderRadius: 8, padding: '12px 16px', marginBottom: 14 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                <AlertTriangle size={16} color={T.rustText} />
+                <strong style={{ fontSize: 13, color: T.rustText }}>{cardsTravados.length} card(s) travado(s) — pediu pra mover mas o card ainda não chegou no destino há mais de 1,5 dia</strong>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                {cardsTravados.map(t => (
+                  <div key={t.solicitacao_id} style={{ fontSize: 12, color: T.inkDim }}>
+                    <strong style={{ fontFamily: FONT_DISPLAY, color: T.blueText }}>{t.br}</strong> — devia estar em "<strong>{t.bucket_destino}</strong>", mas ainda está em "{t.bucket_atual || '?'}" (pedido há {fmtHoras(t.horas_desde_solicitacao)})
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             {loadingConhecPronto ? (
               <div style={{ textAlign: 'center', padding: 30, color: T.inkFaint }}>Carregando…</div>
@@ -5365,8 +5511,144 @@ function MonitoramentoOP() {
         </Overlay>
       )}
 
+      {abaMonitoramento === 'conhecimento_pronto' && (
+        <>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '22px 0 4px' }}>
+            <span style={{ fontFamily: FONT_DISPLAY, fontSize: 13, fontWeight: 700, color: T.inkFaint, textTransform: 'uppercase', letterSpacing: 0.5 }}>Etapa 2 — Verificação de OP's Geradas</span>
+            <div style={{ flex: 1, height: 1, background: T.line }} />
+          </div>
+          {cardsOpsGeradas.filter(c => c.status_verificacao_op !== 'finalizado' && (opsPorBr[c.br] || []).length === 0 && c.bucket_atualizado_em && (Date.now() - new Date(c.bucket_atualizado_em).getTime()) > 1.5 * 24 * 3600 * 1000).length > 0 && (
+            <div style={{ background: T.rustSoft, border: `1px solid ${T.rust}33`, borderRadius: 8, padding: '12px 16px', marginBottom: 14 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <AlertTriangle size={16} color={T.rustText} />
+                <strong style={{ fontSize: 13, color: T.rustText }}>
+                  {cardsOpsGeradas.filter(c => c.status_verificacao_op !== 'finalizado' && (opsPorBr[c.br] || []).length === 0 && c.bucket_atualizado_em && (Date.now() - new Date(c.bucket_atualizado_em).getTime()) > 1.5 * 24 * 3600 * 1000).length} BR(s) em "OP's Geradas" há mais de 1,5 dia sem nenhuma OP sincronizada ainda — vale conferir se está tudo certo
+                </strong>
+              </div>
+            </div>
+          )}
+        </>
+      )}
+
+      {abaMonitoramento === 'conhecimento_pronto' && (
+        <Panel subtitle="Cards na coluna 'OP's Geradas' — confira as OPs que já existem pra esse BR (pode ter mais de uma) antes de decidir finalizar. Só você decide quando está completo — o sistema nunca fecha isso sozinho.">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {loadingOpsGeradas ? (
+              <div style={{ textAlign: 'center', padding: 30, color: T.inkFaint }}>Carregando…</div>
+            ) : cardsOpsGeradas.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: 40, color: T.inkFaint, fontSize: 13 }}>Nenhum card nessa coluna no momento.</div>
+            ) : cardsOpsGeradas.map(c => {
+              const ops = opsPorBr[c.br] || [];
+              const tempo = tempoAoVivo(c);
+              return (
+                <div key={c.id} style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 10 }}>
+                    <div>
+                      <div style={{ fontSize: 14, fontWeight: 700 }}><span style={{ fontFamily: FONT_DISPLAY, color: T.blueText }}>{c.br}</span></div>
+                      <div style={{ fontSize: 12, color: T.inkDim, marginTop: 2 }}>{c.planner_titulo}</div>
+                    </div>
+                    <div style={{ fontFamily: FONT_DISPLAY, fontSize: 20, fontWeight: 700, color: c.status_verificacao_op === 'em_andamento' ? T.terracotta : T.inkFaint }}>
+                      {fmtCronometro(tempo)}
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: 11.5, color: T.inkFaint, fontWeight: 600 }}>OPs encontradas pra esse BR:</span>
+                    {ops.length === 0 ? (
+                      <span style={{ fontSize: 10.5, fontWeight: 700, color: T.amberText, background: T.amberSoft, padding: '3px 8px', borderRadius: 4 }}>⚠ Nenhuma OP sincronizada ainda</span>
+                    ) : ops.map(op => (
+                      <span key={op} style={{ fontSize: 11, fontWeight: 700, fontFamily: FONT_DISPLAY, color: T.oliveText, background: T.oliveSoft, padding: '3px 9px', borderRadius: 4 }}>{op}</span>
+                    ))}
+                  </div>
+
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', borderTop: `1px solid ${T.lineSoft}`, paddingTop: 10, flexWrap: 'wrap' }}>
+                    {c.status_verificacao_op === 'nao_iniciado' && (
+                      <button onClick={() => iniciarOuRetomarVerificacao(c)}
+                        style={{ fontSize: 12, fontWeight: 700, color: '#fff', background: T.blueText, border: 'none', borderRadius: 6, padding: '8px 16px', cursor: 'pointer' }}>
+                        ▶ Iniciar
+                      </button>
+                    )}
+                    {c.status_verificacao_op === 'em_andamento' && (
+                      <button onClick={() => pausarVerificacao(c)}
+                        style={{ fontSize: 12, fontWeight: 700, color: '#fff', background: T.amberText, border: 'none', borderRadius: 6, padding: '8px 16px', cursor: 'pointer' }}>
+                        ⏸ Pausar
+                      </button>
+                    )}
+                    {c.status_verificacao_op === 'pausado' && (
+                      <button onClick={() => iniciarOuRetomarVerificacao(c)}
+                        style={{ fontSize: 12, fontWeight: 700, color: '#fff', background: T.blueText, border: 'none', borderRadius: 6, padding: '8px 16px', cursor: 'pointer' }}>
+                        ▶ Retomar
+                      </button>
+                    )}
+                    {(c.status_verificacao_op === 'em_andamento' || c.status_verificacao_op === 'pausado') && (
+                      <>
+                        <button onClick={() => finalizarVerificacao(c)}
+                          style={{ fontSize: 12, fontWeight: 700, color: '#fff', background: T.oliveText, border: 'none', borderRadius: 6, padding: '8px 16px', cursor: 'pointer' }}>
+                          ✓ Finalizar
+                        </button>
+                        <button onClick={() => setModalPendencia(c)}
+                          style={{ fontSize: 12, fontWeight: 600, color: T.rustText, background: 'transparent', border: `1px solid ${T.rust}55`, borderRadius: 6, padding: '8px 14px', cursor: 'pointer' }}>
+                          ⚠ Sinalizar pendência
+                        </button>
+                      </>
+                    )}
+                    {c.status_verificacao_op === 'pendencia' && (
+                      <span style={{ fontSize: 10.5, fontWeight: 700, color: T.rustText, background: T.rustSoft, padding: '4px 10px', borderRadius: 4 }}>⚠ Movido pra Dúvidas Técnicas</span>
+                    )}
+                    {c.status_verificacao_op === 'finalizado' && (
+                      <span style={{ fontSize: 10.5, fontWeight: 700, color: T.oliveText, background: T.oliveSoft, padding: '4px 10px', borderRadius: 4 }}>✓ Finalizado — movido pra Finaliza processo</span>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </Panel>
+      )}
+
+      {modalPendencia && (
+        <Overlay onClose={() => setModalPendencia(null)}>
+          <div className="scale-in" style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, width: '100%', maxWidth: 460, padding: 24, boxShadow: '0 24px 60px rgba(0,0,0,.18)' }}>
+            <h3 style={{ fontFamily: FONT_DISPLAY, fontSize: 17, fontWeight: 700, margin: '0 0 4px' }}>Sinalizar pendência — {modalPendencia.br}</h3>
+            <p style={{ fontSize: 12.5, color: T.inkFaint, margin: '0 0 16px' }}>Descreve rapidamente o que está pendente:</p>
+            <textarea id="obs-pendencia-textarea" rows={3} placeholder="Ex: falta confirmar quantidade com o cliente…"
+              style={{ ...inputStyle(), width: '100%', resize: 'vertical', marginBottom: 14 }} />
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button onClick={() => sinalizarPendencia(modalPendencia, document.getElementById('obs-pendencia-textarea').value)}
+                style={{ fontSize: 13, fontWeight: 700, color: '#fff', background: T.rustText, border: 'none', borderRadius: 8, padding: '10px 18px', cursor: 'pointer' }}>
+                Confirmar e mover
+              </button>
+              <button onClick={() => setModalPendencia(null)}
+                style={{ fontSize: 12.5, fontWeight: 600, color: T.inkFaint, background: 'transparent', border: `1px solid ${T.line}`, borderRadius: 8, padding: '10px 16px', cursor: 'pointer' }}>
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </Overlay>
+      )}
+
       {abaMonitoramento === 'cards_br_op' && (
-        <Panel subtitle="Cards do quadro 'Gestão Comercial' no Planner — o BR vem do título, a OP vem da observação (preenchida depois pelos meninos). Aqui dá pra ver quem ainda não teve a OP preenchida.">
+        <>
+          {candidatosObs.length > 0 && (
+            <Panel subtitle="Achamos OP nova pra esses BR — nada é escrito no Planner sem você confirmar aqui, um por um.">
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {candidatosObs.map(c => (
+                  <div key={c.planner_task_id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, background: T.oliveSoft, borderRadius: 8, padding: '10px 14px', flexWrap: 'wrap' }}>
+                    <div>
+                      <span style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText }}>{c.br}</span>
+                      <span style={{ color: T.inkFaint, fontSize: 12 }}> · {c.planner_titulo}</span>
+                      <div style={{ fontSize: 12, marginTop: 2 }}>Adicionar na observação: <strong style={{ fontFamily: FONT_DISPLAY }}>OP: {c.ops_encontradas}</strong></div>
+                    </div>
+                    <button onClick={() => confirmarAdicionarOp(c)} disabled={confirmandoObs === c.planner_task_id}
+                      style={{ fontSize: 12, fontWeight: 700, color: '#fff', background: T.oliveText, border: 'none', borderRadius: 6, padding: '8px 14px', cursor: 'pointer', opacity: confirmandoObs === c.planner_task_id ? 0.6 : 1 }}>
+                      {confirmandoObs === c.planner_task_id ? 'Confirmando…' : '✓ Confirmar e adicionar'}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </Panel>
+          )}
+          <Panel subtitle="Cards do quadro 'Gestão Comercial' no Planner — o BR vem do título, a OP vem da observação (preenchida depois pelos meninos). Aqui dá pra ver quem ainda não teve a OP preenchida.">
           <div style={{ display: 'flex', gap: 12, marginBottom: 14, alignItems: 'center', flexWrap: 'wrap' }}>
             <div style={{ position: 'relative' }}>
               <Search size={13} style={{ position: 'absolute', left: 9, top: 9, color: T.inkFaint }} />
@@ -5432,6 +5714,7 @@ function MonitoramentoOP() {
             <BotaoExportar small onClick={() => exportCSV(cardsBrOpFiltrados, 'cards_br_op.csv', ['br', 'planner_titulo', 'op', 'bucket_atual', 'bucket_atualizado_em'])} />
           </div>
         </Panel>
+        </>
       )}
 
       {abaMonitoramento === 'op' && (<>
