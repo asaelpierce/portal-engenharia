@@ -301,6 +301,7 @@ export default function PortalEngenharia() {
             email: session.user.email,
             ve_produtividade_completa: data.ve_produtividade_completa,
             ve_almoxarifado_completo: data.ve_almoxarifado_completo,
+            ve_almoxarifado_apenas_fila: data.ve_almoxarifado_apenas_fila,
             sankhyaUsuario: data.sankhya_usuario,
             // Sem linhas em colaborador_telas = sem restrição cadastrada (mantém acesso total, comportamento antigo).
             // Com linhas = restrição ativa, só essas telas aparecem.
@@ -561,7 +562,6 @@ function PortalConteudo({ currentUser, session }) {
           {renderTab('analise_comercial', <TabErrorBoundary tab="Análise Comercial"><AnaliseComercial /></TabErrorBoundary>)}
           {renderTab('prospeccao_clientes', <TabErrorBoundary tab="Prospecção de Clientes"><ProspeccaoClientes /></TabErrorBoundary>)}
           {renderTab('almoxarifado_fluxo', <TabErrorBoundary tab="Fluxo de Materiais"><AlmoxarifadoFluxo currentUser={currentUser} /></TabErrorBoundary>)}
-          {renderTab('almoxarifado_fila_atendimento', <TabErrorBoundary tab="Fila de Atendimento"><FilaAtendimentoAlmoxarifado currentUser={currentUser} /></TabErrorBoundary>)}
           {renderTab('pedidosvale', <PedidosVale />)}
           {renderTab('aberturacotacao', <TabErrorBoundary tab="Abertura de Cotação"><AberturaCotacao currentUser={currentUser} /></TabErrorBoundary>)}
           {renderTab('ranking', <TabErrorBoundary tab="Ranking"><RankingPontuacao /></TabErrorBoundary>)}
@@ -617,7 +617,6 @@ function Sidebar({ view, setView, pendCount, papel, telasPermitidas }) {
     { id: 'analise_comercial', label: 'Análise Comercial', icon: TrendingUp },
     { id: 'prospeccao_clientes', label: 'Prospecção de Clientes', icon: UserPlus },
     { id: 'almoxarifado_fluxo', label: 'Fluxo de Materiais', icon: Package },
-    { id: 'almoxarifado_fila_atendimento', label: 'Fila de Atendimento', icon: ClipboardList },
     { id: 'pedidosvale',  label: 'Pedidos Vale',           icon: FileWarning },
     { id: 'aberturacotacao', label: 'Abertura de Cotação',  icon: FileStack },
     { id: 'ranking',      label: 'Ranking de Pontuação',    icon: TrendingUp },
@@ -2735,7 +2734,8 @@ function FunilVisualSVG({ segmentos, total, ativo, onClick }) {
   );
 }
 
-function AlmoxarifadoFluxo() {
+function AlmoxarifadoFluxo({ currentUser }) {
+  const apenasFilaAtendimento = currentUser?.ve_almoxarifado_apenas_fila === true;
   const [projetos, setProjetos] = useState([]);
   const [perdas, setPerdas] = useState([]);
   const [detalhado, setDetalhado] = useState([]);
@@ -2746,7 +2746,7 @@ function AlmoxarifadoFluxo() {
   const [busca, setBusca] = useState('');
   const [buscaDetalhado, setBuscaDetalhado] = useState('');
   const [mesFiltro, setMesFiltro] = useState('');
-  const [abaAtiva, setAbaAtiva] = useState('registrar');
+  const [abaAtiva, setAbaAtiva] = useState(apenasFilaAtendimento ? 'fila_atendimento' : 'registrar');
   const [drillBr, setDrillBr] = useState(null);
   const [itensDrill, setItensDrill] = useState([]);
 
@@ -2820,6 +2820,28 @@ function AlmoxarifadoFluxo() {
     setMinhasSolicitacoes(data || []);
   }, []);
   useEffect(() => { carregarMinhasSolicitacoes(); }, [carregarMinhasSolicitacoes]);
+
+  const [reservas, setReservas] = useState([]);
+  const [loadingReservas, setLoadingReservas] = useState(true);
+  const [filtroReserva, setFiltroReserva] = useState('suspeitas'); // suspeitas | com_br | todas
+  const [buscaReserva, setBuscaReserva] = useState('');
+  const carregarReservas = useCallback(async () => {
+    setLoadingReservas(true);
+    const { data } = await supabase.from('almoxarifado_reservas_detalhe').select('*').order('data_solicitacao', { ascending: false }).limit(1000);
+    setReservas(data || []);
+    setLoadingReservas(false);
+  }, []);
+  useEffect(() => { carregarReservas(); }, [carregarReservas]);
+  const reservasFiltradas = useMemo(() => {
+    let lista = reservas;
+    if (filtroReserva === 'suspeitas') lista = lista.filter(r => r.ja_faturado === true);
+    else if (filtroReserva === 'com_br') lista = lista.filter(r => r.br);
+    if (buscaReserva.trim()) {
+      const b = buscaReserva.toLowerCase();
+      lista = lista.filter(r => (r.descrprod || '').toLowerCase().includes(b) || (r.br || '').toLowerCase().includes(b) || (r.op || '').includes(b) || (r.cliente_nome || '').toLowerCase().includes(b));
+    }
+    return lista;
+  }, [reservas, filtroReserva, buscaReserva]);
   const [pendenteItem, setPendenteItem] = useState({}); // material_id -> material pendente
 
   const carregarSituacaoAtual = useCallback(async () => {
@@ -3113,6 +3135,14 @@ function AlmoxarifadoFluxo() {
     );
   };
 
+  if (apenasFilaAtendimento) {
+    return (
+      <div className="fade-up">
+        <FilaAtendimentoAlmoxarifado currentUser={currentUser} />
+      </div>
+    );
+  }
+
   return (
     <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
       <div style={{ fontSize: 12.5, color: T.inkFaint, background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 8, padding: '10px 14px' }}>
@@ -3128,8 +3158,8 @@ function AlmoxarifadoFluxo() {
         <Kpi label="Valor de perda lançado" value={fmtMoeda(kpis.totalPerdasValor)} icon={DollarSign} tone="rust" sub="preenchido manualmente" />
       </div>
 
-      <div style={{ display: 'flex', gap: 4, borderBottom: `1px solid ${T.line}` }}>
-        {[{ id: 'visao_geral', label: 'Visão Geral' }, { id: 'registrar', label: 'Registrar / Situação atual' }, { id: 'detalhado', label: `Detalhado (${detalhado.length})` }, { id: 'faturado_mes', label: 'Faturado por Mês' }, { id: 'produtividade_produto', label: 'Produtividade por Produto' }, { id: 'projetos', label: `Projetos (${projetos.length})` }, { id: 'perdas', label: `Perdas (${perdas.length})` }].map(aba => (
+      <div style={{ display: 'flex', gap: 4, borderBottom: `1px solid ${T.line}`, flexWrap: 'wrap' }}>
+        {[{ id: 'visao_geral', label: 'Visão Geral' }, { id: 'registrar', label: 'Registrar / Situação atual' }, { id: 'fila_atendimento', label: 'Fila de Atendimento' }, { id: 'reservas', label: `Reservas por Projeto${reservas.filter(r => r.ja_faturado).length ? ` (${reservas.filter(r => r.ja_faturado).length})` : ''}` }, { id: 'detalhado', label: `Detalhado (${detalhado.length})` }, { id: 'faturado_mes', label: 'Faturado por Mês' }, { id: 'produtividade_produto', label: 'Produtividade por Produto' }, { id: 'projetos', label: `Projetos (${projetos.length})` }, { id: 'perdas', label: `Perdas (${perdas.length})` }].map(aba => (
           <button key={aba.id} onClick={() => setAbaAtiva(aba.id)}
             style={{
               background: 'none', border: 'none', cursor: 'pointer', padding: '10px 16px', fontSize: 13, fontWeight: 600,
@@ -3375,6 +3405,86 @@ function AlmoxarifadoFluxo() {
               </div>
             </Panel>
         </>
+      )}
+
+      {abaAtiva === 'fila_atendimento' && (
+        <FilaAtendimentoAlmoxarifado currentUser={currentUser} />
+      )}
+
+      {abaAtiva === 'reservas' && (
+        <Panel subtitle="Reserva de matéria-prima no Sankhya, cruzada com a OP (via IDIPROC) e o BR correspondente. ⚠ = a reserva ainda existe mas o projeto já foi faturado — provável reserva que não foi baixada.">
+          <div style={{ display: 'flex', gap: 12, marginBottom: 14, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+            <div style={{ position: 'relative' }}>
+              <Search size={13} style={{ position: 'absolute', left: 9, top: 9, color: T.inkFaint }} />
+              <input value={buscaReserva} onChange={e => setBuscaReserva(e.target.value)} placeholder="Buscar por produto, BR, OP ou cliente…"
+                style={{ ...inputStyle(), width: 280, paddingLeft: 28 }} />
+            </div>
+            <div style={{ display: 'flex', gap: 6 }}>
+              {[
+                { id: 'suspeitas', label: `⚠ Suspeitas (${reservas.filter(r => r.ja_faturado).length})`, cor: T.rustText },
+                { id: 'com_br', label: `Com BR (${reservas.filter(r => r.br).length})`, cor: T.blueText },
+                { id: 'todas', label: `Todas (${reservas.length})`, cor: T.inkDim },
+              ].map(f => (
+                <button key={f.id} onClick={() => setFiltroReserva(f.id)}
+                  style={{
+                    fontSize: 12, fontWeight: 700, padding: '6px 12px', borderRadius: 6, cursor: 'pointer',
+                    border: `1.5px solid ${filtroReserva === f.id ? f.cor : T.line}`,
+                    background: filtroReserva === f.id ? f.cor : 'transparent',
+                    color: filtroReserva === f.id ? '#fff' : f.cor,
+                  }}>
+                  {f.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+              <thead>
+                <tr style={{ background: T.panelAlt, borderBottom: `1px solid ${T.line}` }}>
+                  <th style={thFat(90)}>Data</th>
+                  <th style={thFat(70)}>OP</th>
+                  <th style={thFat(110)}>BR</th>
+                  <th style={thFat(160)}>Cliente</th>
+                  <th style={thFat(0)}>Produto reservado</th>
+                  <th style={{ ...thFat(80), textAlign: 'right' }}>Qtd</th>
+                  <th style={thFat(150)}>Solicitante</th>
+                  <th style={{ ...thFat(90), textAlign: 'center' }}>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {loadingReservas ? (
+                  <tr><td colSpan={8} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Carregando…</td></tr>
+                ) : reservasFiltradas.length === 0 ? (
+                  <tr><td colSpan={8} style={{ padding: 30, textAlign: 'center', color: T.oliveText, fontWeight: 600 }}>✓ Nada encontrado.</td></tr>
+                ) : reservasFiltradas.slice(0, 300).map(r => (
+                  <tr key={r.id} style={{ borderBottom: `1px solid ${T.lineSoft}`, background: r.ja_faturado ? `${T.rustSoft}44` : 'transparent' }}>
+                    <td style={{ padding: '8px 12px', color: T.inkDim, whiteSpace: 'nowrap' }}>{fmtData(r.data_solicitacao)}</td>
+                    <td style={{ padding: '8px 12px', fontFamily: FONT_DISPLAY, fontWeight: 700 }}>{r.op || '—'}</td>
+                    <td style={{ padding: '8px 12px', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText }}>{r.br || '—'}</td>
+                    <td style={{ padding: '8px 12px', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.cliente_nome}>{r.cliente_nome || '—'}</td>
+                    <td style={{ padding: '8px 12px', maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.descrprod}>{r.descrprod}</td>
+                    <td style={{ padding: '8px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY }}>{r.quantidade_reservada}</td>
+                    <td style={{ padding: '8px 12px', color: T.inkFaint, fontSize: 11 }}>{r.solicitante || '—'}</td>
+                    <td style={{ padding: '8px 12px', textAlign: 'center' }}>
+                      {r.ja_faturado ? (
+                        <span style={{ fontSize: 10.5, fontWeight: 700, color: T.rustText, background: T.rustSoft, padding: '3px 8px', borderRadius: 4 }}>⚠ Já faturado</span>
+                      ) : r.br ? (
+                        <span style={{ fontSize: 10.5, fontWeight: 700, color: T.oliveText, background: T.oliveSoft, padding: '3px 8px', borderRadius: 4 }}>Em andamento</span>
+                      ) : (
+                        <span style={{ fontSize: 10.5, color: T.inkFaint }}>Sem BR</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ padding: '10px 0 0', fontSize: 11, color: T.inkFaint, display: 'flex', justifyContent: 'space-between' }}>
+            <span>{reservasFiltradas.length} reservas (mostrando até 300)</span>
+            <BotaoExportar small onClick={() => exportCSV(reservasFiltradas, 'almoxarifado_reservas.csv',
+              ['data_solicitacao', 'op', 'br', 'cliente_nome', 'descrprod', 'quantidade_reservada', 'solicitante', 'ja_faturado'])} />
+          </div>
+        </Panel>
       )}
 
       {abaAtiva === 'detalhado' && (
@@ -4691,6 +4801,28 @@ function MonitoramentoOP() {
   const [filtroDataInicio, setFiltroDataInicio] = useState('');
   const [filtroDataFim, setFiltroDataFim] = useState('');
 
+  const [cardsBrOp, setCardsBrOp] = useState([]);
+  const [loadingCardsBrOp, setLoadingCardsBrOp] = useState(true);
+  const [filtroCardBrOp, setFiltroCardBrOp] = useState('sem_op'); // sem_op | com_op | todos
+  const [buscaCardBrOp, setBuscaCardBrOp] = useState('');
+  const carregarCardsBrOp = useCallback(async () => {
+    setLoadingCardsBrOp(true);
+    const { data } = await supabase.from('monitoramento_op_cards_planner').select('*').eq('planner_excluido', false).order('br');
+    setCardsBrOp(data || []);
+    setLoadingCardsBrOp(false);
+  }, []);
+  useEffect(() => { if (abaMonitoramento === 'cards_br_op') carregarCardsBrOp(); }, [abaMonitoramento, carregarCardsBrOp]);
+  const cardsBrOpFiltrados = useMemo(() => {
+    let lista = cardsBrOp;
+    if (filtroCardBrOp === 'sem_op') lista = lista.filter(c => !c.op || !c.op.trim());
+    else if (filtroCardBrOp === 'com_op') lista = lista.filter(c => c.op && c.op.trim());
+    if (buscaCardBrOp.trim()) {
+      const b = buscaCardBrOp.toLowerCase();
+      lista = lista.filter(c => (c.br || '').toLowerCase().includes(b) || (c.planner_titulo || '').toLowerCase().includes(b) || (c.op || '').includes(b));
+    }
+    return lista;
+  }, [cardsBrOp, filtroCardBrOp, buscaCardBrOp]);
+
   const carregarSolicitacoes = useCallback(async (silencioso = false) => {
     if (!silencioso) setLoadingSolic(true);
     const { data } = await supabase.from('solicitacoes_compra_planner').select('*').order('data_solicitacao', { ascending: false });
@@ -4966,7 +5098,7 @@ function MonitoramentoOP() {
     <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
 
       <div style={{ display: 'flex', gap: 4, borderBottom: `1px solid ${T.line}` }}>
-        {[{ id: 'op', label: 'Monitoramento de OP' }, { id: 'cotacao', label: `Cotação — Card no Planner${solicitacoes.filter(s => !s.card_planner_solicitado).length ? ` (${solicitacoes.filter(s => !s.card_planner_solicitado).length})` : ''}` }].map(aba => (
+        {[{ id: 'op', label: 'Monitoramento de OP' }, { id: 'cotacao', label: `Cotação — Card no Planner${solicitacoes.filter(s => !s.card_planner_solicitado).length ? ` (${solicitacoes.filter(s => !s.card_planner_solicitado).length})` : ''}` }, { id: 'cards_br_op', label: `Cards BR/OP (Comercial)${cardsBrOp.filter(c => !c.op).length ? ` (${cardsBrOp.filter(c => !c.op).length} sem OP)` : ''}` }].map(aba => (
           <button key={aba.id} onClick={() => setAbaMonitoramento(aba.id)}
             style={{
               background: 'none', border: 'none', cursor: 'pointer', padding: '10px 16px', fontSize: 13, fontWeight: 600,
@@ -5108,6 +5240,75 @@ function MonitoramentoOP() {
                 ))}
               </tbody>
             </table>
+          </div>
+        </Panel>
+      )}
+
+      {abaMonitoramento === 'cards_br_op' && (
+        <Panel subtitle="Cards do quadro 'Gestão Comercial' no Planner — o BR vem do título, a OP vem da observação (preenchida depois pelos meninos). Aqui dá pra ver quem ainda não teve a OP preenchida.">
+          <div style={{ display: 'flex', gap: 12, marginBottom: 14, alignItems: 'center', flexWrap: 'wrap' }}>
+            <div style={{ position: 'relative' }}>
+              <Search size={13} style={{ position: 'absolute', left: 9, top: 9, color: T.inkFaint }} />
+              <input value={buscaCardBrOp} onChange={e => setBuscaCardBrOp(e.target.value)} placeholder="Buscar por BR, OP ou título…"
+                style={{ ...inputStyle(), width: 260, paddingLeft: 28 }} />
+            </div>
+            <div style={{ display: 'flex', gap: 6 }}>
+              {[
+                { id: 'sem_op', label: `⚠ Sem OP (${cardsBrOp.filter(c => !c.op || !c.op.trim()).length})`, cor: T.amberText },
+                { id: 'com_op', label: `✓ Com OP (${cardsBrOp.filter(c => c.op && c.op.trim()).length})`, cor: T.oliveText },
+                { id: 'todos', label: `Todos (${cardsBrOp.length})`, cor: T.inkDim },
+              ].map(f => (
+                <button key={f.id} onClick={() => setFiltroCardBrOp(f.id)}
+                  style={{
+                    fontSize: 12, fontWeight: 700, padding: '6px 12px', borderRadius: 6, cursor: 'pointer',
+                    border: `1.5px solid ${filtroCardBrOp === f.id ? f.cor : T.line}`,
+                    background: filtroCardBrOp === f.id ? f.cor : 'transparent',
+                    color: filtroCardBrOp === f.id ? '#fff' : f.cor,
+                  }}>
+                  {f.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+              <thead>
+                <tr style={{ background: T.panelAlt, borderBottom: `1px solid ${T.line}` }}>
+                  <th style={thFat(110)}>BR</th>
+                  <th style={thFat(0)}>Título do card</th>
+                  <th style={thFat(110)}>OP(s)</th>
+                  <th style={thFat(150)}>Coluna atual</th>
+                  <th style={thFat(130)}>Última mudança</th>
+                </tr>
+              </thead>
+              <tbody>
+                {loadingCardsBrOp ? (
+                  <tr><td colSpan={5} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Carregando…</td></tr>
+                ) : cardsBrOpFiltrados.length === 0 ? (
+                  <tr><td colSpan={5} style={{ padding: 30, textAlign: 'center', color: T.oliveText, fontWeight: 600 }}>✓ Nada encontrado.</td></tr>
+                ) : cardsBrOpFiltrados.map(c => (
+                  <tr key={c.id} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                    <td style={{ padding: '9px 12px', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText }}>{c.br}</td>
+                    <td style={{ padding: '9px 12px', maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={c.planner_titulo}>{c.planner_titulo}</td>
+                    <td style={{ padding: '9px 12px' }}>
+                      {c.op && c.op.trim() ? (
+                        <span style={{ fontFamily: FONT_DISPLAY, fontWeight: 700 }}>{c.op}</span>
+                      ) : (
+                        <span style={{ fontSize: 10.5, fontWeight: 700, color: T.amberText, background: T.amberSoft, padding: '3px 8px', borderRadius: 4 }}>⚠ Pendente</span>
+                      )}
+                    </td>
+                    <td style={{ padding: '9px 12px' }}>
+                      <span style={{ fontSize: 11, fontWeight: 600, color: T.inkDim, background: T.panelAlt, padding: '3px 8px', borderRadius: 4 }}>{c.bucket_atual || '—'}</span>
+                    </td>
+                    <td style={{ padding: '9px 12px', color: T.inkFaint, fontSize: 11 }}>{c.bucket_atualizado_em ? fmtData(c.bucket_atualizado_em) : '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ padding: '10px 0 0', fontSize: 11, color: T.inkFaint, display: 'flex', justifyContent: 'space-between' }}>
+            <span>{cardsBrOpFiltrados.length} cards</span>
+            <BotaoExportar small onClick={() => exportCSV(cardsBrOpFiltrados, 'cards_br_op.csv', ['br', 'planner_titulo', 'op', 'bucket_atual', 'bucket_atualizado_em'])} />
           </div>
         </Panel>
       )}
@@ -12054,7 +12255,6 @@ const TELAS_CATALOGO = [
   { id: 'analise_comercial', label: 'Análise Comercial' },
   { id: 'prospeccao_clientes', label: 'Prospecção de Clientes' },
   { id: 'almoxarifado_fluxo', label: 'Fluxo de Materiais' },
-  { id: 'almoxarifado_fila_atendimento', label: 'Fila de Atendimento' },
   { id: 'pedidosvale',  label: 'Pedidos Vale' },
   { id: 'aberturacotacao', label: 'Abertura de Cotação' },
   { id: 'ranking',      label: 'Ranking de Pontuação' },
@@ -12150,6 +12350,14 @@ function PermissoesManager() {
     setSalvando(false);
   };
 
+  const toggleApenasFilaAtendimento = async () => {
+    if (!usuario) return;
+    setSalvando(true);
+    await supabase.from('colaboradores').update({ ve_almoxarifado_apenas_fila: !usuario.ve_almoxarifado_apenas_fila }).eq('id', usuario.id);
+    await carregar();
+    setSalvando(false);
+  };
+
   return (
     <Panel title="Permissões de acesso por usuário" subtitle="Controla quais telas cada colaborador vê e se a produtividade é própria ou de todos">
       <div style={{ display: 'flex', gap: 20, marginTop: 12, flexWrap: 'wrap' }}>
@@ -12201,6 +12409,11 @@ function PermissoesManager() {
               <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5 }}>
                 <input type="checkbox" checked={usuario.ve_almoxarifado_completo !== false} disabled={salvando} onChange={toggleAlmoxarifadoCompleto} />
                 Vê a aba Almoxarifado completa (senão, só código/descrição/disponível/reservado)
+              </label>
+
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5 }}>
+                <input type="checkbox" checked={!!usuario.ve_almoxarifado_apenas_fila} disabled={salvando} onChange={toggleApenasFilaAtendimento} />
+                Em Fluxo de Materiais, vê só a Fila de Atendimento (nada mais) — pros colaboradores que atendem os pedidos
               </label>
             </div>
           )}
