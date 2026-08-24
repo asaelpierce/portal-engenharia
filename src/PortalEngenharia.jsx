@@ -4862,6 +4862,7 @@ function MonitoramentoOP({ currentUser }) {
   const [loadingConhecPronto, setLoadingConhecPronto] = useState(true);
   const [modalFinalizar, setModalFinalizar] = useState(null); // card sendo finalizado agora
   const [modalIniciar, setModalIniciar] = useState(null); // card sendo iniciado agora
+  const [visualizacaoConhecPronto, setVisualizacaoConhecPronto] = useState('cards'); // 'cards' | 'planilha'
   const [processandoCard, setProcessandoCard] = useState(null);
   const carregarConhecPronto = useCallback(async () => {
     setLoadingConhecPronto(true);
@@ -4924,6 +4925,7 @@ function MonitoramentoOP({ currentUser }) {
     setProcessandoCard(card.id);
     await supabase.from('monitoramento_op_cards_planner').update({
       data_iniciado: new Date().toISOString(),
+      iniciado_por: currentUser?.nome || null,
       data_prevista_finalizacao: dataPrevista || null,
       projetista: projetista || null,
     }).eq('id', card.id);
@@ -5495,6 +5497,79 @@ function MonitoramentoOP({ currentUser }) {
       )}
 
       {abaMonitoramento === 'conhecimento_pronto' && (
+        <div style={{ display: 'flex', gap: 6, marginBottom: 4 }}>
+          {[{ id: 'cards', label: '🗂 Cards' }, { id: 'planilha', label: '📋 Planilha (estilo Backlog)' }].map(v => (
+            <button key={v.id} onClick={() => setVisualizacaoConhecPronto(v.id)}
+              style={{
+                fontSize: 12, fontWeight: 700, padding: '6px 14px', borderRadius: 6, cursor: 'pointer',
+                border: `1.5px solid ${visualizacaoConhecPronto === v.id ? T.terracotta : T.line}`,
+                background: visualizacaoConhecPronto === v.id ? T.terracotta : 'transparent',
+                color: visualizacaoConhecPronto === v.id ? '#fff' : T.inkDim,
+              }}>
+              {v.label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {abaMonitoramento === 'conhecimento_pronto' && visualizacaoConhecPronto === 'planilha' && (
+        <Panel subtitle="Visão em tabela, no mesmo formato da planilha de Backlog que a Engenharia já usava — pra manter o mesmo controle de sempre.">
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11.5 }}>
+              <thead>
+                <tr style={{ background: T.panelAlt, borderBottom: `1px solid ${T.line}` }}>
+                  <th style={thFat(90)}>PROJETO</th>
+                  <th style={thFat(140)}>CLIENTE</th>
+                  <th style={thFat(90)}>ABERTURA C.P.</th>
+                  <th style={thFat(130)}>ETAPA</th>
+                  <th style={thFat(90)}>DATA DE INÍCIO</th>
+                  <th style={thFat(90)}>PREVISTA FINAL.</th>
+                  <th style={thFat(90)}>REAL FINAL.</th>
+                  <th style={thFat(120)}>PROJETISTA</th>
+                  <th style={thFat(150)}>MOTIVO ATRASO</th>
+                  <th style={thFat(0)}>OBS. / PENDÊNCIAS</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[...cardsConhecPronto, ...cardsOpsGeradas.filter(o => !cardsConhecPronto.some(c => c.id === o.id))].length === 0 ? (
+                  <tr><td colSpan={10} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Nada por aqui.</td></tr>
+                ) : [...cardsConhecPronto, ...cardsOpsGeradas.filter(o => !cardsConhecPronto.some(c => c.id === o.id))].map(c => {
+                  const etapa = c.data_finalizado
+                    ? (c.finalizado_com_duvida ? '⚠ Dúvidas Técnicas' : (c.status_verificacao_op === 'finalizado' ? '✓ Concluído' : "OP's Geradas"))
+                    : c.data_iniciado ? 'Projeto em andamento'
+                    : c.ciente_em ? 'Aguardando iniciar'
+                    : c.visto_em ? 'Visto, aguardando ciência'
+                    : 'Aguardando visualização';
+                  return (
+                    <tr key={c.id} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                      <td style={{ padding: '7px 10px', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText }}>{c.br}</td>
+                      <td style={{ padding: '7px 10px', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={c.cliente_nome}>{c.cliente_nome || '—'}</td>
+                      <td style={{ padding: '7px 10px', color: T.inkFaint }}>{c.data_abertura_cp ? fmtData(c.data_abertura_cp) : '—'}</td>
+                      <td style={{ padding: '7px 10px' }}>{etapa}</td>
+                      <td style={{ padding: '7px 10px', color: T.inkFaint }}>{c.data_iniciado ? fmtData(c.data_iniciado) : '—'}</td>
+                      <td style={{ padding: '7px 10px', color: T.inkFaint }}>{c.data_prevista_finalizacao ? fmtData(c.data_prevista_finalizacao) : '—'}</td>
+                      <td style={{ padding: '7px 10px', color: c.atrasou ? T.rustText : T.inkFaint, fontWeight: c.atrasou ? 700 : 400 }}>{c.data_finalizado ? fmtData(c.data_finalizado) : '—'}</td>
+                      <td style={{ padding: '7px 10px' }}>{c.projetista || '—'}</td>
+                      <td style={{ padding: '7px 10px', color: T.rustText, maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={c.motivo_atraso}>{c.motivo_atraso || '—'}</td>
+                      <td style={{ padding: '7px 10px', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={c.observacao_duvida || c.pendencias}>{c.observacao_duvida || c.pendencias || '—'}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ padding: '10px 0 0', fontSize: 11, color: T.inkFaint, display: 'flex', justifyContent: 'space-between' }}>
+            <span>{cardsConhecPronto.length + cardsOpsGeradas.filter(o => !cardsConhecPronto.some(c => c.id === o.id)).length} projetos</span>
+            <BotaoExportar small onClick={() => exportCSV(
+              [...cardsConhecPronto, ...cardsOpsGeradas.filter(o => !cardsConhecPronto.some(c => c.id === o.id))],
+              'fluxo_conhecimento_op.csv',
+              ['br', 'cliente_nome', 'data_abertura_cp', 'data_iniciado', 'data_prevista_finalizacao', 'data_finalizado', 'projetista', 'motivo_atraso', 'observacao_duvida', 'pendencias']
+            )} />
+          </div>
+        </Panel>
+      )}
+
+      {abaMonitoramento === 'conhecimento_pronto' && visualizacaoConhecPronto === 'cards' && (
         <Panel subtitle="Cards na coluna 'Engenharia - Conhecimento Pronto' — clica em Iniciar quando começar o projeto, e Finalizar quando terminar. Ao finalizar, o card é movido automaticamente no Planner (via Power Automate).">
           {cardsTravados.length > 0 && (
             <div style={{ background: T.rustSoft, border: `1px solid ${T.rust}33`, borderRadius: 8, padding: '12px 16px', marginBottom: 14 }}>
@@ -5526,11 +5601,9 @@ function MonitoramentoOP({ currentUser }) {
                   <div style={{ fontSize: 12, color: T.inkDim, marginTop: 2 }}>{c.planner_titulo}</div>
                   <div style={{ fontSize: 11, color: T.inkFaint, marginTop: 4 }}>
                     {c.data_abertura_cp && `Aberto em ${fmtData(c.data_abertura_cp)} · `}
-                    {c.visto_em && (
-                      <span title={`Visto por ${c.visto_por || '?'}`}>👁 Visto em {fmtData(c.visto_em)} · </span>
-                    )}
+                    {c.visto_em && `👁 Visto em ${fmtData(c.visto_em)} (${c.visto_por || '?'}) · `}
                     {c.ciente_em && `✓ Ciente em ${fmtData(c.ciente_em)} (${c.ciente_por || '?'}) · `}
-                    {c.data_iniciado ? `Iniciado em ${fmtData(c.data_iniciado)}` : c.ciente_em ? 'Aguardando iniciar' : c.visto_em ? 'Visto, aguardando confirmação' : 'Ainda não visto'}
+                    {c.data_iniciado ? `Iniciado em ${fmtData(c.data_iniciado)}${c.iniciado_por ? ` por ${c.iniciado_por}` : ''}` : c.ciente_em ? 'Aguardando iniciar' : c.visto_em ? 'Visto, aguardando confirmação' : 'Ainda não visto'}
                     {c.projetista && ` · Projetista: ${c.projetista}`}
                     {c.data_prevista_finalizacao && ` · Previsto: ${fmtData(c.data_prevista_finalizacao)}`}
                     {c.data_finalizado && ` · Finalizado em ${fmtData(c.data_finalizado)} · Tempo: ${fmtHoras(c.horas_gastas)}`}
@@ -5631,7 +5704,7 @@ function MonitoramentoOP({ currentUser }) {
         );
       })()}
 
-      {abaMonitoramento === 'conhecimento_pronto' && (
+      {abaMonitoramento === 'conhecimento_pronto' && visualizacaoConhecPronto === 'cards' && (
         <>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '22px 0 4px' }}>
             <span style={{ fontFamily: FONT_DISPLAY, fontSize: 13, fontWeight: 700, color: T.inkFaint, textTransform: 'uppercase', letterSpacing: 0.5 }}>Etapa 2 — Verificação de OP's Geradas</span>
@@ -5650,7 +5723,7 @@ function MonitoramentoOP({ currentUser }) {
         </>
       )}
 
-      {abaMonitoramento === 'conhecimento_pronto' && (
+      {abaMonitoramento === 'conhecimento_pronto' && visualizacaoConhecPronto === 'cards' && (
         <Panel subtitle="Cards na coluna 'OP's Geradas' — confira as OPs que já existem pra esse BR (pode ter mais de uma) antes de decidir finalizar. Só você decide quando está completo — o sistema nunca fecha isso sozinho.">
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             {loadingOpsGeradas ? (
