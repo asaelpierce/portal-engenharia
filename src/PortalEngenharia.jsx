@@ -4807,7 +4807,7 @@ function MonitoramentoOP() {
   const [buscaCardBrOp, setBuscaCardBrOp] = useState('');
   const carregarCardsBrOp = useCallback(async () => {
     setLoadingCardsBrOp(true);
-    const { data } = await supabase.from('monitoramento_op_cards_planner').select('*').eq('planner_excluido', false).order('br');
+    const { data } = await supabase.from('v_monitoramento_op_cards_planner').select('*').eq('planner_excluido', false).order('br');
     setCardsBrOp(data || []);
     setLoadingCardsBrOp(false);
   }, []);
@@ -4822,6 +4822,59 @@ function MonitoramentoOP() {
     }
     return lista;
   }, [cardsBrOp, filtroCardBrOp, buscaCardBrOp]);
+
+  // ── Aba "Conhecimento Pronto" — fluxo Iniciar → Finalizar → move card automático ──
+  const [cardsConhecPronto, setCardsConhecPronto] = useState([]);
+  const [loadingConhecPronto, setLoadingConhecPronto] = useState(true);
+  const [modalFinalizar, setModalFinalizar] = useState(null); // card sendo finalizado agora
+  const [processandoCard, setProcessandoCard] = useState(null);
+  const carregarConhecPronto = useCallback(async () => {
+    setLoadingConhecPronto(true);
+    const { data } = await supabase.from('v_monitoramento_op_cards_planner').select('*')
+      .eq('bucket_atual', 'Engenharia - Conhecimento Pronto').eq('planner_excluido', false)
+      .order('br');
+    setCardsConhecPronto(data || []);
+    setLoadingConhecPronto(false);
+  }, []);
+  useEffect(() => { if (abaMonitoramento === 'conhecimento_pronto') carregarConhecPronto(); }, [abaMonitoramento, carregarConhecPronto]);
+  useEffect(() => {
+    if (abaMonitoramento !== 'conhecimento_pronto') return;
+    const id = setInterval(() => carregarConhecPronto(), 20000);
+    return () => clearInterval(id);
+  }, [abaMonitoramento, carregarConhecPronto]);
+
+  const iniciarProjeto = async (card) => {
+    setProcessandoCard(card.id);
+    await supabase.from('monitoramento_op_cards_planner').update({ data_iniciado: new Date().toISOString() }).eq('id', card.id);
+    await carregarConhecPronto();
+    setProcessandoCard(null);
+  };
+
+  const finalizarProjeto = async (card, comDuvida, observacao) => {
+    setProcessandoCard(card.id);
+    await supabase.from('monitoramento_op_cards_planner').update({
+      data_finalizado: new Date().toISOString(),
+      finalizado_com_duvida: comDuvida,
+      observacao_duvida: observacao || null,
+    }).eq('id', card.id);
+
+    await supabase.from('solicitacoes_mover_card_planner').insert({
+      planner_task_id: card.planner_task_id,
+      br: card.br,
+      bucket_destino: comDuvida ? 'Dúvidas Técnicas' : "OP's Geradas",
+      status: 'pendente',
+    });
+
+    setModalFinalizar(null);
+    await carregarConhecPronto();
+    setProcessandoCard(null);
+  };
+
+  const fmtHoras = (h) => {
+    if (h == null) return '—';
+    if (h < 1) return `${Math.round(h * 60)} min`;
+    return `${h.toFixed(1)} h`;
+  };
 
   const carregarSolicitacoes = useCallback(async (silencioso = false) => {
     if (!silencioso) setLoadingSolic(true);
@@ -5098,7 +5151,7 @@ function MonitoramentoOP() {
     <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
 
       <div style={{ display: 'flex', gap: 4, borderBottom: `1px solid ${T.line}` }}>
-        {[{ id: 'op', label: 'Monitoramento de OP' }, { id: 'cotacao', label: `Cotação — Card no Planner${solicitacoes.filter(s => !s.card_planner_solicitado).length ? ` (${solicitacoes.filter(s => !s.card_planner_solicitado).length})` : ''}` }, { id: 'cards_br_op', label: `Cards BR/OP (Comercial)${cardsBrOp.filter(c => !c.op).length ? ` (${cardsBrOp.filter(c => !c.op).length} sem OP)` : ''}` }].map(aba => (
+        {[{ id: 'op', label: 'Monitoramento de OP' }, { id: 'cotacao', label: `Cotação — Card no Planner${solicitacoes.filter(s => !s.card_planner_solicitado).length ? ` (${solicitacoes.filter(s => !s.card_planner_solicitado).length})` : ''}` }, { id: 'cards_br_op', label: `Cards BR/OP (Comercial)${cardsBrOp.filter(c => !c.op).length ? ` (${cardsBrOp.filter(c => !c.op).length} sem OP)` : ''}` }, { id: 'conhecimento_pronto', label: `Conhecimento Pronto${cardsConhecPronto.filter(c => !c.data_finalizado).length ? ` (${cardsConhecPronto.filter(c => !c.data_finalizado).length})` : ''}` }].map(aba => (
           <button key={aba.id} onClick={() => setAbaMonitoramento(aba.id)}
             style={{
               background: 'none', border: 'none', cursor: 'pointer', padding: '10px 16px', fontSize: 13, fontWeight: 600,
@@ -5242,6 +5295,74 @@ function MonitoramentoOP() {
             </table>
           </div>
         </Panel>
+      )}
+
+      {abaMonitoramento === 'conhecimento_pronto' && (
+        <Panel subtitle="Cards na coluna 'Engenharia - Conhecimento Pronto' — clica em Iniciar quando começar o projeto, e Finalizar quando terminar. Ao finalizar, o card é movido automaticamente no Planner (via Power Automate).">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {loadingConhecPronto ? (
+              <div style={{ textAlign: 'center', padding: 30, color: T.inkFaint }}>Carregando…</div>
+            ) : cardsConhecPronto.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: 40, color: T.inkFaint, fontSize: 13 }}>Nenhum card nessa coluna no momento.</div>
+            ) : cardsConhecPronto.map(c => (
+              <div key={c.id} style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '14px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                <div>
+                  <div style={{ fontSize: 14, fontWeight: 700 }}>
+                    <span style={{ fontFamily: FONT_DISPLAY, color: T.blueText }}>{c.br}</span>
+                  </div>
+                  <div style={{ fontSize: 12, color: T.inkDim, marginTop: 2 }}>{c.planner_titulo}</div>
+                  <div style={{ fontSize: 11, color: T.inkFaint, marginTop: 4 }}>
+                    {c.data_iniciado ? `Iniciado em ${fmtData(c.data_iniciado)}` : 'Ainda não iniciado'}
+                    {c.data_finalizado && ` · Finalizado em ${fmtData(c.data_finalizado)} · Tempo: ${fmtHoras(c.horas_gastas)}`}
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  {c.data_finalizado ? (
+                    <span style={{ fontSize: 10.5, fontWeight: 700, color: c.finalizado_com_duvida ? T.amberText : T.oliveText, background: c.finalizado_com_duvida ? T.amberSoft : T.oliveSoft, padding: '4px 10px', borderRadius: 4 }}>
+                      {c.finalizado_com_duvida ? '⚠ Enviado p/ Dúvidas Técnicas' : "✓ Enviado p/ OP's Geradas"}
+                    </span>
+                  ) : !c.data_iniciado ? (
+                    <button onClick={() => iniciarProjeto(c)} disabled={processandoCard === c.id}
+                      style={{ fontSize: 12, fontWeight: 700, color: '#fff', background: T.blueText, border: 'none', borderRadius: 6, padding: '8px 16px', cursor: 'pointer', opacity: processandoCard === c.id ? 0.6 : 1 }}>
+                      {processandoCard === c.id ? 'Iniciando…' : '▶ Iniciar Projeto'}
+                    </button>
+                  ) : (
+                    <button onClick={() => setModalFinalizar(c)}
+                      style={{ fontSize: 12, fontWeight: 700, color: '#fff', background: T.terracotta, border: 'none', borderRadius: 6, padding: '8px 16px', cursor: 'pointer' }}>
+                      ✓ Finalizar
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </Panel>
+      )}
+
+      {modalFinalizar && (
+        <Overlay onClose={() => setModalFinalizar(null)}>
+          <div className="scale-in" style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, width: '100%', maxWidth: 460, padding: 24, boxShadow: '0 24px 60px rgba(0,0,0,.18)' }}>
+            <h3 style={{ fontFamily: FONT_DISPLAY, fontSize: 17, fontWeight: 700, margin: '0 0 4px' }}>Finalizar {modalFinalizar.br}</h3>
+            <p style={{ fontSize: 12.5, color: T.inkFaint, margin: '0 0 16px' }}>Como foi essa etapa?</p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <button onClick={() => finalizarProjeto(modalFinalizar, false, null)} disabled={processandoCard === modalFinalizar.id}
+                style={{ fontSize: 13, fontWeight: 700, color: '#fff', background: T.oliveText, border: 'none', borderRadius: 8, padding: '12px 16px', cursor: 'pointer', textAlign: 'left' }}>
+                ✓ Finalizado normalmente — mover pra "OP's Geradas"
+              </button>
+              <button onClick={() => {
+                const obs = prompt('Descreve rapidamente a dúvida técnica (opcional):') || '';
+                finalizarProjeto(modalFinalizar, true, obs);
+              }} disabled={processandoCard === modalFinalizar.id}
+                style={{ fontSize: 13, fontWeight: 700, color: '#fff', background: T.amberText, border: 'none', borderRadius: 8, padding: '12px 16px', cursor: 'pointer', textAlign: 'left' }}>
+                ⚠ Tem dúvida técnica — mover pra "Dúvidas Técnicas"
+              </button>
+              <button onClick={() => setModalFinalizar(null)}
+                style={{ fontSize: 12.5, fontWeight: 600, color: T.inkFaint, background: 'transparent', border: `1px solid ${T.line}`, borderRadius: 8, padding: '10px 16px', cursor: 'pointer', marginTop: 4 }}>
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </Overlay>
       )}
 
       {abaMonitoramento === 'cards_br_op' && (
