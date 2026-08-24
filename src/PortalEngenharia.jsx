@@ -4793,6 +4793,16 @@ function VerificacaoProjetos({ currentUser }) {
 
 function MonitoramentoOP() {
   const STATUS_PLANNER_LABEL = { notStarted: 'Não iniciado', inProgress: 'Em andamento', completed: 'Concluído' };
+  // IDs reais dos buckets do quadro "Gestão Comercial" no Planner — o portal
+  // manda o ID direto na solicitação de mover card, sem precisar o Power
+  // Automate descobrir/traduzir nome pra ID.
+  const BUCKETS_PLANNER = {
+    CONHECIMENTO_PRONTO: 'EWmnDctn00KrthU9NhijvpcAPYtl',
+    AVALIACAO_PRELIMINAR: 'aP8nsbEDEkSB7cBRhOrXkZcAKvzc',
+    PROJETOS_EM_ANDAMENTO: 'bFR9Hid1TE6S6kQUtsFD-5cAAQbR',
+    OPS_GERADAS: 'Gkd6VVWprEacnKG3F73XGZcAEzsE',
+    DUVIDAS_TECNICAS: 'CaDhL0JpMUifIHgbkBxniZcANDG0',
+  };
   const [abaMonitoramento, setAbaMonitoramento] = useState('op'); // 'op' | 'cotacao'
   const [solicitacoes, setSolicitacoes] = useState([]);
   const [loadingSolic, setLoadingSolic] = useState(true);
@@ -4851,13 +4861,27 @@ function MonitoramentoOP() {
   const [cardsConhecPronto, setCardsConhecPronto] = useState([]);
   const [loadingConhecPronto, setLoadingConhecPronto] = useState(true);
   const [modalFinalizar, setModalFinalizar] = useState(null); // card sendo finalizado agora
+  const [modalIniciar, setModalIniciar] = useState(null); // card sendo iniciado agora
   const [processandoCard, setProcessandoCard] = useState(null);
   const carregarConhecPronto = useCallback(async () => {
     setLoadingConhecPronto(true);
     const { data } = await supabase.from('v_monitoramento_op_cards_planner').select('*')
       .eq('bucket_atual', 'Engenharia - Conhecimento Pronto').eq('planner_excluido', false)
       .order('br');
-    setCardsConhecPronto(data || []);
+    let lista = data || [];
+    const brs = [...new Set(lista.map(c => c.br).filter(Boolean))];
+    if (brs.length) {
+      const clientePorBr = {};
+      const { data: pedidos } = await supabase.from('pedidos_itens').select('br,cliente_nome').in('br', brs);
+      (pedidos || []).forEach(p => { if (p.cliente_nome && !clientePorBr[p.br]) clientePorBr[p.br] = p.cliente_nome; });
+      const semCliente = brs.filter(br => !clientePorBr[br]);
+      if (semCliente.length) {
+        const { data: vendas } = await supabase.from('nota_venda_itens').select('br,cliente_nome').in('br', semCliente);
+        (vendas || []).forEach(v => { if (v.cliente_nome && !clientePorBr[v.br]) clientePorBr[v.br] = v.cliente_nome; });
+      }
+      lista = lista.map(c => ({ ...c, cliente_nome: c.cliente_nome || clientePorBr[c.br] || null }));
+    }
+    setCardsConhecPronto(lista);
     setLoadingConhecPronto(false);
   }, []);
   useEffect(() => { if (abaMonitoramento === 'conhecimento_pronto') carregarConhecPronto(); }, [abaMonitoramento, carregarConhecPronto]);
@@ -4867,25 +4891,53 @@ function MonitoramentoOP() {
     return () => clearInterval(id);
   }, [abaMonitoramento, carregarConhecPronto]);
 
-  const iniciarProjeto = async (card) => {
+  const marcarCienteDemanda = async (card) => {
     setProcessandoCard(card.id);
-    await supabase.from('monitoramento_op_cards_planner').update({ data_iniciado: new Date().toISOString() }).eq('id', card.id);
+    await supabase.from('monitoramento_op_cards_planner').update({
+      ciente_em: new Date().toISOString(),
+      ciente_por: currentUser?.nome || null,
+    }).eq('id', card.id);
+    await supabase.from('solicitacoes_mover_card_planner').insert({
+      planner_task_id: card.planner_task_id,
+      br: card.br,
+      bucket_destino: BUCKETS_PLANNER.AVALIACAO_PRELIMINAR,
+      status: 'pendente',
+    });
     await carregarConhecPronto();
     setProcessandoCard(null);
   };
 
-  const finalizarProjeto = async (card, comDuvida, observacao) => {
+  const iniciarProjeto = async (card, dataPrevista, projetista) => {
+    setProcessandoCard(card.id);
+    await supabase.from('monitoramento_op_cards_planner').update({
+      data_iniciado: new Date().toISOString(),
+      data_prevista_finalizacao: dataPrevista || null,
+      projetista: projetista || null,
+    }).eq('id', card.id);
+    await supabase.from('solicitacoes_mover_card_planner').insert({
+      planner_task_id: card.planner_task_id,
+      br: card.br,
+      bucket_destino: BUCKETS_PLANNER.PROJETOS_EM_ANDAMENTO,
+      status: 'pendente',
+    });
+    setModalIniciar(null);
+    await carregarConhecPronto();
+    setProcessandoCard(null);
+  };
+
+  const finalizarProjeto = async (card, comDuvida, observacao, motivoAtraso) => {
     setProcessandoCard(card.id);
     await supabase.from('monitoramento_op_cards_planner').update({
       data_finalizado: new Date().toISOString(),
       finalizado_com_duvida: comDuvida,
       observacao_duvida: observacao || null,
+      motivo_atraso: motivoAtraso || null,
     }).eq('id', card.id);
 
     await supabase.from('solicitacoes_mover_card_planner').insert({
       planner_task_id: card.planner_task_id,
       br: card.br,
-      bucket_destino: comDuvida ? 'Dúvidas Técnicas' : "OP's Geradas",
+      bucket_destino: comDuvida ? BUCKETS_PLANNER.DUVIDAS_TECNICAS : BUCKETS_PLANNER.OPS_GERADAS,
       status: 'pendente',
     });
 
@@ -4915,8 +4967,14 @@ function MonitoramentoOP() {
   const [tick, setTick] = useState(0); // força recálculo do tempo ao vivo a cada segundo
   const carregarOpsGeradas = useCallback(async () => {
     setLoadingOpsGeradas(true);
+    // Não usa bucket_atual (isso só é atualizado pelo Fluxo 1, que só rastreia
+    // "Conhecimento Pronto") -- usa nosso próprio controle: já foi finalizado
+    // normalmente (sem dúvida) e ainda não passou pela verificação das OPs.
     const { data } = await supabase.from('v_monitoramento_op_cards_planner').select('*')
-      .eq('bucket_atual', "OP's Geradas").eq('planner_excluido', false)
+      .not('data_finalizado', 'is', null)
+      .eq('finalizado_com_duvida', false)
+      .neq('status_verificacao_op', 'finalizado')
+      .eq('planner_excluido', false)
       .order('br');
     setCardsOpsGeradas(data || []);
     const brs = [...new Set((data || []).map(c => c.br).filter(Boolean))];
@@ -4967,12 +5025,7 @@ function MonitoramentoOP() {
       ultimo_inicio_verificacao: null,
       finalizado_verificacao_em: new Date().toISOString(),
     }).eq('id', card.id);
-    await supabase.from('solicitacoes_mover_card_planner').insert({
-      planner_task_id: card.planner_task_id,
-      br: card.br,
-      bucket_destino: 'Finaliza processo',
-      status: 'pendente',
-    });
+    // Não precisa mover — já está no bucket final "OP's GERADAS", que é o último da esteira
     await carregarOpsGeradas();
   };
 
@@ -4987,7 +5040,7 @@ function MonitoramentoOP() {
     await supabase.from('solicitacoes_mover_card_planner').insert({
       planner_task_id: card.planner_task_id,
       br: card.br,
-      bucket_destino: 'Dúvidas Técnicas',
+      bucket_destino: BUCKETS_PLANNER.DUVIDAS_TECNICAS,
       status: 'pendente',
     });
     setModalPendencia(null);
@@ -5282,7 +5335,7 @@ function MonitoramentoOP() {
     <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
 
       <div style={{ display: 'flex', gap: 4, borderBottom: `1px solid ${T.line}` }}>
-        {[{ id: 'op', label: 'Monitoramento de OP' }, { id: 'cotacao', label: `Cotação — Card no Planner${solicitacoes.filter(s => !s.card_planner_solicitado).length ? ` (${solicitacoes.filter(s => !s.card_planner_solicitado).length})` : ''}` }, { id: 'cards_br_op', label: `Cards BR/OP (Comercial)${cardsBrOp.filter(c => !c.op).length ? ` (${cardsBrOp.filter(c => !c.op).length} sem OP)` : ''}` }, { id: 'conhecimento_pronto', label: `Conhecimento Pronto${(cardsConhecPronto.filter(c => !c.data_finalizado).length + cardsOpsGeradas.filter(c => c.status_verificacao_op !== 'finalizado').length) ? ` (${cardsConhecPronto.filter(c => !c.data_finalizado).length + cardsOpsGeradas.filter(c => c.status_verificacao_op !== 'finalizado').length})` : ''}` }].map(aba => (
+        {[{ id: 'op', label: 'Monitoramento de OP' }, { id: 'cotacao', label: `Cotação — Card no Planner${solicitacoes.filter(s => !s.card_planner_solicitado).length ? ` (${solicitacoes.filter(s => !s.card_planner_solicitado).length})` : ''}` }, { id: 'conhecimento_pronto', label: `Fluxo Conhecimento → OP${(cardsConhecPronto.filter(c => !c.data_finalizado).length + cardsOpsGeradas.filter(c => c.status_verificacao_op !== 'finalizado').length) ? ` (${cardsConhecPronto.filter(c => !c.data_finalizado).length + cardsOpsGeradas.filter(c => c.status_verificacao_op !== 'finalizado').length})` : ''}` }].map(aba => (
           <button key={aba.id} onClick={() => setAbaMonitoramento(aba.id)}
             style={{
               background: 'none', border: 'none', cursor: 'pointer', padding: '10px 16px', fontSize: 13, fontWeight: 600,
@@ -5455,11 +5508,17 @@ function MonitoramentoOP() {
                 <div>
                   <div style={{ fontSize: 14, fontWeight: 700 }}>
                     <span style={{ fontFamily: FONT_DISPLAY, color: T.blueText }}>{c.br}</span>
+                    {c.cliente_nome && <span style={{ fontSize: 12, fontWeight: 400, color: T.inkDim }}> — {c.cliente_nome}</span>}
                   </div>
                   <div style={{ fontSize: 12, color: T.inkDim, marginTop: 2 }}>{c.planner_titulo}</div>
                   <div style={{ fontSize: 11, color: T.inkFaint, marginTop: 4 }}>
-                    {c.data_iniciado ? `Iniciado em ${fmtData(c.data_iniciado)}` : 'Ainda não iniciado'}
+                    {c.data_abertura_cp && `Aberto em ${fmtData(c.data_abertura_cp)} · `}
+                    {c.ciente_em && `Ciente em ${fmtData(c.ciente_em)} (${c.ciente_por || '?'}) · `}
+                    {c.data_iniciado ? `Iniciado em ${fmtData(c.data_iniciado)}` : c.ciente_em ? 'Aguardando iniciar' : 'Ainda não visto'}
+                    {c.projetista && ` · Projetista: ${c.projetista}`}
+                    {c.data_prevista_finalizacao && ` · Previsto: ${fmtData(c.data_prevista_finalizacao)}`}
                     {c.data_finalizado && ` · Finalizado em ${fmtData(c.data_finalizado)} · Tempo: ${fmtHoras(c.horas_gastas)}`}
+                    {c.atrasou && <span style={{ color: T.rustText, fontWeight: 700 }}> · ⚠ Atrasou</span>}
                   </div>
                 </div>
                 <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -5467,10 +5526,15 @@ function MonitoramentoOP() {
                     <span style={{ fontSize: 10.5, fontWeight: 700, color: c.finalizado_com_duvida ? T.amberText : T.oliveText, background: c.finalizado_com_duvida ? T.amberSoft : T.oliveSoft, padding: '4px 10px', borderRadius: 4 }}>
                       {c.finalizado_com_duvida ? '⚠ Enviado p/ Dúvidas Técnicas' : "✓ Enviado p/ OP's Geradas"}
                     </span>
+                  ) : !c.ciente_em ? (
+                    <button onClick={() => marcarCienteDemanda(c)} disabled={processandoCard === c.id}
+                      style={{ fontSize: 12, fontWeight: 700, color: '#fff', background: T.inkDim, border: 'none', borderRadius: 6, padding: '8px 16px', cursor: 'pointer', opacity: processandoCard === c.id ? 0.6 : 1 }}>
+                      {processandoCard === c.id ? 'Confirmando…' : '👁 Ciente da Demanda'}
+                    </button>
                   ) : !c.data_iniciado ? (
-                    <button onClick={() => iniciarProjeto(c)} disabled={processandoCard === c.id}
-                      style={{ fontSize: 12, fontWeight: 700, color: '#fff', background: T.blueText, border: 'none', borderRadius: 6, padding: '8px 16px', cursor: 'pointer', opacity: processandoCard === c.id ? 0.6 : 1 }}>
-                      {processandoCard === c.id ? 'Iniciando…' : '▶ Iniciar Projeto'}
+                    <button onClick={() => setModalIniciar(c)}
+                      style={{ fontSize: 12, fontWeight: 700, color: '#fff', background: T.blueText, border: 'none', borderRadius: 6, padding: '8px 16px', cursor: 'pointer' }}>
+                      ▶ Iniciar Projeto
                     </button>
                   ) : (
                     <button onClick={() => setModalFinalizar(c)}
@@ -5485,19 +5549,58 @@ function MonitoramentoOP() {
         </Panel>
       )}
 
-      {modalFinalizar && (
+      {modalIniciar && (
+        <Overlay onClose={() => setModalIniciar(null)}>
+          <div className="scale-in" style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, width: '100%', maxWidth: 440, padding: 24, boxShadow: '0 24px 60px rgba(0,0,0,.18)' }}>
+            <h3 style={{ fontFamily: FONT_DISPLAY, fontSize: 17, fontWeight: 700, margin: '0 0 4px' }}>Iniciar {modalIniciar.br}</h3>
+            <p style={{ fontSize: 12.5, color: T.inkFaint, margin: '0 0 16px' }}>Só pra registrar direitinho o acompanhamento:</p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div>
+                <label style={{ fontSize: 11.5, fontWeight: 600, color: T.inkDim, display: 'block', marginBottom: 4 }}>Data prevista de finalização</label>
+                <input id="input-data-prevista" type="date" style={{ ...inputStyle(), width: '100%' }} />
+              </div>
+              <div>
+                <label style={{ fontSize: 11.5, fontWeight: 600, color: T.inkDim, display: 'block', marginBottom: 4 }}>Projetista responsável</label>
+                <input id="input-projetista" type="text" defaultValue={currentUser?.nome || ''} placeholder="Nome de quem vai fazer" style={{ ...inputStyle(), width: '100%' }} />
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 8, marginTop: 18 }}>
+              <button onClick={() => iniciarProjeto(modalIniciar, document.getElementById('input-data-prevista').value, document.getElementById('input-projetista').value)}
+                disabled={processandoCard === modalIniciar.id}
+                style={{ fontSize: 13, fontWeight: 700, color: '#fff', background: T.blueText, border: 'none', borderRadius: 8, padding: '10px 18px', cursor: 'pointer' }}>
+                {processandoCard === modalIniciar.id ? 'Iniciando…' : '▶ Iniciar'}
+              </button>
+              <button onClick={() => setModalIniciar(null)}
+                style={{ fontSize: 12.5, fontWeight: 600, color: T.inkFaint, background: 'transparent', border: `1px solid ${T.line}`, borderRadius: 8, padding: '10px 16px', cursor: 'pointer' }}>
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </Overlay>
+      )}
+
+      {modalFinalizar && (() => {
+        const hoje = new Date().toISOString().slice(0, 10);
+        const estaAtrasado = modalFinalizar.data_prevista_finalizacao && hoje > modalFinalizar.data_prevista_finalizacao;
+        return (
         <Overlay onClose={() => setModalFinalizar(null)}>
           <div className="scale-in" style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, width: '100%', maxWidth: 460, padding: 24, boxShadow: '0 24px 60px rgba(0,0,0,.18)' }}>
             <h3 style={{ fontFamily: FONT_DISPLAY, fontSize: 17, fontWeight: 700, margin: '0 0 4px' }}>Finalizar {modalFinalizar.br}</h3>
             <p style={{ fontSize: 12.5, color: T.inkFaint, margin: '0 0 16px' }}>Como foi essa etapa?</p>
+            {estaAtrasado && (
+              <div style={{ marginBottom: 14 }}>
+                <label style={{ fontSize: 11.5, fontWeight: 600, color: T.rustText, display: 'block', marginBottom: 4 }}>⚠ Passou da data prevista ({fmtData(modalFinalizar.data_prevista_finalizacao)}) — motivo do atraso:</label>
+                <textarea id="input-motivo-atraso" rows={2} style={{ ...inputStyle(), width: '100%', resize: 'vertical' }} placeholder="Ex: aguardou retorno do cliente…" />
+              </div>
+            )}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              <button onClick={() => finalizarProjeto(modalFinalizar, false, null)} disabled={processandoCard === modalFinalizar.id}
+              <button onClick={() => finalizarProjeto(modalFinalizar, false, null, estaAtrasado ? document.getElementById('input-motivo-atraso').value : null)} disabled={processandoCard === modalFinalizar.id}
                 style={{ fontSize: 13, fontWeight: 700, color: '#fff', background: T.oliveText, border: 'none', borderRadius: 8, padding: '12px 16px', cursor: 'pointer', textAlign: 'left' }}>
                 ✓ Finalizado normalmente — mover pra "OP's Geradas"
               </button>
               <button onClick={() => {
                 const obs = prompt('Descreve rapidamente a dúvida técnica (opcional):') || '';
-                finalizarProjeto(modalFinalizar, true, obs);
+                finalizarProjeto(modalFinalizar, true, obs, estaAtrasado ? document.getElementById('input-motivo-atraso')?.value : null);
               }} disabled={processandoCard === modalFinalizar.id}
                 style={{ fontSize: 13, fontWeight: 700, color: '#fff', background: T.amberText, border: 'none', borderRadius: 8, padding: '12px 16px', cursor: 'pointer', textAlign: 'left' }}>
                 ⚠ Tem dúvida técnica — mover pra "Dúvidas Técnicas"
@@ -5509,7 +5612,8 @@ function MonitoramentoOP() {
             </div>
           </div>
         </Overlay>
-      )}
+        );
+      })()}
 
       {abaMonitoramento === 'conhecimento_pronto' && (
         <>
