@@ -5027,7 +5027,7 @@ function PlaquinhaEquipamento({ currentUser }) {
                         {[
                           ['N. Ordem de serviço', 'numero_ordem_servico', 'text', 'Preenche manualmente…'],
                           ['N. Desenho', 'numero_desenho', 'text', 'Preenche manualmente… *obrigatório'],
-                          ['Mês/ano', 'mes_ano', 'date', null],
+                          ['Mês/ano', 'mes_ano', 'month', null],
                           ['N. Pedido de compra', 'numero_pedido_compra', 'text', null],
                           ['N. Projeto (BR)', 'br', 'text', null],
                           ['Cliente', 'cliente_nome', 'text', null],
@@ -5036,7 +5036,26 @@ function PlaquinhaEquipamento({ currentUser }) {
                             <td style={{ padding: '7px 16px', fontWeight: 700, color: T.inkDim, width: 180, background: `${T.panelAlt}88` }}>{label}</td>
                             <td style={{ padding: '7px 16px' }}>
                               {item.status === 'preenchida' ? (
-                                tipo === 'date' ? (item[nome] ? fmtMesAno(item[nome]) : '—') : (item[nome] || '—')
+                                nome === 'mes_ano' ? (item[nome] ? fmtMesAno(item[nome]) : '—') : (item[nome] || '—')
+                              ) : nome === 'mes_ano' ? (
+                                <div style={{ display: 'flex', gap: 6 }}>
+                                  <select value={campo(item, nome) ? new Date(campo(item, nome) + 'T12:00:00').getMonth() : ''}
+                                    onChange={e => {
+                                      const anoAtual = campo(item, nome) ? new Date(campo(item, nome) + 'T12:00:00').getFullYear() : new Date().getFullYear();
+                                      const mes = String(Number(e.target.value) + 1).padStart(2, '0');
+                                      setCampo(item.id, nome, `${anoAtual}-${mes}-01`);
+                                    }}
+                                    style={{ ...inputStyle(), border: 'none', padding: '2px 4px', background: 'transparent', flex: 1 }}>
+                                    <option value="">Mês…</option>
+                                    {MESES_PT.map((m, i) => <option key={m} value={i}>{m}</option>)}
+                                  </select>
+                                  <input type="number" placeholder="Ano" value={campo(item, nome) ? new Date(campo(item, nome) + 'T12:00:00').getFullYear() : ''}
+                                    onChange={e => {
+                                      const mesAtual = campo(item, nome) ? String(new Date(campo(item, nome) + 'T12:00:00').getMonth() + 1).padStart(2, '0') : '01';
+                                      setCampo(item.id, nome, e.target.value ? `${e.target.value}-${mesAtual}-01` : '');
+                                    }}
+                                    style={{ ...inputStyle(), border: 'none', padding: '2px 4px', background: 'transparent', width: 80 }} />
+                                </div>
                               ) : (
                                 <input type={tipo} value={campo(item, nome)} onChange={e => setCampo(item.id, nome, e.target.value)}
                                   placeholder={placeholder || undefined}
