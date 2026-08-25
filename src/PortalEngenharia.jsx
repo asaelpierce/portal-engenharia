@@ -4894,11 +4894,12 @@ function PlaquinhaEquipamento({ currentUser }) {
   };
 
   const duplicar = async (item) => {
-    await supabase.from('plaquinhas_equipamento').insert({
+    const { error } = await supabase.from('plaquinhas_equipamento').insert({
       br: item.br, cliente_nome: item.cliente_nome, numero_pedido_compra: item.numero_pedido_compra,
       mes_ano: item.mes_ano, data_prevista_entrega: item.data_prevista_entrega,
-      origem_deteccao: item.origem_deteccao, status: 'pendente',
+      origem_deteccao: 'manual', status: 'pendente', // sempre 'manual' — evita colidir com a trava de único por BR das origens automáticas
     });
+    if (error) { alert(`Erro ao duplicar: ${error.message}`); return; }
     setAba('pendentes');
     await carregar();
   };
