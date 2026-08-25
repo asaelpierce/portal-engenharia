@@ -4797,6 +4797,7 @@ function VerificacaoProjetos({ currentUser }) {
 
 function PlaquinhaEquipamento({ currentUser }) {
   const [aba, setAba] = useState('pendentes'); // 'pendentes' | 'preenchidas'
+  const [origemAba, setOrigemAba] = useState('compras'); // 'compras' | 'automacao'
   const [itens, setItens] = useState([]);
   const [loading, setLoading] = useState(true);
   const [edicoes, setEdicoes] = useState({}); // id -> { campo: valor }
@@ -4813,11 +4814,27 @@ function PlaquinhaEquipamento({ currentUser }) {
   }, []);
   useEffect(() => { carregar(); }, [carregar]);
 
+  // Primeiro agrupa TUDO por BR, pra decidir de qual aba de origem cada BR pertence
+  // (se tiver QUALQUER item vindo do Portal de Compras/Sankhya, o grupo inteiro fica
+  // lá — nunca aparece duplicado nas duas abas)
+  const origemPorBr = useMemo(() => {
+    const mapa = new Map();
+    itens.forEach(item => {
+      const chave = item.br || `sem-br-${item.id}`;
+      const ehCompras = item.origem_deteccao === 'fabricado_kalenborn' || item.origem_deteccao === 'recebido_cliente';
+      if (ehCompras) mapa.set(chave, 'compras');
+      else if (!mapa.has(chave)) mapa.set(chave, 'automacao');
+    });
+    return mapa;
+  }, [itens]);
+
   const pendentes = itens.filter(i => i.status === 'pendente');
   const preenchidas = itens.filter(i => i.status === 'preenchida');
-  const listaAtual = (aba === 'pendentes' ? pendentes : preenchidas).filter(i =>
-    !busca.trim() || (i.br || '').toLowerCase().includes(busca.toLowerCase()) || (i.cliente_nome || '').toLowerCase().includes(busca.toLowerCase())
-  );
+  const listaAtual = (aba === 'pendentes' ? pendentes : preenchidas).filter(i => {
+    const chave = i.br || `sem-br-${i.id}`;
+    if (origemPorBr.get(chave) !== origemAba) return false;
+    return !busca.trim() || (i.br || '').toLowerCase().includes(busca.toLowerCase()) || (i.cliente_nome || '').toLowerCase().includes(busca.toLowerCase());
+  });
 
   // Agrupa por BR — tudo do mesmo projeto fica sempre junto, não importa a ordem/criação
   const grupos = useMemo(() => {
@@ -4868,7 +4885,7 @@ function PlaquinhaEquipamento({ currentUser }) {
     }).eq('id', item.id);
 
     if (enviarEmail && emailDestino) {
-      const corpo = `PLAQUINHA DE EQUIPAMENTO\n\nN. Ordem de serviço: ${dadosFinais.numero_ordem_servico || '—'}\nN. Desenho: ${dadosFinais.numero_desenho}\nMês/ano: ${fmtMesAno(dadosFinais.mes_ano)}\nN. Pedido de compra: ${dadosFinais.numero_pedido_compra || '—'}\nN. Projeto: ${dadosFinais.br || '—'}\nCliente: ${dadosFinais.cliente_nome || '—'}\n\nPreenchido por ${currentUser?.nome || '?'}.`;
+      const corpo = `PLAQUINHA DE EQUIPAMENTO\n\nN. Ordem de serviço: ${dadosFinais.numero_ordem_servico || '—'}\nN. Desenho: ${dadosFinais.numero_desenho}\nMês/ano: ${fmtMesAno(dadosFinais.mes_ano)}\nN. Pedido de compra: ${dadosFinais.numero_pedido_compra || '—'}\nN. Projeto: ${dadosFinais.br || '—'}\nCliente: ${dadosFinais.cliente_nome || '—'}\n\nBaixar o arquivo Word: https://sieztnpchjjmrwrmrhoa.supabase.co/functions/v1/gerar-plaquinha-docx?id=${item.id}\n\nPreenchido por ${currentUser?.nome || '?'}.`;
       await supabase.from('solicitacoes_email_plaquinha').insert({
         plaquinha_id: item.id,
         destinatario_email: emailDestino,
@@ -4926,6 +4943,22 @@ function PlaquinhaEquipamento({ currentUser }) {
     <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 18, maxWidth: 900 }}>
       <div style={{ fontSize: 12.5, color: T.inkFaint, background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 8, padding: '10px 14px' }}>
         Todos os campos são editáveis — corrige se algo vier errado. Itens do mesmo BR ficam sempre agrupados juntos.
+      </div>
+
+      <div style={{ display: 'flex', gap: 4, borderBottom: `1px solid ${T.line}` }}>
+        {[
+          { id: 'compras', label: `📋 Portal de Compras (regra Sankhya)` },
+          { id: 'automacao', label: `🤖 Automação / Comercial` },
+        ].map(o => (
+          <button key={o.id} onClick={() => setOrigemAba(o.id)}
+            style={{
+              background: 'none', border: 'none', cursor: 'pointer', padding: '10px 16px', fontSize: 13, fontWeight: 600,
+              color: origemAba === o.id ? T.terracotta : T.inkFaint,
+              borderBottom: `2px solid ${origemAba === o.id ? T.terracotta : 'transparent'}`, marginBottom: -1,
+            }}>
+            {o.label}
+          </button>
+        ))}
       </div>
 
       <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'space-between' }}>
@@ -5032,10 +5065,16 @@ function PlaquinhaEquipamento({ currentUser }) {
                         <span style={{ fontSize: 11, color: T.inkFaint }}>
                           Preenchido por {item.preenchido_por || '?'} em {new Date(item.preenchido_em).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' })}
                         </span>
-                        <button onClick={() => refazer(item)}
-                          style={{ fontSize: 11.5, fontWeight: 600, color: T.amberText, background: 'transparent', border: `1px solid ${T.amber}66`, borderRadius: 5, padding: '5px 10px', cursor: 'pointer' }}>
-                          ↺ Refazer
-                        </button>
+                        <div style={{ display: 'flex', gap: 8 }}>
+                          <a href={`https://sieztnpchjjmrwrmrhoa.supabase.co/functions/v1/gerar-plaquinha-docx?id=${item.id}`}
+                            style={{ fontSize: 11.5, fontWeight: 700, color: '#fff', background: T.blueText, borderRadius: 5, padding: '5px 12px', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                            ⬇ Baixar Word
+                          </a>
+                          <button onClick={() => refazer(item)}
+                            style={{ fontSize: 11.5, fontWeight: 600, color: T.amberText, background: 'transparent', border: `1px solid ${T.amber}66`, borderRadius: 5, padding: '5px 10px', cursor: 'pointer' }}>
+                            ↺ Refazer
+                          </button>
+                        </div>
                       </div>
                     )}
                   </div>
