@@ -4803,6 +4803,7 @@ function PlaquinhaEquipamento({ currentUser }) {
   const [salvandoId, setSalvandoId] = useState(null);
   const [busca, setBusca] = useState('');
   const [mostrarCriarManual, setMostrarCriarManual] = useState(false);
+  const [modalConcluir, setModalConcluir] = useState(null); // item sendo concluído agora
 
   const carregar = useCallback(async () => {
     setLoading(true);
@@ -4818,31 +4819,64 @@ function PlaquinhaEquipamento({ currentUser }) {
     !busca.trim() || (i.br || '').toLowerCase().includes(busca.toLowerCase()) || (i.cliente_nome || '').toLowerCase().includes(busca.toLowerCase())
   );
 
-  const fmtMesAno = (d) => !d ? '—' : new Date(d + 'T12:00:00').toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' }).toUpperCase();
+  const MESES_PT = ['JANEIRO','FEVEREIRO','MARÇO','ABRIL','MAIO','JUNHO','JULHO','AGOSTO','SETEMBRO','OUTUBRO','NOVEMBRO','DEZEMBRO'];
+  const fmtMesAno = (d) => {
+    if (!d) return '—';
+    const data = new Date(d + 'T12:00:00');
+    const ano2digitos = String(data.getFullYear()).slice(-2);
+    return `${MESES_PT[data.getMonth()]}/${ano2digitos}`;
+  };
   const fmtDataCurta = (d) => !d ? '—' : new Date(d + 'T12:00:00').toLocaleDateString('pt-BR');
 
   const campo = (item, nome) => edicoes[item.id]?.[nome] ?? item[nome] ?? '';
   const setCampo = (itemId, nome, valor) => setEdicoes(prev => ({ ...prev, [itemId]: { ...prev[itemId], [nome]: valor } }));
 
-  const salvar = async (item) => {
+  const salvar = (item) => {
     const desenho = campo(item, 'numero_desenho');
     const mesAno = campo(item, 'mes_ano');
     if (!desenho) { alert('Preenche o N. Desenho antes de salvar.'); return; }
     if (!mesAno) { alert('Preenche o Mês/Ano antes de salvar.'); return; }
+    setModalConcluir(item);
+  };
+
+  const concluirFinal = async (item, enviarEmail, emailDestino) => {
     setSalvandoId(item.id);
-    await supabase.from('plaquinhas_equipamento').update({
+    const dadosFinais = {
       br: campo(item, 'br') || null,
       cliente_nome: campo(item, 'cliente_nome') || null,
       numero_pedido_compra: campo(item, 'numero_pedido_compra') || null,
-      numero_desenho: desenho,
+      numero_desenho: campo(item, 'numero_desenho'),
       numero_ordem_servico: campo(item, 'numero_ordem_servico') || null,
-      mes_ano: mesAno,
+      mes_ano: campo(item, 'mes_ano'),
+    };
+    await supabase.from('plaquinhas_equipamento').update({
+      ...dadosFinais,
       status: 'preenchida',
       preenchido_por: currentUser?.nome || null,
       preenchido_em: new Date().toISOString(),
     }).eq('id', item.id);
+
+    if (enviarEmail && emailDestino) {
+      const corpo = `PLAQUINHA DE EQUIPAMENTO\n\nN. Ordem de serviço: ${dadosFinais.numero_ordem_servico || '—'}\nN. Desenho: ${dadosFinais.numero_desenho}\nMês/ano: ${fmtMesAno(dadosFinais.mes_ano)}\nN. Pedido de compra: ${dadosFinais.numero_pedido_compra || '—'}\nN. Projeto: ${dadosFinais.br || '—'}\nCliente: ${dadosFinais.cliente_nome || '—'}\n\nPreenchido por ${currentUser?.nome || '?'}.`;
+      await supabase.from('solicitacoes_email_plaquinha').insert({
+        plaquinha_id: item.id,
+        destinatario_email: emailDestino,
+        assunto: `Plaquinha de Equipamento — ${dadosFinais.br || dadosFinais.numero_desenho}`,
+        corpo,
+        status: 'pendente',
+      });
+    }
+
+    setModalConcluir(null);
     await carregar();
     setSalvandoId(null);
+  };
+
+  const refazer = async (item) => {
+    await supabase.from('plaquinhas_equipamento').update({
+      status: 'pendente', preenchido_por: null, preenchido_em: null,
+    }).eq('id', item.id);
+    await carregar();
   };
 
   const salvarSemFinalizar = async (item) => {
@@ -4865,11 +4899,12 @@ function PlaquinhaEquipamento({ currentUser }) {
       mes_ano: item.mes_ano, data_prevista_entrega: item.data_prevista_entrega,
       origem_deteccao: item.origem_deteccao, status: 'pendente',
     });
+    setAba('pendentes');
     await carregar();
   };
 
   return (
-    <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 18, maxWidth: 900 }}>
+    <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 18, maxWidth: 1400 }}>
       <div style={{ fontSize: 12.5, color: T.inkFaint, background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 8, padding: '10px 14px' }}>
         Todos os campos são editáveis — corrige se algo vier errado. Se um BR precisar de mais de uma plaquinha (peça diferente), usa "Duplicar" e só troca o desenho.
       </div>
@@ -4902,11 +4937,11 @@ function PlaquinhaEquipamento({ currentUser }) {
 
       {mostrarCriarManual && <CriarPlaquinhaManual onFechar={() => setMostrarCriarManual(false)} onCriado={carregar} />}
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(460px, 1fr))', gap: 12, alignItems: 'start' }}>
         {loading ? (
-          <div style={{ textAlign: 'center', padding: 30, color: T.inkFaint }}>Carregando…</div>
+          <div style={{ textAlign: 'center', padding: 30, color: T.inkFaint, gridColumn: '1 / -1' }}>Carregando…</div>
         ) : listaAtual.length === 0 ? (
-          <div style={{ textAlign: 'center', padding: 40, color: T.inkFaint, fontSize: 13 }}>Nada por aqui.</div>
+          <div style={{ textAlign: 'center', padding: 40, color: T.inkFaint, fontSize: 13, gridColumn: '1 / -1' }}>Nada por aqui.</div>
         ) : listaAtual.map(item => (
           <div key={item.id} style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
             <div style={{ padding: '8px 14px', borderBottom: `1px solid ${T.line}`, background: T.panelAlt, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -4960,14 +4995,98 @@ function PlaquinhaEquipamento({ currentUser }) {
                 </button>
               </div>
             ) : (
-              <div style={{ padding: '8px 14px', borderTop: `1px solid ${T.line}`, fontSize: 11, color: T.inkFaint }}>
-                Preenchido por {item.preenchido_por || '?'} em {new Date(item.preenchido_em).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' })}
+              <div style={{ padding: '8px 14px', borderTop: `1px solid ${T.line}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <span style={{ fontSize: 11, color: T.inkFaint }}>
+                  Preenchido por {item.preenchido_por || '?'} em {new Date(item.preenchido_em).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                </span>
+                <button onClick={() => refazer(item)}
+                  style={{ fontSize: 11.5, fontWeight: 600, color: T.amberText, background: 'transparent', border: `1px solid ${T.amber}66`, borderRadius: 5, padding: '5px 10px', cursor: 'pointer' }}>
+                  ↺ Refazer
+                </button>
               </div>
             )}
           </div>
         ))}
       </div>
+
+      {modalConcluir && (
+        <ModalConcluirPlaquinha item={modalConcluir} currentUser={currentUser}
+          onFechar={() => setModalConcluir(null)}
+          onConfirmar={(comEmail, email) => concluirFinal(modalConcluir, comEmail, email)}
+          salvando={salvandoId === modalConcluir.id} />
+      )}
     </div>
+  );
+}
+
+function ModalConcluirPlaquinha({ item, currentUser, onFechar, onConfirmar, salvando }) {
+  const [enviarEmail, setEnviarEmail] = useState(false);
+  const [textoNome, setTextoNome] = useState('');
+  const [emailEscolhido, setEmailEscolhido] = useState('');
+  const [colaboradores, setColaboradores] = useState([]);
+  const [mostrarSugestoes, setMostrarSugestoes] = useState(false);
+
+  useEffect(() => {
+    supabase.from('colaboradores').select('nome,email').eq('ativo', true).not('email', 'is', null).order('nome')
+      .then(({ data }) => setColaboradores(data || []));
+  }, []);
+
+  const sugestoes = textoNome.trim()
+    ? colaboradores.filter(c => c.nome.toLowerCase().includes(textoNome.toLowerCase()))
+    : [];
+
+  const escolher = (c) => {
+    setTextoNome(`${c.nome} <${c.email}>`);
+    setEmailEscolhido(c.email);
+    setMostrarSugestoes(false);
+  };
+
+  return (
+    <Overlay onClose={onFechar}>
+      <div className="scale-in" style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, width: '100%', maxWidth: 440, padding: 24, boxShadow: '0 24px 60px rgba(0,0,0,.18)' }}>
+        <h3 style={{ fontFamily: FONT_DISPLAY, fontSize: 17, fontWeight: 700, margin: '0 0 4px' }}>Concluir plaquinha {item.br ? `— ${item.br}` : ''}</h3>
+        <p style={{ fontSize: 12.5, color: T.inkFaint, margin: '0 0 16px' }}>Quer mandar por e-mail agora que terminou?</p>
+
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, marginBottom: 12, cursor: 'pointer' }}>
+          <input type="checkbox" checked={enviarEmail} onChange={e => setEnviarEmail(e.target.checked)} />
+          Enviar por e-mail
+        </label>
+
+        {enviarEmail && (
+          <div style={{ position: 'relative', marginBottom: 14 }}>
+            <input value={textoNome}
+              onChange={e => { setTextoNome(e.target.value); setEmailEscolhido(''); setMostrarSugestoes(true); }}
+              onFocus={() => setMostrarSugestoes(true)}
+              placeholder="Digita o nome da pessoa…" style={{ ...inputStyle(), width: '100%' }} />
+            {mostrarSugestoes && sugestoes.length > 0 && (
+              <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, background: T.panel, border: `1px solid ${T.line}`, borderRadius: 8, marginTop: 4, boxShadow: '0 8px 24px rgba(0,0,0,.12)', zIndex: 10, maxHeight: 200, overflowY: 'auto' }}>
+                {sugestoes.map(c => (
+                  <div key={c.email} onClick={() => escolher(c)}
+                    style={{ padding: '8px 12px', cursor: 'pointer', fontSize: 12.5, borderBottom: `1px solid ${T.lineSoft}` }}
+                    onMouseDown={e => e.preventDefault()}>
+                    <div style={{ fontWeight: 700 }}>{c.nome}</div>
+                    <div style={{ color: T.inkFaint, fontSize: 11 }}>{c.email}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+            {!emailEscolhido && textoNome.includes('@') && (
+              <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 4 }}>Usando o e-mail digitado direto, já que não achou ninguém com esse nome.</div>
+            )}
+          </div>
+        )}
+
+        <div style={{ display: 'flex', gap: 8, marginTop: enviarEmail ? 0 : 14 }}>
+          <button onClick={() => onConfirmar(enviarEmail, emailEscolhido || textoNome)} disabled={salvando || (enviarEmail && !(emailEscolhido || textoNome.includes('@')))}
+            style={{ fontSize: 13, fontWeight: 700, color: '#fff', background: T.oliveText, border: 'none', borderRadius: 8, padding: '10px 18px', cursor: 'pointer', opacity: (enviarEmail && !(emailEscolhido || textoNome.includes('@'))) ? 0.5 : 1 }}>
+            {salvando ? 'Concluindo…' : enviarEmail ? '✓ Concluir e enviar' : '✓ Só concluir'}
+          </button>
+          <button onClick={onFechar} style={{ fontSize: 12.5, fontWeight: 600, color: T.inkFaint, background: 'transparent', border: `1px solid ${T.line}`, borderRadius: 8, padding: '10px 16px', cursor: 'pointer' }}>
+            Cancelar
+          </button>
+        </div>
+      </div>
+    </Overlay>
   );
 }
 
