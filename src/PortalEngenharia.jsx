@@ -558,6 +558,7 @@ function PortalConteudo({ currentUser, session }) {
           {renderTab('equipamentos', <TabErrorBoundary tab="Equipamentos de Terceiros"><EquipamentosTerceiros /></TabErrorBoundary>)}
           {renderTab('acompanhamento_servico', <TabErrorBoundary tab="Acompanhamento de Serviço"><AcompanhamentoServico /></TabErrorBoundary>)}
           {renderTab('monitoramento_op', <TabErrorBoundary tab="Monitoramento OP"><MonitoramentoOP currentUser={currentUser} /></TabErrorBoundary>)}
+          {renderTab('proposta_tecnica', <TabErrorBoundary tab="Proposta Técnica"><PropostaTecnica currentUser={currentUser} /></TabErrorBoundary>)}
           {renderTab('verificacao_projetos', <TabErrorBoundary tab="Verificação de Projetos"><VerificacaoProjetos currentUser={currentUser} /></TabErrorBoundary>)}
           {renderTab('analise_comercial', <TabErrorBoundary tab="Análise Comercial"><AnaliseComercial /></TabErrorBoundary>)}
           {renderTab('prospeccao_clientes', <TabErrorBoundary tab="Prospecção de Clientes"><ProspeccaoClientes /></TabErrorBoundary>)}
@@ -613,6 +614,7 @@ function Sidebar({ view, setView, pendCount, papel, telasPermitidas }) {
     { id: 'equipamentos', label: 'Equip. Terceiros',       icon: Webhook },
     { id: 'acompanhamento_servico', label: 'Falta Nota de Serviço', icon: AlertTriangle },
     { id: 'monitoramento_op', label: 'Monitoramento OP', icon: Gauge },
+    { id: 'proposta_tecnica', label: 'Proposta Técnica', icon: FileStack },
     { id: 'verificacao_projetos', label: 'Verificação de Projetos', icon: ClipboardCheck },
     { id: 'analise_comercial', label: 'Análise Comercial', icon: TrendingUp },
     { id: 'prospeccao_clientes', label: 'Prospecção de Clientes', icon: UserPlus },
@@ -4791,6 +4793,371 @@ function VerificacaoProjetos({ currentUser }) {
   );
 }
 
+function PropostaTecnica({ currentUser }) {
+  const [abaPT, setAbaPT] = useState('minhas_tarefas'); // 'direcionar' | 'minhas_tarefas' | 'aprovacao' | 'todas'
+  const [itens, setItens] = useState([]);
+  const [colaboradores, setColaboradores] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  const carregar = useCallback(async () => {
+    setLoading(true);
+    const [{ data }, { data: colabs }] = await Promise.all([
+      supabase.from('propostas_tecnicas').select('*, direcionado_para_nome:colaboradores!propostas_tecnicas_direcionado_para_fkey(nome), direcionado_por_nome:colaboradores!propostas_tecnicas_direcionado_por_fkey(nome), aprovado_por_nome:colaboradores!propostas_tecnicas_aprovado_por_fkey(nome)').order('created_at', { ascending: false }),
+      supabase.from('colaboradores').select('id,nome').eq('ativo', true).order('nome'),
+    ]);
+    setItens((data || []).map(d => ({
+      ...d,
+      direcionado_para_nome: d.direcionado_para_nome?.nome || null,
+      direcionado_por_nome: d.direcionado_por_nome?.nome || null,
+      aprovado_por_nome: d.aprovado_por_nome?.nome || null,
+    })));
+    setColaboradores(colabs || []);
+    setLoading(false);
+  }, []);
+  useEffect(() => { carregar(); }, [carregar]);
+
+  const meuId = colaboradores.find(c => c.nome === currentUser?.nome)?.id;
+  const minhasTarefas = itens.filter(i => i.direcionado_para === meuId && (i.status === 'aberta' || i.status === 'reprovada'));
+  const paraAprovar = itens.filter(i => i.status === 'entregue');
+
+  const fmtDataHora = (iso) => !iso ? '—' : new Date(iso).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+  const fmtData = (d) => !d ? '—' : new Date(d + 'T12:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit' });
+  const diasAberta = (item) => {
+    const inicio = new Date(item.direcionado_em);
+    const fim = item.entregue_em ? new Date(item.entregue_em) : new Date();
+    return Math.max(0, Math.floor((fim - inicio) / (1000 * 60 * 60 * 24)));
+  };
+  const atrasada = (item) => item.status !== 'aprovada' && new Date().toISOString().slice(0, 10) > item.prazo_entrega;
+
+  return (
+    <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 18, maxWidth: 1280 }}>
+      <div style={{ fontSize: 12.5, color: T.inkFaint, background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 8, padding: '10px 14px' }}>
+        Toda proposta técnica passa por aqui — direciona pra alguém, quem recebe vê como tarefa aberta, anexa o retorno, e entra pra aprovação. Dá pra ver quem está fazendo, quem não está, e quanto tempo está levando.
+      </div>
+
+      <div style={{ display: 'flex', gap: 4, borderBottom: `1px solid ${T.line}`, flexWrap: 'wrap' }}>
+        {[
+          { id: 'minhas_tarefas', label: `Minhas Tarefas${minhasTarefas.length ? ` (${minhasTarefas.length})` : ''}` },
+          { id: 'direcionar', label: 'Direcionar Nova' },
+          { id: 'aprovacao', label: `Aprovação${paraAprovar.length ? ` (${paraAprovar.length})` : ''}` },
+          { id: 'todas', label: `Todas (${itens.length})` },
+        ].map(aba => (
+          <button key={aba.id} onClick={() => setAbaPT(aba.id)}
+            style={{
+              background: 'none', border: 'none', cursor: 'pointer', padding: '10px 16px', fontSize: 13, fontWeight: 600,
+              color: abaPT === aba.id ? T.terracotta : T.inkFaint,
+              borderBottom: `2px solid ${abaPT === aba.id ? T.terracotta : 'transparent'}`, marginBottom: -1,
+            }}>
+            {aba.label}
+          </button>
+        ))}
+      </div>
+
+      {abaPT === 'direcionar' && <DirecionarPropostaTecnica currentUser={currentUser} colaboradores={colaboradores} onCriado={carregar} />}
+
+      {abaPT === 'minhas_tarefas' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {loading ? (
+            <div style={{ textAlign: 'center', padding: 30, color: T.inkFaint }}>Carregando…</div>
+          ) : minhasTarefas.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: 40, color: T.oliveText, fontWeight: 600, fontSize: 13 }}>✓ Nenhuma tarefa aberta pra você.</div>
+          ) : minhasTarefas.map(item => (
+            <TarefaCard key={item.id} item={item} currentUser={currentUser} onAtualizado={carregar} fmtDataHora={fmtDataHora} fmtData={fmtData} diasAberta={diasAberta} atrasada={atrasada} />
+          ))}
+        </div>
+      )}
+
+      {abaPT === 'aprovacao' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {loading ? (
+            <div style={{ textAlign: 'center', padding: 30, color: T.inkFaint }}>Carregando…</div>
+          ) : paraAprovar.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: 40, color: T.inkFaint, fontSize: 13 }}>Nada esperando aprovação.</div>
+          ) : paraAprovar.map(item => (
+            <AprovacaoCard key={item.id} item={item} currentUser={currentUser} onAtualizado={carregar} fmtDataHora={fmtDataHora} fmtData={fmtData} />
+          ))}
+        </div>
+      )}
+
+      {abaPT === 'todas' && (
+        <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+              <thead>
+                <tr style={{ background: T.panelAlt, borderBottom: `1px solid ${T.line}` }}>
+                  <th style={thFat(100)}>BR</th>
+                  <th style={thFat(140)}>Cliente</th>
+                  <th style={thFat(120)}>Direcionado pra</th>
+                  <th style={thFat(90)}>Direcionado em</th>
+                  <th style={thFat(80)}>Prazo</th>
+                  <th style={thFat(90)}>Status</th>
+                  <th style={{ ...thFat(70), textAlign: 'right' }}>Dias</th>
+                </tr>
+              </thead>
+              <tbody>
+                {itens.length === 0 ? (
+                  <tr><td colSpan={7} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Nenhuma proposta técnica ainda.</td></tr>
+                ) : itens.map(item => (
+                  <tr key={item.id} style={{ borderBottom: `1px solid ${T.lineSoft}`, background: atrasada(item) ? `${T.rustSoft}44` : 'transparent' }}>
+                    <td style={{ padding: '8px 12px', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText }}>{item.br || '—'}</td>
+                    <td style={{ padding: '8px 12px' }}>{item.cliente_nome || '—'}</td>
+                    <td style={{ padding: '8px 12px' }}>{item.direcionado_para_nome || '—'}</td>
+                    <td style={{ padding: '8px 12px', color: T.inkFaint }}>{fmtDataHora(item.direcionado_em)}</td>
+                    <td style={{ padding: '8px 12px', color: atrasada(item) ? T.rustText : T.inkFaint, fontWeight: atrasada(item) ? 700 : 400 }}>{fmtData(item.prazo_entrega)}</td>
+                    <td style={{ padding: '8px 12px' }}>
+                      <span style={{
+                        fontSize: 10.5, fontWeight: 700, padding: '3px 8px', borderRadius: 4,
+                        color: item.status === 'aprovada' ? T.oliveText : item.status === 'reprovada' ? T.rustText : item.status === 'entregue' ? T.blueText : T.amberText,
+                        background: item.status === 'aprovada' ? T.oliveSoft : item.status === 'reprovada' ? T.rustSoft : item.status === 'entregue' ? T.blueSoft : T.amberSoft,
+                      }}>
+                        {item.status === 'aberta' ? 'Aberta' : item.status === 'entregue' ? 'Aguard. aprovação' : item.status === 'aprovada' ? '✓ Aprovada' : '✗ Reprovada'}
+                      </span>
+                      {atrasada(item) && <span style={{ marginLeft: 5, fontSize: 10, fontWeight: 700, color: T.rustText }}>⚠ Atrasada</span>}
+                    </td>
+                    <td style={{ padding: '8px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY }}>{diasAberta(item)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DirecionarPropostaTecnica({ currentUser, colaboradores, onCriado }) {
+  const [br, setBr] = useState('');
+  const [cliente, setCliente] = useState('');
+  const [prazo, setPrazo] = useState('');
+  const [direcionadoPara, setDirecionadoPara] = useState('');
+  const [arquivoProposta, setArquivoProposta] = useState(null);
+  const [arquivoEmail, setArquivoEmail] = useState(null);
+  const [enviando, setEnviando] = useState(false);
+  const [progresso, setProgresso] = useState('');
+  const [erro, setErro] = useState(null);
+  const [sucesso, setSucesso] = useState(false);
+
+  const enviar = async () => {
+    if (!prazo || !direcionadoPara) { setErro('Prazo e destinatário são obrigatórios.'); return; }
+    if (!arquivoProposta && !arquivoEmail) { setErro('Anexa a proposta e/ou o e-mail.'); return; }
+    setErro(null);
+    setEnviando(true);
+
+    const uploads = {};
+    try {
+      for (const [campo, file] of [['proposta', arquivoProposta], ['email', arquivoEmail]]) {
+        if (!file) continue;
+        setProgresso(`Enviando ${file.name}…`);
+        const path = `proposta-tecnica/${Date.now()}_${file.name}`;
+        const { error: upErr } = await supabase.storage.from('propostas-arquivos').upload(path, file, { upsert: true });
+        if (upErr) throw new Error(`Erro ao enviar "${file.name}": ${upErr.message}`);
+        const { data: urlData } = supabase.storage.from('propostas-arquivos').getPublicUrl(path);
+        uploads[campo] = { url: urlData.publicUrl, nome: file.name };
+      }
+
+      setProgresso('Salvando…');
+      const { data: colabAtual } = await supabase.from('colaboradores').select('id').eq('nome', currentUser?.nome).maybeSingle();
+      const { data: novaProposta, error } = await supabase.from('propostas_tecnicas').insert({
+        br: br || null,
+        cliente_nome: cliente || null,
+        arquivo_proposta_url: uploads.proposta?.url || null,
+        arquivo_proposta_nome: uploads.proposta?.nome || null,
+        arquivo_email_url: uploads.email?.url || null,
+        arquivo_email_nome: uploads.email?.nome || null,
+        prazo_entrega: prazo,
+        direcionado_para: direcionadoPara,
+        direcionado_por: colabAtual?.id || null,
+        status: 'aberta',
+      }).select().single();
+      if (error) throw new Error(error.message);
+
+      // Enfileira a notificação do Teams (Power Automate processa depois)
+      const destinatario = colaboradores.find(c => c.id === direcionadoPara);
+      const { data: colabDestino } = await supabase.from('colaboradores').select('email').eq('id', direcionadoPara).maybeSingle();
+      if (colabDestino?.email) {
+        await supabase.from('solicitacoes_notificacao_teams').insert({
+          proposta_tecnica_id: novaProposta.id,
+          destinatario_email: colabDestino.email,
+          mensagem: `Nova proposta técnica direcionada pra você${br ? ` — ${br}` : ''}${cliente ? ` (${cliente})` : ''}. Prazo: ${new Date(prazo + 'T12:00:00').toLocaleDateString('pt-BR')}.`,
+          status: 'pendente',
+        });
+      }
+
+      setSucesso(true);
+      setBr(''); setCliente(''); setPrazo(''); setDirecionadoPara(''); setArquivoProposta(null); setArquivoEmail(null);
+      onCriado();
+      setTimeout(() => setSucesso(false), 4000);
+    } catch (e) {
+      setErro(e.message);
+    }
+    setEnviando(false);
+    setProgresso('');
+  };
+
+  return (
+    <Panel title="Direcionar proposta técnica" subtitle="Anexa a proposta e/ou o e-mail que você recebeu do comercial, define o prazo, e escolhe quem vai fazer.">
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 14, maxWidth: 480 }}>
+        {erro && <div style={{ background: T.rustSoft, color: T.rustText, borderRadius: 6, padding: '8px 12px', fontSize: 12.5 }}>{erro}</div>}
+        {sucesso && <div style={{ background: T.oliveSoft, color: T.oliveText, borderRadius: 6, padding: '8px 12px', fontSize: 12.5, fontWeight: 600 }}>✓ Direcionado com sucesso!</div>}
+
+        <div style={{ display: 'flex', gap: 10 }}>
+          <div style={{ flex: 1 }}>
+            <label style={{ fontSize: 11.5, fontWeight: 600, color: T.inkDim, display: 'block', marginBottom: 4 }}>BR (opcional)</label>
+            <input value={br} onChange={e => setBr(e.target.value)} placeholder="Ex: BR14500/26" style={{ ...inputStyle(), width: '100%' }} />
+          </div>
+          <div style={{ flex: 1 }}>
+            <label style={{ fontSize: 11.5, fontWeight: 600, color: T.inkDim, display: 'block', marginBottom: 4 }}>Cliente (opcional)</label>
+            <input value={cliente} onChange={e => setCliente(e.target.value)} placeholder="Nome do cliente" style={{ ...inputStyle(), width: '100%' }} />
+          </div>
+        </div>
+
+        <div>
+          <label style={{ fontSize: 11.5, fontWeight: 600, color: T.inkDim, display: 'block', marginBottom: 4 }}>Anexar proposta (PDF/Word)</label>
+          <input type="file" onChange={e => setArquivoProposta(e.target.files?.[0] || null)} style={{ fontSize: 12.5 }} />
+        </div>
+        <div>
+          <label style={{ fontSize: 11.5, fontWeight: 600, color: T.inkDim, display: 'block', marginBottom: 4 }}>Anexar e-mail (opcional)</label>
+          <input type="file" onChange={e => setArquivoEmail(e.target.files?.[0] || null)} style={{ fontSize: 12.5 }} />
+        </div>
+
+        <div>
+          <label style={{ fontSize: 11.5, fontWeight: 600, color: T.inkDim, display: 'block', marginBottom: 4 }}>Prazo de entrega (o que o comercial passou)</label>
+          <input type="date" value={prazo} onChange={e => setPrazo(e.target.value)} style={{ ...inputStyle(), width: '100%' }} />
+        </div>
+
+        <div>
+          <label style={{ fontSize: 11.5, fontWeight: 600, color: T.inkDim, display: 'block', marginBottom: 4 }}>Direcionar para</label>
+          <div style={{ position: 'relative' }}>
+            <select value={direcionadoPara} onChange={e => setDirecionadoPara(e.target.value)} style={{ ...inputStyle(), width: '100%', appearance: 'none' }}>
+              <option value="">Escolhe quem vai fazer…</option>
+              {colaboradores.map(c => <option key={c.id} value={c.id}>{c.nome}</option>)}
+            </select>
+            <ChevronDown size={13} style={{ position: 'absolute', right: 10, top: 11, color: T.inkFaint, pointerEvents: 'none' }} />
+          </div>
+        </div>
+
+        <button onClick={enviar} disabled={enviando}
+          style={{ fontSize: 13, fontWeight: 700, color: '#fff', background: T.terracotta, border: 'none', borderRadius: 8, padding: '11px 18px', cursor: 'pointer', opacity: enviando ? 0.6 : 1 }}>
+          {enviando ? (progresso || 'Enviando…') : '📨 Direcionar e notificar'}
+        </button>
+      </div>
+    </Panel>
+  );
+}
+
+function TarefaCard({ item, currentUser, onAtualizado, fmtDataHora, fmtData, diasAberta, atrasada }) {
+  const [arquivoRetorno, setArquivoRetorno] = useState(null);
+  const [enviando, setEnviando] = useState(false);
+  const [erro, setErro] = useState(null);
+
+  const entregar = async () => {
+    if (!arquivoRetorno) { setErro('Anexa o retorno antes de entregar.'); return; }
+    setErro(null);
+    setEnviando(true);
+    try {
+      const path = `proposta-tecnica-retorno/${Date.now()}_${arquivoRetorno.name}`;
+      const { error: upErr } = await supabase.storage.from('propostas-arquivos').upload(path, arquivoRetorno, { upsert: true });
+      if (upErr) throw new Error(upErr.message);
+      const { data: urlData } = supabase.storage.from('propostas-arquivos').getPublicUrl(path);
+      await supabase.from('propostas_tecnicas').update({
+        arquivo_retorno_url: urlData.publicUrl,
+        arquivo_retorno_nome: arquivoRetorno.name,
+        status: 'entregue',
+        entregue_em: new Date().toISOString(),
+      }).eq('id', item.id);
+      onAtualizado();
+    } catch (e) {
+      setErro(e.message);
+    }
+    setEnviando(false);
+  };
+
+  return (
+    <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 10 }}>
+        <div>
+          <div style={{ fontSize: 14, fontWeight: 700 }}>
+            {item.br && <span style={{ fontFamily: FONT_DISPLAY, color: T.blueText }}>{item.br}</span>}
+            {item.cliente_nome && <span style={{ fontSize: 12, fontWeight: 400, color: T.inkDim }}> — {item.cliente_nome}</span>}
+          </div>
+          <div style={{ fontSize: 11.5, color: T.inkFaint, marginTop: 3 }}>
+            Direcionado por {item.direcionado_por_nome || '?'} em {fmtDataHora(item.direcionado_em)}
+          </div>
+          {item.status === 'reprovada' && item.comentario_aprovacao && (
+            <div style={{ fontSize: 11.5, color: T.rustText, marginTop: 4 }}>✗ Reprovada: {item.comentario_aprovacao} — ajusta e reenvia</div>
+          )}
+        </div>
+        <span style={{ fontSize: 11.5, fontWeight: 700, color: atrasada(item) ? T.rustText : T.inkDim, background: atrasada(item) ? T.rustSoft : T.panelAlt, padding: '4px 10px', borderRadius: 4 }}>
+          Prazo: {fmtData(item.prazo_entrega)} {atrasada(item) && '⚠'}
+        </span>
+      </div>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        {item.arquivo_proposta_url && <a href={item.arquivo_proposta_url} target="_blank" rel="noreferrer" style={{ fontSize: 11.5, color: T.blueText, textDecoration: 'underline' }}>📄 {item.arquivo_proposta_nome}</a>}
+        {item.arquivo_email_url && <a href={item.arquivo_email_url} target="_blank" rel="noreferrer" style={{ fontSize: 11.5, color: T.blueText, textDecoration: 'underline' }}>✉️ {item.arquivo_email_nome}</a>}
+      </div>
+      {erro && <div style={{ fontSize: 11.5, color: T.rustText }}>{erro}</div>}
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', borderTop: `1px solid ${T.lineSoft}`, paddingTop: 10, flexWrap: 'wrap' }}>
+        <input type="file" onChange={e => setArquivoRetorno(e.target.files?.[0] || null)} style={{ fontSize: 11.5 }} />
+        <button onClick={entregar} disabled={enviando}
+          style={{ fontSize: 12, fontWeight: 700, color: '#fff', background: T.oliveText, border: 'none', borderRadius: 6, padding: '7px 14px', cursor: 'pointer', opacity: enviando ? 0.6 : 1 }}>
+          {enviando ? 'Enviando…' : '✓ Entregar pra aprovação'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function AprovacaoCard({ item, currentUser, onAtualizado, fmtDataHora, fmtData }) {
+  const [comentario, setComentario] = useState('');
+  const [processando, setProcessando] = useState(false);
+
+  const decidir = async (aprovado) => {
+    setProcessando(true);
+    const { data: colabAtual } = await supabase.from('colaboradores').select('id').eq('nome', currentUser?.nome).maybeSingle();
+    await supabase.from('propostas_tecnicas').update({
+      status: aprovado ? 'aprovada' : 'reprovada',
+      aprovado_por: colabAtual?.id || null,
+      aprovado_em: new Date().toISOString(),
+      comentario_aprovacao: comentario || null,
+    }).eq('id', item.id);
+    onAtualizado();
+    setProcessando(false);
+  };
+
+  return (
+    <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10 }}>
+        <div>
+          <div style={{ fontSize: 14, fontWeight: 700 }}>
+            {item.br && <span style={{ fontFamily: FONT_DISPLAY, color: T.blueText }}>{item.br}</span>}
+            {item.cliente_nome && <span style={{ fontSize: 12, fontWeight: 400, color: T.inkDim }}> — {item.cliente_nome}</span>}
+          </div>
+          <div style={{ fontSize: 11.5, color: T.inkFaint, marginTop: 3 }}>
+            Feito por {item.direcionado_para_nome || '?'} — entregue em {fmtDataHora(item.entregue_em)}
+          </div>
+        </div>
+      </div>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        {item.arquivo_proposta_url && <a href={item.arquivo_proposta_url} target="_blank" rel="noreferrer" style={{ fontSize: 11.5, color: T.blueText, textDecoration: 'underline' }}>📄 Proposta original</a>}
+        {item.arquivo_retorno_url && <a href={item.arquivo_retorno_url} target="_blank" rel="noreferrer" style={{ fontSize: 11.5, fontWeight: 700, color: T.oliveText, textDecoration: 'underline' }}>📎 {item.arquivo_retorno_nome}</a>}
+      </div>
+      <textarea value={comentario} onChange={e => setComentario(e.target.value)} rows={2} placeholder="Comentário (opcional, obrigatório se reprovar)"
+        style={{ ...inputStyle(), width: '100%', resize: 'vertical' }} />
+      <div style={{ display: 'flex', gap: 8 }}>
+        <button onClick={() => decidir(true)} disabled={processando}
+          style={{ fontSize: 12, fontWeight: 700, color: '#fff', background: T.oliveText, border: 'none', borderRadius: 6, padding: '8px 16px', cursor: 'pointer' }}>
+          ✓ Aprovar
+        </button>
+        <button onClick={() => decidir(false)} disabled={processando || !comentario}
+          style={{ fontSize: 12, fontWeight: 700, color: '#fff', background: T.rustText, border: 'none', borderRadius: 6, padding: '8px 16px', cursor: 'pointer', opacity: !comentario ? 0.5 : 1 }}>
+          ✗ Reprovar
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function MonitoramentoOP({ currentUser }) {
   const STATUS_PLANNER_LABEL = { notStarted: 'Não iniciado', inProgress: 'Em andamento', completed: 'Concluído' };
   // IDs reais dos buckets do quadro "Gestão Comercial" no Planner — o portal
@@ -7724,7 +8091,15 @@ function RevisaoResponsaveisPropostas() {
   const [loading, setLoading] = useState(true);
   const [salvandoId, setSalvandoId] = useState(null);
   const [selecoes, setSelecoes] = useState({}); // proposta_id -> colaborador_id escolhido
-  const [aberto, setAberto] = useState(true);
+  const [aberto, setAberto] = useState(() => localStorage.getItem('revisaoResponsaveis_oculto') !== 'true');
+
+  const alternarAberto = () => {
+    setAberto(a => {
+      const novo = !a;
+      localStorage.setItem('revisaoResponsaveis_oculto', novo ? 'false' : 'true');
+      return novo;
+    });
+  };
 
   const carregar = useCallback(async () => {
     setLoading(true);
@@ -7771,12 +8146,16 @@ function RevisaoResponsaveisPropostas() {
 
   return (
     <div style={{ background: T.amberSoft, border: `1px solid ${T.amber}44`, borderRadius: 10, overflow: 'hidden' }}>
-      <div onClick={() => setAberto(a => !a)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', cursor: 'pointer' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <AlertTriangle size={16} color={T.amberText} />
           <strong style={{ fontSize: 13.5, color: T.amberText }}>{itens.length} proposta(s) precisam confirmar quem fez de verdade</strong>
         </div>
-        <ChevronDown size={16} color={T.amberText} style={{ transform: aberto ? 'rotate(180deg)' : 'none', transition: 'transform .15s' }} />
+        <button onClick={alternarAberto}
+          style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 700, color: T.amberText, background: 'transparent', border: `1px solid ${T.amber}66`, borderRadius: 6, padding: '5px 12px', cursor: 'pointer' }}>
+          {aberto ? 'Ocultar' : 'Expandir'}
+          <ChevronDown size={13} style={{ transform: aberto ? 'rotate(180deg)' : 'none', transition: 'transform .15s' }} />
+        </button>
       </div>
       {aberto && (
         <div style={{ padding: '0 16px 16px', display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -12944,6 +13323,7 @@ const TELAS_CATALOGO = [
   { id: 'equipamentos', label: 'Equip. Terceiros' },
   { id: 'acompanhamento_servico', label: 'Falta Nota de Serviço' },
   { id: 'monitoramento_op', label: 'Monitoramento OP' },
+  { id: 'proposta_tecnica', label: 'Proposta Técnica' },
   { id: 'verificacao_projetos', label: 'Verificação de Projetos' },
   { id: 'analise_comercial', label: 'Análise Comercial' },
   { id: 'prospeccao_clientes', label: 'Prospecção de Clientes' },
