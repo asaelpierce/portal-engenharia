@@ -4869,6 +4869,15 @@ function PlaquinhaEquipamento({ currentUser }) {
           <div style={{ textAlign: 'center', padding: 40, color: T.inkFaint, fontSize: 13 }}>Nada por aqui.</div>
         ) : listaAtual.map(item => (
           <div key={item.id} style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
+            <div style={{ padding: '8px 14px', borderBottom: `1px solid ${T.line}`, background: T.panelAlt }}>
+              <span style={{
+                fontSize: 10.5, fontWeight: 700, padding: '3px 8px', borderRadius: 4,
+                color: item.origem_deteccao === 'recebido_cliente' ? T.blueText : T.oliveText,
+                background: item.origem_deteccao === 'recebido_cliente' ? T.blueSoft : T.oliveSoft,
+              }}>
+                {item.origem_deteccao === 'recebido_cliente' ? '📥 Recebido do cliente (industrialização)' : '🏭 Fabricado pela Kalenborn'}
+              </span>
+            </div>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
               <tbody>
                 <tr style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
