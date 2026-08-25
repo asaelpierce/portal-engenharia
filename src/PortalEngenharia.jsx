@@ -4799,9 +4799,10 @@ function PlaquinhaEquipamento({ currentUser }) {
   const [aba, setAba] = useState('pendentes'); // 'pendentes' | 'preenchidas'
   const [itens, setItens] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [edicoes, setEdicoes] = useState({}); // id -> { numero_desenho, numero_ordem_servico }
+  const [edicoes, setEdicoes] = useState({}); // id -> { campo: valor }
   const [salvandoId, setSalvandoId] = useState(null);
   const [busca, setBusca] = useState('');
+  const [mostrarCriarManual, setMostrarCriarManual] = useState(false);
 
   const carregar = useCallback(async () => {
     setLoading(true);
@@ -4814,22 +4815,27 @@ function PlaquinhaEquipamento({ currentUser }) {
   const pendentes = itens.filter(i => i.status === 'pendente');
   const preenchidas = itens.filter(i => i.status === 'preenchida');
   const listaAtual = (aba === 'pendentes' ? pendentes : preenchidas).filter(i =>
-    !busca.trim() || i.br.toLowerCase().includes(busca.toLowerCase()) || (i.cliente_nome || '').toLowerCase().includes(busca.toLowerCase())
+    !busca.trim() || (i.br || '').toLowerCase().includes(busca.toLowerCase()) || (i.cliente_nome || '').toLowerCase().includes(busca.toLowerCase())
   );
 
   const fmtMesAno = (d) => !d ? '—' : new Date(d + 'T12:00:00').toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' }).toUpperCase();
+  const fmtDataCurta = (d) => !d ? '—' : new Date(d + 'T12:00:00').toLocaleDateString('pt-BR');
+
+  const campo = (item, nome) => edicoes[item.id]?.[nome] ?? item[nome] ?? '';
+  const setCampo = (itemId, nome, valor) => setEdicoes(prev => ({ ...prev, [itemId]: { ...prev[itemId], [nome]: valor } }));
 
   const salvar = async (item) => {
-    const edicao = edicoes[item.id] || {};
-    const desenho = edicao.numero_desenho ?? item.numero_desenho;
-    const ordemServico = edicao.numero_ordem_servico ?? item.numero_ordem_servico;
-    const mesAno = edicao.mes_ano || item.mes_ano;
+    const desenho = campo(item, 'numero_desenho');
+    const mesAno = campo(item, 'mes_ano');
     if (!desenho) { alert('Preenche o N. Desenho antes de salvar.'); return; }
     if (!mesAno) { alert('Preenche o Mês/Ano antes de salvar.'); return; }
     setSalvandoId(item.id);
     await supabase.from('plaquinhas_equipamento').update({
+      br: campo(item, 'br') || null,
+      cliente_nome: campo(item, 'cliente_nome') || null,
+      numero_pedido_compra: campo(item, 'numero_pedido_compra') || null,
       numero_desenho: desenho,
-      numero_ordem_servico: ordemServico || null,
+      numero_ordem_servico: campo(item, 'numero_ordem_servico') || null,
       mes_ano: mesAno,
       status: 'preenchida',
       preenchido_por: currentUser?.nome || null,
@@ -4839,31 +4845,62 @@ function PlaquinhaEquipamento({ currentUser }) {
     setSalvandoId(null);
   };
 
+  const salvarSemFinalizar = async (item) => {
+    setSalvandoId(item.id);
+    await supabase.from('plaquinhas_equipamento').update({
+      br: campo(item, 'br') || null,
+      cliente_nome: campo(item, 'cliente_nome') || null,
+      numero_pedido_compra: campo(item, 'numero_pedido_compra') || null,
+      numero_desenho: campo(item, 'numero_desenho') || null,
+      numero_ordem_servico: campo(item, 'numero_ordem_servico') || null,
+      mes_ano: campo(item, 'mes_ano') || null,
+    }).eq('id', item.id);
+    await carregar();
+    setSalvandoId(null);
+  };
+
+  const duplicar = async (item) => {
+    await supabase.from('plaquinhas_equipamento').insert({
+      br: item.br, cliente_nome: item.cliente_nome, numero_pedido_compra: item.numero_pedido_compra,
+      mes_ano: item.mes_ano, data_prevista_entrega: item.data_prevista_entrega,
+      origem_deteccao: item.origem_deteccao, status: 'pendente',
+    });
+    await carregar();
+  };
+
   return (
     <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 18, maxWidth: 900 }}>
       <div style={{ fontSize: 12.5, color: T.inkFaint, background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 8, padding: '10px 14px' }}>
-        Cliente, N. Projeto e N. Pedido de Compra vêm automáticos do Sankhya. Preenche só o N. Desenho e a N. Ordem de Serviço.
+        Todos os campos são editáveis — corrige se algo vier errado. Se um BR precisar de mais de uma plaquinha (peça diferente), usa "Duplicar" e só troca o desenho.
       </div>
 
-      <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-        <div style={{ display: 'flex', gap: 4 }}>
-          {[{ id: 'pendentes', label: `Pendentes (${pendentes.length})` }, { id: 'preenchidas', label: `Preenchidas (${preenchidas.length})` }].map(a => (
-            <button key={a.id} onClick={() => setAba(a.id)}
-              style={{
-                fontSize: 12.5, fontWeight: 700, padding: '7px 14px', borderRadius: 6, cursor: 'pointer',
-                border: `1.5px solid ${aba === a.id ? T.terracotta : T.line}`,
-                background: aba === a.id ? T.terracotta : 'transparent',
-                color: aba === a.id ? '#fff' : T.inkDim,
-              }}>
-              {a.label}
-            </button>
-          ))}
+      <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'space-between' }}>
+        <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', gap: 4 }}>
+            {[{ id: 'pendentes', label: `Pendentes (${pendentes.length})` }, { id: 'preenchidas', label: `Preenchidas (${preenchidas.length})` }].map(a => (
+              <button key={a.id} onClick={() => setAba(a.id)}
+                style={{
+                  fontSize: 12.5, fontWeight: 700, padding: '7px 14px', borderRadius: 6, cursor: 'pointer',
+                  border: `1.5px solid ${aba === a.id ? T.terracotta : T.line}`,
+                  background: aba === a.id ? T.terracotta : 'transparent',
+                  color: aba === a.id ? '#fff' : T.inkDim,
+                }}>
+                {a.label}
+              </button>
+            ))}
+          </div>
+          <div style={{ position: 'relative' }}>
+            <Search size={13} style={{ position: 'absolute', left: 9, top: 9, color: T.inkFaint }} />
+            <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Buscar BR ou cliente…" style={{ ...inputStyle(), width: 220, paddingLeft: 28 }} />
+          </div>
         </div>
-        <div style={{ position: 'relative' }}>
-          <Search size={13} style={{ position: 'absolute', left: 9, top: 9, color: T.inkFaint }} />
-          <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Buscar BR ou cliente…" style={{ ...inputStyle(), width: 220, paddingLeft: 28 }} />
-        </div>
+        <button onClick={() => setMostrarCriarManual(true)}
+          style={{ fontSize: 12.5, fontWeight: 700, color: '#fff', background: T.blueText, border: 'none', borderRadius: 6, padding: '8px 14px', cursor: 'pointer' }}>
+          + Criar Nova Manualmente
+        </button>
       </div>
+
+      {mostrarCriarManual && <CriarPlaquinhaManual onFechar={() => setMostrarCriarManual(false)} onCriado={carregar} />}
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         {loading ? (
@@ -4872,66 +4909,54 @@ function PlaquinhaEquipamento({ currentUser }) {
           <div style={{ textAlign: 'center', padding: 40, color: T.inkFaint, fontSize: 13 }}>Nada por aqui.</div>
         ) : listaAtual.map(item => (
           <div key={item.id} style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
-            <div style={{ padding: '8px 14px', borderBottom: `1px solid ${T.line}`, background: T.panelAlt }}>
+            <div style={{ padding: '8px 14px', borderBottom: `1px solid ${T.line}`, background: T.panelAlt, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <span style={{
                 fontSize: 10.5, fontWeight: 700, padding: '3px 8px', borderRadius: 4,
-                color: item.origem_deteccao === 'recebido_cliente' ? T.blueText : item.origem_deteccao === 'requisitado_comercial' ? T.terracotta : T.oliveText,
-                background: item.origem_deteccao === 'recebido_cliente' ? T.blueSoft : item.origem_deteccao === 'requisitado_comercial' ? `${T.terracotta}22` : T.oliveSoft,
+                color: item.origem_deteccao === 'recebido_cliente' ? T.blueText : item.origem_deteccao === 'requisitado_comercial' ? T.terracotta : item.origem_deteccao === 'manual' ? T.inkDim : T.oliveText,
+                background: item.origem_deteccao === 'recebido_cliente' ? T.blueSoft : item.origem_deteccao === 'requisitado_comercial' ? `${T.terracotta}22` : item.origem_deteccao === 'manual' ? T.lineSoft : T.oliveSoft,
               }}>
-                {item.origem_deteccao === 'recebido_cliente' ? '📥 Recebido do cliente (industrialização)' : item.origem_deteccao === 'requisitado_comercial' ? '📨 Requisitado pelo comercial' : '🏭 Fabricado pela Kalenborn'}
+                {item.origem_deteccao === 'recebido_cliente' ? '📥 Recebido do cliente' : item.origem_deteccao === 'requisitado_comercial' ? '📨 Requisitado pelo comercial' : item.origem_deteccao === 'manual' ? '✋ Criado manualmente' : '🏭 Fabricado pela Kalenborn'}
               </span>
+              <button onClick={() => duplicar(item)} title="Cria uma cópia desse item (pra fazer outra plaquinha do mesmo pedido)"
+                style={{ fontSize: 11, fontWeight: 700, color: T.inkDim, background: 'transparent', border: `1px solid ${T.line}`, borderRadius: 5, padding: '4px 10px', cursor: 'pointer' }}>
+                ⧉ Duplicar
+              </button>
             </div>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
               <tbody>
-                <tr style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
-                  <td style={{ padding: '8px 14px', fontWeight: 700, color: T.inkDim, width: 180, background: T.panelAlt }}>N. Ordem de serviço</td>
-                  <td style={{ padding: '8px 14px' }}>
-                    {item.status === 'preenchida' ? (item.numero_ordem_servico || '—') : (
-                      <input defaultValue={item.numero_ordem_servico || ''} onChange={e => setEdicoes(prev => ({ ...prev, [item.id]: { ...prev[item.id], numero_ordem_servico: e.target.value } }))}
-                        placeholder="Preenche manualmente…" style={{ ...inputStyle(), width: '100%', border: 'none', padding: '2px 0' }} />
-                    )}
-                  </td>
-                </tr>
-                <tr style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
-                  <td style={{ padding: '8px 14px', fontWeight: 700, color: T.inkDim, background: T.panelAlt }}>N. Desenho</td>
-                  <td style={{ padding: '8px 14px' }}>
-                    {item.status === 'preenchida' ? (item.numero_desenho || '—') : (
-                      <input defaultValue={item.numero_desenho || ''} onChange={e => setEdicoes(prev => ({ ...prev, [item.id]: { ...prev[item.id], numero_desenho: e.target.value } }))}
-                        placeholder="Preenche manualmente… *obrigatório" style={{ ...inputStyle(), width: '100%', border: 'none', padding: '2px 0' }} />
-                    )}
-                  </td>
-                </tr>
-                <tr style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
-                  <td style={{ padding: '8px 14px', fontWeight: 700, color: T.inkDim, background: T.panelAlt }}>Mês/ano</td>
-                  <td style={{ padding: '8px 14px' }}>
-                    {item.status === 'preenchida' ? (item.mes_ano ? fmtMesAno(item.mes_ano) : '—')
-                      : item.mes_ano ? fmtMesAno(item.mes_ano)
-                      : (
-                        <input type="date" defaultValue={edicoes[item.id]?.mes_ano || ''}
-                          onChange={e => setEdicoes(prev => ({ ...prev, [item.id]: { ...prev[item.id], mes_ano: e.target.value } }))}
-                          style={{ ...inputStyle(), border: `1px solid ${T.amber}`, padding: '4px 8px' }} />
+                {[
+                  ['N. Ordem de serviço', 'numero_ordem_servico', 'text', 'Preenche manualmente…'],
+                  ['N. Desenho', 'numero_desenho', 'text', 'Preenche manualmente… *obrigatório'],
+                  ['Mês/ano', 'mes_ano', 'date', null],
+                  ['N. Pedido de compra', 'numero_pedido_compra', 'text', null],
+                  ['N. Projeto (BR)', 'br', 'text', null],
+                  ['Cliente', 'cliente_nome', 'text', null],
+                ].map(([label, nome, tipo, placeholder]) => (
+                  <tr key={nome} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                    <td style={{ padding: '8px 14px', fontWeight: 700, color: T.inkDim, width: 180, background: T.panelAlt }}>{label}</td>
+                    <td style={{ padding: '8px 14px' }}>
+                      {item.status === 'preenchida' ? (
+                        tipo === 'date' ? (item[nome] ? fmtMesAno(item[nome]) : '—') : (item[nome] || '—')
+                      ) : (
+                        <input type={tipo} value={campo(item, nome)} onChange={e => setCampo(item.id, nome, e.target.value)}
+                          placeholder={placeholder || undefined}
+                          style={{ ...inputStyle(), width: '100%', border: 'none', padding: '2px 0', background: 'transparent',
+                            fontWeight: nome === 'br' ? 700 : 400, fontFamily: nome === 'br' ? FONT_DISPLAY : undefined, color: nome === 'br' ? T.blueText : T.ink }} />
                       )}
-                  </td>
-                </tr>
-                <tr style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
-                  <td style={{ padding: '8px 14px', fontWeight: 700, color: T.inkDim, background: T.panelAlt }}>N. Pedido de compra</td>
-                  <td style={{ padding: '8px 14px' }}>{item.numero_pedido_compra || '—'}</td>
-                </tr>
-                <tr style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
-                  <td style={{ padding: '8px 14px', fontWeight: 700, color: T.inkDim, background: T.panelAlt }}>N. Projeto</td>
-                  <td style={{ padding: '8px 14px', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText }}>{item.br}</td>
-                </tr>
-                <tr>
-                  <td style={{ padding: '8px 14px', fontWeight: 700, color: T.inkDim, background: T.panelAlt }}>Cliente</td>
-                  <td style={{ padding: '8px 14px' }}>{item.cliente_nome || '—'}</td>
-                </tr>
+                    </td>
+                  </tr>
+                ))}
               </tbody>
             </table>
             {item.status === 'pendente' ? (
-              <div style={{ padding: '10px 14px', borderTop: `1px solid ${T.line}`, display: 'flex', justifyContent: 'flex-end' }}>
+              <div style={{ padding: '10px 14px', borderTop: `1px solid ${T.line}`, display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+                <button onClick={() => salvarSemFinalizar(item)} disabled={salvandoId === item.id}
+                  style={{ fontSize: 12, fontWeight: 600, color: T.inkDim, background: 'transparent', border: `1px solid ${T.line}`, borderRadius: 6, padding: '8px 14px', cursor: 'pointer' }}>
+                  Salvar rascunho
+                </button>
                 <button onClick={() => salvar(item)} disabled={salvandoId === item.id}
                   style={{ fontSize: 12.5, fontWeight: 700, color: '#fff', background: T.oliveText, border: 'none', borderRadius: 6, padding: '8px 16px', cursor: 'pointer', opacity: salvandoId === item.id ? 0.6 : 1 }}>
-                  {salvandoId === item.id ? 'Salvando…' : '✓ Salvar plaquinha'}
+                  {salvandoId === item.id ? 'Salvando…' : '✓ Concluir plaquinha'}
                 </button>
               </div>
             ) : (
@@ -4943,6 +4968,91 @@ function PlaquinhaEquipamento({ currentUser }) {
         ))}
       </div>
     </div>
+  );
+}
+
+function CriarPlaquinhaManual({ onFechar, onCriado }) {
+  const [br, setBr] = useState('');
+  const [buscando, setBuscando] = useState(false);
+  const [encontrado, setEncontrado] = useState(null);
+  const [naoAchou, setNaoAchou] = useState(false);
+  const [criando, setCriando] = useState(false);
+
+  const buscar = async () => {
+    if (!br.trim()) return;
+    setBuscando(true);
+    setNaoAchou(false);
+    setEncontrado(null);
+    const { data } = await supabase.from('pedidos_itens').select('br,cliente_nome,numero_pedido,data_prevista_entrega')
+      .ilike('br', br.trim()).limit(1).maybeSingle();
+    if (data) {
+      setEncontrado(data);
+    } else {
+      setNaoAchou(true);
+      setEncontrado({ br: br.trim(), cliente_nome: '', numero_pedido: '', data_prevista_entrega: '' });
+    }
+    setBuscando(false);
+  };
+
+  const criar = async () => {
+    setCriando(true);
+    await supabase.from('plaquinhas_equipamento').insert({
+      br: encontrado.br, cliente_nome: encontrado.cliente_nome || null,
+      numero_pedido_compra: encontrado.numero_pedido || null,
+      data_prevista_entrega: encontrado.data_prevista_entrega || null,
+      origem_deteccao: 'manual', status: 'pendente',
+    });
+    setCriando(false);
+    onCriado();
+    onFechar();
+  };
+
+  return (
+    <Panel title="Criar plaquinha manualmente" subtitle="Digita o BR e busca — a gente preenche cliente e pedido automaticamente se achar.">
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 420 }}>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <input value={br} onChange={e => setBr(e.target.value)} onKeyDown={e => e.key === 'Enter' && buscar()}
+            placeholder="Ex: BR14500/26" style={{ ...inputStyle(), flex: 1 }} />
+          <button onClick={buscar} disabled={buscando || !br.trim()}
+            style={{ fontSize: 12.5, fontWeight: 700, color: '#fff', background: T.inkDim, border: 'none', borderRadius: 6, padding: '8px 16px', cursor: 'pointer' }}>
+            {buscando ? 'Buscando…' : '🔍 Buscar'}
+          </button>
+        </div>
+
+        {naoAchou && <div style={{ fontSize: 12, color: T.amberText }}>⚠ Não achamos esse BR — pode preencher tudo na mão abaixo.</div>}
+
+        {encontrado && (
+          <>
+            <div>
+              <label style={{ fontSize: 11.5, fontWeight: 600, color: T.inkDim, display: 'block', marginBottom: 4 }}>Cliente</label>
+              <input value={encontrado.cliente_nome || ''} onChange={e => setEncontrado(prev => ({ ...prev, cliente_nome: e.target.value }))} style={{ ...inputStyle(), width: '100%' }} />
+            </div>
+            <div>
+              <label style={{ fontSize: 11.5, fontWeight: 600, color: T.inkDim, display: 'block', marginBottom: 4 }}>N. Pedido de compra</label>
+              <input value={encontrado.numero_pedido || ''} onChange={e => setEncontrado(prev => ({ ...prev, numero_pedido: e.target.value }))} style={{ ...inputStyle(), width: '100%' }} />
+            </div>
+            <div>
+              <label style={{ fontSize: 11.5, fontWeight: 600, color: T.inkDim, display: 'block', marginBottom: 4 }}>Data prevista de entrega</label>
+              <input type="date" value={encontrado.data_prevista_entrega || ''} onChange={e => setEncontrado(prev => ({ ...prev, data_prevista_entrega: e.target.value }))} style={{ ...inputStyle(), width: '100%' }} />
+            </div>
+            <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+              <button onClick={criar} disabled={criando}
+                style={{ fontSize: 12.5, fontWeight: 700, color: '#fff', background: T.oliveText, border: 'none', borderRadius: 6, padding: '8px 16px', cursor: 'pointer' }}>
+                {criando ? 'Criando…' : '✓ Adicionar à lista de pendentes'}
+              </button>
+              <button onClick={onFechar} style={{ fontSize: 12.5, fontWeight: 600, color: T.inkFaint, background: 'transparent', border: `1px solid ${T.line}`, borderRadius: 6, padding: '8px 14px', cursor: 'pointer' }}>
+                Cancelar
+              </button>
+            </div>
+          </>
+        )}
+        {!encontrado && (
+          <button onClick={onFechar} style={{ fontSize: 12.5, fontWeight: 600, color: T.inkFaint, background: 'transparent', border: `1px solid ${T.line}`, borderRadius: 6, padding: '8px 14px', cursor: 'pointer', alignSelf: 'flex-start' }}>
+            Cancelar
+          </button>
+        )}
+      </div>
+    </Panel>
   );
 }
 
