@@ -4823,11 +4823,14 @@ function PlaquinhaEquipamento({ currentUser }) {
     const edicao = edicoes[item.id] || {};
     const desenho = edicao.numero_desenho ?? item.numero_desenho;
     const ordemServico = edicao.numero_ordem_servico ?? item.numero_ordem_servico;
+    const mesAno = edicao.mes_ano || item.mes_ano;
     if (!desenho) { alert('Preenche o N. Desenho antes de salvar.'); return; }
+    if (!mesAno) { alert('Preenche o Mês/Ano antes de salvar.'); return; }
     setSalvandoId(item.id);
     await supabase.from('plaquinhas_equipamento').update({
       numero_desenho: desenho,
       numero_ordem_servico: ordemServico || null,
+      mes_ano: mesAno,
       status: 'preenchida',
       preenchido_por: currentUser?.nome || null,
       preenchido_em: new Date().toISOString(),
@@ -4872,10 +4875,10 @@ function PlaquinhaEquipamento({ currentUser }) {
             <div style={{ padding: '8px 14px', borderBottom: `1px solid ${T.line}`, background: T.panelAlt }}>
               <span style={{
                 fontSize: 10.5, fontWeight: 700, padding: '3px 8px', borderRadius: 4,
-                color: item.origem_deteccao === 'recebido_cliente' ? T.blueText : T.oliveText,
-                background: item.origem_deteccao === 'recebido_cliente' ? T.blueSoft : T.oliveSoft,
+                color: item.origem_deteccao === 'recebido_cliente' ? T.blueText : item.origem_deteccao === 'requisitado_comercial' ? T.terracotta : T.oliveText,
+                background: item.origem_deteccao === 'recebido_cliente' ? T.blueSoft : item.origem_deteccao === 'requisitado_comercial' ? `${T.terracotta}22` : T.oliveSoft,
               }}>
-                {item.origem_deteccao === 'recebido_cliente' ? '📥 Recebido do cliente (industrialização)' : '🏭 Fabricado pela Kalenborn'}
+                {item.origem_deteccao === 'recebido_cliente' ? '📥 Recebido do cliente (industrialização)' : item.origem_deteccao === 'requisitado_comercial' ? '📨 Requisitado pelo comercial' : '🏭 Fabricado pela Kalenborn'}
               </span>
             </div>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
@@ -4900,8 +4903,14 @@ function PlaquinhaEquipamento({ currentUser }) {
                 </tr>
                 <tr style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
                   <td style={{ padding: '8px 14px', fontWeight: 700, color: T.inkDim, background: T.panelAlt }}>Mês/ano</td>
-                  <td style={{ padding: '8px 14px', color: item.mes_ano ? T.ink : T.amberText }}>
-                    {item.mes_ano ? fmtMesAno(item.mes_ano) : '⚠ Ainda não faturado — sem data de entrada ainda'}
+                  <td style={{ padding: '8px 14px' }}>
+                    {item.status === 'preenchida' ? (item.mes_ano ? fmtMesAno(item.mes_ano) : '—')
+                      : item.mes_ano ? fmtMesAno(item.mes_ano)
+                      : (
+                        <input type="date" defaultValue={edicoes[item.id]?.mes_ano || ''}
+                          onChange={e => setEdicoes(prev => ({ ...prev, [item.id]: { ...prev[item.id], mes_ano: e.target.value } }))}
+                          style={{ ...inputStyle(), border: `1px solid ${T.amber}`, padding: '4px 8px' }} />
+                      )}
                   </td>
                 </tr>
                 <tr style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
