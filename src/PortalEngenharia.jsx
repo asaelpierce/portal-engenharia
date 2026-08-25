@@ -4851,8 +4851,7 @@ function PlaquinhaEquipamento({ currentUser }) {
   const fmtMesAno = (d) => {
     if (!d) return '—';
     const data = new Date(d + 'T12:00:00');
-    const ano2digitos = String(data.getFullYear()).slice(-2);
-    return `${MESES_PT[data.getMonth()]}/${ano2digitos}`;
+    return `${MESES_PT[data.getMonth()]}/${data.getFullYear()}`;
   };
   const fmtDataCurta = (d) => !d ? '—' : new Date(d + 'T12:00:00').toLocaleDateString('pt-BR');
 
@@ -5186,13 +5185,13 @@ function CriarPlaquinhaManual({ onFechar, onCriado }) {
     setBuscando(true);
     setNaoAchou(false);
     setEncontrado(null);
-    const { data } = await supabase.from('pedidos_itens').select('br,cliente_nome,numero_pedido,data_prevista_entrega')
+    const { data } = await supabase.from('pedidos_itens').select('br,cliente_nome,numero_pedido,data_prevista_entrega,produto_descricao')
       .ilike('br', br.trim()).limit(1).maybeSingle();
     if (data) {
       setEncontrado(data);
     } else {
       setNaoAchou(true);
-      setEncontrado({ br: br.trim(), cliente_nome: '', numero_pedido: '', data_prevista_entrega: '' });
+      setEncontrado({ br: br.trim(), cliente_nome: '', numero_pedido: '', data_prevista_entrega: '', produto_descricao: '' });
     }
     setBuscando(false);
   };
@@ -5226,6 +5225,12 @@ function CriarPlaquinhaManual({ onFechar, onCriado }) {
 
         {encontrado && (
           <>
+            {encontrado.produto_descricao && (
+              <div style={{ background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 8, padding: '10px 12px' }}>
+                <div style={{ fontSize: 10.5, fontWeight: 700, color: T.inkFaint, marginBottom: 3 }}>PRODUTO (Sankhya)</div>
+                <div style={{ fontSize: 12, color: T.inkDim, lineHeight: 1.4 }}>{encontrado.produto_descricao}</div>
+              </div>
+            )}
             <div>
               <label style={{ fontSize: 11.5, fontWeight: 600, color: T.inkDim, display: 'block', marginBottom: 4 }}>Cliente</label>
               <input value={encontrado.cliente_nome || ''} onChange={e => setEncontrado(prev => ({ ...prev, cliente_nome: e.target.value }))} style={{ ...inputStyle(), width: '100%' }} />
