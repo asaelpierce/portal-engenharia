@@ -559,6 +559,7 @@ function PortalConteudo({ currentUser, session }) {
           {renderTab('acompanhamento_servico', <TabErrorBoundary tab="Acompanhamento de Serviço"><AcompanhamentoServico /></TabErrorBoundary>)}
           {renderTab('monitoramento_op', <TabErrorBoundary tab="Monitoramento OP"><MonitoramentoOP currentUser={currentUser} /></TabErrorBoundary>)}
           {renderTab('proposta_tecnica', <TabErrorBoundary tab="Proposta Técnica"><PropostaTecnica currentUser={currentUser} /></TabErrorBoundary>)}
+          {renderTab('plaquinha_equipamento', <TabErrorBoundary tab="Plaquinha de Equipamento"><PlaquinhaEquipamento currentUser={currentUser} /></TabErrorBoundary>)}
           {renderTab('verificacao_projetos', <TabErrorBoundary tab="Verificação de Projetos"><VerificacaoProjetos currentUser={currentUser} /></TabErrorBoundary>)}
           {renderTab('analise_comercial', <TabErrorBoundary tab="Análise Comercial"><AnaliseComercial /></TabErrorBoundary>)}
           {renderTab('prospeccao_clientes', <TabErrorBoundary tab="Prospecção de Clientes"><ProspeccaoClientes /></TabErrorBoundary>)}
@@ -615,6 +616,7 @@ function Sidebar({ view, setView, pendCount, papel, telasPermitidas }) {
     { id: 'acompanhamento_servico', label: 'Falta Nota de Serviço', icon: AlertTriangle },
     { id: 'monitoramento_op', label: 'Monitoramento OP', icon: Gauge },
     { id: 'proposta_tecnica', label: 'Proposta Técnica', icon: FileStack },
+    { id: 'plaquinha_equipamento', label: 'Plaquinha de Equipamento', icon: Package },
     { id: 'verificacao_projetos', label: 'Verificação de Projetos', icon: ClipboardCheck },
     { id: 'analise_comercial', label: 'Análise Comercial', icon: TrendingUp },
     { id: 'prospeccao_clientes', label: 'Prospecção de Clientes', icon: UserPlus },
@@ -4788,6 +4790,139 @@ function VerificacaoProjetos({ currentUser }) {
           <BotaoExportar small onClick={() => exportCSV(filtrados, 'verificacao_projetos.csv',
             ['identificacao','abreviatura','dhalter','propostaCriada','conhecimentoPedido'])} />
         </div>
+      </div>
+    </div>
+  );
+}
+
+function PlaquinhaEquipamento({ currentUser }) {
+  const [aba, setAba] = useState('pendentes'); // 'pendentes' | 'preenchidas'
+  const [itens, setItens] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [edicoes, setEdicoes] = useState({}); // id -> { numero_desenho, numero_ordem_servico }
+  const [salvandoId, setSalvandoId] = useState(null);
+  const [busca, setBusca] = useState('');
+
+  const carregar = useCallback(async () => {
+    setLoading(true);
+    const { data } = await supabase.from('plaquinhas_equipamento').select('*').order('created_at', { ascending: false });
+    setItens(data || []);
+    setLoading(false);
+  }, []);
+  useEffect(() => { carregar(); }, [carregar]);
+
+  const pendentes = itens.filter(i => i.status === 'pendente');
+  const preenchidas = itens.filter(i => i.status === 'preenchida');
+  const listaAtual = (aba === 'pendentes' ? pendentes : preenchidas).filter(i =>
+    !busca.trim() || i.br.toLowerCase().includes(busca.toLowerCase()) || (i.cliente_nome || '').toLowerCase().includes(busca.toLowerCase())
+  );
+
+  const fmtMesAno = (d) => !d ? '—' : new Date(d + 'T12:00:00').toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' }).toUpperCase();
+
+  const salvar = async (item) => {
+    const edicao = edicoes[item.id] || {};
+    const desenho = edicao.numero_desenho ?? item.numero_desenho;
+    const ordemServico = edicao.numero_ordem_servico ?? item.numero_ordem_servico;
+    if (!desenho) { alert('Preenche o N. Desenho antes de salvar.'); return; }
+    setSalvandoId(item.id);
+    await supabase.from('plaquinhas_equipamento').update({
+      numero_desenho: desenho,
+      numero_ordem_servico: ordemServico || null,
+      status: 'preenchida',
+      preenchido_por: currentUser?.nome || null,
+      preenchido_em: new Date().toISOString(),
+    }).eq('id', item.id);
+    await carregar();
+    setSalvandoId(null);
+  };
+
+  return (
+    <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 18, maxWidth: 900 }}>
+      <div style={{ fontSize: 12.5, color: T.inkFaint, background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 8, padding: '10px 14px' }}>
+        Cliente, N. Projeto e N. Pedido de Compra vêm automáticos do Sankhya. Preenche só o N. Desenho e a N. Ordem de Serviço.
+      </div>
+
+      <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: 4 }}>
+          {[{ id: 'pendentes', label: `Pendentes (${pendentes.length})` }, { id: 'preenchidas', label: `Preenchidas (${preenchidas.length})` }].map(a => (
+            <button key={a.id} onClick={() => setAba(a.id)}
+              style={{
+                fontSize: 12.5, fontWeight: 700, padding: '7px 14px', borderRadius: 6, cursor: 'pointer',
+                border: `1.5px solid ${aba === a.id ? T.terracotta : T.line}`,
+                background: aba === a.id ? T.terracotta : 'transparent',
+                color: aba === a.id ? '#fff' : T.inkDim,
+              }}>
+              {a.label}
+            </button>
+          ))}
+        </div>
+        <div style={{ position: 'relative' }}>
+          <Search size={13} style={{ position: 'absolute', left: 9, top: 9, color: T.inkFaint }} />
+          <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Buscar BR ou cliente…" style={{ ...inputStyle(), width: 220, paddingLeft: 28 }} />
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        {loading ? (
+          <div style={{ textAlign: 'center', padding: 30, color: T.inkFaint }}>Carregando…</div>
+        ) : listaAtual.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: 40, color: T.inkFaint, fontSize: 13 }}>Nada por aqui.</div>
+        ) : listaAtual.map(item => (
+          <div key={item.id} style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+              <tbody>
+                <tr style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                  <td style={{ padding: '8px 14px', fontWeight: 700, color: T.inkDim, width: 180, background: T.panelAlt }}>N. Ordem de serviço</td>
+                  <td style={{ padding: '8px 14px' }}>
+                    {item.status === 'preenchida' ? (item.numero_ordem_servico || '—') : (
+                      <input defaultValue={item.numero_ordem_servico || ''} onChange={e => setEdicoes(prev => ({ ...prev, [item.id]: { ...prev[item.id], numero_ordem_servico: e.target.value } }))}
+                        placeholder="Preenche manualmente…" style={{ ...inputStyle(), width: '100%', border: 'none', padding: '2px 0' }} />
+                    )}
+                  </td>
+                </tr>
+                <tr style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                  <td style={{ padding: '8px 14px', fontWeight: 700, color: T.inkDim, background: T.panelAlt }}>N. Desenho</td>
+                  <td style={{ padding: '8px 14px' }}>
+                    {item.status === 'preenchida' ? (item.numero_desenho || '—') : (
+                      <input defaultValue={item.numero_desenho || ''} onChange={e => setEdicoes(prev => ({ ...prev, [item.id]: { ...prev[item.id], numero_desenho: e.target.value } }))}
+                        placeholder="Preenche manualmente… *obrigatório" style={{ ...inputStyle(), width: '100%', border: 'none', padding: '2px 0' }} />
+                    )}
+                  </td>
+                </tr>
+                <tr style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                  <td style={{ padding: '8px 14px', fontWeight: 700, color: T.inkDim, background: T.panelAlt }}>Mês/ano</td>
+                  <td style={{ padding: '8px 14px', color: item.mes_ano ? T.ink : T.amberText }}>
+                    {item.mes_ano ? fmtMesAno(item.mes_ano) : '⚠ Ainda não faturado — sem data de entrada ainda'}
+                  </td>
+                </tr>
+                <tr style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                  <td style={{ padding: '8px 14px', fontWeight: 700, color: T.inkDim, background: T.panelAlt }}>N. Pedido de compra</td>
+                  <td style={{ padding: '8px 14px' }}>{item.numero_pedido_compra || '—'}</td>
+                </tr>
+                <tr style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                  <td style={{ padding: '8px 14px', fontWeight: 700, color: T.inkDim, background: T.panelAlt }}>N. Projeto</td>
+                  <td style={{ padding: '8px 14px', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText }}>{item.br}</td>
+                </tr>
+                <tr>
+                  <td style={{ padding: '8px 14px', fontWeight: 700, color: T.inkDim, background: T.panelAlt }}>Cliente</td>
+                  <td style={{ padding: '8px 14px' }}>{item.cliente_nome || '—'}</td>
+                </tr>
+              </tbody>
+            </table>
+            {item.status === 'pendente' ? (
+              <div style={{ padding: '10px 14px', borderTop: `1px solid ${T.line}`, display: 'flex', justifyContent: 'flex-end' }}>
+                <button onClick={() => salvar(item)} disabled={salvandoId === item.id}
+                  style={{ fontSize: 12.5, fontWeight: 700, color: '#fff', background: T.oliveText, border: 'none', borderRadius: 6, padding: '8px 16px', cursor: 'pointer', opacity: salvandoId === item.id ? 0.6 : 1 }}>
+                  {salvandoId === item.id ? 'Salvando…' : '✓ Salvar plaquinha'}
+                </button>
+              </div>
+            ) : (
+              <div style={{ padding: '8px 14px', borderTop: `1px solid ${T.line}`, fontSize: 11, color: T.inkFaint }}>
+                Preenchido por {item.preenchido_por || '?'} em {new Date(item.preenchido_em).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' })}
+              </div>
+            )}
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -13324,6 +13459,7 @@ const TELAS_CATALOGO = [
   { id: 'acompanhamento_servico', label: 'Falta Nota de Serviço' },
   { id: 'monitoramento_op', label: 'Monitoramento OP' },
   { id: 'proposta_tecnica', label: 'Proposta Técnica' },
+  { id: 'plaquinha_equipamento', label: 'Plaquinha de Equipamento' },
   { id: 'verificacao_projetos', label: 'Verificação de Projetos' },
   { id: 'analise_comercial', label: 'Análise Comercial' },
   { id: 'prospeccao_clientes', label: 'Prospecção de Clientes' },
