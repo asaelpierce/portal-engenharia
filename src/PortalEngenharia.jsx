@@ -4978,6 +4978,9 @@ function MonitoramentoOP({ currentUser }) {
   const [cardsOpsGeradas, setCardsOpsGeradas] = useState([]);
   const [loadingOpsGeradas, setLoadingOpsGeradas] = useState(true);
   const [opsPorBr, setOpsPorBr] = useState({}); // br -> [ops]
+  const [opsConfirmadas, setOpsConfirmadas] = useState({}); // card.id -> Set(ops confirmadas)
+  const [opsExtras, setOpsExtras] = useState({}); // card.id -> [ops adicionadas manualmente]
+  const [novaOpInput, setNovaOpInput] = useState({}); // card.id -> texto do input
   const [modalPendencia, setModalPendencia] = useState(null);
   const [tick, setTick] = useState(0); // força recálculo do tempo ao vivo a cada segundo
   const carregarOpsGeradas = useCallback(async () => {
@@ -4997,7 +5000,16 @@ function MonitoramentoOP({ currentUser }) {
       const { data: ops } = await supabase.from('almoxarifado_op_materiais').select('br,op').in('br', brs);
       const agrupado = {};
       (ops || []).forEach(o => { (agrupado[o.br] = agrupado[o.br] || new Set()).add(o.op); });
-      setOpsPorBr(Object.fromEntries(Object.entries(agrupado).map(([br, s]) => [br, [...s]])));
+      const opsPorBrNovo = Object.fromEntries(Object.entries(agrupado).map(([br, s]) => [br, [...s]]));
+      setOpsPorBr(opsPorBrNovo);
+      // Marca tudo que foi encontrado como "confirmado" por padrão (o usuário desmarca se alguma estiver errada)
+      setOpsConfirmadas(prev => {
+        const novo = { ...prev };
+        (data || []).forEach(c => {
+          if (!novo[c.id]) novo[c.id] = new Set(opsPorBrNovo[c.br] || []);
+        });
+        return novo;
+      });
     }
     setLoadingOpsGeradas(false);
   }, []);
@@ -5032,14 +5044,46 @@ function MonitoramentoOP({ currentUser }) {
     await carregarOpsGeradas();
   };
 
+  const toggleOpConfirmada = (card, op) => {
+    setOpsConfirmadas(prev => {
+      const atual = new Set(prev[card.id] || []);
+      if (atual.has(op)) atual.delete(op); else atual.add(op);
+      return { ...prev, [card.id]: atual };
+    });
+  };
+
+  const adicionarOpExtra = (card) => {
+    const valor = (novaOpInput[card.id] || '').trim();
+    if (!valor) return;
+    setOpsExtras(prev => ({ ...prev, [card.id]: [...new Set([...(prev[card.id] || []), valor])] }));
+    setOpsConfirmadas(prev => {
+      const atual = new Set(prev[card.id] || []);
+      atual.add(valor);
+      return { ...prev, [card.id]: atual };
+    });
+    setNovaOpInput(prev => ({ ...prev, [card.id]: '' }));
+  };
+
   const finalizarVerificacao = async (card) => {
     const segundosRodados = card.ultimo_inicio_verificacao ? Math.floor((Date.now() - new Date(card.ultimo_inicio_verificacao).getTime()) / 1000) : 0;
+    const opsFinais = [...(opsConfirmadas[card.id] || [])].sort().join(', ') || null;
     await supabase.from('monitoramento_op_cards_planner').update({
       status_verificacao_op: 'finalizado',
       tempo_acumulado_segundos: (card.tempo_acumulado_segundos || 0) + segundosRodados,
       ultimo_inicio_verificacao: null,
       finalizado_verificacao_em: new Date().toISOString(),
+      op: opsFinais,
+      op_registrada_observacao: false, // reabre pra reescrever a observação com a lista confirmada
     }).eq('id', card.id);
+    // Pede pro Fluxo 3 reescrever a observação do card com a lista CONFIRMADA (não a bruta detectada)
+    if (opsFinais) {
+      await supabase.from('solicitacoes_atualizar_observacao_planner').insert({
+        planner_task_id: card.planner_task_id,
+        br: card.br,
+        op_para_adicionar: opsFinais,
+        status: 'pendente',
+      });
+    }
     // Não precisa mover — já está no bucket final "OP's GERADAS", que é o último da esteira
     await carregarOpsGeradas();
   };
@@ -5731,7 +5775,9 @@ function MonitoramentoOP({ currentUser }) {
             ) : cardsOpsGeradas.length === 0 ? (
               <div style={{ textAlign: 'center', padding: 40, color: T.inkFaint, fontSize: 13 }}>Nenhum card nessa coluna no momento.</div>
             ) : cardsOpsGeradas.map(c => {
-              const ops = opsPorBr[c.br] || [];
+              const ops = [...new Set([...(opsPorBr[c.br] || []), ...(opsExtras[c.id] || [])])];
+              const confirmadas = opsConfirmadas[c.id] || new Set();
+              const podeEditar = c.status_verificacao_op !== 'finalizado';
               const tempo = tempoAoVivo(c);
               return (
                 <div key={c.id} style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -5746,13 +5792,36 @@ function MonitoramentoOP({ currentUser }) {
                   </div>
 
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                    <span style={{ fontSize: 11.5, color: T.inkFaint, fontWeight: 600 }}>OPs encontradas pra esse BR:</span>
-                    {ops.length === 0 ? (
+                    <span style={{ fontSize: 11.5, color: T.inkFaint, fontWeight: 600 }}>OPs encontradas pra esse BR (desmarca a que estiver errada):</span>
+                    {ops.length === 0 && (
                       <span style={{ fontSize: 10.5, fontWeight: 700, color: T.amberText, background: T.amberSoft, padding: '3px 8px', borderRadius: 4 }}>⚠ Nenhuma OP sincronizada ainda</span>
-                    ) : ops.map(op => (
-                      <span key={op} style={{ fontSize: 11, fontWeight: 700, fontFamily: FONT_DISPLAY, color: T.oliveText, background: T.oliveSoft, padding: '3px 9px', borderRadius: 4 }}>{op}</span>
-                    ))}
+                    )}
+                    {ops.map(op => {
+                      const marcada = confirmadas.has(op);
+                      return (
+                        <label key={op} onClick={() => podeEditar && toggleOpConfirmada(c, op)}
+                          style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 700, fontFamily: FONT_DISPLAY, cursor: podeEditar ? 'pointer' : 'default',
+                            color: marcada ? T.oliveText : T.inkFaint, background: marcada ? T.oliveSoft : T.lineSoft, padding: '3px 9px', borderRadius: 4, textDecoration: marcada ? 'none' : 'line-through' }}>
+                          <input type="checkbox" checked={marcada} readOnly disabled={!podeEditar} style={{ margin: 0 }} />
+                          {op}
+                        </label>
+                      );
+                    })}
+                    {podeEditar && (
+                      <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                        <input value={novaOpInput[c.id] || ''} onChange={e => setNovaOpInput(prev => ({ ...prev, [c.id]: e.target.value }))}
+                          onKeyDown={e => e.key === 'Enter' && adicionarOpExtra(c)}
+                          placeholder="+ OP não listada" style={{ ...inputStyle(), width: 110, fontSize: 10.5, padding: '3px 8px' }} />
+                        <button onClick={() => adicionarOpExtra(c)}
+                          style={{ fontSize: 10.5, fontWeight: 700, color: T.inkDim, background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 4, padding: '3px 8px', cursor: 'pointer' }}>
+                          Adicionar
+                        </button>
+                      </div>
+                    )}
                   </div>
+                  {podeEditar && confirmadas.size === 0 && ops.length > 0 && (
+                    <div style={{ fontSize: 10.5, color: T.rustText }}>⚠ Nenhuma OP marcada — ao finalizar, o card fica sem OP registrada na observação.</div>
+                  )}
 
                   <div style={{ display: 'flex', gap: 8, alignItems: 'center', borderTop: `1px solid ${T.lineSoft}`, paddingTop: 10, flexWrap: 'wrap' }}>
                     {c.status_verificacao_op === 'nao_iniciado' && (
