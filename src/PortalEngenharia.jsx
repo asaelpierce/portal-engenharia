@@ -6238,10 +6238,17 @@ function MonitoramentoOP({ currentUser }) {
     setCardsOpsGeradas(data || []);
     const brs = [...new Set((data || []).map(c => c.br).filter(Boolean))];
     if (brs.length) {
-      const { data: ops } = await supabase.from('almoxarifado_op_materiais').select('br,op').in('br', brs);
-      const agrupado = {};
-      (ops || []).forEach(o => { (agrupado[o.br] = agrupado[o.br] || new Set()).add(o.op); });
-      setOpsPorBr(Object.fromEntries(Object.entries(agrupado).map(([br, s]) => [br, [...s]])));
+      // Busca direto no Sankhya (não depende de já ter apontamento de produção
+      // -- pega a OP assim que ela é criada, mesmo ainda "Aberto")
+      try {
+        const res = await fetch(`${SUPABASE_URL}/functions/v1/buscar-op-por-br`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ brs }),
+        }).then(r => r.json());
+        if (res.ok) {
+          setOpsPorBr(Object.fromEntries(Object.entries(res.opsPorBr).map(([br, lista]) => [br, lista.map(x => x.op)])));
+        }
+      } catch (e) { console.error('Erro buscando OP por BR:', e); }
     }
     setLoadingOpsGeradas(false);
   }, []);
