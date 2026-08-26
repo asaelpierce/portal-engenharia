@@ -4804,6 +4804,8 @@ function ConfApontamento() {
   const [busca, setBusca] = useState('');
   const [ultimaSinc, setUltimaSinc] = useState(null);
   const [opAberta, setOpAberta] = useState(null); // número da OP selecionada pro modal de detalhe
+  const [ordenarPor, setOrdenarPor] = useState('op'); // 'op' | 'br'
+  const [ordemAsc, setOrdemAsc] = useState(true);
 
   const carregar = useCallback(async () => {
     setLoading(true);
@@ -4823,7 +4825,18 @@ function ConfApontamento() {
       if (!String(i.op).includes(b) && !(i.produto_descricao || '').toLowerCase().includes(b) && !(i.br || '').toLowerCase().includes(b)) return false;
     }
     return true;
+  }).sort((a, b) => {
+    let va, vb;
+    if (ordenarPor === 'op') { va = Number(a.op) || 0; vb = Number(b.op) || 0; }
+    else { va = a.br || ''; vb = b.br || ''; }
+    const cmp = va < vb ? -1 : va > vb ? 1 : 0;
+    return ordemAsc ? cmp : -cmp;
   });
+
+  const alternarOrdem = (campo) => {
+    if (ordenarPor === campo) setOrdemAsc(prev => !prev);
+    else { setOrdenarPor(campo); setOrdemAsc(true); }
+  };
 
   const contagens = {
     total: itens.length,
@@ -4872,8 +4885,12 @@ function ConfApontamento() {
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
             <thead>
               <tr style={{ background: T.panelAlt, borderBottom: `1px solid ${T.line}` }}>
-                <th style={thFat(70)}>OP</th>
-                <th style={thFat(90)}>BR</th>
+                <th style={{ ...thFat(70), cursor: 'pointer', userSelect: 'none' }} onClick={() => alternarOrdem('op')}>
+                  OP {ordenarPor === 'op' && (ordemAsc ? '▲' : '▼')}
+                </th>
+                <th style={{ ...thFat(90), cursor: 'pointer', userSelect: 'none' }} onClick={() => alternarOrdem('br')}>
+                  BR {ordenarPor === 'br' && (ordemAsc ? '▲' : '▼')}
+                </th>
                 <th style={thFat(70)}>Código</th>
                 <th style={thFat(220)}>Produto</th>
                 <th style={{ ...thFat(90), textAlign: 'right' }}>Esperado</th>
