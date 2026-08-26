@@ -560,6 +560,7 @@ function PortalConteudo({ currentUser, session }) {
           {renderTab('monitoramento_op', <TabErrorBoundary tab="Monitoramento OP"><MonitoramentoOP currentUser={currentUser} /></TabErrorBoundary>)}
           {renderTab('proposta_tecnica', <TabErrorBoundary tab="Proposta Técnica"><PropostaTecnica currentUser={currentUser} /></TabErrorBoundary>)}
           {renderTab('plaquinha_equipamento', <TabErrorBoundary tab="Plaquinha de Equipamento"><PlaquinhaEquipamento currentUser={currentUser} /></TabErrorBoundary>)}
+          {renderTab('conf_apontamento', <TabErrorBoundary tab="Conf. Apontamento"><ConfApontamento /></TabErrorBoundary>)}
           {renderTab('verificacao_projetos', <TabErrorBoundary tab="Verificação de Projetos"><VerificacaoProjetos currentUser={currentUser} /></TabErrorBoundary>)}
           {renderTab('analise_comercial', <TabErrorBoundary tab="Análise Comercial"><AnaliseComercial /></TabErrorBoundary>)}
           {renderTab('prospeccao_clientes', <TabErrorBoundary tab="Prospecção de Clientes"><ProspeccaoClientes /></TabErrorBoundary>)}
@@ -617,6 +618,7 @@ function Sidebar({ view, setView, pendCount, papel, telasPermitidas }) {
     { id: 'monitoramento_op', label: 'Monitoramento OP', icon: Gauge },
     { id: 'proposta_tecnica', label: 'Proposta Técnica', icon: FileStack },
     { id: 'plaquinha_equipamento', label: 'Plaquinha de Equipamento', icon: Package },
+    { id: 'conf_apontamento', label: 'Conf. Apontamento', icon: ClipboardCheck },
     { id: 'verificacao_projetos', label: 'Verificação de Projetos', icon: ClipboardCheck },
     { id: 'analise_comercial', label: 'Análise Comercial', icon: TrendingUp },
     { id: 'prospeccao_clientes', label: 'Prospecção de Clientes', icon: UserPlus },
@@ -4790,6 +4792,128 @@ function VerificacaoProjetos({ currentUser }) {
           <BotaoExportar small onClick={() => exportCSV(filtrados, 'verificacao_projetos.csv',
             ['identificacao','abreviatura','dhalter','propostaCriada','conhecimentoPedido'])} />
         </div>
+      </div>
+    </div>
+  );
+}
+
+function ConfApontamento() {
+  const [itens, setItens] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [filtroStatus, setFiltroStatus] = useState('divergente_finalizado'); // 'todos' | 'divergente' | 'divergente_finalizado' | 'ok'
+  const [busca, setBusca] = useState('');
+  const [ultimaSinc, setUltimaSinc] = useState(null);
+
+  const carregar = useCallback(async () => {
+    setLoading(true);
+    const { data } = await supabase.from('conferencia_apontamento').select('*').order('sincronizado_em', { ascending: false }).limit(3000);
+    setItens(data || []);
+    if (data && data.length) setUltimaSinc(data[0].sincronizado_em);
+    setLoading(false);
+  }, []);
+  useEffect(() => { carregar(); }, [carregar]);
+
+  const filtrados = itens.filter(i => {
+    if (filtroStatus === 'divergente' && i.diferenca == 0) return false;
+    if (filtroStatus === 'divergente_finalizado' && (i.diferenca == 0 || i.status_op !== 'Finalizado')) return false;
+    if (filtroStatus === 'ok' && i.diferenca != 0) return false;
+    if (busca.trim()) {
+      const b = busca.toLowerCase();
+      if (!String(i.op).includes(b) && !(i.produto_descricao || '').toLowerCase().includes(b) && !(i.br || '').toLowerCase().includes(b)) return false;
+    }
+    return true;
+  });
+
+  const contagens = {
+    total: itens.length,
+    divergente: itens.filter(i => i.diferenca != 0).length,
+    divergenteFinalizado: itens.filter(i => i.diferenca != 0 && i.status_op === 'Finalizado').length,
+    ok: itens.filter(i => i.diferenca == 0).length,
+  };
+
+  const fmtNum = (n) => n == null ? '—' : Number(n).toLocaleString('pt-BR', { maximumFractionDigits: 3 });
+  const fmtData = (d) => !d ? '—' : new Date(d + 'T12:00:00').toLocaleDateString('pt-BR');
+
+  return (
+    <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 18, maxWidth: 1200 }}>
+      <div style={{ fontSize: 12.5, color: T.inkFaint, background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 8, padding: '10px 14px' }}>
+        Compara, por OP e produto, a quantidade que foi <strong>planejada</strong> (Pedido de Venda) com a quantidade que foi <strong>apontada</strong> na produção. Sincroniza sozinho a cada 4h.
+        {ultimaSinc && <span style={{ marginLeft: 8, color: T.inkFaint }}>· Última sincronização: {new Date(ultimaSinc).toLocaleString('pt-BR')}</span>}
+      </div>
+
+      <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'space-between' }}>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          {[
+            { id: 'divergente_finalizado', label: `⚠ Finalizadas com divergência (${contagens.divergenteFinalizado})`, cor: T.rustText },
+            { id: 'divergente', label: `Todas divergentes (${contagens.divergente})`, cor: T.amberText },
+            { id: 'ok', label: `✓ Batendo (${contagens.ok})`, cor: T.oliveText },
+            { id: 'todos', label: `Todas (${contagens.total})`, cor: T.inkDim },
+          ].map(f => (
+            <button key={f.id} onClick={() => setFiltroStatus(f.id)}
+              style={{
+                fontSize: 12, fontWeight: 700, padding: '7px 12px', borderRadius: 6, cursor: 'pointer',
+                border: `1.5px solid ${filtroStatus === f.id ? f.cor : T.line}`,
+                background: filtroStatus === f.id ? f.cor : 'transparent',
+                color: filtroStatus === f.id ? '#fff' : T.inkDim,
+              }}>
+              {f.label}
+            </button>
+          ))}
+        </div>
+        <div style={{ position: 'relative' }}>
+          <Search size={13} style={{ position: 'absolute', left: 9, top: 9, color: T.inkFaint }} />
+          <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Buscar OP, produto ou BR…" style={{ ...inputStyle(), width: 220, paddingLeft: 28 }} />
+        </div>
+      </div>
+
+      <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+            <thead>
+              <tr style={{ background: T.panelAlt, borderBottom: `1px solid ${T.line}` }}>
+                <th style={thFat(70)}>OP</th>
+                <th style={thFat(90)}>BR</th>
+                <th style={thFat(220)}>Produto</th>
+                <th style={{ ...thFat(90), textAlign: 'right' }}>Planejado</th>
+                <th style={{ ...thFat(90), textAlign: 'right' }}>Apontado</th>
+                <th style={{ ...thFat(90), textAlign: 'right' }}>Diferença</th>
+                <th style={thFat(90)}>Status OP</th>
+                <th style={thFat(90)}>Apontado em</th>
+              </tr>
+            </thead>
+            <tbody>
+              {loading ? (
+                <tr><td colSpan={8} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Carregando…</td></tr>
+              ) : filtrados.length === 0 ? (
+                <tr><td colSpan={8} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Nada aqui — bom sinal!</td></tr>
+              ) : filtrados.slice(0, 300).map(i => (
+                <tr key={i.id} style={{ borderBottom: `1px solid ${T.lineSoft}`, background: (i.diferenca != 0 && i.status_op === 'Finalizado') ? `${T.rustSoft}55` : 'transparent' }}>
+                  <td style={{ padding: '7px 12px', fontFamily: FONT_DISPLAY, fontWeight: 700 }}>{i.op}</td>
+                  <td style={{ padding: '7px 12px', color: T.blueText, fontWeight: 600 }}>{i.br || '—'}</td>
+                  <td style={{ padding: '7px 12px', maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={i.produto_descricao}>{i.produto_descricao}</td>
+                  <td style={{ padding: '7px 12px', textAlign: 'right' }}>{fmtNum(i.quantidade_planejada)}</td>
+                  <td style={{ padding: '7px 12px', textAlign: 'right' }}>{fmtNum(i.quantidade_apontada)}</td>
+                  <td style={{ padding: '7px 12px', textAlign: 'right', fontWeight: 700, color: i.diferenca == 0 ? T.oliveText : (i.diferenca < 0 ? T.rustText : T.amberText) }}>
+                    {i.diferenca == 0 ? '✓' : (i.diferenca > 0 ? '+' : '') + fmtNum(i.diferenca)}
+                  </td>
+                  <td style={{ padding: '7px 12px' }}>
+                    <span style={{
+                      fontSize: 10.5, fontWeight: 700, padding: '2px 7px', borderRadius: 4,
+                      color: i.status_op === 'Finalizado' ? T.oliveText : T.amberText,
+                      background: i.status_op === 'Finalizado' ? T.oliveSoft : T.amberSoft,
+                    }}>{i.status_op}</span>
+                  </td>
+                  <td style={{ padding: '7px 12px', color: T.inkFaint }}>{fmtData(i.data_apontamento)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {filtrados.length > 300 && (
+          <div style={{ padding: '10px 16px', fontSize: 11.5, color: T.inkFaint, borderTop: `1px solid ${T.line}` }}>
+            Mostrando as primeiras 300 de {filtrados.length} — refina a busca pra ver mais específico.
+          </div>
+        )}
       </div>
     </div>
   );
@@ -14007,6 +14131,7 @@ const TELAS_CATALOGO = [
   { id: 'monitoramento_op', label: 'Monitoramento OP' },
   { id: 'proposta_tecnica', label: 'Proposta Técnica' },
   { id: 'plaquinha_equipamento', label: 'Plaquinha de Equipamento' },
+  { id: 'conf_apontamento', label: 'Conf. Apontamento' },
   { id: 'verificacao_projetos', label: 'Verificação de Projetos' },
   { id: 'analise_comercial', label: 'Análise Comercial' },
   { id: 'prospeccao_clientes', label: 'Prospecção de Clientes' },
