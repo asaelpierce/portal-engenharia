@@ -561,6 +561,7 @@ function PortalConteudo({ currentUser, session }) {
           {renderTab('proposta_tecnica', <TabErrorBoundary tab="Proposta Técnica"><PropostaTecnica currentUser={currentUser} /></TabErrorBoundary>)}
           {renderTab('plaquinha_equipamento', <TabErrorBoundary tab="Plaquinha de Equipamento"><PlaquinhaEquipamento currentUser={currentUser} /></TabErrorBoundary>)}
           {renderTab('conf_apontamento', <TabErrorBoundary tab="Conf. Apontamento"><ConfApontamento /></TabErrorBoundary>)}
+          {renderTab('reservas_pendentes', <TabErrorBoundary tab="Reservas Pendentes"><ReservasPendentes /></TabErrorBoundary>)}
           {renderTab('verificacao_projetos', <TabErrorBoundary tab="Verificação de Projetos"><VerificacaoProjetos currentUser={currentUser} /></TabErrorBoundary>)}
           {renderTab('analise_comercial', <TabErrorBoundary tab="Análise Comercial"><AnaliseComercial /></TabErrorBoundary>)}
           {renderTab('prospeccao_clientes', <TabErrorBoundary tab="Prospecção de Clientes"><ProspeccaoClientes /></TabErrorBoundary>)}
@@ -619,6 +620,7 @@ function Sidebar({ view, setView, pendCount, papel, telasPermitidas }) {
     { id: 'proposta_tecnica', label: 'Proposta Técnica', icon: FileStack },
     { id: 'plaquinha_equipamento', label: 'Plaquinha de Equipamento', icon: Package },
     { id: 'conf_apontamento', label: 'Conf. Apontamento', icon: ClipboardCheck },
+    { id: 'reservas_pendentes', label: 'Reservas Pendentes', icon: AlertTriangle },
     { id: 'verificacao_projetos', label: 'Verificação de Projetos', icon: ClipboardCheck },
     { id: 'analise_comercial', label: 'Análise Comercial', icon: TrendingUp },
     { id: 'prospeccao_clientes', label: 'Prospecção de Clientes', icon: UserPlus },
@@ -4792,6 +4794,117 @@ function VerificacaoProjetos({ currentUser }) {
           <BotaoExportar small onClick={() => exportCSV(filtrados, 'verificacao_projetos.csv',
             ['identificacao','abreviatura','dhalter','propostaCriada','conhecimentoPedido'])} />
         </div>
+      </div>
+    </div>
+  );
+}
+
+function ReservasPendentes() {
+  const [itens, setItens] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [busca, setBusca] = useState('');
+  const [ultimaSinc, setUltimaSinc] = useState(null);
+  const [ordenarPor, setOrdenarPor] = useState('op');
+  const [ordemAsc, setOrdemAsc] = useState(true);
+
+  const carregar = useCallback(async () => {
+    setLoading(true);
+    const { data } = await supabase.from('reservas_pendentes_sankhya').select('*').order('sincronizado_em', { ascending: false }).limit(3000);
+    setItens(data || []);
+    if (data && data.length) setUltimaSinc(data[0].sincronizado_em);
+    setLoading(false);
+  }, []);
+  useEffect(() => { carregar(); }, [carregar]);
+
+  const filtrados = itens.filter(i => {
+    if (!busca.trim()) return true;
+    const b = busca.toLowerCase();
+    return String(i.op || '').includes(b) || (i.descr_produto || '').toLowerCase().includes(b) || (i.br || '').toLowerCase().includes(b);
+  }).sort((a, b) => {
+    let va, vb;
+    if (ordenarPor === 'op') { va = Number(a.op) || 0; vb = Number(b.op) || 0; }
+    else { va = a.br || ''; vb = b.br || ''; }
+    const cmp = va < vb ? -1 : va > vb ? 1 : 0;
+    return ordemAsc ? cmp : -cmp;
+  });
+
+  const alternarOrdem = (campo) => {
+    if (ordenarPor === campo) setOrdemAsc(prev => !prev);
+    else { setOrdenarPor(campo); setOrdemAsc(true); }
+  };
+
+  const fmtNum = (n) => n == null ? '—' : Number(n).toLocaleString('pt-BR', { maximumFractionDigits: 3 });
+  const fmtData = (d) => !d ? '—' : new Date(d + 'T12:00:00').toLocaleDateString('pt-BR');
+
+  return (
+    <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 18, maxWidth: 1200 }}>
+      <div style={{ fontSize: 12.5, color: T.inkFaint, background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 8, padding: '10px 14px' }}>
+        Sinalização antecipada — itens com <strong>reserva pendente</strong> no Sankhya (ainda não entregues), pra você saber que estão comprometidos ANTES de tentar usar ou transferir. Sincroniza sozinho a cada 4h.
+        {ultimaSinc && <span style={{ marginLeft: 8, color: T.inkFaint }}>· Última sincronização: {new Date(ultimaSinc).toLocaleString('pt-BR')}</span>}
+      </div>
+
+      <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'space-between' }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: T.amberText }}>
+          {itens.length} item(ns) com reserva pendente
+        </div>
+        <div style={{ position: 'relative' }}>
+          <Search size={13} style={{ position: 'absolute', left: 9, top: 9, color: T.inkFaint }} />
+          <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Buscar OP, produto ou BR…" style={{ ...inputStyle(), width: 220, paddingLeft: 28 }} />
+        </div>
+      </div>
+
+      <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+            <thead>
+              <tr style={{ background: T.panelAlt, borderBottom: `1px solid ${T.line}` }}>
+                <th style={{ ...thFat(70), cursor: 'pointer', userSelect: 'none' }} onClick={() => alternarOrdem('op')}>
+                  OP {ordenarPor === 'op' && (ordemAsc ? '▲' : '▼')}
+                </th>
+                <th style={{ ...thFat(90), cursor: 'pointer', userSelect: 'none' }} onClick={() => alternarOrdem('br')}>
+                  BR {ordenarPor === 'br' && (ordemAsc ? '▲' : '▼')}
+                </th>
+                <th style={thFat(70)}>Código</th>
+                <th style={thFat(220)}>Produto</th>
+                <th style={{ ...thFat(90), textAlign: 'right' }}>Reservada</th>
+                <th style={thFat(90)}>Lote</th>
+                <th style={thFat(80)}>Local</th>
+                <th style={thFat(90)}>Status OP</th>
+              </tr>
+            </thead>
+            <tbody>
+              {loading ? (
+                <tr><td colSpan={8} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Carregando…</td></tr>
+              ) : filtrados.length === 0 ? (
+                <tr><td colSpan={8} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Nada aqui — nenhuma reserva pendente!</td></tr>
+              ) : filtrados.slice(0, 300).map(i => (
+                <tr key={i.id} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                  <td style={{ padding: '7px 12px', fontFamily: FONT_DISPLAY, fontWeight: 700 }}>{i.op || '—'}</td>
+                  <td style={{ padding: '7px 12px', color: T.blueText, fontWeight: 600 }}>{i.br || '—'}</td>
+                  <td style={{ padding: '7px 12px', color: T.inkFaint, fontFamily: 'monospace', fontSize: 11.5 }}>{i.cod_produto}</td>
+                  <td style={{ padding: '7px 12px', maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={i.descr_produto}>{i.descr_produto}</td>
+                  <td style={{ padding: '7px 12px', textAlign: 'right', fontWeight: 700, color: T.amberText }}>{fmtNum(i.qtd_reservada)}</td>
+                  <td style={{ padding: '7px 12px', color: T.inkFaint }}>{i.controle_lote || '—'}</td>
+                  <td style={{ padding: '7px 12px', color: T.inkFaint }}>{i.local_origem || '—'}</td>
+                  <td style={{ padding: '7px 12px' }}>
+                    {i.status_op && (
+                      <span style={{
+                        fontSize: 10.5, fontWeight: 700, padding: '2px 7px', borderRadius: 4,
+                        color: i.status_op === 'Finalizado' ? T.oliveText : T.amberText,
+                        background: i.status_op === 'Finalizado' ? T.oliveSoft : T.amberSoft,
+                      }}>{i.status_op}</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {filtrados.length > 300 && (
+          <div style={{ padding: '10px 16px', fontSize: 11.5, color: T.inkFaint, borderTop: `1px solid ${T.line}` }}>
+            Mostrando as primeiras 300 de {filtrados.length} — refina a busca pra ver mais específico.
+          </div>
+        )}
       </div>
     </div>
   );
@@ -14210,6 +14323,7 @@ const TELAS_CATALOGO = [
   { id: 'proposta_tecnica', label: 'Proposta Técnica' },
   { id: 'plaquinha_equipamento', label: 'Plaquinha de Equipamento' },
   { id: 'conf_apontamento', label: 'Conf. Apontamento' },
+  { id: 'reservas_pendentes', label: 'Reservas Pendentes' },
   { id: 'verificacao_projetos', label: 'Verificação de Projetos' },
   { id: 'analise_comercial', label: 'Análise Comercial' },
   { id: 'prospeccao_clientes', label: 'Prospecção de Clientes' },
