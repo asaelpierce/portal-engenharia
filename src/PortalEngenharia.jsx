@@ -5289,7 +5289,7 @@ function ModalEmailPlaquinha({ modalEmail, currentUser, montarTemplateGrupo, onF
 
   return (
     <Overlay onClose={onFechar}>
-      <div className="scale-in" style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, width: '100%', maxWidth: 640, padding: 24, boxShadow: '0 24px 60px rgba(0,0,0,.18)', maxHeight: '90vh', overflowY: 'auto' }}>
+      <div className="scale-in" style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, width: '100%', maxWidth: 820, padding: 24, boxShadow: '0 24px 60px rgba(0,0,0,.18)', maxHeight: '90vh', overflowY: 'auto' }}>
         <h3 style={{ fontFamily: FONT_DISPLAY, fontSize: 17, fontWeight: 700, margin: '0 0 4px' }}>
           {modo === 'concluir' ? `Concluir plaquinha${ehMassa ? 's' : ''}` : ehMassa ? `Enviar ${grupos.length} e-mails pendentes` : 'Enviar e-mail'}
         </h3>
@@ -5358,7 +5358,7 @@ function ModalEmailPlaquinha({ modalEmail, currentUser, montarTemplateGrupo, onF
             <label style={{ fontSize: 11.5, fontWeight: 600, color: T.inkDim, display: 'block', marginBottom: 4, marginTop: 6 }}>Assunto</label>
             <input value={assunto} onChange={e => setAssunto(e.target.value)} style={{ ...inputStyle(), width: '100%', marginBottom: 10 }} />
             <label style={{ fontSize: 11.5, fontWeight: 600, color: T.inkDim, display: 'block', marginBottom: 4 }}>Corpo do e-mail</label>
-            <textarea value={corpo} onChange={e => setCorpo(e.target.value)} rows={10}
+            <textarea value={corpo} onChange={e => setCorpo(e.target.value)} rows={16}
               style={{ ...inputStyle(), width: '100%', resize: 'vertical', fontSize: 12.5 }} />
             <p style={{ fontSize: 10, color: T.inkFaint, marginTop: 4 }}>Escreve normal — as quebras de linha e o link já ficam certos no e-mail final.</p>
           </>
