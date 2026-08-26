@@ -4868,19 +4868,26 @@ function PlaquinhaEquipamento({ currentUser }) {
   const montarTemplateGrupo = (items) => {
     const primeiro = items[0];
     const blocos = items.map(it => (
-      `N. Ordem de serviço: ${it.numero_ordem_servico || '—'}<br>` +
-      `N. Desenho: ${it.numero_desenho || '—'}<br>` +
-      `Mês/ano: ${fmtMesAno(it.mes_ano)}<br>` +
-      `N. Pedido de compra: ${it.numero_pedido_compra || '—'}<br>` +
-      `N. Projeto: ${it.br || '—'}<br>` +
+      `N. Ordem de serviço: ${it.numero_ordem_servico || '—'}\n` +
+      `N. Desenho: ${it.numero_desenho || '—'}\n` +
+      `Mês/ano: ${fmtMesAno(it.mes_ano)}\n` +
+      `N. Pedido de compra: ${it.numero_pedido_compra || '—'}\n` +
+      `N. Projeto: ${it.br || '—'}\n` +
       `Cliente: ${it.cliente_nome || '—'}`
-    )).join('<br><br>—<br><br>');
+    )).join('\n\n—\n\n');
     const linkDownload = `https://sieztnpchjjmrwrmrhoa.supabase.co/functions/v1/gerar-plaquinha-docx?${primeiro.br ? `br=${encodeURIComponent(primeiro.br)}` : `id=${primeiro.id}`}`;
-    const assinatura = currentUser?.assinatura_email ? `<br><br>${currentUser.assinatura_email.replace(/\n/g, '<br>')}` : `<br><br>${currentUser?.nome || ''}`;
+    const assinatura = currentUser?.assinatura_email || currentUser?.nome || '';
     const assunto = `Plaquinha de Equipamento — ${primeiro.br || primeiro.numero_desenho}`;
-    const corpo = `<b>PLAQUINHA DE EQUIPAMENTO</b><br><br>${blocos}<br><br>` +
-      `<a href="${linkDownload}">Baixar o arquivo Word</a>${assinatura}`;
+    const corpo = `PLAQUINHA DE EQUIPAMENTO\n\n${blocos}\n\nBaixar o arquivo Word: ${linkDownload}\n\n${assinatura}`;
     return { assunto, corpo };
+  };
+
+  // Converte o texto normal (o que ela vê e edita) pro HTML que vai de verdade no e-mail —
+  // ela nunca precisa ver tag nenhuma, só texto legível.
+  const textoParaHtmlEmail = (texto) => {
+    const escapado = texto.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const comLinks = escapado.replace(/(https?:\/\/[^\s]+)/g, '<a href="$1">$1</a>');
+    return comLinks.replace(/\n/g, '<br>');
   };
 
   const validarGrupo = (items) => {
@@ -4931,7 +4938,7 @@ function PlaquinhaEquipamento({ currentUser }) {
           plaquinha_ids: items.map(i => i.id),
           destinatarios,
           assunto: assuntoDoGrupo,
-          corpo: corpoDoGrupo,
+          corpo: textoParaHtmlEmail(corpoDoGrupo),
           status: 'pendente',
         });
         await supabase.from('plaquinhas_equipamento').update({ email_enviado: true }).in('id', items.map(i => i.id));
@@ -5352,8 +5359,8 @@ function ModalEmailPlaquinha({ modalEmail, currentUser, montarTemplateGrupo, onF
             <input value={assunto} onChange={e => setAssunto(e.target.value)} style={{ ...inputStyle(), width: '100%', marginBottom: 10 }} />
             <label style={{ fontSize: 11.5, fontWeight: 600, color: T.inkDim, display: 'block', marginBottom: 4 }}>Corpo do e-mail</label>
             <textarea value={corpo} onChange={e => setCorpo(e.target.value)} rows={10}
-              style={{ ...inputStyle(), width: '100%', resize: 'vertical', fontFamily: 'monospace', fontSize: 11.5 }} />
-            <p style={{ fontSize: 10, color: T.inkFaint, marginTop: 4 }}>Aceita HTML simples (ex: &lt;br&gt; pra quebrar linha, &lt;b&gt;texto&lt;/b&gt; pra negrito).</p>
+              style={{ ...inputStyle(), width: '100%', resize: 'vertical', fontSize: 12.5 }} />
+            <p style={{ fontSize: 10, color: T.inkFaint, marginTop: 4 }}>Escreve normal — as quebras de linha e o link já ficam certos no e-mail final.</p>
           </>
         )}
 
