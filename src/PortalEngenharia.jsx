@@ -4804,7 +4804,7 @@ function PlaquinhaEquipamento({ currentUser }) {
   const [salvandoId, setSalvandoId] = useState(null);
   const [busca, setBusca] = useState('');
   const [mostrarCriarManual, setMostrarCriarManual] = useState(false);
-  const [modalConcluir, setModalConcluir] = useState(null); // item sendo concluído agora
+  const [modalEmail, setModalEmail] = useState(null); // { grupos: [...], modo: 'concluir'|'enviar'|'massa' }
 
   const carregar = useCallback(async () => {
     setLoading(true);
@@ -4814,9 +4814,6 @@ function PlaquinhaEquipamento({ currentUser }) {
   }, []);
   useEffect(() => { carregar(); }, [carregar]);
 
-  // Primeiro agrupa TUDO por BR, pra decidir de qual aba de origem cada BR pertence
-  // (se tiver QUALQUER item vindo do Portal de Compras/Sankhya, o grupo inteiro fica
-  // lá — nunca aparece duplicado nas duas abas)
   const origemPorBr = useMemo(() => {
     const mapa = new Map();
     itens.forEach(item => {
@@ -4836,7 +4833,6 @@ function PlaquinhaEquipamento({ currentUser }) {
     return !busca.trim() || (i.br || '').toLowerCase().includes(busca.toLowerCase()) || (i.cliente_nome || '').toLowerCase().includes(busca.toLowerCase());
   });
 
-  // Agrupa por BR — tudo do mesmo projeto fica sempre junto, não importa a ordem/criação
   const grupos = useMemo(() => {
     const mapa = new Map();
     listaAtual.forEach(item => {
@@ -4847,62 +4843,108 @@ function PlaquinhaEquipamento({ currentUser }) {
     return [...mapa.entries()].map(([chave, items]) => ({ chave, items }));
   }, [listaAtual]);
 
+  // Grupos preenchidos que ainda não tiveram e-mail disparado (pro botão de disparo em massa)
+  const gruposSemEmail = useMemo(() => {
+    const mapa = new Map();
+    itens.filter(i => i.status === 'preenchida' && !i.email_enviado).forEach(item => {
+      const chave = item.br || `sem-br-${item.id}`;
+      if (!mapa.has(chave)) mapa.set(chave, []);
+      mapa.get(chave).push(item);
+    });
+    return [...mapa.entries()].map(([chave, items]) => ({ chave, items }));
+  }, [itens]);
+
   const MESES_PT = ['JANEIRO','FEVEREIRO','MARÇO','ABRIL','MAIO','JUNHO','JULHO','AGOSTO','SETEMBRO','OUTUBRO','NOVEMBRO','DEZEMBRO'];
   const fmtMesAno = (d) => {
     if (!d) return '—';
     const data = new Date(d + 'T12:00:00');
     return `${MESES_PT[data.getMonth()]}/${data.getFullYear()}`;
   };
-  const fmtDataCurta = (d) => !d ? '—' : new Date(d + 'T12:00:00').toLocaleDateString('pt-BR');
 
   const campo = (item, nome) => edicoes[item.id]?.[nome] ?? item[nome] ?? '';
   const setCampo = (itemId, nome, valor) => setEdicoes(prev => ({ ...prev, [itemId]: { ...prev[itemId], [nome]: valor } }));
 
-  const salvar = (item) => {
-    const desenho = campo(item, 'numero_desenho');
-    const mesAno = campo(item, 'mes_ano');
-    if (!desenho) { alert('Preenche o N. Desenho antes de salvar.'); return; }
-    if (!mesAno) { alert('Preenche o Mês/Ano antes de salvar.'); return; }
-    setModalConcluir(item);
+  // Monta o texto padrão (assunto + corpo) pra um grupo de itens de um mesmo BR
+  const montarTemplateGrupo = (items) => {
+    const primeiro = items[0];
+    const blocos = items.map(it => (
+      `N. Ordem de serviço: ${it.numero_ordem_servico || '—'}<br>` +
+      `N. Desenho: ${it.numero_desenho || '—'}<br>` +
+      `Mês/ano: ${fmtMesAno(it.mes_ano)}<br>` +
+      `N. Pedido de compra: ${it.numero_pedido_compra || '—'}<br>` +
+      `N. Projeto: ${it.br || '—'}<br>` +
+      `Cliente: ${it.cliente_nome || '—'}`
+    )).join('<br><br>—<br><br>');
+    const linkDownload = `https://sieztnpchjjmrwrmrhoa.supabase.co/functions/v1/gerar-plaquinha-docx?${primeiro.br ? `br=${encodeURIComponent(primeiro.br)}` : `id=${primeiro.id}`}`;
+    const assinatura = currentUser?.assinatura_email ? `<br><br>${currentUser.assinatura_email.replace(/\n/g, '<br>')}` : `<br><br>${currentUser?.nome || ''}`;
+    const assunto = `Plaquinha de Equipamento — ${primeiro.br || primeiro.numero_desenho}`;
+    const corpo = `<b>PLAQUINHA DE EQUIPAMENTO</b><br><br>${blocos}<br><br>` +
+      `<a href="${linkDownload}">Baixar o arquivo Word</a>${assinatura}`;
+    return { assunto, corpo };
   };
 
-  const concluirFinal = async (item, enviarEmail, emailDestino) => {
-    setSalvandoId(item.id);
-    const dadosFinais = {
-      br: campo(item, 'br') || null,
-      cliente_nome: campo(item, 'cliente_nome') || null,
-      numero_pedido_compra: campo(item, 'numero_pedido_compra') || null,
-      numero_desenho: campo(item, 'numero_desenho'),
-      numero_ordem_servico: campo(item, 'numero_ordem_servico') || null,
-      mes_ano: campo(item, 'mes_ano'),
-    };
-    await supabase.from('plaquinhas_equipamento').update({
-      ...dadosFinais,
-      status: 'preenchida',
-      preenchido_por: currentUser?.nome || null,
-      preenchido_em: new Date().toISOString(),
-    }).eq('id', item.id);
-
-    if (enviarEmail && emailDestino) {
-      const corpo = `PLAQUINHA DE EQUIPAMENTO\n\nN. Ordem de serviço: ${dadosFinais.numero_ordem_servico || '—'}\nN. Desenho: ${dadosFinais.numero_desenho}\nMês/ano: ${fmtMesAno(dadosFinais.mes_ano)}\nN. Pedido de compra: ${dadosFinais.numero_pedido_compra || '—'}\nN. Projeto: ${dadosFinais.br || '—'}\nCliente: ${dadosFinais.cliente_nome || '—'}\n\nBaixar o arquivo Word: https://sieztnpchjjmrwrmrhoa.supabase.co/functions/v1/gerar-plaquinha-docx?id=${item.id}\n\nPreenchido por ${currentUser?.nome || '?'}.`;
-      await supabase.from('solicitacoes_email_plaquinha').insert({
-        plaquinha_id: item.id,
-        destinatario_email: emailDestino,
-        assunto: `Plaquinha de Equipamento — ${dadosFinais.br || dadosFinais.numero_desenho}`,
-        corpo,
-        status: 'pendente',
-      });
+  const validarGrupo = (items) => {
+    for (const it of items) {
+      if (!campo(it, 'numero_desenho')) return `Falta o N. Desenho em um dos itens de ${it.br || 'sem BR'}.`;
+      if (!campo(it, 'mes_ano')) return `Falta o Mês/Ano em um dos itens de ${it.br || 'sem BR'}.`;
     }
+    return null;
+  };
 
-    setModalConcluir(null);
+  const concluirGrupo = (items) => {
+    const erro = validarGrupo(items);
+    if (erro) { alert(erro); return; }
+    setModalEmail({ grupos: [{ items }], modo: 'concluir' });
+  };
+
+  const enviarEmailGrupo = (items) => {
+    setModalEmail({ grupos: [{ items }], modo: 'enviar' });
+  };
+
+  const dispararTodos = () => {
+    if (gruposSemEmail.length === 0) return;
+    setModalEmail({ grupos: gruposSemEmail, modo: 'massa' });
+  };
+
+  const confirmarEnvio = async ({ grupos: gruposModal, modo, destinatarios, assunto, corpo }) => {
+    setSalvandoId('modal');
+    for (const { items } of gruposModal) {
+      // Se veio de "concluir", salva os dados finais de cada item do grupo primeiro
+      if (modo === 'concluir') {
+        for (const it of items) {
+          await supabase.from('plaquinhas_equipamento').update({
+            br: campo(it, 'br') || null,
+            cliente_nome: campo(it, 'cliente_nome') || null,
+            numero_pedido_compra: campo(it, 'numero_pedido_compra') || null,
+            numero_desenho: campo(it, 'numero_desenho'),
+            numero_ordem_servico: campo(it, 'numero_ordem_servico') || null,
+            mes_ano: campo(it, 'mes_ano'),
+            status: 'preenchida',
+            preenchido_por: currentUser?.nome || null,
+            preenchido_em: new Date().toISOString(),
+          }).eq('id', it.id);
+        }
+      }
+      if (destinatarios.length > 0) {
+        const { assunto: assuntoDoGrupo, corpo: corpoDoGrupo } = (gruposModal.length > 1) ? montarTemplateGrupo(items) : { assunto, corpo };
+        await supabase.from('solicitacoes_email_plaquinha').insert({
+          plaquinha_ids: items.map(i => i.id),
+          destinatarios,
+          assunto: assuntoDoGrupo,
+          corpo: corpoDoGrupo,
+          status: 'pendente',
+        });
+        await supabase.from('plaquinhas_equipamento').update({ email_enviado: true }).in('id', items.map(i => i.id));
+      }
+    }
+    setModalEmail(null);
     await carregar();
     setSalvandoId(null);
   };
 
-  const refazer = async (item) => {
-    await supabase.from('plaquinhas_equipamento').update({
-      status: 'pendente', preenchido_por: null, preenchido_em: null,
-    }).eq('id', item.id);
+  const refazerGrupo = async (items) => {
+    if (!confirm(`Reabrir ${items.length > 1 ? 'os ' + items.length + ' itens' : 'esse item'} pra edição?`)) return;
+    await supabase.from('plaquinhas_equipamento').update({ status: 'pendente', preenchido_por: null, preenchido_em: null }).in('id', items.map(i => i.id));
     await carregar();
   };
 
@@ -4924,7 +4966,7 @@ function PlaquinhaEquipamento({ currentUser }) {
     const { error } = await supabase.from('plaquinhas_equipamento').insert({
       br: item.br, cliente_nome: item.cliente_nome, numero_pedido_compra: item.numero_pedido_compra,
       mes_ano: item.mes_ano, data_prevista_entrega: item.data_prevista_entrega,
-      origem_deteccao: 'manual', status: 'pendente', // sempre 'manual' — evita colidir com a trava de único por BR das origens automáticas
+      origem_deteccao: 'manual', status: 'pendente',
     });
     if (error) { alert(`Erro ao adicionar item: ${error.message}`); return; }
     setAba('pendentes');
@@ -4940,8 +4982,29 @@ function PlaquinhaEquipamento({ currentUser }) {
 
   return (
     <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 18, maxWidth: 900 }}>
+      {(pendentes.length > 0 || gruposSemEmail.length > 0) && (
+        <div style={{ background: T.amberSoft, border: `1px solid ${T.amber}55`, borderRadius: 8, padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <AlertTriangle size={16} color={T.amberText} />
+            <strong style={{ fontSize: 13, color: T.amberText }}>Tem coisa pendente aqui</strong>
+          </div>
+          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', fontSize: 12.5 }}>
+            {pendentes.length > 0 && (
+              <button onClick={() => setAba('pendentes')} style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: T.amberText, textDecoration: 'underline', fontSize: 12.5 }}>
+                {pendentes.length} plaquinha(s) ainda por preencher
+              </button>
+            )}
+            {gruposSemEmail.length > 0 && (
+              <button onClick={() => { setAba('preenchidas'); }} style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: T.amberText, textDecoration: 'underline', fontSize: 12.5 }}>
+                {gruposSemEmail.length} projeto(s) concluído(s) mas <strong>sem e-mail enviado</strong>
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
       <div style={{ fontSize: 12.5, color: T.inkFaint, background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 8, padding: '10px 14px' }}>
-        Todos os campos são editáveis — corrige se algo vier errado. Itens do mesmo BR ficam sempre agrupados juntos.
+        Todos os campos são editáveis — corrige se algo vier errado. Itens do mesmo BR ficam sempre agrupados juntos e o Word/e-mail saem juntos também.
       </div>
 
       <div style={{ display: 'flex', gap: 4, borderBottom: `1px solid ${T.line}` }}>
@@ -4980,10 +5043,18 @@ function PlaquinhaEquipamento({ currentUser }) {
             <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Buscar BR ou cliente…" style={{ ...inputStyle(), width: 220, paddingLeft: 28 }} />
           </div>
         </div>
-        <button onClick={() => setMostrarCriarManual(true)}
-          style={{ fontSize: 12.5, fontWeight: 700, color: '#fff', background: T.blueText, border: 'none', borderRadius: 6, padding: '8px 14px', cursor: 'pointer' }}>
-          + Criar Nova Manualmente
-        </button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          {aba === 'preenchidas' && gruposSemEmail.length > 0 && (
+            <button onClick={dispararTodos}
+              style={{ fontSize: 12.5, fontWeight: 700, color: '#fff', background: T.terracotta, border: 'none', borderRadius: 6, padding: '8px 14px', cursor: 'pointer' }}>
+              🚀 Disparar e-mails pendentes ({gruposSemEmail.length})
+            </button>
+          )}
+          <button onClick={() => setMostrarCriarManual(true)}
+            style={{ fontSize: 12.5, fontWeight: 700, color: '#fff', background: T.blueText, border: 'none', borderRadius: 6, padding: '8px 14px', cursor: 'pointer' }}>
+            + Criar Nova Manualmente
+          </button>
+        </div>
       </div>
 
       {mostrarCriarManual && <CriarPlaquinhaManual onFechar={() => setMostrarCriarManual(false)} onCriado={carregar} />}
@@ -4995,6 +5066,8 @@ function PlaquinhaEquipamento({ currentUser }) {
           <div style={{ textAlign: 'center', padding: 40, color: T.inkFaint, fontSize: 13 }}>Nada por aqui.</div>
         ) : grupos.map(({ chave, items }) => {
           const primeiro = items[0];
+          const todosPendentes = items.every(i => i.status === 'pendente');
+          const todosPreenchidos = items.every(i => i.status === 'preenchida');
           return (
             <div key={chave} style={{ background: T.panel, border: `1.5px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
               <div style={{ padding: '10px 16px', background: T.panelAlt, borderBottom: `1px solid ${T.line}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
@@ -5003,6 +5076,22 @@ function PlaquinhaEquipamento({ currentUser }) {
                   {primeiro.cliente_nome && <span style={{ fontSize: 12, color: T.inkDim }}> — {primeiro.cliente_nome}</span>}
                   {items.length > 1 && <span style={{ fontSize: 10.5, fontWeight: 700, color: T.terracotta, marginLeft: 8, background: `${T.terracotta}18`, padding: '2px 7px', borderRadius: 4 }}>{items.length} itens</span>}
                 </div>
+                {items.length > 1 && (
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    {todosPendentes && (
+                      <button onClick={() => concluirGrupo(items)}
+                        style={{ fontSize: 11.5, fontWeight: 700, color: '#fff', background: T.oliveText, border: 'none', borderRadius: 5, padding: '5px 12px', cursor: 'pointer' }}>
+                        ✓ Concluir os {items.length} itens
+                      </button>
+                    )}
+                    {todosPreenchidos && (
+                      <button onClick={() => refazerGrupo(items)}
+                        style={{ fontSize: 11.5, fontWeight: 600, color: T.amberText, background: 'transparent', border: `1px solid ${T.amber}66`, borderRadius: 5, padding: '5px 10px', cursor: 'pointer' }}>
+                        ↺ Refazer todos
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
               <div style={{ display: 'flex', flexDirection: 'column' }}>
                 {items.map((item, idx) => (
@@ -5073,31 +5162,52 @@ function PlaquinhaEquipamento({ currentUser }) {
                           style={{ fontSize: 12, fontWeight: 600, color: T.inkDim, background: 'transparent', border: `1px solid ${T.line}`, borderRadius: 6, padding: '8px 14px', cursor: 'pointer' }}>
                           Salvar rascunho
                         </button>
-                        <button onClick={() => salvar(item)} disabled={salvandoId === item.id}
-                          style={{ fontSize: 12.5, fontWeight: 700, color: '#fff', background: T.oliveText, border: 'none', borderRadius: 6, padding: '8px 16px', cursor: 'pointer', opacity: salvandoId === item.id ? 0.6 : 1 }}>
-                          {salvandoId === item.id ? 'Salvando…' : '✓ Concluir plaquinha'}
-                        </button>
+                        {items.length === 1 && (
+                          <button onClick={() => concluirGrupo(items)} disabled={salvandoId === item.id}
+                            style={{ fontSize: 12.5, fontWeight: 700, color: '#fff', background: T.oliveText, border: 'none', borderRadius: 6, padding: '8px 16px', cursor: 'pointer', opacity: salvandoId === item.id ? 0.6 : 1 }}>
+                            {salvandoId === item.id ? 'Salvando…' : '✓ Concluir plaquinha'}
+                          </button>
+                        )}
                       </div>
                     ) : (
                       <div style={{ padding: '8px 16px 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                         <span style={{ fontSize: 11, color: T.inkFaint }}>
                           Preenchido por {item.preenchido_por || '?'} em {new Date(item.preenchido_em).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                          {item.email_enviado && <span style={{ color: T.oliveText, fontWeight: 700 }}> · ✓ e-mail enviado</span>}
                         </span>
-                        <div style={{ display: 'flex', gap: 8 }}>
-                          <a href={`https://sieztnpchjjmrwrmrhoa.supabase.co/functions/v1/gerar-plaquinha-docx?id=${item.id}`}
-                            style={{ fontSize: 11.5, fontWeight: 700, color: '#fff', background: T.blueText, borderRadius: 5, padding: '5px 12px', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-                            ⬇ Baixar Word
-                          </a>
-                          <button onClick={() => refazer(item)}
-                            style={{ fontSize: 11.5, fontWeight: 600, color: T.amberText, background: 'transparent', border: `1px solid ${T.amber}66`, borderRadius: 5, padding: '5px 10px', cursor: 'pointer' }}>
-                            ↺ Refazer
-                          </button>
-                        </div>
+                        {items.length === 1 && (
+                          <div style={{ display: 'flex', gap: 8 }}>
+                            <a href={`https://sieztnpchjjmrwrmrhoa.supabase.co/functions/v1/gerar-plaquinha-docx?id=${item.id}`}
+                              style={{ fontSize: 11.5, fontWeight: 700, color: '#fff', background: T.blueText, borderRadius: 5, padding: '5px 12px', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                              ⬇ Baixar Word
+                            </a>
+                            <button onClick={() => enviarEmailGrupo(items)}
+                              style={{ fontSize: 11.5, fontWeight: 700, color: '#fff', background: T.terracotta, border: 'none', borderRadius: 5, padding: '5px 12px', cursor: 'pointer' }}>
+                              📧 Enviar e-mail
+                            </button>
+                            <button onClick={() => refazerGrupo(items)}
+                              style={{ fontSize: 11.5, fontWeight: 600, color: T.amberText, background: 'transparent', border: `1px solid ${T.amber}66`, borderRadius: 5, padding: '5px 10px', cursor: 'pointer' }}>
+                              ↺ Refazer
+                            </button>
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
                 ))}
               </div>
+              {items.length > 1 && todosPreenchidos && (
+                <div style={{ padding: '8px 16px 12px', borderTop: `1px dashed ${T.lineSoft}`, display: 'flex', gap: 8 }}>
+                  <a href={`https://sieztnpchjjmrwrmrhoa.supabase.co/functions/v1/gerar-plaquinha-docx?br=${encodeURIComponent(primeiro.br)}`}
+                    style={{ fontSize: 11.5, fontWeight: 700, color: '#fff', background: T.blueText, borderRadius: 5, padding: '6px 14px', textDecoration: 'none' }}>
+                    ⬇ Baixar Word (com os {items.length} itens)
+                  </a>
+                  <button onClick={() => enviarEmailGrupo(items)}
+                    style={{ fontSize: 11.5, fontWeight: 700, color: '#fff', background: T.terracotta, border: 'none', borderRadius: 5, padding: '6px 14px', cursor: 'pointer' }}>
+                    📧 Enviar e-mail (com os {items.length} itens)
+                  </button>
+                </div>
+              )}
               {aba === 'pendentes' && (
                 <div style={{ padding: '8px 16px 12px', borderTop: `1px dashed ${T.lineSoft}` }}>
                   <button onClick={() => adicionarItem(primeiro)}
@@ -5111,78 +5221,153 @@ function PlaquinhaEquipamento({ currentUser }) {
         })}
       </div>
 
-      {modalConcluir && (
-        <ModalConcluirPlaquinha item={modalConcluir} currentUser={currentUser}
-          onFechar={() => setModalConcluir(null)}
-          onConfirmar={(comEmail, email) => concluirFinal(modalConcluir, comEmail, email)}
-          salvando={salvandoId === modalConcluir.id} />
+      {modalEmail && (
+        <ModalEmailPlaquinha modalEmail={modalEmail} currentUser={currentUser}
+          montarTemplateGrupo={montarTemplateGrupo}
+          onFechar={() => setModalEmail(null)}
+          onConfirmar={confirmarEnvio}
+          salvando={salvandoId === 'modal'} />
       )}
     </div>
   );
 }
 
-function ModalConcluirPlaquinha({ item, currentUser, onFechar, onConfirmar, salvando }) {
-  const [enviarEmail, setEnviarEmail] = useState(false);
+function ModalEmailPlaquinha({ modalEmail, currentUser, montarTemplateGrupo, onFechar, onConfirmar, salvando }) {
+  const { grupos, modo } = modalEmail;
+  const ehMassa = grupos.length > 1;
+  const primeiroGrupo = grupos[0].items;
+  const templateInicial = montarTemplateGrupo(primeiroGrupo);
+
+  const [destinatarios, setDestinatarios] = useState([]);
   const [textoNome, setTextoNome] = useState('');
-  const [emailEscolhido, setEmailEscolhido] = useState('');
   const [colaboradores, setColaboradores] = useState([]);
   const [mostrarSugestoes, setMostrarSugestoes] = useState(false);
+  const [modelos, setModelos] = useState([]);
+  const [assunto, setAssunto] = useState(templateInicial.assunto);
+  const [corpo, setCorpo] = useState(templateInicial.corpo);
+  const [nomeNovoModelo, setNomeNovoModelo] = useState('');
+  const [mostrarSalvarModelo, setMostrarSalvarModelo] = useState(false);
 
   useEffect(() => {
     supabase.from('colaboradores').select('nome,email').eq('ativo', true).not('email', 'is', null).order('nome')
       .then(({ data }) => setColaboradores(data || []));
+    supabase.from('modelos_email_plaquinha').select('*').order('nome_modelo')
+      .then(({ data }) => setModelos(data || []));
   }, []);
 
-  const sugestoes = textoNome.trim()
-    ? colaboradores.filter(c => c.nome.toLowerCase().includes(textoNome.toLowerCase()))
-    : [];
+  const sugestoes = textoNome.trim() ? colaboradores.filter(c => c.nome.toLowerCase().includes(textoNome.toLowerCase()) && !destinatarios.includes(c.email)) : [];
 
-  const escolher = (c) => {
-    setTextoNome(`${c.nome} <${c.email}>`);
-    setEmailEscolhido(c.email);
+  const adicionarDestinatario = (email) => {
+    if (!email || destinatarios.includes(email)) return;
+    setDestinatarios(prev => [...prev, email]);
+    setTextoNome('');
     setMostrarSugestoes(false);
+  };
+  const removerDestinatario = (email) => setDestinatarios(prev => prev.filter(e => e !== email));
+
+  const usarModelo = (modelo) => {
+    setDestinatarios(modelo.destinatarios || []);
+  };
+
+  const salvarModelo = async () => {
+    if (!nomeNovoModelo.trim() || destinatarios.length === 0) return;
+    await supabase.from('modelos_email_plaquinha').insert({
+      nome_modelo: nomeNovoModelo.trim(), destinatarios, criado_por: currentUser?.nome || null,
+    });
+    const { data } = await supabase.from('modelos_email_plaquinha').select('*').order('nome_modelo');
+    setModelos(data || []);
+    setNomeNovoModelo('');
+    setMostrarSalvarModelo(false);
   };
 
   return (
     <Overlay onClose={onFechar}>
-      <div className="scale-in" style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, width: '100%', maxWidth: 440, padding: 24, boxShadow: '0 24px 60px rgba(0,0,0,.18)' }}>
-        <h3 style={{ fontFamily: FONT_DISPLAY, fontSize: 17, fontWeight: 700, margin: '0 0 4px' }}>Concluir plaquinha {item.br ? `— ${item.br}` : ''}</h3>
-        <p style={{ fontSize: 12.5, color: T.inkFaint, margin: '0 0 16px' }}>Quer mandar por e-mail agora que terminou?</p>
+      <div className="scale-in" style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, width: '100%', maxWidth: 640, padding: 24, boxShadow: '0 24px 60px rgba(0,0,0,.18)', maxHeight: '90vh', overflowY: 'auto' }}>
+        <h3 style={{ fontFamily: FONT_DISPLAY, fontSize: 17, fontWeight: 700, margin: '0 0 4px' }}>
+          {modo === 'concluir' ? `Concluir plaquinha${ehMassa ? 's' : ''}` : ehMassa ? `Enviar ${grupos.length} e-mails pendentes` : 'Enviar e-mail'}
+        </h3>
+        <p style={{ fontSize: 12.5, color: T.inkFaint, margin: '0 0 16px' }}>
+          {ehMassa
+            ? `Cada projeto abaixo vai virar um e-mail separado, todos pros mesmos destinatários: ${grupos.map(g => g.items[0].br).join(', ')}.`
+            : 'Escolhe pra quem manda, e confere o texto antes de enviar.'}
+        </p>
 
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, marginBottom: 12, cursor: 'pointer' }}>
-          <input type="checkbox" checked={enviarEmail} onChange={e => setEnviarEmail(e.target.checked)} />
-          Enviar por e-mail
-        </label>
+        {/* Destinatários */}
+        <label style={{ fontSize: 11.5, fontWeight: 600, color: T.inkDim, display: 'block', marginBottom: 4 }}>Destinatários</label>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 6 }}>
+          {destinatarios.map(email => (
+            <span key={email} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11.5, background: T.blueSoft, color: T.blueText, padding: '4px 8px', borderRadius: 5 }}>
+              {email}
+              <span onClick={() => removerDestinatario(email)} style={{ cursor: 'pointer', fontWeight: 700 }}>×</span>
+            </span>
+          ))}
+        </div>
+        <div style={{ position: 'relative', marginBottom: 10 }}>
+          <input value={textoNome}
+            onChange={e => { setTextoNome(e.target.value); setMostrarSugestoes(true); }}
+            onFocus={() => setMostrarSugestoes(true)}
+            onKeyDown={e => { if (e.key === 'Enter' && textoNome.includes('@')) { adicionarDestinatario(textoNome.trim()); } }}
+            placeholder="Digita o nome ou e-mail e aperta Enter…" style={{ ...inputStyle(), width: '100%' }} />
+          {mostrarSugestoes && sugestoes.length > 0 && (
+            <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, background: T.panel, border: `1px solid ${T.line}`, borderRadius: 8, marginTop: 4, boxShadow: '0 8px 24px rgba(0,0,0,.12)', zIndex: 10, maxHeight: 180, overflowY: 'auto' }}>
+              {sugestoes.map(c => (
+                <div key={c.email} onClick={() => adicionarDestinatario(c.email)} onMouseDown={e => e.preventDefault()}
+                  style={{ padding: '8px 12px', cursor: 'pointer', fontSize: 12.5, borderBottom: `1px solid ${T.lineSoft}` }}>
+                  <div style={{ fontWeight: 700 }}>{c.nome}</div>
+                  <div style={{ color: T.inkFaint, fontSize: 11 }}>{c.email}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
 
-        {enviarEmail && (
-          <div style={{ position: 'relative', marginBottom: 14 }}>
-            <input value={textoNome}
-              onChange={e => { setTextoNome(e.target.value); setEmailEscolhido(''); setMostrarSugestoes(true); }}
-              onFocus={() => setMostrarSugestoes(true)}
-              placeholder="Digita o nome da pessoa…" style={{ ...inputStyle(), width: '100%' }} />
-            {mostrarSugestoes && sugestoes.length > 0 && (
-              <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, background: T.panel, border: `1px solid ${T.line}`, borderRadius: 8, marginTop: 4, boxShadow: '0 8px 24px rgba(0,0,0,.12)', zIndex: 10, maxHeight: 200, overflowY: 'auto' }}>
-                {sugestoes.map(c => (
-                  <div key={c.email} onClick={() => escolher(c)}
-                    style={{ padding: '8px 12px', cursor: 'pointer', fontSize: 12.5, borderBottom: `1px solid ${T.lineSoft}` }}
-                    onMouseDown={e => e.preventDefault()}>
-                    <div style={{ fontWeight: 700 }}>{c.nome}</div>
-                    <div style={{ color: T.inkFaint, fontSize: 11 }}>{c.email}</div>
-                  </div>
-                ))}
-              </div>
-            )}
-            {!emailEscolhido && textoNome.includes('@') && (
-              <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 4 }}>Usando o e-mail digitado direto, já que não achou ninguém com esse nome.</div>
-            )}
+        {/* Modelos salvos */}
+        {modelos.length > 0 && (
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
+            <span style={{ fontSize: 11, color: T.inkFaint, alignSelf: 'center' }}>Modelos salvos:</span>
+            {modelos.map(m => (
+              <button key={m.id} onClick={() => usarModelo(m)}
+                style={{ fontSize: 11, fontWeight: 600, color: T.inkDim, background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 5, padding: '3px 9px', cursor: 'pointer' }}>
+                {m.nome_modelo}
+              </button>
+            ))}
+          </div>
+        )}
+        {destinatarios.length > 0 && !mostrarSalvarModelo && (
+          <button onClick={() => setMostrarSalvarModelo(true)} style={{ fontSize: 10.5, color: T.blueText, background: 'none', border: 'none', cursor: 'pointer', padding: 0, marginBottom: 12 }}>
+            💾 Salvar esses destinatários como modelo
+          </button>
+        )}
+        {mostrarSalvarModelo && (
+          <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
+            <input value={nomeNovoModelo} onChange={e => setNomeNovoModelo(e.target.value)} placeholder="Nome do modelo (ex: Time Ternium)" style={{ ...inputStyle(), flex: 1 }} />
+            <button onClick={salvarModelo} style={{ fontSize: 11.5, fontWeight: 700, color: '#fff', background: T.oliveText, border: 'none', borderRadius: 5, padding: '6px 12px', cursor: 'pointer' }}>Salvar</button>
           </div>
         )}
 
-        <div style={{ display: 'flex', gap: 8, marginTop: enviarEmail ? 0 : 14 }}>
-          <button onClick={() => onConfirmar(enviarEmail, emailEscolhido || textoNome)} disabled={salvando || (enviarEmail && !(emailEscolhido || textoNome.includes('@')))}
-            style={{ fontSize: 13, fontWeight: 700, color: '#fff', background: T.oliveText, border: 'none', borderRadius: 8, padding: '10px 18px', cursor: 'pointer', opacity: (enviarEmail && !(emailEscolhido || textoNome.includes('@'))) ? 0.5 : 1 }}>
-            {salvando ? 'Concluindo…' : enviarEmail ? '✓ Concluir e enviar' : '✓ Só concluir'}
+        {/* Assunto/corpo — só edita de verdade se for envio único (em massa usa o template automático por projeto) */}
+        {!ehMassa && (
+          <>
+            <label style={{ fontSize: 11.5, fontWeight: 600, color: T.inkDim, display: 'block', marginBottom: 4, marginTop: 6 }}>Assunto</label>
+            <input value={assunto} onChange={e => setAssunto(e.target.value)} style={{ ...inputStyle(), width: '100%', marginBottom: 10 }} />
+            <label style={{ fontSize: 11.5, fontWeight: 600, color: T.inkDim, display: 'block', marginBottom: 4 }}>Corpo do e-mail</label>
+            <textarea value={corpo} onChange={e => setCorpo(e.target.value)} rows={10}
+              style={{ ...inputStyle(), width: '100%', resize: 'vertical', fontFamily: 'monospace', fontSize: 11.5 }} />
+            <p style={{ fontSize: 10, color: T.inkFaint, marginTop: 4 }}>Aceita HTML simples (ex: &lt;br&gt; pra quebrar linha, &lt;b&gt;texto&lt;/b&gt; pra negrito).</p>
+          </>
+        )}
+
+        <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
+          <button onClick={() => onConfirmar({ grupos, modo, destinatarios, assunto, corpo })} disabled={salvando || destinatarios.length === 0}
+            style={{ fontSize: 13, fontWeight: 700, color: '#fff', background: T.oliveText, border: 'none', borderRadius: 8, padding: '10px 18px', cursor: 'pointer', opacity: (salvando || destinatarios.length === 0) ? 0.5 : 1 }}>
+            {salvando ? 'Enviando…' : ehMassa ? `✓ Disparar ${grupos.length} e-mails` : modo === 'concluir' ? '✓ Concluir e enviar' : '✓ Enviar'}
           </button>
+          {modo === 'concluir' && (
+            <button onClick={() => onConfirmar({ grupos, modo, destinatarios: [], assunto, corpo })} disabled={salvando}
+              style={{ fontSize: 12.5, fontWeight: 600, color: T.inkDim, background: 'transparent', border: `1px solid ${T.line}`, borderRadius: 8, padding: '10px 16px', cursor: 'pointer' }}>
+              Só concluir (sem e-mail)
+            </button>
+          )}
           <button onClick={onFechar} style={{ fontSize: 12.5, fontWeight: 600, color: T.inkFaint, background: 'transparent', border: `1px solid ${T.line}`, borderRadius: 8, padding: '10px 16px', cursor: 'pointer' }}>
             Cancelar
           </button>
