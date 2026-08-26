@@ -4837,7 +4837,7 @@ function ConfApontamento() {
   return (
     <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 18, maxWidth: 1200 }}>
       <div style={{ fontSize: 12.5, color: T.inkFaint, background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 8, padding: '10px 14px' }}>
-        Compara, por OP e produto, a quantidade que foi <strong>planejada</strong> (Pedido de Venda) com a quantidade que foi <strong>apontada</strong> na produção. Sincroniza sozinho a cada 4h.
+        Compara, por OP e <strong>item de matéria-prima</strong>, a quantidade que era <strong>esperada pela composição oficial</strong> (fórmula cadastrada × quantidade produzida) com a quantidade que foi <strong>realmente apontada</strong> na produção — não conta o produto acabado. Sincroniza sozinho a cada 4h.
         {ultimaSinc && <span style={{ marginLeft: 8, color: T.inkFaint }}>· Última sincronização: {new Date(ultimaSinc).toLocaleString('pt-BR')}</span>}
       </div>
 
@@ -4874,7 +4874,7 @@ function ConfApontamento() {
                 <th style={thFat(70)}>OP</th>
                 <th style={thFat(90)}>BR</th>
                 <th style={thFat(220)}>Produto</th>
-                <th style={{ ...thFat(90), textAlign: 'right' }}>Planejado</th>
+                <th style={{ ...thFat(90), textAlign: 'right' }}>Esperado</th>
                 <th style={{ ...thFat(90), textAlign: 'right' }}>Apontado</th>
                 <th style={{ ...thFat(90), textAlign: 'right' }}>Diferença</th>
                 <th style={thFat(90)}>Status OP</th>
