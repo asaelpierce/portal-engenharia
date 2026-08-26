@@ -4803,6 +4803,7 @@ function ConfApontamento() {
   const [filtroStatus, setFiltroStatus] = useState('divergente_finalizado'); // 'todos' | 'divergente' | 'divergente_finalizado' | 'ok'
   const [busca, setBusca] = useState('');
   const [ultimaSinc, setUltimaSinc] = useState(null);
+  const [opAberta, setOpAberta] = useState(null); // número da OP selecionada pro modal de detalhe
 
   const carregar = useCallback(async () => {
     setLoading(true);
@@ -4873,6 +4874,7 @@ function ConfApontamento() {
               <tr style={{ background: T.panelAlt, borderBottom: `1px solid ${T.line}` }}>
                 <th style={thFat(70)}>OP</th>
                 <th style={thFat(90)}>BR</th>
+                <th style={thFat(70)}>Código</th>
                 <th style={thFat(220)}>Produto</th>
                 <th style={{ ...thFat(90), textAlign: 'right' }}>Esperado</th>
                 <th style={{ ...thFat(90), textAlign: 'right' }}>Apontado</th>
@@ -4883,13 +4885,14 @@ function ConfApontamento() {
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={8} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Carregando…</td></tr>
+                <tr><td colSpan={9} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Carregando…</td></tr>
               ) : filtrados.length === 0 ? (
-                <tr><td colSpan={8} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Nada aqui — bom sinal!</td></tr>
+                <tr><td colSpan={9} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Nada aqui — bom sinal!</td></tr>
               ) : filtrados.slice(0, 300).map(i => (
-                <tr key={i.id} style={{ borderBottom: `1px solid ${T.lineSoft}`, background: (i.diferenca != 0 && i.status_op === 'Finalizado') ? `${T.rustSoft}55` : 'transparent' }}>
-                  <td style={{ padding: '7px 12px', fontFamily: FONT_DISPLAY, fontWeight: 700 }}>{i.op}</td>
+                <tr key={i.id} onClick={() => setOpAberta(i.op)} style={{ borderBottom: `1px solid ${T.lineSoft}`, background: (i.diferenca != 0 && i.status_op === 'Finalizado') ? `${T.rustSoft}55` : 'transparent', cursor: 'pointer' }}>
+                  <td style={{ padding: '7px 12px', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.terracotta, textDecoration: 'underline' }}>{i.op}</td>
                   <td style={{ padding: '7px 12px', color: T.blueText, fontWeight: 600 }}>{i.br || '—'}</td>
+                  <td style={{ padding: '7px 12px', color: T.inkFaint, fontFamily: 'monospace', fontSize: 11.5 }}>{i.codprod}</td>
                   <td style={{ padding: '7px 12px', maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={i.produto_descricao}>{i.produto_descricao}</td>
                   <td style={{ padding: '7px 12px', textAlign: 'right' }}>{fmtNum(i.quantidade_planejada)}</td>
                   <td style={{ padding: '7px 12px', textAlign: 'right' }}>{fmtNum(i.quantidade_apontada)}</td>
@@ -4915,7 +4918,58 @@ function ConfApontamento() {
           </div>
         )}
       </div>
+
+      {opAberta && (
+        <ModalDetalheOP op={opAberta} itens={itens.filter(i => i.op === opAberta)} onFechar={() => setOpAberta(null)}
+          fmtNum={fmtNum} fmtData={fmtData} />
+      )}
     </div>
+  );
+}
+
+function ModalDetalheOP({ op, itens, onFechar, fmtNum, fmtData }) {
+  const primeiro = itens[0];
+  return (
+    <Overlay onClose={onFechar}>
+      <div className="scale-in" style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, width: '100%', maxWidth: 720, padding: 24, boxShadow: '0 24px 60px rgba(0,0,0,.18)', maxHeight: '85vh', overflowY: 'auto' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4 }}>
+          <div>
+            <h3 style={{ fontFamily: FONT_DISPLAY, fontSize: 18, fontWeight: 700, margin: 0 }}>OP {op}</h3>
+            <div style={{ fontSize: 12.5, color: T.inkFaint, marginTop: 2 }}>
+              {primeiro?.br && <span style={{ color: T.blueText, fontWeight: 600 }}>{primeiro.br}</span>}
+              {primeiro?.status_op && <span style={{ marginLeft: 8 }}>· {primeiro.status_op}</span>}
+              {primeiro?.data_apontamento && <span style={{ marginLeft: 8 }}>· apontado em {fmtData(primeiro.data_apontamento)}</span>}
+            </div>
+          </div>
+          <button onClick={onFechar} style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.inkFaint, fontSize: 20, lineHeight: 1, padding: 4 }}>×</button>
+        </div>
+
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5, marginTop: 14 }}>
+          <thead>
+            <tr style={{ background: T.panelAlt, borderBottom: `1px solid ${T.line}` }}>
+              <th style={thFat(70)}>Código</th>
+              <th style={thFat(240)}>Produto</th>
+              <th style={{ ...thFat(90), textAlign: 'right' }}>Esperado</th>
+              <th style={{ ...thFat(90), textAlign: 'right' }}>Apontado</th>
+              <th style={{ ...thFat(90), textAlign: 'right' }}>Diferença</th>
+            </tr>
+          </thead>
+          <tbody>
+            {itens.map(i => (
+              <tr key={i.id} style={{ borderBottom: `1px solid ${T.lineSoft}`, background: i.diferenca != 0 ? `${T.rustSoft}33` : 'transparent' }}>
+                <td style={{ padding: '8px 12px', color: T.inkFaint, fontFamily: 'monospace', fontSize: 11.5 }}>{i.codprod}</td>
+                <td style={{ padding: '8px 12px' }}>{i.produto_descricao}</td>
+                <td style={{ padding: '8px 12px', textAlign: 'right' }}>{fmtNum(i.quantidade_planejada)}</td>
+                <td style={{ padding: '8px 12px', textAlign: 'right' }}>{fmtNum(i.quantidade_apontada)}</td>
+                <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 700, color: i.diferenca == 0 ? T.oliveText : (i.diferenca < 0 ? T.rustText : T.amberText) }}>
+                  {i.diferenca == 0 ? '✓' : (i.diferenca > 0 ? '+' : '') + fmtNum(i.diferenca)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Overlay>
   );
 }
 
