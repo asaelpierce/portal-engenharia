@@ -8,7 +8,7 @@ import {
   Filter, FileWarning, Stamp, ArrowUpRight, ArrowDownRight, Minus, Zap,
   CircleDot, ShieldCheck, MessageSquareWarning, ListFilter, Webhook, Users,
   RefreshCw, TrendingUp, DollarSign, CheckCircle2, Package, Layers, Bell, BarChart2, Download, History, ClipboardList,
-  Trophy, Repeat, UserPlus,
+  Trophy, Repeat, UserPlus, Trash2,
 } from 'lucide-react';
 
 /* ============================================================================
@@ -4809,6 +4809,9 @@ function ReservasPendentes() {
   const [ordemAsc, setOrdemAsc] = useState(true);
   const [selecionados, setSelecionados] = useState(new Set());
   const [abrindoLote, setAbrindoLote] = useState(false);
+  const [cancelando, setCancelando] = useState(null); // id do item sendo cancelado agora
+  const [confirmando, setConfirmando] = useState(null); // item aguardando confirmação no modal
+  const [erroCancelamento, setErroCancelamento] = useState(null);
 
   const carregar = useCallback(async () => {
     setLoading(true);
@@ -4818,6 +4821,29 @@ function ReservasPendentes() {
     setLoading(false);
   }, []);
   useEffect(() => { carregar(); }, [carregar]);
+
+  // Chama a edge function que loga no Sankhya com o usuário de serviço,
+  // executa o CACSP.excluirNotas na reserva e — se der certo — já tira a
+  // linha da tela local, sem esperar a próxima sincronização (4h).
+  const confirmarCancelamento = async (item) => {
+    setConfirmando(null);
+    setCancelando(item.id);
+    setErroCancelamento(null);
+    try {
+      const { data, error } = await supabase.functions.invoke('sankhya-cancelar-reserva', {
+        body: { nunota: item.nunota_reserva, cod_produto: item.cod_produto },
+      });
+      if (error || !data?.ok) {
+        throw new Error(data?.error || error?.message || 'Falha desconhecida ao cancelar');
+      }
+      setItens(prev => prev.filter(i => i.id !== item.id));
+      setSelecionados(prev => { const n = new Set(prev); n.delete(item.id); return n; });
+    } catch (e) {
+      setErroCancelamento({ id: item.id, msg: String(e.message || e) });
+    } finally {
+      setCancelando(null);
+    }
+  };
 
   const filtrados = itens.filter(i => {
     if (!busca.trim()) return true;
@@ -4942,7 +4968,24 @@ function ReservasPendentes() {
                     )}
                   </td>
                   <td style={{ padding: '7px 12px' }}>
-                    <BotaoAbrirSankhya nunota={i.nunota_reserva} tipmov="J" codtipoper={i.codtipoper} />
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <BotaoAbrirSankhya nunota={i.nunota_reserva} tipmov="J" codtipoper={i.codtipoper} />
+                      <button
+                        onClick={() => setConfirmando(i)}
+                        disabled={cancelando === i.id}
+                        title="Cancelar reserva no Sankhya"
+                        style={{
+                          display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                          width: 24, height: 24, border: `1px solid ${T.line}`, borderRadius: 5,
+                          background: 'transparent', color: T.rustText, cursor: cancelando === i.id ? 'default' : 'pointer',
+                          opacity: cancelando === i.id ? 0.5 : 1,
+                        }}>
+                        {cancelando === i.id ? '…' : <Trash2 size={12} />}
+                      </button>
+                    </div>
+                    {erroCancelamento?.id === i.id && (
+                      <div style={{ fontSize: 10.5, color: T.rustText, marginTop: 4, maxWidth: 220 }}>{erroCancelamento.msg}</div>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -4955,6 +4998,37 @@ function ReservasPendentes() {
           </div>
         )}
       </div>
+
+      {confirmando && (
+        <div style={{
+          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 1000,
+          display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16,
+        }} onClick={() => setConfirmando(null)}>
+          <div onClick={e => e.stopPropagation()} style={{
+            background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: 22,
+            maxWidth: 380, width: '100%', boxShadow: '0 12px 30px rgba(0,0,0,0.25)',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+              <Trash2 size={16} color={T.rustText} />
+              <div style={{ fontSize: 14, fontWeight: 700 }}>Cancelar reserva no Sankhya</div>
+            </div>
+            <div style={{ fontSize: 12.5, color: T.inkDim, lineHeight: 1.5, marginBottom: 16 }}>
+              Isso vai <strong>excluir a nota de reserva {confirmando.nunota_reserva}</strong> direto no Sankhya
+              (OP {confirmando.op || '—'}, produto {confirmando.descr_produto}). Ação irreversível — não tem como desfazer por aqui.
+            </div>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button onClick={() => setConfirmando(null)} style={{
+                fontSize: 12.5, fontWeight: 600, padding: '7px 14px', borderRadius: 6, cursor: 'pointer',
+                border: `1px solid ${T.line}`, background: 'transparent', color: T.inkDim,
+              }}>Cancelar</button>
+              <button onClick={() => confirmarCancelamento(confirmando)} style={{
+                fontSize: 12.5, fontWeight: 700, padding: '7px 14px', borderRadius: 6, cursor: 'pointer',
+                border: 'none', background: T.rustText, color: '#fff',
+              }}>Sim, cancelar no Sankhya</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
