@@ -4960,7 +4960,18 @@ function ReservasPendentes() {
         },
       });
       if (error || !data?.ok) {
-        return { ok: false, item, erro: data?.error || error?.message || 'Falha desconhecida ao cancelar' };
+        // Quando a function responde com status != 2xx (ex.: 502), o supabase-js
+        // não preenche `data` — o corpo real (com o `diagnostico`) fica em
+        // error.context, que é a Response bruta. Sem isso, perderíamos o detalhe
+        // do erro (statusMessage do Sankhya, body cru etc) e só sobraria uma
+        // mensagem genérica de rede.
+        let corpo = data;
+        if (!corpo && error?.context?.json) {
+          corpo = await error.context.json().catch(() => null);
+        }
+        const mensagem = corpo?.error || error?.message || 'Falha desconhecida ao cancelar';
+        const diagnostico = corpo?.diagnostico ? ` | ${JSON.stringify(corpo.diagnostico)}` : '';
+        return { ok: false, item, erro: mensagem + diagnostico };
       }
       return { ok: true, item };
     } catch (e) {
