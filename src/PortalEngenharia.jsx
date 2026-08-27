@@ -4838,6 +4838,111 @@ function ReservasPendentes() {
   }, []);
   useEffect(() => { carregar(); }, [carregar]);
 
+  // Baixa um Excel de 1 linha com todos os dados do item que acabou de ser
+  // cancelado -- comprovante imediato pra anexar em e-mail, ticket, etc.
+  const gerarComprovanteCancelamento = async (item, canceladoPor) => {
+    const { default: ExcelJS } = await import('exceljs');
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'Portal Engenharia Kalenborn';
+    workbook.created = new Date();
+    const sheet = workbook.addWorksheet('Reserva Cancelada');
+    const colunas = [
+      { header: 'OP', key: 'op', width: 10 },
+      { header: 'BR', key: 'br', width: 14 },
+      { header: 'Nro. Pedido', key: 'nro_pedido', width: 14 },
+      { header: 'NUNOTA Reserva', key: 'nunota', width: 16 },
+      { header: 'Código Produto', key: 'cod_produto', width: 14 },
+      { header: 'Descrição', key: 'descr_produto', width: 40 },
+      { header: 'Qtd Reservada', key: 'qtd_reservada', width: 14 },
+      { header: 'Lote', key: 'lote', width: 14 },
+      { header: 'Local', key: 'local', width: 10 },
+      { header: 'Status OP', key: 'status_op', width: 12 },
+      { header: 'Cancelado em', key: 'cancelado_em', width: 20 },
+      { header: 'Cancelado por', key: 'cancelado_por', width: 24 },
+    ];
+    sheet.columns = colunas;
+    sheet.addRow({
+      op: item.op ?? '—', br: item.br ?? '—', nro_pedido: item.nro_pedido ?? '—',
+      nunota: item.nunota_reserva, cod_produto: item.cod_produto, descr_produto: item.descr_produto ?? '—',
+      qtd_reservada: Number(item.qtd_reservada) || 0, lote: item.controle_lote ?? '—', local: item.local_origem ?? '—',
+      status_op: item.status_op ?? '—', cancelado_em: new Date().toLocaleString('pt-BR'), cancelado_por: canceladoPor || '—',
+    });
+    const headerRow = sheet.getRow(1);
+    headerRow.eachCell(cell => {
+      cell.font = { name: 'Arial', bold: true, color: { argb: 'FFFFFFFF' }, size: 11 };
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFC8261C' } };
+      cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+    });
+    headerRow.height = 28;
+    sheet.getRow(2).eachCell({ includeEmpty: true }, cell => { cell.font = { name: 'Arial', size: 10.5 }; cell.alignment = { vertical: 'middle' }; });
+
+    const buffer = await workbook.xlsx.writeBuffer();
+    const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `reserva_cancelada_OP${item.op || item.nunota_reserva}.xlsx`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // Baixa o histórico completo de tudo que já foi cancelado (tabela de log
+  // gravada pela edge function, sucesso ou falha) -- útil pra auditoria/relatório.
+  const [baixandoHistorico, setBaixandoHistorico] = useState(false);
+  const baixarHistoricoCancelamentos = async () => {
+    setBaixandoHistorico(true);
+    try {
+      const { data: log } = await supabase.from('reservas_canceladas_log').select('*').order('cancelado_em', { ascending: false }).limit(5000);
+      const { default: ExcelJS } = await import('exceljs');
+      const workbook = new ExcelJS.Workbook();
+      workbook.creator = 'Portal Engenharia Kalenborn';
+      workbook.created = new Date();
+      const sheet = workbook.addWorksheet('Histórico Cancelamentos', { views: [{ state: 'frozen', ySplit: 1 }] });
+      sheet.columns = [
+        { header: 'Data/Hora', key: 'cancelado_em', width: 20 },
+        { header: 'OP', key: 'op', width: 10 },
+        { header: 'BR', key: 'br', width: 14 },
+        { header: 'Nro. Pedido', key: 'nro_pedido', width: 14 },
+        { header: 'NUNOTA Reserva', key: 'nunota_reserva', width: 16 },
+        { header: 'Código Produto', key: 'cod_produto', width: 14 },
+        { header: 'Descrição', key: 'descr_produto', width: 40 },
+        { header: 'Qtd Reservada', key: 'qtd_reservada', width: 14 },
+        { header: 'Lote', key: 'controle_lote', width: 14 },
+        { header: 'Local', key: 'local_origem', width: 10 },
+        { header: 'Status OP', key: 'status_op', width: 12 },
+        { header: 'Resultado', key: 'sankhya_status', width: 12 },
+        { header: 'Mensagem', key: 'sankhya_mensagem', width: 30 },
+        { header: 'Cancelado por', key: 'cancelado_por', width: 24 },
+      ];
+      (log || []).forEach(l => sheet.addRow({ ...l, cancelado_em: l.cancelado_em ? new Date(l.cancelado_em).toLocaleString('pt-BR') : '—' }));
+      const headerRow = sheet.getRow(1);
+      headerRow.eachCell(cell => {
+        cell.font = { name: 'Arial', bold: true, color: { argb: 'FFFFFFFF' }, size: 11 };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFC8261C' } };
+        cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+      });
+      headerRow.height = 30;
+      sheet.eachRow((row, rowNumber) => {
+        if (rowNumber === 1) return;
+        const l = (log || [])[rowNumber - 2];
+        row.eachCell({ includeEmpty: true }, cell => {
+          cell.font = { name: 'Arial', size: 10.5 };
+          cell.alignment = { vertical: 'middle' };
+          if (l?.sankhya_status === 'falha') cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFCE4E4' } };
+          else if (rowNumber % 2 === 0) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF6F4F0' } };
+        });
+      });
+      const buffer = await workbook.xlsx.writeBuffer();
+      const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = `historico_cancelamentos_reservas_${new Date().toISOString().slice(0, 10)}.xlsx`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } finally {
+      setBaixandoHistorico(false);
+    }
+  };
+
   // Chama a edge function que loga no Sankhya com o usuário de serviço,
   // executa o CACSP.excluirNotas na reserva e — se der certo — já tira a
   // linha da tela local, sem esperar a próxima sincronização (4h).
@@ -4846,14 +4951,22 @@ function ReservasPendentes() {
     setCancelando(item.id);
     setErroCancelamento(null);
     try {
+      const { data: { user } } = await supabase.auth.getUser();
+      const canceladoPor = user?.email || null;
       const { data, error } = await supabase.functions.invoke('sankhya-cancelar-reserva', {
-        body: { nunota: item.nunota_reserva, cod_produto: item.cod_produto },
+        body: {
+          nunota: item.nunota_reserva, cod_produto: item.cod_produto, descr_produto: item.descr_produto,
+          op: item.op, br: item.br, nro_pedido: item.nro_pedido, qtd_reservada: item.qtd_reservada,
+          controle_lote: item.controle_lote, local_origem: item.local_origem, status_op: item.status_op,
+          cancelado_por: canceladoPor,
+        },
       });
       if (error || !data?.ok) {
         throw new Error(data?.error || error?.message || 'Falha desconhecida ao cancelar');
       }
       setItens(prev => prev.filter(i => i.id !== item.id));
       setSelecionados(prev => { const n = new Set(prev); n.delete(item.id); return n; });
+      await gerarComprovanteCancelamento(item, canceladoPor);
     } catch (e) {
       setErroCancelamento({ id: item.id, msg: String(e.message || e) });
     } finally {
@@ -4955,6 +5068,10 @@ function ReservasPendentes() {
             {abrindoLote ? 'Abrindo…' : `↗ Abrir ${selecionados.size} selecionado(s) no Sankhya`}
           </button>
         )}
+        <button onClick={baixarHistoricoCancelamentos} disabled={baixandoHistorico}
+          style={{ fontSize: 12, fontWeight: 600, color: T.inkDim, background: 'transparent', border: `1px solid ${T.line}`, borderRadius: 6, padding: '7px 12px', cursor: 'pointer', opacity: baixandoHistorico ? 0.6 : 1, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          <Download size={12} /> {baixandoHistorico ? 'Gerando…' : 'Histórico de cancelamentos'}
+        </button>
         <div style={{ position: 'relative' }}>
           <Search size={13} style={{ position: 'absolute', left: 9, top: 9, color: T.inkFaint }} />
           <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Buscar OP, produto ou BR…" style={{ ...inputStyle(), width: 220, paddingLeft: 28 }} />
