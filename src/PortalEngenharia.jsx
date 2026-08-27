@@ -4814,6 +4814,9 @@ function ReservasPendentes() {
   const [cancelando, setCancelando] = useState(null); // id do item sendo cancelado agora
   const [confirmando, setConfirmando] = useState(null); // item aguardando confirmação no modal
   const [erroCancelamento, setErroCancelamento] = useState(null);
+  const [confirmandoLote, setConfirmandoLote] = useState(false); // modal de confirmação do cancelamento em lote
+  const [cancelandoLote, setCancelandoLote] = useState(false);
+  const [progressoLote, setProgressoLote] = useState({ feito: 0, total: 0 });
 
   const carregar = useCallback(async () => {
     setLoading(true);
@@ -4943,16 +4946,11 @@ function ReservasPendentes() {
     }
   };
 
-  // Chama a edge function que loga no Sankhya com o usuário de serviço,
-  // executa o CACSP.excluirNotas na reserva e — se der certo — já tira a
-  // linha da tela local, sem esperar a próxima sincronização (4h).
-  const confirmarCancelamento = async (item) => {
-    setConfirmando(null);
-    setCancelando(item.id);
-    setErroCancelamento(null);
+  // Chama a edge function pra UM item -- devolve {ok, item, erro?} em vez de
+  // lançar, pra dar pra usar tanto no cancelamento individual quanto no lote
+  // (onde um item falhar não pode travar os outros).
+  const chamarCancelamento = async (item, canceladoPor) => {
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      const canceladoPor = user?.email || null;
       const { data, error } = await supabase.functions.invoke('sankhya-cancelar-reserva', {
         body: {
           nunota: item.nunota_reserva, cod_produto: item.cod_produto, descr_produto: item.descr_produto,
@@ -4962,16 +4960,123 @@ function ReservasPendentes() {
         },
       });
       if (error || !data?.ok) {
-        throw new Error(data?.error || error?.message || 'Falha desconhecida ao cancelar');
+        return { ok: false, item, erro: data?.error || error?.message || 'Falha desconhecida ao cancelar' };
       }
+      return { ok: true, item };
+    } catch (e) {
+      return { ok: false, item, erro: String(e.message || e) };
+    }
+  };
+
+  // Cancelamento de UM item, disparado pela lixeira da linha.
+  const confirmarCancelamento = async (item) => {
+    setConfirmando(null);
+    setCancelando(item.id);
+    setErroCancelamento(null);
+    const { data: { user } } = await supabase.auth.getUser();
+    const canceladoPor = user?.email || null;
+    const resultado = await chamarCancelamento(item, canceladoPor);
+    if (resultado.ok) {
       setItens(prev => prev.filter(i => i.id !== item.id));
       setSelecionados(prev => { const n = new Set(prev); n.delete(item.id); return n; });
       await gerarComprovanteCancelamento(item, canceladoPor);
-    } catch (e) {
-      setErroCancelamento({ id: item.id, msg: String(e.message || e) });
-    } finally {
-      setCancelando(null);
+    } else {
+      setErroCancelamento({ id: item.id, msg: resultado.erro });
     }
+    setCancelando(null);
+  };
+
+  // Cancelamento EM LOTE dos itens marcados. Sequencial (um de cada vez) --
+  // cada chamada já faz login completo no Sankhya, então rodar em paralelo
+  // arriscaria sobrecarregar/derrubar a sessão de serviço. No final, baixa
+  // um único Excel consolidado com sucesso e falha de cada item.
+  const confirmarCancelamentoLote = async () => {
+    setConfirmandoLote(false);
+    const itensSelecionados = filtrados.filter(i => selecionados.has(i.id));
+    if (!itensSelecionados.length) return;
+    setCancelandoLote(true);
+    setProgressoLote({ feito: 0, total: itensSelecionados.length });
+
+    const { data: { user } } = await supabase.auth.getUser();
+    const canceladoPor = user?.email || null;
+    const resultados = [];
+    for (const item of itensSelecionados) {
+      const r = await chamarCancelamento(item, canceladoPor);
+      resultados.push(r);
+      setProgressoLote(prev => ({ ...prev, feito: prev.feito + 1 }));
+    }
+
+    const idsSucesso = new Set(resultados.filter(r => r.ok).map(r => r.item.id));
+    setItens(prev => prev.filter(i => !idsSucesso.has(i.id)));
+    setSelecionados(prev => { const n = new Set(prev); idsSucesso.forEach(id => n.delete(id)); return n; });
+
+    await gerarRelatorioLote(resultados, canceladoPor);
+    setCancelandoLote(false);
+  };
+
+  // Excel consolidado do cancelamento em lote -- uma linha por item, com
+  // coluna de resultado (sucesso/falha) e a mensagem de erro quando houver.
+  const gerarRelatorioLote = async (resultados, canceladoPor) => {
+    const { default: ExcelJS } = await import('exceljs');
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'Portal Engenharia Kalenborn';
+    workbook.created = new Date();
+    const sheet = workbook.addWorksheet('Cancelamento em Lote', { views: [{ state: 'frozen', ySplit: 1 }] });
+    sheet.columns = [
+      { header: 'Resultado', key: 'resultado', width: 12 },
+      { header: 'OP', key: 'op', width: 10 },
+      { header: 'BR', key: 'br', width: 14 },
+      { header: 'Nro. Pedido', key: 'nro_pedido', width: 14 },
+      { header: 'NUNOTA Reserva', key: 'nunota', width: 16 },
+      { header: 'Código Produto', key: 'cod_produto', width: 14 },
+      { header: 'Descrição', key: 'descr_produto', width: 40 },
+      { header: 'Qtd Reservada', key: 'qtd_reservada', width: 14 },
+      { header: 'Lote', key: 'lote', width: 14 },
+      { header: 'Local', key: 'local', width: 10 },
+      { header: 'Status OP', key: 'status_op', width: 12 },
+      { header: 'Erro', key: 'erro', width: 34 },
+      { header: 'Cancelado em', key: 'cancelado_em', width: 20 },
+      { header: 'Cancelado por', key: 'cancelado_por', width: 24 },
+    ];
+    const agora = new Date().toLocaleString('pt-BR');
+    resultados.forEach(r => {
+      const i = r.item;
+      sheet.addRow({
+        resultado: r.ok ? '✓ Cancelado' : '✗ Falhou',
+        op: i.op ?? '—', br: i.br ?? '—', nro_pedido: i.nro_pedido ?? '—', nunota: i.nunota_reserva,
+        cod_produto: i.cod_produto, descr_produto: i.descr_produto ?? '—', qtd_reservada: Number(i.qtd_reservada) || 0,
+        lote: i.controle_lote ?? '—', local: i.local_origem ?? '—', status_op: i.status_op ?? '—',
+        erro: r.ok ? '' : (r.erro || ''), cancelado_em: agora, cancelado_por: canceladoPor || '—',
+      });
+    });
+    const headerRow = sheet.getRow(1);
+    headerRow.eachCell(cell => {
+      cell.font = { name: 'Arial', bold: true, color: { argb: 'FFFFFFFF' }, size: 11 };
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFC8261C' } };
+      cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+    });
+    headerRow.height = 30;
+    sheet.eachRow((row, rowNumber) => {
+      if (rowNumber === 1) return;
+      const r = resultados[rowNumber - 2];
+      row.eachCell({ includeEmpty: true }, cell => {
+        cell.font = { name: 'Arial', size: 10.5 };
+        cell.alignment = { vertical: 'middle' };
+        if (!r?.ok) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFCE4E4' } };
+        else if (rowNumber % 2 === 0) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF6F4F0' } };
+      });
+    });
+    const linhaResumo = sheet.addRow({});
+    sheet.getCell(`A${linhaResumo.number}`).value = `Total: ${resultados.length} · Sucesso: ${resultados.filter(r => r.ok).length} · Falha: ${resultados.filter(r => !r.ok).length}`;
+    sheet.getCell(`A${linhaResumo.number}`).font = { name: 'Arial', bold: true, size: 10.5 };
+
+    const buffer = await workbook.xlsx.writeBuffer();
+    const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `cancelamento_em_lote_${new Date().toISOString().slice(0, 10)}_${Date.now()}.xlsx`;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   const faturado = (item) => item.nro_pedido ? faturamentoPorPedido[item.nro_pedido] : null;
@@ -5063,10 +5168,16 @@ function ReservasPendentes() {
           ))}
         </div>
         {selecionados.size > 0 && (
-          <button onClick={abrirSelecionadosEmLote} disabled={abrindoLote}
-            style={{ fontSize: 12, fontWeight: 700, color: '#fff', background: T.terracotta, border: 'none', borderRadius: 6, padding: '7px 14px', cursor: 'pointer', opacity: abrindoLote ? 0.6 : 1 }}>
-            {abrindoLote ? 'Abrindo…' : `↗ Abrir ${selecionados.size} selecionado(s) no Sankhya`}
-          </button>
+          <>
+            <button onClick={abrirSelecionadosEmLote} disabled={abrindoLote}
+              style={{ fontSize: 12, fontWeight: 700, color: '#fff', background: T.terracotta, border: 'none', borderRadius: 6, padding: '7px 14px', cursor: 'pointer', opacity: abrindoLote ? 0.6 : 1 }}>
+              {abrindoLote ? 'Abrindo…' : `↗ Abrir ${selecionados.size} selecionado(s) no Sankhya`}
+            </button>
+            <button onClick={() => setConfirmandoLote(true)} disabled={cancelandoLote}
+              style={{ fontSize: 12, fontWeight: 700, color: '#fff', background: T.rustText, border: 'none', borderRadius: 6, padding: '7px 14px', cursor: 'pointer', opacity: cancelandoLote ? 0.6 : 1, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              <Trash2 size={12} /> {cancelandoLote ? `Cancelando ${progressoLote.feito}/${progressoLote.total}…` : `Cancelar ${selecionados.size} selecionado(s) no Sankhya`}
+            </button>
+          </>
         )}
         <button onClick={baixarHistoricoCancelamentos} disabled={baixandoHistorico}
           style={{ fontSize: 12, fontWeight: 600, color: T.inkDim, background: 'transparent', border: `1px solid ${T.line}`, borderRadius: 6, padding: '7px 12px', cursor: 'pointer', opacity: baixandoHistorico ? 0.6 : 1, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
@@ -5204,6 +5315,36 @@ function ReservasPendentes() {
                 fontSize: 12.5, fontWeight: 700, padding: '7px 14px', borderRadius: 6, cursor: 'pointer',
                 border: 'none', background: T.rustText, color: '#fff',
               }}>Sim, cancelar no Sankhya</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {confirmandoLote && (
+        <div style={{
+          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 1000,
+          display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16,
+        }} onClick={() => setConfirmandoLote(false)}>
+          <div onClick={e => e.stopPropagation()} style={{
+            background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: 22,
+            maxWidth: 420, width: '100%', boxShadow: '0 12px 30px rgba(0,0,0,0.25)',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+              <Trash2 size={16} color={T.rustText} />
+              <div style={{ fontSize: 14, fontWeight: 700 }}>Cancelar {selecionados.size} reservas no Sankhya</div>
+            </div>
+            <div style={{ fontSize: 12.5, color: T.inkDim, lineHeight: 1.5, marginBottom: 16 }}>
+              Isso vai <strong>excluir {selecionados.size} notas de reserva</strong>, uma por uma, direto no Sankhya. Ação irreversível — não tem como desfazer por aqui.
+              Ao terminar, baixa automaticamente um Excel com o resultado (sucesso/falha) de cada item.
+            </div>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button onClick={() => setConfirmandoLote(false)} style={{
+                fontSize: 12.5, fontWeight: 600, padding: '7px 14px', borderRadius: 6, cursor: 'pointer',
+                border: `1px solid ${T.line}`, background: 'transparent', color: T.inkDim,
+              }}>Cancelar</button>
+              <button onClick={confirmarCancelamentoLote} style={{
+                fontSize: 12.5, fontWeight: 700, padding: '7px 14px', borderRadius: 6, cursor: 'pointer',
+                border: 'none', background: T.rustText, color: '#fff',
+              }}>Sim, cancelar {selecionados.size} no Sankhya</button>
             </div>
           </div>
         </div>
