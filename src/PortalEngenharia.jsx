@@ -157,6 +157,7 @@ const SANKHYA_CONFIG_POR_TIPMOV = {
   C: { classe: 'br.com.sankhya.com.mov.CentralNotas_COMPRA', tipoportal: 'PC' },
   V: { classe: 'br.com.sankhya.com.mov.CentralNotas_VENDA', tipoportal: 'PV' },
   P: { classe: 'br.com.sankhya.com.mov.CentralNotas_VENDA', tipoportal: 'PV' },
+  J: { classe: 'br.com.sankhya.com.mov.CentralNotas_MOVINTERNA', tipoportal: 'PI' }, // Pedido de Requisição (confirmado na tela de Reservas Pendentes)
 };
 function base64Utf8(texto) {
   return btoa(unescape(encodeURIComponent(texto)));
@@ -4806,6 +4807,8 @@ function ReservasPendentes() {
   const [ultimaSinc, setUltimaSinc] = useState(null);
   const [ordenarPor, setOrdenarPor] = useState('op');
   const [ordemAsc, setOrdemAsc] = useState(true);
+  const [selecionados, setSelecionados] = useState(new Set());
+  const [abrindoLote, setAbrindoLote] = useState(false);
 
   const carregar = useCallback(async () => {
     setLoading(true);
@@ -4833,19 +4836,54 @@ function ReservasPendentes() {
     else { setOrdenarPor(campo); setOrdemAsc(true); }
   };
 
+  const alternarSelecao = (id) => {
+    setSelecionados(prev => {
+      const novo = new Set(prev);
+      if (novo.has(id)) novo.delete(id); else novo.add(id);
+      return novo;
+    });
+  };
+  const selecionarTodosVisiveis = () => {
+    const idsVisiveis = filtrados.slice(0, 300).map(i => i.id);
+    const todosJaSelecionados = idsVisiveis.every(id => selecionados.has(id));
+    setSelecionados(todosJaSelecionados ? new Set() : new Set(idsVisiveis));
+  };
+
+  // Abre um link por vez, com uma pequena pausa entre cada — navegadores
+  // bloqueiam abertura de várias abas de uma vez sem isso
+  const abrirSelecionadosEmLote = async () => {
+    const itensSelecionados = filtrados.filter(i => selecionados.has(i.id) && i.codtipoper);
+    if (!itensSelecionados.length) return;
+    setAbrindoLote(true);
+    for (const i of itensSelecionados) {
+      const link = linkSankhyaNota({ nunota: i.nunota_reserva, tipmov: 'J', codtipoper: i.codtipoper });
+      if (link) window.open(link, '_blank');
+      await new Promise(r => setTimeout(r, 400));
+    }
+    setAbrindoLote(false);
+  };
+
   const fmtNum = (n) => n == null ? '—' : Number(n).toLocaleString('pt-BR', { maximumFractionDigits: 3 });
   const fmtData = (d) => !d ? '—' : new Date(d + 'T12:00:00').toLocaleDateString('pt-BR');
 
   return (
     <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 18, maxWidth: 1200 }}>
       <div style={{ fontSize: 12.5, color: T.inkFaint, background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 8, padding: '10px 14px' }}>
-        Sinalização antecipada — itens com <strong>reserva pendente</strong> no Sankhya (ainda não entregues), pra você saber que estão comprometidos ANTES de tentar usar ou transferir. Sincroniza sozinho a cada 4h.
+        Sinalização antecipada — itens com <strong>reserva pendente</strong> no Sankhya (ainda não entregues), pra você saber que estão comprometidos ANTES de tentar usar ou transferir. Marca os que quer resolver e abre todos de uma vez — o clique de liberar a reserva continua sendo feito por você, lá no Sankhya. Sincroniza sozinho a cada 4h.
         {ultimaSinc && <span style={{ marginLeft: 8, color: T.inkFaint }}>· Última sincronização: {new Date(ultimaSinc).toLocaleString('pt-BR')}</span>}
       </div>
 
       <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'space-between' }}>
-        <div style={{ fontSize: 13, fontWeight: 700, color: T.amberText }}>
-          {itens.length} item(ns) com reserva pendente
+        <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: T.amberText }}>
+            {itens.length} item(ns) com reserva pendente
+          </div>
+          {selecionados.size > 0 && (
+            <button onClick={abrirSelecionadosEmLote} disabled={abrindoLote}
+              style={{ fontSize: 12, fontWeight: 700, color: '#fff', background: T.terracotta, border: 'none', borderRadius: 6, padding: '7px 14px', cursor: 'pointer', opacity: abrindoLote ? 0.6 : 1 }}>
+              {abrindoLote ? 'Abrindo…' : `↗ Abrir ${selecionados.size} selecionado(s) no Sankhya`}
+            </button>
+          )}
         </div>
         <div style={{ position: 'relative' }}>
           <Search size={13} style={{ position: 'absolute', left: 9, top: 9, color: T.inkFaint }} />
@@ -4858,6 +4896,10 @@ function ReservasPendentes() {
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
             <thead>
               <tr style={{ background: T.panelAlt, borderBottom: `1px solid ${T.line}` }}>
+                <th style={{ ...thFat(36), textAlign: 'center' }}>
+                  <input type="checkbox" onChange={selecionarTodosVisiveis}
+                    checked={filtrados.slice(0, 300).length > 0 && filtrados.slice(0, 300).every(i => selecionados.has(i.id))} />
+                </th>
                 <th style={{ ...thFat(70), cursor: 'pointer', userSelect: 'none' }} onClick={() => alternarOrdem('op')}>
                   OP {ordenarPor === 'op' && (ordemAsc ? '▲' : '▼')}
                 </th>
@@ -4870,15 +4912,19 @@ function ReservasPendentes() {
                 <th style={thFat(90)}>Lote</th>
                 <th style={thFat(80)}>Local</th>
                 <th style={thFat(90)}>Status OP</th>
+                <th style={thFat(100)}></th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={8} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Carregando…</td></tr>
+                <tr><td colSpan={10} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Carregando…</td></tr>
               ) : filtrados.length === 0 ? (
-                <tr><td colSpan={8} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Nada aqui — nenhuma reserva pendente!</td></tr>
+                <tr><td colSpan={10} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Nada aqui — nenhuma reserva pendente!</td></tr>
               ) : filtrados.slice(0, 300).map(i => (
-                <tr key={i.id} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                <tr key={i.id} style={{ borderBottom: `1px solid ${T.lineSoft}`, background: selecionados.has(i.id) ? `${T.terracotta}0d` : 'transparent' }}>
+                  <td style={{ padding: '7px 12px', textAlign: 'center' }}>
+                    <input type="checkbox" checked={selecionados.has(i.id)} onChange={() => alternarSelecao(i.id)} />
+                  </td>
                   <td style={{ padding: '7px 12px', fontFamily: FONT_DISPLAY, fontWeight: 700 }}>{i.op || '—'}</td>
                   <td style={{ padding: '7px 12px', color: T.blueText, fontWeight: 600 }}>{i.br || '—'}</td>
                   <td style={{ padding: '7px 12px', color: T.inkFaint, fontFamily: 'monospace', fontSize: 11.5 }}>{i.cod_produto}</td>
@@ -4894,6 +4940,9 @@ function ReservasPendentes() {
                         background: i.status_op === 'Finalizado' ? T.oliveSoft : T.amberSoft,
                       }}>{i.status_op}</span>
                     )}
+                  </td>
+                  <td style={{ padding: '7px 12px' }}>
+                    <BotaoAbrirSankhya nunota={i.nunota_reserva} tipmov="J" codtipoper={i.codtipoper} />
                   </td>
                 </tr>
               ))}
