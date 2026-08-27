@@ -4802,11 +4802,13 @@ function VerificacaoProjetos({ currentUser }) {
 
 function ReservasPendentes() {
   const [itens, setItens] = useState([]);
+  const [faturamentoPorPedido, setFaturamentoPorPedido] = useState({}); // numero_pedido -> { data_faturamento, valor_nota, numero_nota }
   const [loading, setLoading] = useState(true);
   const [busca, setBusca] = useState('');
   const [ultimaSinc, setUltimaSinc] = useState(null);
   const [ordenarPor, setOrdenarPor] = useState('op');
   const [ordemAsc, setOrdemAsc] = useState(true);
+  const [filtroStatus, setFiltroStatus] = useState('todos'); // 'todos' | 'aberto' | 'finalizado' | 'finalizado_faturado' | 'finalizado_nao_faturado'
   const [selecionados, setSelecionados] = useState(new Set());
   const [abrindoLote, setAbrindoLote] = useState(false);
   const [cancelando, setCancelando] = useState(null); // id do item sendo cancelado agora
@@ -4815,9 +4817,23 @@ function ReservasPendentes() {
 
   const carregar = useCallback(async () => {
     setLoading(true);
-    const { data } = await supabase.from('reservas_pendentes_sankhya').select('*').order('sincronizado_em', { ascending: false }).limit(3000);
+    const [{ data }, { data: fat }] = await Promise.all([
+      supabase.from('reservas_pendentes_sankhya').select('*').order('sincronizado_em', { ascending: false }).limit(3000),
+      // Só nota de VENDA (tipmov='V') conta como faturamento de fato — pedido (tipmov='P')
+      // também aparece em faturamento_resumo mas não significa NF emitida.
+      supabase.from('faturamento_resumo').select('numero_pedido,data_faturamento,valor_nota,numero_nota').eq('tipmov', 'V').not('numero_pedido', 'is', null),
+    ]);
     setItens(data || []);
     if (data && data.length) setUltimaSinc(data[0].sincronizado_em);
+    const mapa = {};
+    (fat || []).forEach(f => {
+      const existente = mapa[f.numero_pedido];
+      // Se o mesmo pedido tiver mais de uma NF, guarda a mais recente.
+      if (!existente || (f.data_faturamento && f.data_faturamento > existente.data_faturamento)) {
+        mapa[f.numero_pedido] = f;
+      }
+    });
+    setFaturamentoPorPedido(mapa);
     setLoading(false);
   }, []);
   useEffect(() => { carregar(); }, [carregar]);
@@ -4845,7 +4861,13 @@ function ReservasPendentes() {
     }
   };
 
+  const faturado = (item) => item.nro_pedido ? faturamentoPorPedido[item.nro_pedido] : null;
+
   const filtrados = itens.filter(i => {
+    if (filtroStatus === 'aberto' && i.status_op !== 'Aberto') return false;
+    if (filtroStatus === 'finalizado' && i.status_op !== 'Finalizado') return false;
+    if (filtroStatus === 'finalizado_faturado' && (i.status_op !== 'Finalizado' || !faturado(i))) return false;
+    if (filtroStatus === 'finalizado_nao_faturado' && (i.status_op !== 'Finalizado' || faturado(i))) return false;
     if (!busca.trim()) return true;
     const b = busca.toLowerCase();
     return String(i.op || '').includes(b) || (i.descr_produto || '').toLowerCase().includes(b) || (i.br || '').toLowerCase().includes(b);
@@ -4856,6 +4878,14 @@ function ReservasPendentes() {
     const cmp = va < vb ? -1 : va > vb ? 1 : 0;
     return ordemAsc ? cmp : -cmp;
   });
+
+  const contagens = {
+    todos: itens.length,
+    aberto: itens.filter(i => i.status_op === 'Aberto').length,
+    finalizado: itens.filter(i => i.status_op === 'Finalizado').length,
+    finalizadoFaturado: itens.filter(i => i.status_op === 'Finalizado' && faturado(i)).length,
+    finalizadoNaoFaturado: itens.filter(i => i.status_op === 'Finalizado' && !faturado(i)).length,
+  };
 
   const alternarOrdem = (campo) => {
     if (ordenarPor === campo) setOrdemAsc(prev => !prev);
@@ -4900,17 +4930,31 @@ function ReservasPendentes() {
       </div>
 
       <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'space-between' }}>
-        <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: T.amberText }}>
-            {itens.length} item(ns) com reserva pendente
-          </div>
-          {selecionados.size > 0 && (
-            <button onClick={abrirSelecionadosEmLote} disabled={abrindoLote}
-              style={{ fontSize: 12, fontWeight: 700, color: '#fff', background: T.terracotta, border: 'none', borderRadius: 6, padding: '7px 14px', cursor: 'pointer', opacity: abrindoLote ? 0.6 : 1 }}>
-              {abrindoLote ? 'Abrindo…' : `↗ Abrir ${selecionados.size} selecionado(s) no Sankhya`}
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          {[
+            { id: 'todos', label: `Todas (${contagens.todos})`, cor: T.inkDim },
+            { id: 'aberto', label: `Aberta (${contagens.aberto})`, cor: T.amberText },
+            { id: 'finalizado', label: `Finalizada (${contagens.finalizado})`, cor: T.rustText },
+            { id: 'finalizado_nao_faturado', label: `⚠ Finalizada, não faturada (${contagens.finalizadoNaoFaturado})`, cor: T.rustText },
+            { id: 'finalizado_faturado', label: `✓ Finalizada e faturada (${contagens.finalizadoFaturado})`, cor: T.oliveText },
+          ].map(f => (
+            <button key={f.id} onClick={() => setFiltroStatus(f.id)}
+              style={{
+                fontSize: 12, fontWeight: 700, padding: '7px 12px', borderRadius: 6, cursor: 'pointer',
+                border: `1.5px solid ${filtroStatus === f.id ? f.cor : T.line}`,
+                background: filtroStatus === f.id ? f.cor : 'transparent',
+                color: filtroStatus === f.id ? '#fff' : T.inkDim,
+              }}>
+              {f.label}
             </button>
-          )}
+          ))}
         </div>
+        {selecionados.size > 0 && (
+          <button onClick={abrirSelecionadosEmLote} disabled={abrindoLote}
+            style={{ fontSize: 12, fontWeight: 700, color: '#fff', background: T.terracotta, border: 'none', borderRadius: 6, padding: '7px 14px', cursor: 'pointer', opacity: abrindoLote ? 0.6 : 1 }}>
+            {abrindoLote ? 'Abrindo…' : `↗ Abrir ${selecionados.size} selecionado(s) no Sankhya`}
+          </button>
+        )}
         <div style={{ position: 'relative' }}>
           <Search size={13} style={{ position: 'absolute', left: 9, top: 9, color: T.inkFaint }} />
           <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Buscar OP, produto ou BR…" style={{ ...inputStyle(), width: 220, paddingLeft: 28 }} />
@@ -4938,15 +4982,18 @@ function ReservasPendentes() {
                 <th style={thFat(90)}>Lote</th>
                 <th style={thFat(80)}>Local</th>
                 <th style={thFat(90)}>Status OP</th>
+                <th style={thFat(100)}>Faturado</th>
                 <th style={thFat(100)}></th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={10} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Carregando…</td></tr>
+                <tr><td colSpan={11} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Carregando…</td></tr>
               ) : filtrados.length === 0 ? (
-                <tr><td colSpan={10} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Nada aqui — nenhuma reserva pendente!</td></tr>
-              ) : filtrados.slice(0, 300).map(i => (
+                <tr><td colSpan={11} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Nada aqui — nenhuma reserva pendente!</td></tr>
+              ) : filtrados.slice(0, 300).map(i => {
+                const nf = faturado(i);
+                return (
                 <tr key={i.id} style={{ borderBottom: `1px solid ${T.lineSoft}`, background: selecionados.has(i.id) ? `${T.terracotta}0d` : 'transparent' }}>
                   <td style={{ padding: '7px 12px', textAlign: 'center' }}>
                     <input type="checkbox" checked={selecionados.has(i.id)} onChange={() => alternarSelecao(i.id)} />
@@ -4965,6 +5012,21 @@ function ReservasPendentes() {
                         color: i.status_op === 'Finalizado' ? T.oliveText : T.amberText,
                         background: i.status_op === 'Finalizado' ? T.oliveSoft : T.amberSoft,
                       }}>{i.status_op}</span>
+                    )}
+                  </td>
+                  <td style={{ padding: '7px 12px' }}>
+                    {!i.nro_pedido ? (
+                      <span style={{ fontSize: 10.5, color: T.inkFaint }}>sem pedido</span>
+                    ) : nf ? (
+                      <span title={`NF ${nf.numero_nota || '—'} · ${fmtData(nf.data_faturamento)}`} style={{
+                        fontSize: 10.5, fontWeight: 700, padding: '2px 7px', borderRadius: 4,
+                        color: T.oliveText, background: T.oliveSoft,
+                      }}>✓ Faturado</span>
+                    ) : (
+                      <span style={{
+                        fontSize: 10.5, fontWeight: 700, padding: '2px 7px', borderRadius: 4,
+                        color: T.rustText, background: T.rustSoft,
+                      }}>Pendente</span>
                     )}
                   </td>
                   <td style={{ padding: '7px 12px' }}>
@@ -4988,7 +5050,7 @@ function ReservasPendentes() {
                     )}
                   </td>
                 </tr>
-              ))}
+              );})}
             </tbody>
           </table>
         </div>
