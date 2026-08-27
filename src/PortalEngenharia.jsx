@@ -4968,7 +4968,10 @@ function ReservasPendentes() {
     }
   };
 
-  // Cancelamento de UM item, disparado pela lixeira da linha.
+  // Cancelamento de UM item, disparado pela lixeira da linha. O Sankhya
+  // cancela a NOTA inteira (NUNOTA), não só esse produto -- então, se der
+  // certo, remove da tela TODOS os itens que compartilham a mesma NUNOTA
+  // (podem ser vários produtos da mesma OP), não só o que foi clicado.
   const confirmarCancelamento = async (item) => {
     setConfirmando(null);
     setCancelando(item.id);
@@ -4977,8 +4980,12 @@ function ReservasPendentes() {
     const canceladoPor = user?.email || null;
     const resultado = await chamarCancelamento(item, canceladoPor);
     if (resultado.ok) {
-      setItens(prev => prev.filter(i => i.id !== item.id));
-      setSelecionados(prev => { const n = new Set(prev); n.delete(item.id); return n; });
+      setItens(prev => prev.filter(i => i.nunota_reserva !== item.nunota_reserva));
+      setSelecionados(prev => {
+        const n = new Set(prev);
+        itens.filter(i => i.nunota_reserva === item.nunota_reserva).forEach(i => n.delete(i.id));
+        return n;
+      });
       await gerarComprovanteCancelamento(item, canceladoPor);
     } else {
       setErroCancelamento({ id: item.id, msg: resultado.erro });
@@ -4986,29 +4993,49 @@ function ReservasPendentes() {
     setCancelando(null);
   };
 
-  // Cancelamento EM LOTE dos itens marcados. Sequencial (um de cada vez) --
-  // cada chamada já faz login completo no Sankhya, então rodar em paralelo
-  // arriscaria sobrecarregar/derrubar a sessão de serviço. No final, baixa
-  // um único Excel consolidado com sucesso e falha de cada item.
+  // Cancelamento EM LOTE dos itens marcados. IMPORTANTE: o Sankhya cancela
+  // por NUNOTA (nota inteira), não por linha/produto -- então, se várias
+  // linhas selecionadas forem da mesma NUNOTA (ex.: uma OP com 6 produtos
+  // na mesma nota), cancelar a primeira já cancela todas juntas no Sankhya.
+  // Por isso agrupamos por NUNOTA antes de disparar: só chamamos a função
+  // UMA VEZ por nota, e aplicamos o resultado a todos os produtos dela --
+  // em vez de tentar cancelar a mesma nota 6 vezes (o que faria as 5
+  // seguintes falharem, porque a nota já não existiria mais).
   const confirmarCancelamentoLote = async () => {
     setConfirmandoLote(false);
     const itensSelecionados = filtrados.filter(i => selecionados.has(i.id));
     if (!itensSelecionados.length) return;
+
+    const gruposPorNunota = new Map();
+    itensSelecionados.forEach(i => {
+      if (!gruposPorNunota.has(i.nunota_reserva)) gruposPorNunota.set(i.nunota_reserva, []);
+      gruposPorNunota.get(i.nunota_reserva).push(i);
+    });
+    const grupos = [...gruposPorNunota.values()];
+
     setCancelandoLote(true);
-    setProgressoLote({ feito: 0, total: itensSelecionados.length });
+    setProgressoLote({ feito: 0, total: grupos.length });
 
     const { data: { user } } = await supabase.auth.getUser();
     const canceladoPor = user?.email || null;
+    // resultados fica no nível de ITEM (não de nota) pra o relatório final
+    // mostrar uma linha por produto, mesmo quando várias linhas vieram do
+    // mesmo cancelamento de nota.
     const resultados = [];
-    for (const item of itensSelecionados) {
-      const r = await chamarCancelamento(item, canceladoPor);
-      resultados.push(r);
+    for (const grupo of grupos) {
+      const representante = grupo[0];
+      const r = await chamarCancelamento(representante, canceladoPor);
+      grupo.forEach(item => resultados.push({ ok: r.ok, item, erro: r.erro }));
       setProgressoLote(prev => ({ ...prev, feito: prev.feito + 1 }));
     }
 
-    const idsSucesso = new Set(resultados.filter(r => r.ok).map(r => r.item.id));
-    setItens(prev => prev.filter(i => !idsSucesso.has(i.id)));
-    setSelecionados(prev => { const n = new Set(prev); idsSucesso.forEach(id => n.delete(id)); return n; });
+    const nunotasComSucesso = new Set(resultados.filter(r => r.ok).map(r => r.item.nunota_reserva));
+    setItens(prev => prev.filter(i => !nunotasComSucesso.has(i.nunota_reserva)));
+    setSelecionados(prev => {
+      const n = new Set(prev);
+      resultados.filter(r => r.ok).forEach(r => n.delete(r.item.id));
+      return n;
+    });
 
     await gerarRelatorioLote(resultados, canceladoPor);
     setCancelandoLote(false);
@@ -5038,6 +5065,10 @@ function ReservasPendentes() {
       { header: 'Cancelado em', key: 'cancelado_em', width: 20 },
       { header: 'Cancelado por', key: 'cancelado_por', width: 24 },
     ];
+    // Nota: o Sankhya cancela por NUNOTA (a nota inteira), não por linha de
+    // produto — então várias linhas com a mesma NUNOTA aqui foram canceladas
+    // juntas numa única chamada, não uma por uma.
+    sheet.getCell('A1').note = 'O cancelamento é feito por NUNOTA (nota inteira). Linhas com a mesma NUNOTA foram canceladas juntas, numa única chamada ao Sankhya.';
     const agora = new Date().toLocaleString('pt-BR');
     resultados.forEach(r => {
       const i = r.item;
@@ -5080,6 +5111,8 @@ function ReservasPendentes() {
   };
 
   const faturado = (item) => item.nro_pedido ? faturamentoPorPedido[item.nro_pedido] : null;
+
+  const nunotasUnicasSelecionadas = new Set(itens.filter(i => selecionados.has(i.id)).map(i => i.nunota_reserva)).size;
 
   const filtrados = itens.filter(i => {
     if (filtroStatus === 'aberto' && i.status_op !== 'Aberto') return false;
@@ -5333,7 +5366,10 @@ function ReservasPendentes() {
               <div style={{ fontSize: 14, fontWeight: 700 }}>Cancelar {selecionados.size} reservas no Sankhya</div>
             </div>
             <div style={{ fontSize: 12.5, color: T.inkDim, lineHeight: 1.5, marginBottom: 16 }}>
-              Isso vai <strong>excluir {selecionados.size} notas de reserva</strong>, uma por uma, direto no Sankhya. Ação irreversível — não tem como desfazer por aqui.
+              Isso vai <strong>excluir {nunotasUnicasSelecionadas} nota(s)</strong> no Sankhya
+              {nunotasUnicasSelecionadas < selecionados.size && (
+                <> — os {selecionados.size} itens marcados estão distribuídos em {nunotasUnicasSelecionadas} nota(s) (várias linhas podem ser produtos diferentes da mesma nota, e cancelar a nota já leva todos juntos)</>
+              )}. Ação irreversível — não tem como desfazer por aqui.
               Ao terminar, baixa automaticamente um Excel com o resultado (sucesso/falha) de cada item.
             </div>
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
