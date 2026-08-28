@@ -4946,72 +4946,45 @@ function ReservasPendentes() {
     }
   };
 
-  // Chama a edge function pra UM item -- devolve {ok, item, erro?} em vez de
-  // lançar, pra dar pra usar tanto no cancelamento individual quanto no lote
-  // (onde um item falhar não pode travar os outros).
-  const chamarCancelamento = async (item, canceladoPor) => {
+  // A API do Sankhya pra cancelar (CACSP.excluirNotas) só funciona de dentro
+  // de uma sessão de tela aberta de verdade no navegador -- não dá pra
+  // replicar via chamada direta de servidor (testado exaustivamente). Então
+  // em vez de tentar cancelar sozinho, a gente ABRE a nota certa direto no
+  // Sankhya (mesmo link do botão "Abrir no Sankhya", usando linkSankhyaNota)
+  // -- a pessoa só clica na lixeira LÁ, que ela já sabe fazer. Continua
+  // eliminando o trabalho de precisar procurar/identificar qual nota é.
+  //
+  // Não removemos o item da tela local aqui, porque não temos como saber se
+  // o cancelamento manual foi concluído -- isso é refletido sozinho na
+  // próxima sincronização automática (a cada 4h), quando o item já não
+  // aparecer mais como pendente no Sankhya.
+  const registrarSolicitacaoCancelamento = async (item, canceladoPor) => {
     try {
-      const { data, error } = await supabase.functions.invoke('sankhya-cancelar-reserva', {
-        body: {
-          nunota: item.nunota_reserva, cod_produto: item.cod_produto, descr_produto: item.descr_produto,
-          op: item.op, br: item.br, nro_pedido: item.nro_pedido, qtd_reservada: item.qtd_reservada,
-          controle_lote: item.controle_lote, local_origem: item.local_origem, status_op: item.status_op,
-          cancelado_por: canceladoPor,
-        },
+      await supabase.from('reservas_canceladas_log').insert({
+        nunota_reserva: item.nunota_reserva, cod_produto: item.cod_produto, descr_produto: item.descr_produto,
+        op: item.op, br: item.br, nro_pedido: item.nro_pedido, qtd_reservada: item.qtd_reservada,
+        controle_lote: item.controle_lote, local_origem: item.local_origem, status_op: item.status_op,
+        cancelado_por: canceladoPor, sankhya_status: 'aberto_para_cancelar_manual',
+        sankhya_mensagem: 'Nota aberta no Sankhya para cancelamento manual pelo usuário.',
       });
-      if (error || !data?.ok) {
-        // Quando a function responde com status != 2xx (ex.: 502), o supabase-js
-        // não preenche `data` — o corpo real (com o `diagnostico`) fica em
-        // error.context, que é a Response bruta. Sem isso, perderíamos o detalhe
-        // do erro (statusMessage do Sankhya, body cru etc) e só sobraria uma
-        // mensagem genérica de rede.
-        let corpo = data;
-        if (!corpo && error?.context?.json) {
-          corpo = await error.context.json().catch(() => null);
-        }
-        const mensagem = corpo?.error || error?.message || 'Falha desconhecida ao cancelar';
-        const diagnostico = corpo?.diagnostico ? ` | ${JSON.stringify(corpo.diagnostico)}` : '';
-        return { ok: false, item, erro: mensagem + diagnostico };
-      }
-      return { ok: true, item };
-    } catch (e) {
-      return { ok: false, item, erro: String(e.message || e) };
-    }
+    } catch { /* log é só auditoria — não deve travar o fluxo se falhar */ }
   };
 
-  // Cancelamento de UM item, disparado pela lixeira da linha. O Sankhya
-  // cancela a NOTA inteira (NUNOTA), não só esse produto -- então, se der
-  // certo, remove da tela TODOS os itens que compartilham a mesma NUNOTA
-  // (podem ser vários produtos da mesma OP), não só o que foi clicado.
+  // Cancelamento de UM item, disparado pela lixeira da linha.
   const confirmarCancelamento = async (item) => {
     setConfirmando(null);
-    setCancelando(item.id);
-    setErroCancelamento(null);
     const { data: { user } } = await supabase.auth.getUser();
     const canceladoPor = user?.email || null;
-    const resultado = await chamarCancelamento(item, canceladoPor);
-    if (resultado.ok) {
-      setItens(prev => prev.filter(i => i.nunota_reserva !== item.nunota_reserva));
-      setSelecionados(prev => {
-        const n = new Set(prev);
-        itens.filter(i => i.nunota_reserva === item.nunota_reserva).forEach(i => n.delete(i.id));
-        return n;
-      });
-      await gerarComprovanteCancelamento(item, canceladoPor);
-    } else {
-      setErroCancelamento({ id: item.id, msg: resultado.erro });
-    }
-    setCancelando(null);
+    const link = linkSankhyaNota({ nunota: item.nunota_reserva, tipmov: 'J', codtipoper: item.codtipoper });
+    if (link) window.open(link, '_blank', 'noopener,noreferrer');
+    await registrarSolicitacaoCancelamento(item, canceladoPor);
   };
 
-  // Cancelamento EM LOTE dos itens marcados. IMPORTANTE: o Sankhya cancela
-  // por NUNOTA (nota inteira), não por linha/produto -- então, se várias
-  // linhas selecionadas forem da mesma NUNOTA (ex.: uma OP com 6 produtos
-  // na mesma nota), cancelar a primeira já cancela todas juntas no Sankhya.
-  // Por isso agrupamos por NUNOTA antes de disparar: só chamamos a função
-  // UMA VEZ por nota, e aplicamos o resultado a todos os produtos dela --
-  // em vez de tentar cancelar a mesma nota 6 vezes (o que faria as 5
-  // seguintes falharem, porque a nota já não existiria mais).
+  // "Cancelamento" em lote: como não dá pra automatizar o clique final, aqui
+  // a gente agrupa por NUNOTA (uma nota pode ter vários produtos), registra
+  // a solicitação de cada uma, e gera um Excel-checklist com um link
+  // clicável por nota -- a pessoa abre da planilha mesmo, uma de cada vez,
+  // e cancela lá no Sankhya.
   const confirmarCancelamentoLote = async () => {
     setConfirmandoLote(false);
     const itensSelecionados = filtrados.filter(i => selecionados.has(i.id));
@@ -5029,67 +5002,50 @@ function ReservasPendentes() {
 
     const { data: { user } } = await supabase.auth.getUser();
     const canceladoPor = user?.email || null;
-    // resultados fica no nível de ITEM (não de nota) pra o relatório final
-    // mostrar uma linha por produto, mesmo quando várias linhas vieram do
-    // mesmo cancelamento de nota.
-    const resultados = [];
+
     for (const grupo of grupos) {
       const representante = grupo[0];
-      const r = await chamarCancelamento(representante, canceladoPor);
-      grupo.forEach(item => resultados.push({ ok: r.ok, item, erro: r.erro }));
+      await registrarSolicitacaoCancelamento(representante, canceladoPor);
       setProgressoLote(prev => ({ ...prev, feito: prev.feito + 1 }));
     }
 
-    const nunotasComSucesso = new Set(resultados.filter(r => r.ok).map(r => r.item.nunota_reserva));
-    setItens(prev => prev.filter(i => !nunotasComSucesso.has(i.nunota_reserva)));
-    setSelecionados(prev => {
-      const n = new Set(prev);
-      resultados.filter(r => r.ok).forEach(r => n.delete(r.item.id));
-      return n;
-    });
-
-    await gerarRelatorioLote(resultados, canceladoPor);
+    await gerarChecklistLote(grupos, canceladoPor);
     setCancelandoLote(false);
   };
 
-  // Excel consolidado do cancelamento em lote -- uma linha por item, com
-  // coluna de resultado (sucesso/falha) e a mensagem de erro quando houver.
-  const gerarRelatorioLote = async (resultados, canceladoPor) => {
+  // Excel-checklist do lote -- uma linha por NOTA (não por produto), com
+  // link clicável que abre direto no Sankhya, pronto pra clicar em excluir.
+  const gerarChecklistLote = async (grupos, canceladoPor) => {
     const { default: ExcelJS } = await import('exceljs');
     const workbook = new ExcelJS.Workbook();
     workbook.creator = 'Portal Engenharia Kalenborn';
     workbook.created = new Date();
-    const sheet = workbook.addWorksheet('Cancelamento em Lote', { views: [{ state: 'frozen', ySplit: 1 }] });
+    const sheet = workbook.addWorksheet('Checklist Cancelamento', { views: [{ state: 'frozen', ySplit: 1 }] });
     sheet.columns = [
-      { header: 'Resultado', key: 'resultado', width: 12 },
+      { header: 'Abrir no Sankhya', key: 'link', width: 20 },
       { header: 'OP', key: 'op', width: 10 },
       { header: 'BR', key: 'br', width: 14 },
       { header: 'Nro. Pedido', key: 'nro_pedido', width: 14 },
-      { header: 'NUNOTA Reserva', key: 'nunota', width: 16 },
-      { header: 'Código Produto', key: 'cod_produto', width: 14 },
-      { header: 'Descrição', key: 'descr_produto', width: 40 },
-      { header: 'Qtd Reservada', key: 'qtd_reservada', width: 14 },
-      { header: 'Lote', key: 'lote', width: 14 },
-      { header: 'Local', key: 'local', width: 10 },
+      { header: 'NUNOTA', key: 'nunota', width: 14 },
+      { header: 'Produtos da nota', key: 'produtos', width: 46 },
+      { header: 'Qtd total reservada', key: 'qtd_reservada', width: 16 },
       { header: 'Status OP', key: 'status_op', width: 12 },
-      { header: 'Erro', key: 'erro', width: 34 },
-      { header: 'Cancelado em', key: 'cancelado_em', width: 20 },
-      { header: 'Cancelado por', key: 'cancelado_por', width: 24 },
+      { header: 'Solicitado por', key: 'cancelado_por', width: 24 },
     ];
-    // Nota: o Sankhya cancela por NUNOTA (a nota inteira), não por linha de
-    // produto — então várias linhas com a mesma NUNOTA aqui foram canceladas
-    // juntas numa única chamada, não uma por uma.
-    sheet.getCell('A1').note = 'O cancelamento é feito por NUNOTA (nota inteira). Linhas com a mesma NUNOTA foram canceladas juntas, numa única chamada ao Sankhya.';
+    sheet.getCell('A1').note = 'Clique em "Abrir no Sankhya" pra ir direto na nota. Cancele lá (lixeira). Some sozinho daqui na próxima sincronização automática (a cada 4h).';
     const agora = new Date().toLocaleString('pt-BR');
-    resultados.forEach(r => {
-      const i = r.item;
-      sheet.addRow({
-        resultado: r.ok ? '✓ Cancelado' : '✗ Falhou',
-        op: i.op ?? '—', br: i.br ?? '—', nro_pedido: i.nro_pedido ?? '—', nunota: i.nunota_reserva,
-        cod_produto: i.cod_produto, descr_produto: i.descr_produto ?? '—', qtd_reservada: Number(i.qtd_reservada) || 0,
-        lote: i.controle_lote ?? '—', local: i.local_origem ?? '—', status_op: i.status_op ?? '—',
-        erro: r.ok ? '' : (r.erro || ''), cancelado_em: agora, cancelado_por: canceladoPor || '—',
+    grupos.forEach(grupo => {
+      const rep = grupo[0];
+      const link = linkSankhyaNota({ nunota: rep.nunota_reserva, tipmov: 'J', codtipoper: rep.codtipoper });
+      const row = sheet.addRow({
+        op: rep.op ?? '—', br: rep.br ?? '—', nro_pedido: rep.nro_pedido ?? '—', nunota: rep.nunota_reserva,
+        produtos: grupo.map(i => i.descr_produto).filter(Boolean).join(' · '),
+        qtd_reservada: grupo.reduce((acc, i) => acc + (Number(i.qtd_reservada) || 0), 0),
+        status_op: rep.status_op ?? '—', cancelado_por: canceladoPor || '—',
       });
+      const cellLink = row.getCell('link');
+      if (link) { cellLink.value = { text: '↗ Abrir', hyperlink: link }; cellLink.font = { name: 'Arial', size: 10.5, color: { argb: 'FF1D4ED8' }, underline: true }; }
+      else { cellLink.value = '—'; }
     });
     const headerRow = sheet.getRow(1);
     headerRow.eachCell(cell => {
@@ -5100,23 +5056,21 @@ function ReservasPendentes() {
     headerRow.height = 30;
     sheet.eachRow((row, rowNumber) => {
       if (rowNumber === 1) return;
-      const r = resultados[rowNumber - 2];
       row.eachCell({ includeEmpty: true }, cell => {
-        cell.font = { name: 'Arial', size: 10.5 };
-        cell.alignment = { vertical: 'middle' };
-        if (!r?.ok) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFCE4E4' } };
-        else if (rowNumber % 2 === 0) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF6F4F0' } };
+        if (cell.address !== `A${rowNumber}`) cell.font = { name: 'Arial', size: 10.5 };
+        cell.alignment = { vertical: 'middle', wrapText: cell.col === 6 };
+        if (rowNumber % 2 === 0) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF6F4F0' } };
       });
     });
     const linhaResumo = sheet.addRow({});
-    sheet.getCell(`A${linhaResumo.number}`).value = `Total: ${resultados.length} · Sucesso: ${resultados.filter(r => r.ok).length} · Falha: ${resultados.filter(r => !r.ok).length}`;
+    sheet.getCell(`A${linhaResumo.number}`).value = `Total: ${grupos.length} nota(s) para cancelar · Gerado em ${agora}`;
     sheet.getCell(`A${linhaResumo.number}`).font = { name: 'Arial', bold: true, size: 10.5 };
 
     const buffer = await workbook.xlsx.writeBuffer();
     const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url; a.download = `cancelamento_em_lote_${new Date().toISOString().slice(0, 10)}_${Date.now()}.xlsx`;
+    a.href = url; a.download = `checklist_cancelamento_reservas_${new Date().toISOString().slice(0, 10)}.xlsx`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -5219,7 +5173,7 @@ function ReservasPendentes() {
             </button>
             <button onClick={() => setConfirmandoLote(true)} disabled={cancelandoLote}
               style={{ fontSize: 12, fontWeight: 700, color: '#fff', background: T.rustText, border: 'none', borderRadius: 6, padding: '7px 14px', cursor: 'pointer', opacity: cancelandoLote ? 0.6 : 1, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-              <Trash2 size={12} /> {cancelandoLote ? `Cancelando ${progressoLote.feito}/${progressoLote.total}…` : `Cancelar ${selecionados.size} selecionado(s) no Sankhya`}
+              <Trash2 size={12} /> {cancelandoLote ? `Gerando checklist ${progressoLote.feito}/${progressoLote.total}…` : `Gerar checklist de cancelamento (${selecionados.size})`}
             </button>
           </>
         )}
@@ -5307,7 +5261,7 @@ function ReservasPendentes() {
                       <button
                         onClick={() => setConfirmando(i)}
                         disabled={cancelando === i.id}
-                        title="Cancelar reserva no Sankhya"
+                        title="Abrir nota no Sankhya para cancelar"
                         style={{
                           display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
                           width: 24, height: 24, border: `1px solid ${T.line}`, borderRadius: 5,
@@ -5344,11 +5298,12 @@ function ReservasPendentes() {
           }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
               <Trash2 size={16} color={T.rustText} />
-              <div style={{ fontSize: 14, fontWeight: 700 }}>Cancelar reserva no Sankhya</div>
+              <div style={{ fontSize: 14, fontWeight: 700 }}>Abrir nota para cancelar no Sankhya</div>
             </div>
             <div style={{ fontSize: 12.5, color: T.inkDim, lineHeight: 1.5, marginBottom: 16 }}>
-              Isso vai <strong>excluir a nota de reserva {confirmando.nunota_reserva}</strong> direto no Sankhya
-              (OP {confirmando.op || '—'}, produto {confirmando.descr_produto}). Ação irreversível — não tem como desfazer por aqui.
+              Isso vai abrir a <strong>nota {confirmando.nunota_reserva}</strong> direto no Sankhya
+              (OP {confirmando.op || '—'}, produto {confirmando.descr_produto}) numa aba nova. Clique na lixeira lá dentro pra
+              cancelar de verdade — some daqui sozinho na próxima sincronização automática (a cada 4h).
             </div>
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
               <button onClick={() => setConfirmando(null)} style={{
@@ -5358,7 +5313,7 @@ function ReservasPendentes() {
               <button onClick={() => confirmarCancelamento(confirmando)} style={{
                 fontSize: 12.5, fontWeight: 700, padding: '7px 14px', borderRadius: 6, cursor: 'pointer',
                 border: 'none', background: T.rustText, color: '#fff',
-              }}>Sim, cancelar no Sankhya</button>
+              }}>↗ Abrir no Sankhya</button>
             </div>
           </div>
         </div>
@@ -5374,14 +5329,14 @@ function ReservasPendentes() {
           }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
               <Trash2 size={16} color={T.rustText} />
-              <div style={{ fontSize: 14, fontWeight: 700 }}>Cancelar {selecionados.size} reservas no Sankhya</div>
+              <div style={{ fontSize: 14, fontWeight: 700 }}>Gerar checklist de cancelamento</div>
             </div>
             <div style={{ fontSize: 12.5, color: T.inkDim, lineHeight: 1.5, marginBottom: 16 }}>
-              Isso vai <strong>excluir {nunotasUnicasSelecionadas} nota(s)</strong> no Sankhya
+              Isso vai gerar um Excel com <strong>{nunotasUnicasSelecionadas} nota(s)</strong>
               {nunotasUnicasSelecionadas < selecionados.size && (
-                <> — os {selecionados.size} itens marcados estão distribuídos em {nunotasUnicasSelecionadas} nota(s) (várias linhas podem ser produtos diferentes da mesma nota, e cancelar a nota já leva todos juntos)</>
-              )}. Ação irreversível — não tem como desfazer por aqui.
-              Ao terminar, baixa automaticamente um Excel com o resultado (sucesso/falha) de cada item.
+                <> — os {selecionados.size} itens marcados estão distribuídos em {nunotasUnicasSelecionadas} nota(s) (várias linhas podem ser produtos diferentes da mesma nota)</>
+              )}, cada uma com um link que abre direto no Sankhya. Você clica em cada link e cancela lá (lixeira) — os itens somem
+              daqui sozinhos na próxima sincronização automática (a cada 4h).
             </div>
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
               <button onClick={() => setConfirmandoLote(false)} style={{
@@ -5391,7 +5346,7 @@ function ReservasPendentes() {
               <button onClick={confirmarCancelamentoLote} style={{
                 fontSize: 12.5, fontWeight: 700, padding: '7px 14px', borderRadius: 6, cursor: 'pointer',
                 border: 'none', background: T.rustText, color: '#fff',
-              }}>Sim, cancelar {selecionados.size} no Sankhya</button>
+              }}>📄 Gerar checklist</button>
             </div>
           </div>
         </div>
