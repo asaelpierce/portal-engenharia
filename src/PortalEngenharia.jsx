@@ -5662,19 +5662,25 @@ function PlaquinhaEquipamento({ currentUser }) {
   const setCampo = (itemId, nome, valor) => setEdicoes(prev => ({ ...prev, [itemId]: { ...prev[itemId], [nome]: valor } }));
 
   // Monta o texto padrão (assunto + corpo) pra um grupo de itens de um mesmo BR
+  // -- usa campo(it, x) (que prioriza o que a usuária acabou de digitar na
+  // tela, ainda não salvo) em vez de it.x direto (que só pega o que já tá
+  // salvo no banco). Sem isso, o e-mail saía com dado antigo/vazio sempre
+  // que ela preenchia e mandava concluir na sequência, sem dar tempo do
+  // salvamento acontecer antes de montar o texto.
   const montarTemplateGrupo = (items) => {
     const primeiro = items[0];
     const blocos = items.map(it => (
-      `N. Ordem de serviço: ${it.numero_ordem_servico || '—'}\n` +
-      `N. Desenho: ${it.numero_desenho || '—'}\n` +
-      `Mês/ano: ${fmtMesAno(it.mes_ano)}\n` +
-      `N. Pedido de compra: ${it.numero_pedido_compra || '—'}\n` +
-      `N. Projeto: ${it.br || '—'}\n` +
-      `Cliente: ${it.cliente_nome || '—'}`
+      `N. Ordem de serviço: ${campo(it, 'numero_ordem_servico') || '—'}\n` +
+      `N. Desenho: ${campo(it, 'numero_desenho') || '—'}\n` +
+      `Mês/ano: ${fmtMesAno(campo(it, 'mes_ano'))}\n` +
+      `N. Pedido de compra: ${campo(it, 'numero_pedido_compra') || '—'}\n` +
+      `N. Projeto: ${campo(it, 'br') || '—'}\n` +
+      `Cliente: ${campo(it, 'cliente_nome') || '—'}`
     )).join('\n\n—\n\n');
-    const linkDownload = `https://sieztnpchjjmrwrmrhoa.supabase.co/functions/v1/gerar-plaquinha-docx?${primeiro.br ? `br=${encodeURIComponent(primeiro.br)}` : `id=${primeiro.id}`}`;
+    const brOuId = campo(primeiro, 'br');
+    const linkDownload = `https://sieztnpchjjmrwrmrhoa.supabase.co/functions/v1/gerar-plaquinha-docx?${brOuId ? `br=${encodeURIComponent(brOuId)}` : `id=${primeiro.id}`}`;
     const assinatura = currentUser?.assinatura_email || currentUser?.nome || '';
-    const assunto = `Plaquinha de Equipamento — ${primeiro.br || primeiro.numero_desenho}`;
+    const assunto = `Plaquinha de Equipamento — ${brOuId || campo(primeiro, 'numero_desenho')}`;
     const corpo = `PLAQUINHA DE EQUIPAMENTO\n\n${blocos}\n\nBaixar o arquivo Word: ${linkDownload}\n\n${assinatura}`;
     return { assunto, corpo };
   };
@@ -5712,11 +5718,12 @@ function PlaquinhaEquipamento({ currentUser }) {
 
   const confirmarEnvio = async ({ grupos: gruposModal, modo, destinatarios, assunto, corpo }) => {
     setSalvandoId('modal');
+    const erros = [];
     for (const { items } of gruposModal) {
       // Se veio de "concluir", salva os dados finais de cada item do grupo primeiro
       if (modo === 'concluir') {
         for (const it of items) {
-          await supabase.from('plaquinhas_equipamento').update({
+          const { error } = await supabase.from('plaquinhas_equipamento').update({
             br: campo(it, 'br') || null,
             cliente_nome: campo(it, 'cliente_nome') || null,
             numero_pedido_compra: campo(it, 'numero_pedido_compra') || null,
@@ -5727,23 +5734,39 @@ function PlaquinhaEquipamento({ currentUser }) {
             preenchido_por: currentUser?.nome || null,
             preenchido_em: new Date().toISOString(),
           }).eq('id', it.id);
+          if (error) erros.push(`Salvar plaquinha ${it.id}: ${error.message}`);
         }
       }
       if (destinatarios.length > 0) {
         const { assunto: assuntoDoGrupo, corpo: corpoDoGrupo } = (gruposModal.length > 1) ? montarTemplateGrupo(items) : { assunto, corpo };
-        await supabase.from('solicitacoes_email_plaquinha').insert({
-          plaquinha_ids: items.map(i => i.id),
-          destinatarios,
-          assunto: assuntoDoGrupo,
-          corpo: textoParaHtmlEmail(corpoDoGrupo),
-          status: 'pendente',
-        });
-        await supabase.from('plaquinhas_equipamento').update({ email_enviado: true }).in('id', items.map(i => i.id));
+        const corpoHtml = textoParaHtmlEmail(corpoDoGrupo);
+        // IMPORTANTE: a automação que dispara o e-mail de verdade (Power
+        // Automate) só sabe ler os campos no singular (plaquinha_id,
+        // destinatario_email) -- isso rodava certo antes de existir suporte
+        // a vários destinatários/plaquinhas por e-mail. Manda os campos no
+        // plural TAMBÉM (pra quem usa eles), mas grava um registro POR
+        // destinatário nos campos singulares, senão a automação nunca
+        // enxerga a solicitação e ela fica "pendente" pra sempre.
+        for (const destinatario of destinatarios) {
+          const { error } = await supabase.from('solicitacoes_email_plaquinha').insert({
+            plaquinha_id: items[0].id,
+            plaquinha_ids: items.map(i => i.id),
+            destinatario_email: destinatario,
+            destinatarios,
+            assunto: assuntoDoGrupo,
+            corpo: corpoHtml,
+            status: 'pendente',
+          });
+          if (error) erros.push(`Solicitar e-mail pra ${destinatario}: ${error.message}`);
+        }
+        const { error: errorUpdate } = await supabase.from('plaquinhas_equipamento').update({ email_enviado: true }).in('id', items.map(i => i.id));
+        if (errorUpdate) erros.push(`Marcar e-mail enviado: ${errorUpdate.message}`);
       }
     }
     setModalEmail(null);
     await carregar();
     setSalvandoId(null);
+    if (erros.length) alert('Algumas coisas deram erro ao salvar:\n\n' + erros.join('\n'));
   };
 
   const refazerGrupo = async (items) => {
@@ -6074,10 +6097,19 @@ function ModalEmailPlaquinha({ modalEmail, currentUser, montarTemplateGrupo, onF
   };
 
   const salvarModelo = async () => {
-    if (!nomeNovoModelo.trim() || destinatarios.length === 0) return;
-    await supabase.from('modelos_email_plaquinha').insert({
+    if (!nomeNovoModelo.trim()) return;
+    if (destinatarios.length === 0) {
+      // Antes falhava em silêncio aqui (parecia que salvou, mas nunca
+      // salvava nada) -- geralmente porque o e-mail foi digitado mas
+      // ninguém apertou Enter pra confirmar, então nunca virou destinatário
+      // de verdade. Agora avisa claramente em vez de fingir que funcionou.
+      alert('Adiciona pelo menos um destinatário antes de salvar (digita o e-mail e aperta Enter pra confirmar).');
+      return;
+    }
+    const { error } = await supabase.from('modelos_email_plaquinha').insert({
       nome_modelo: nomeNovoModelo.trim(), destinatarios, criado_por: currentUser?.nome || null,
     });
+    if (error) { alert('Não consegui salvar o modelo: ' + error.message); return; }
     const { data } = await supabase.from('modelos_email_plaquinha').select('*').order('nome_modelo');
     setModelos(data || []);
     setNomeNovoModelo('');
@@ -6111,6 +6143,7 @@ function ModalEmailPlaquinha({ modalEmail, currentUser, montarTemplateGrupo, onF
             onChange={e => { setTextoNome(e.target.value); setMostrarSugestoes(true); }}
             onFocus={() => setMostrarSugestoes(true)}
             onKeyDown={e => { if (e.key === 'Enter' && textoNome.includes('@')) { adicionarDestinatario(textoNome.trim()); } }}
+            onBlur={() => { if (textoNome.trim().includes('@')) adicionarDestinatario(textoNome.trim()); }}
             placeholder="Digita o nome ou e-mail e aperta Enter…" style={{ ...inputStyle(), width: '100%' }} />
           {mostrarSugestoes && sugestoes.length > 0 && (
             <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, background: T.panel, border: `1px solid ${T.line}`, borderRadius: 8, marginTop: 4, boxShadow: '0 8px 24px rgba(0,0,0,.12)', zIndex: 10, maxHeight: 180, overflowY: 'auto' }}>
