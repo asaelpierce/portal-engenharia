@@ -7096,6 +7096,14 @@ function MonitoramentoOP({ currentUser }) {
   };
 
   const [linhas, setLinhas] = useState([]);
+  const [vinculosManuais, setVinculosManuais] = useState({}); // "br|cod_produto" -> { nro_ordem_producao, vinculado_por, vinculado_em }
+  const carregarVinculosManuais = useCallback(async () => {
+    const { data } = await supabase.from('monitoramento_op_vinculo_manual').select('*');
+    const mapa = {};
+    (data || []).forEach(v => { mapa[`${v.br}|${v.cod_produto}`] = v; });
+    setVinculosManuais(mapa);
+  }, []);
+  useEffect(() => { carregarVinculosManuais(); }, [carregarVinculosManuais]);
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState(null);
   const [busca, setBusca] = useState('');
@@ -7159,7 +7167,29 @@ function MonitoramentoOP({ currentUser }) {
     }));
   };
 
-  const [tagsCatalogo, setTagsCatalogo] = useState([]);
+  const [vinculando, setVinculando] = useState(null); // "br|cod_produto" sendo processado agora
+  const [opManualMonitoramento, setOpManualMonitoramento] = useState({}); // "br|cod_produto" -> texto digitado
+  const vincularOpManual = async (br, codProduto, nroOp) => {
+    if (!nroOp || !String(nroOp).trim()) return;
+    const chave = `${br}|${codProduto}`;
+    setVinculando(chave);
+    await supabase.from('monitoramento_op_vinculo_manual').upsert({
+      br, cod_produto: String(codProduto), nro_ordem_producao: String(nroOp).trim(),
+      vinculado_por: currentUser?.nome || null, vinculado_em: new Date().toISOString(),
+    }, { onConflict: 'br,cod_produto' });
+    setOpManualMonitoramento(prev => ({ ...prev, [chave]: '' }));
+    await carregarVinculosManuais();
+    setVinculando(null);
+  };
+  const desvincularOpManual = async (br, codProduto) => {
+    const chave = `${br}|${codProduto}`;
+    setVinculando(chave);
+    await supabase.from('monitoramento_op_vinculo_manual').delete().eq('br', br).eq('cod_produto', String(codProduto));
+    await carregarVinculosManuais();
+    setVinculando(null);
+  };
+
+
   const [tagsPorBr, setTagsPorBr] = useState({}); // br -> [tag_id, ...]
   const [anotacoesPorBr, setAnotacoesPorBr] = useState({}); // br -> { observacao, data_referencia }
   const [novaTagNome, setNovaTagNome] = useState('');
@@ -7268,7 +7298,16 @@ function MonitoramentoOP({ currentUser }) {
     }
   };
 
-  const fmtData = (iso) => !iso ? '—' : new Date(iso + 'T00:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: '2-digit' });
+  const fmtData = (iso) => {
+    if (!iso) return '—';
+    // Aceita tanto data simples ("2026-08-31") quanto timestamp completo
+    // ("2026-08-31 12:02:42.437+00" ou "2026-08-31T12:02:42Z") -- so
+    // concatena T00:00:00 quando e mesmo so a data, senao vira data invalida.
+    const jaTemHora = /[T ]\d{2}:\d{2}/.test(iso);
+    const d = jaTemHora ? new Date(iso) : new Date(iso + 'T00:00:00');
+    if (isNaN(d.getTime())) return '—';
+    return d.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: '2-digit' });
+  };
   const diasEmAberto = (iso) => !iso ? null : Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
 
   // Agrupa por BR — a "pior" situação entre os itens de um projeto define o status do projeto
@@ -7278,8 +7317,15 @@ function MonitoramentoOP({ currentUser }) {
     const semBR = linhas.filter(l => !l.br);
     const porBR = {};
     linhas.filter(l => l.br).forEach(l => {
+      // Vínculo manual sobrepõe o que veio do Sankhya -- corrige quando o
+      // sistema não achou a OP sozinho (ou achou errado). Também tira o
+      // item da categoria "sem_op" já que agora tem uma OP vinculada.
+      const vinculo = vinculosManuais[`${l.br}|${l.cod_produto}`];
+      const lFinal = vinculo
+        ? { ...l, nro_ordem_producao: vinculo.nro_ordem_producao, status: l.status === 'sem_op' ? 'op_planejada' : l.status, vinculo_manual: true }
+        : l;
       if (!porBR[l.br]) porBR[l.br] = { br: l.br, cliente: l.cliente_nome, itens: [], dataMaisAntiga: l.data_pedido };
-      porBR[l.br].itens.push(l);
+      porBR[l.br].itens.push(lFinal);
       if (l.data_pedido && (!porBR[l.br].dataMaisAntiga || l.data_pedido < porBR[l.br].dataMaisAntiga)) {
         porBR[l.br].dataMaisAntiga = l.data_pedido;
       }
@@ -7309,7 +7355,7 @@ function MonitoramentoOP({ currentUser }) {
         };
       }),
     };
-  }, [linhas]);
+  }, [linhas, vinculosManuais]);
 
   const filtrados = useMemo(() => {
     return projetos.lista
@@ -8269,7 +8315,21 @@ function MonitoramentoOP({ currentUser }) {
                         </td>
                         <td style={{ padding: '9px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY }}>{it.quantidade}</td>
                         <td style={{ padding: '9px 12px', color: T.inkFaint, whiteSpace: 'nowrap' }}>{fmtData(it.data_pedido)}</td>
-                        <td style={{ padding: '9px 12px', textAlign: 'center', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText }}>{it.nro_ordem_producao || '—'}</td>
+                        <td style={{ padding: '9px 12px', textAlign: 'center', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText }}>
+                          {it.nro_ordem_producao || '—'}
+                          {it.vinculo_manual && (
+                            <div>
+                              <span title="Vinculado manualmente (não veio do Sankhya)" style={{ fontFamily: 'inherit', fontSize: 9.5, fontWeight: 700, color: T.amberText }}>
+                                ✎ manual
+                              </span>
+                              {' '}
+                              <button onClick={() => desvincularOpManual(drillBR.br, it.cod_produto)} disabled={vinculando === `${drillBR.br}|${it.cod_produto}`}
+                                style={{ fontSize: 9.5, color: T.rustText, background: 'transparent', border: 'none', cursor: 'pointer', textDecoration: 'underline', padding: 0 }}>
+                                desfazer
+                              </button>
+                            </div>
+                          )}
+                        </td>
                         <td style={{ padding: '9px 12px', textAlign: 'center' }}>
                           <span style={{ fontSize: 12, fontWeight: 700, color: st.cor, background: st.bg, padding: '3px 8px', borderRadius: 4, whiteSpace: 'nowrap' }}>{st.label}</span>
                         </td>
@@ -8319,9 +8379,26 @@ function MonitoramentoOP({ currentUser }) {
                                       <span key={idx} style={{ marginRight: 12, whiteSpace: 'nowrap' }}>
                                         <span style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText }}>OP {op.nro_ordem_producao}</span>
                                         {' '}({op.br || '—'} · {fmtData(op.data_apontamento)})
+                                        {' '}
+                                        <button onClick={() => vincularOpManual(drillBR.br, it.cod_produto, op.nro_ordem_producao)}
+                                          disabled={vinculando === `${drillBR.br}|${it.cod_produto}`}
+                                          style={{ fontSize: 10, color: T.oliveText, background: 'transparent', border: `1px solid ${T.oliveText}55`, borderRadius: 4, padding: '1px 6px', cursor: 'pointer' }}>
+                                          vincular a esse item
+                                        </button>
                                       </span>
                                     ))
                                   )}
+                                </div>
+                                <div style={{ fontSize: 11.5, display: 'flex', alignItems: 'center', gap: 6 }}>
+                                  <span style={{ fontWeight: 700, color: T.inkFaint }}>Buscar/incluir OP manualmente: </span>
+                                  <input value={opManualMonitoramento[`${drillBR.br}|${it.cod_produto}`] || ''}
+                                    onChange={e => setOpManualMonitoramento(prev => ({ ...prev, [`${drillBR.br}|${it.cod_produto}`]: e.target.value }))}
+                                    placeholder="Nº da OP" style={{ ...inputStyle(), width: 90, padding: '4px 8px', fontSize: 11.5 }} />
+                                  <button onClick={() => vincularOpManual(drillBR.br, it.cod_produto, opManualMonitoramento[`${drillBR.br}|${it.cod_produto}`])}
+                                    disabled={vinculando === `${drillBR.br}|${it.cod_produto}` || !opManualMonitoramento[`${drillBR.br}|${it.cod_produto}`]?.trim()}
+                                    style={{ fontSize: 11, fontWeight: 700, color: '#fff', background: T.terracotta, border: 'none', borderRadius: 5, padding: '5px 10px', cursor: 'pointer', opacity: !opManualMonitoramento[`${drillBR.br}|${it.cod_produto}`]?.trim() ? 0.5 : 1 }}>
+                                    Vincular
+                                  </button>
                                 </div>
                                 <div style={{ fontSize: 11.5 }}>
                                   <span style={{ fontWeight: 700, color: T.inkFaint }}>Já pedido antes (outros BRs): </span>
