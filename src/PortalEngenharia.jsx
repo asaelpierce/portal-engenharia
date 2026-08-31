@@ -5701,10 +5701,33 @@ function PlaquinhaEquipamento({ currentUser }) {
     return null;
   };
 
-  const concluirGrupo = (items) => {
+  const concluirGrupo = async (items) => {
     const erro = validarGrupo(items);
     if (erro) { alert(erro); return; }
-    setModalEmail({ grupos: [{ items }], modo: 'concluir' });
+    // Salva os dados JÁ AGORA (antes de abrir o modal), e monta uma cópia
+    // "congelada" de cada item com os valores confirmados. Isso evita
+    // depender de sincronização fina entre edicoes/campo() no momento de
+    // montar o e-mail -- o modal sempre trabalha com dado que JÁ está no
+    // banco, não com uma leitura indireta que pode ficar dessincronizada.
+    setSalvandoId(items[0].id);
+    const itensSalvos = [];
+    const erros = [];
+    for (const it of items) {
+      const dados = {
+        br: campo(it, 'br') || null,
+        cliente_nome: campo(it, 'cliente_nome') || null,
+        numero_pedido_compra: campo(it, 'numero_pedido_compra') || null,
+        numero_desenho: campo(it, 'numero_desenho'),
+        numero_ordem_servico: campo(it, 'numero_ordem_servico') || null,
+        mes_ano: campo(it, 'mes_ano'),
+      };
+      const { error } = await supabase.from('plaquinhas_equipamento').update(dados).eq('id', it.id);
+      if (error) erros.push(`Item ${it.id}: ${error.message}`);
+      itensSalvos.push({ ...it, ...dados });
+    }
+    setSalvandoId(null);
+    if (erros.length) { alert('Não consegui salvar antes de continuar:\n\n' + erros.join('\n')); return; }
+    setModalEmail({ grupos: [{ items: itensSalvos }], modo: 'concluir' });
   };
 
   const enviarEmailGrupo = (items) => {
@@ -5720,16 +5743,12 @@ function PlaquinhaEquipamento({ currentUser }) {
     setSalvandoId('modal');
     const erros = [];
     for (const { items } of gruposModal) {
-      // Se veio de "concluir", salva os dados finais de cada item do grupo primeiro
+      // Se veio de "concluir", os dados (br, desenho, mês/ano etc.) já foram
+      // salvos em concluirGrupo (antes do modal abrir) -- aqui só marca
+      // como preenchida de verdade.
       if (modo === 'concluir') {
         for (const it of items) {
           const { error } = await supabase.from('plaquinhas_equipamento').update({
-            br: campo(it, 'br') || null,
-            cliente_nome: campo(it, 'cliente_nome') || null,
-            numero_pedido_compra: campo(it, 'numero_pedido_compra') || null,
-            numero_desenho: campo(it, 'numero_desenho'),
-            numero_ordem_servico: campo(it, 'numero_ordem_servico') || null,
-            mes_ano: campo(it, 'mes_ano'),
             status: 'preenchida',
             preenchido_por: currentUser?.nome || null,
             preenchido_em: new Date().toISOString(),
