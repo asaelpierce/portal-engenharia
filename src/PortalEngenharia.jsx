@@ -8029,7 +8029,7 @@ function MonitoramentoOP({ currentUser }) {
 
       {historicoModalItem && (
         <Overlay onClose={() => setHistoricoModalItem(null)}>
-          <div className="scale-in" style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, width: '100%', maxWidth: 720, maxHeight: '85vh', overflowY: 'auto', boxShadow: '0 24px 60px rgba(0,0,0,.18)' }}>
+          <div className="scale-in" style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, width: '90vw', maxWidth: 900, maxHeight: '85vh', overflowY: 'auto', boxShadow: '0 24px 60px rgba(0,0,0,.18)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', padding: '18px 22px', borderBottom: `1px solid ${T.line}`, position: 'sticky', top: 0, background: T.panel }}>
               <div>
                 <div style={{ fontFamily: FONT_DISPLAY, fontSize: 15, fontWeight: 700 }}>{historicoModalItem.cod_produto} — {historicoModalItem.produto_descricao}</div>
@@ -8401,8 +8401,8 @@ function MonitoramentoOP({ currentUser }) {
       {drillBR && (
         <Overlay onClose={() => setDrillBR(null)}>
           <div className="scale-in" style={{
-            background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, width: '100%', maxWidth: 720,
-            maxHeight: '85vh', display: 'flex', flexDirection: 'column', overflow: 'hidden', boxShadow: '0 24px 60px rgba(0,0,0,.18)',
+            background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, width: '95vw', maxWidth: 1200,
+            maxHeight: '90vh', display: 'flex', flexDirection: 'column', overflow: 'hidden', boxShadow: '0 24px 60px rgba(0,0,0,.18)',
           }}>
             <div style={{ padding: '18px 22px', borderBottom: `1px solid ${T.line}`, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
               <div>
