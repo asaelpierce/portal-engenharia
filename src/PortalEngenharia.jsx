@@ -7114,11 +7114,9 @@ function MonitoramentoOP({ currentUser }) {
   const [syncStatus, setSyncStatus] = useState(null);
   const [ultimoSync, setUltimoSync] = useState(null);
   const [drillBR, setDrillBR] = useState(null); // BR selecionado — mostra os itens dele
-  const [historicoItemAberto, setHistoricoItemAberto] = useState(null); // cod_produto expandido agora
+  const [historicoModalItem, setHistoricoModalItem] = useState(null); // item selecionado -- abre modal em tela cheia
   const [historicoItemDados, setHistoricoItemDados] = useState({}); // cod_produto -> { composicao, ultimasOps, loading }
   const carregarHistoricoItem = async (codProduto, brAtual) => {
-    if (historicoItemAberto === codProduto) { setHistoricoItemAberto(null); return; }
-    setHistoricoItemAberto(codProduto);
     if (historicoItemDados[codProduto]) return; // já em cache
     setHistoricoItemDados(prev => ({ ...prev, [codProduto]: { loading: true } }));
     // IMPORTANTE: essa composição/histórico não vive no banco do Portal
@@ -8009,6 +8007,101 @@ function MonitoramentoOP({ currentUser }) {
         </Overlay>
       )}
 
+      {historicoModalItem && (
+        <Overlay onClose={() => setHistoricoModalItem(null)}>
+          <div className="scale-in" style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, width: '100%', maxWidth: 720, maxHeight: '85vh', overflowY: 'auto', boxShadow: '0 24px 60px rgba(0,0,0,.18)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', padding: '18px 22px', borderBottom: `1px solid ${T.line}`, position: 'sticky', top: 0, background: T.panel }}>
+              <div>
+                <div style={{ fontFamily: FONT_DISPLAY, fontSize: 15, fontWeight: 700 }}>{historicoModalItem.cod_produto} — {historicoModalItem.produto_descricao}</div>
+                <div style={{ fontSize: 12, color: T.inkFaint, marginTop: 2 }}>{drillBR?.br}</div>
+              </div>
+              <button onClick={() => setHistoricoModalItem(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.inkFaint }}><X size={18} /></button>
+            </div>
+            <div style={{ padding: '18px 22px' }}>
+              {(() => {
+                const hist = historicoItemDados[historicoModalItem.cod_produto];
+                const it = historicoModalItem;
+                if (hist?.loading || !hist) return <div style={{ fontSize: 13, color: T.inkFaint, padding: '20px 0', textAlign: 'center' }}>Carregando…</div>;
+                return (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+                    <div style={{ fontSize: 13 }}>
+                      <div style={{ fontWeight: 700, color: T.inkFaint, marginBottom: 6 }}>
+                        Composição (PA):{' '}
+                        {hist.materiais.length > 0 ? (
+                          <span style={{ color: T.oliveText, fontWeight: 700 }}>✓ Cadastrada ({hist.materiais.length} insumo{hist.materiais.length !== 1 ? 's' : ''})</span>
+                        ) : (
+                          <span style={{ color: T.amberText, fontWeight: 700 }}>⚠ Não cadastrada</span>
+                        )}
+                      </div>
+                      {hist.materiais.length > 0 && (
+                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+                          <tbody>
+                            {hist.materiais.map((m, idx) => (
+                              <tr key={idx} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                                <td style={{ padding: '4px 8px 4px 0', color: T.inkFaint, fontFamily: 'monospace' }}>{m.codigoMP}</td>
+                                <td style={{ padding: '4px 8px 4px 0' }}>{m.descricao || <span style={{ color: T.inkFaint, fontStyle: 'italic' }}>sem descrição cadastrada</span>}</td>
+                                <td style={{ padding: '4px 0', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 700, whiteSpace: 'nowrap' }}>{m.quantidade} {m.um}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      )}
+                    </div>
+                    <div style={{ fontSize: 13 }}>
+                      <div style={{ fontWeight: 700, color: T.inkFaint, marginBottom: 6 }}>Últimas OPs desse produto:</div>
+                      {hist.ultimasOps.length === 0 ? (
+                        <span style={{ color: T.inkFaint }}>nenhuma OP com apontamento de matéria-prima encontrada</span>
+                      ) : (
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                          {hist.ultimasOps.map((op, idx) => (
+                            <span key={idx} style={{ whiteSpace: 'nowrap' }}>
+                              <span style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText }}>OP {op.nro_ordem_producao}</span>
+                              {' '}({op.br || '—'} · {fmtData(op.data_apontamento)})
+                              {' '}
+                              <button onClick={() => vincularOpManual(drillBR.br, it.cod_produto, op.nro_ordem_producao)}
+                                disabled={vinculando === `${drillBR.br}|${it.cod_produto}`}
+                                style={{ fontSize: 10.5, color: T.oliveText, background: 'transparent', border: `1px solid ${T.oliveText}55`, borderRadius: 4, padding: '2px 7px', cursor: 'pointer' }}>
+                                vincular a esse item
+                              </button>
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    <div style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                      <span style={{ fontWeight: 700, color: T.inkFaint }}>Buscar/incluir OP manualmente: </span>
+                      <input value={opManualMonitoramento[`${drillBR.br}|${it.cod_produto}`] || ''}
+                        onChange={e => setOpManualMonitoramento(prev => ({ ...prev, [`${drillBR.br}|${it.cod_produto}`]: e.target.value }))}
+                        placeholder="Nº da OP" style={{ ...inputStyle(), width: 110, padding: '6px 10px', fontSize: 13 }} />
+                      <button onClick={() => vincularOpManual(drillBR.br, it.cod_produto, opManualMonitoramento[`${drillBR.br}|${it.cod_produto}`])}
+                        disabled={vinculando === `${drillBR.br}|${it.cod_produto}` || !opManualMonitoramento[`${drillBR.br}|${it.cod_produto}`]?.trim()}
+                        style={{ fontSize: 12.5, fontWeight: 700, color: '#fff', background: T.terracotta, border: 'none', borderRadius: 6, padding: '7px 14px', cursor: 'pointer', opacity: !opManualMonitoramento[`${drillBR.br}|${it.cod_produto}`]?.trim() ? 0.5 : 1 }}>
+                        Vincular
+                      </button>
+                    </div>
+                    <div style={{ fontSize: 13 }}>
+                      <div style={{ fontWeight: 700, color: T.inkFaint, marginBottom: 6 }}>Já pedido antes (outros BRs):</div>
+                      {hist.pedidosAnteriores.length === 0 ? (
+                        <span style={{ color: T.inkFaint }}>nenhum pedido anterior encontrado com esse código</span>
+                      ) : (
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                          {hist.pedidosAnteriores.map((p, idx) => (
+                            <span key={idx} style={{ whiteSpace: 'nowrap' }}>
+                              <span style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText }}>{p.br}</span>
+                              {' '}({p.cliente_nome || '—'} · qtd {p.quantidade} · {fmtData(p.data_neg)})
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+          </div>
+        </Overlay>
+      )}
+
       {modalPendencia && (
         <Overlay onClose={() => setModalPendencia(null)}>
           <div className="scale-in" style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, width: '100%', maxWidth: 460, padding: 24, boxShadow: '0 24px 60px rgba(0,0,0,.18)' }}>
@@ -8313,11 +8406,8 @@ function MonitoramentoOP({ currentUser }) {
                 <tbody>
                   {drillBR.itens.map((it, i) => {
                     const st = statusInfo(it.status);
-                    const hist = historicoItemDados[it.cod_produto];
-                    const aberto = historicoItemAberto === it.cod_produto;
                     return (
-                      <React.Fragment key={i}>
-                      <tr style={{ borderBottom: aberto ? 'none' : `1px solid ${T.lineSoft}` }}>
+                      <tr key={i} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
                         <td style={{ padding: '9px 12px' }}>
                           <div style={{ fontWeight: 600 }}>{it.cod_produto} — {it.produto_descricao}</div>
                         </td>
@@ -8342,95 +8432,12 @@ function MonitoramentoOP({ currentUser }) {
                           <span style={{ fontSize: 12, fontWeight: 700, color: st.cor, background: st.bg, padding: '3px 8px', borderRadius: 4, whiteSpace: 'nowrap' }}>{st.label}</span>
                         </td>
                         <td style={{ padding: '9px 12px', textAlign: 'center' }}>
-                          <button onClick={() => carregarHistoricoItem(it.cod_produto, drillBR.br)}
+                          <button onClick={() => { setHistoricoModalItem(it); carregarHistoricoItem(it.cod_produto, drillBR.br); }}
                             style={{ fontSize: 10.5, fontWeight: 600, color: T.blueText, background: 'transparent', border: `1px solid ${T.blueText}55`, borderRadius: 5, padding: '3px 8px', cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                            {aberto ? '✕ Fechar' : '🕘 Histórico'}
+                            🕘 Histórico
                           </button>
                         </td>
                       </tr>
-                      {aberto && (
-                        <tr style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
-                          <td colSpan={6} style={{ padding: '4px 12px 12px', background: T.panelAlt, maxWidth: 1 }}>
-                            {hist?.loading || !hist ? (
-                              <div style={{ fontSize: 11.5, color: T.inkFaint, padding: '6px 4px' }}>Carregando…</div>
-                            ) : (
-                              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '6px 4px' }}>
-                                <div style={{ fontSize: 11.5 }}>
-                                  <div style={{ fontWeight: 700, color: T.inkFaint, marginBottom: 4 }}>
-                                    Composição (PA):{' '}
-                                    {hist.materiais.length > 0 ? (
-                                      <span style={{ color: T.oliveText, fontWeight: 700 }}>✓ Cadastrada ({hist.materiais.length} insumo{hist.materiais.length !== 1 ? 's' : ''})</span>
-                                    ) : (
-                                      <span style={{ color: T.amberText, fontWeight: 700 }}>⚠ Não cadastrada</span>
-                                    )}
-                                  </div>
-                                  {hist.materiais.length > 0 && (
-                                    <table style={{ borderCollapse: 'collapse', fontSize: 11 }}>
-                                      <tbody>
-                                        {hist.materiais.map((m, idx) => (
-                                          <tr key={idx}>
-                                            <td style={{ padding: '2px 8px 2px 0', color: T.inkFaint, fontFamily: 'monospace' }}>{m.codigoMP}</td>
-                                            <td style={{ padding: '2px 8px 2px 0' }}>{m.descricao || <span style={{ color: T.inkFaint, fontStyle: 'italic' }}>sem descrição cadastrada</span>}</td>
-                                            <td style={{ padding: '2px 0', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 700, whiteSpace: 'nowrap' }}>{m.quantidade} {m.um}</td>
-                                          </tr>
-                                        ))}
-                                      </tbody>
-                                    </table>
-                                  )}
-                                </div>
-                                <div style={{ fontSize: 11.5 }}>
-                                  <div style={{ fontWeight: 700, color: T.inkFaint, marginBottom: 4 }}>Últimas OPs desse produto:</div>
-                                  {hist.ultimasOps.length === 0 ? (
-                                    <span style={{ color: T.inkFaint }}>nenhuma OP com apontamento de matéria-prima encontrada</span>
-                                  ) : (
-                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                                      {hist.ultimasOps.map((op, idx) => (
-                                        <span key={idx} style={{ whiteSpace: 'nowrap' }}>
-                                          <span style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText }}>OP {op.nro_ordem_producao}</span>
-                                          {' '}({op.br || '—'} · {fmtData(op.data_apontamento)})
-                                          {' '}
-                                          <button onClick={() => vincularOpManual(drillBR.br, it.cod_produto, op.nro_ordem_producao)}
-                                            disabled={vinculando === `${drillBR.br}|${it.cod_produto}`}
-                                            style={{ fontSize: 10, color: T.oliveText, background: 'transparent', border: `1px solid ${T.oliveText}55`, borderRadius: 4, padding: '1px 6px', cursor: 'pointer' }}>
-                                            vincular a esse item
-                                          </button>
-                                        </span>
-                                      ))}
-                                    </div>
-                                  )}
-                                </div>
-                                <div style={{ fontSize: 11.5, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                                  <span style={{ fontWeight: 700, color: T.inkFaint }}>Buscar/incluir OP manualmente: </span>
-                                  <input value={opManualMonitoramento[`${drillBR.br}|${it.cod_produto}`] || ''}
-                                    onChange={e => setOpManualMonitoramento(prev => ({ ...prev, [`${drillBR.br}|${it.cod_produto}`]: e.target.value }))}
-                                    placeholder="Nº da OP" style={{ ...inputStyle(), width: 90, padding: '4px 8px', fontSize: 11.5 }} />
-                                  <button onClick={() => vincularOpManual(drillBR.br, it.cod_produto, opManualMonitoramento[`${drillBR.br}|${it.cod_produto}`])}
-                                    disabled={vinculando === `${drillBR.br}|${it.cod_produto}` || !opManualMonitoramento[`${drillBR.br}|${it.cod_produto}`]?.trim()}
-                                    style={{ fontSize: 11, fontWeight: 700, color: '#fff', background: T.terracotta, border: 'none', borderRadius: 5, padding: '5px 10px', cursor: 'pointer', opacity: !opManualMonitoramento[`${drillBR.br}|${it.cod_produto}`]?.trim() ? 0.5 : 1 }}>
-                                    Vincular
-                                  </button>
-                                </div>
-                                <div style={{ fontSize: 11.5 }}>
-                                  <div style={{ fontWeight: 700, color: T.inkFaint, marginBottom: 4 }}>Já pedido antes (outros BRs):</div>
-                                  {hist.pedidosAnteriores.length === 0 ? (
-                                    <span style={{ color: T.inkFaint }}>nenhum pedido anterior encontrado com esse código</span>
-                                  ) : (
-                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                                      {hist.pedidosAnteriores.map((p, idx) => (
-                                        <span key={idx} style={{ whiteSpace: 'nowrap' }}>
-                                          <span style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText }}>{p.br}</span>
-                                          {' '}({p.cliente_nome || '—'} · qtd {p.quantidade} · {fmtData(p.data_neg)})
-                                        </span>
-                                      ))}
-                                    </div>
-                                  )}
-                                </div>
-                              </div>
-                            )}
-                          </td>
-                        </tr>
-                      )}
-                      </React.Fragment>
                     );
                   })}
                 </tbody>
