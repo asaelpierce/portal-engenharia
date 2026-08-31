@@ -7574,7 +7574,19 @@ function MonitoramentoOP({ currentUser }) {
         </div>
       )}
 
-      {abaMonitoramento === 'conhecimento_pronto' && visualizacaoConhecPronto === 'planilha' && (
+      {abaMonitoramento === 'conhecimento_pronto' && visualizacaoConhecPronto === 'planilha' && (() => {
+        // Junta as 3 fontes (etapas diferentes do fluxo) sem duplicar --
+        // antes só juntava cardsConhecPronto + cardsOpsGeradas, e por isso
+        // os projetos que completavam as DUAS etapas (cardsFinalizados)
+        // nunca apareciam na planilha, mesmo já tendo sido corrigido na
+        // visão de Cards.
+        const idsVistos = new Set();
+        const todosDaPlanilha = [...cardsConhecPronto, ...cardsOpsGeradas, ...cardsFinalizados].filter(c => {
+          if (idsVistos.has(c.id)) return false;
+          idsVistos.add(c.id);
+          return true;
+        });
+        return (
         <Panel subtitle="Visão em tabela, no mesmo formato da planilha de Backlog que a Engenharia já usava — pra manter o mesmo controle de sempre.">
           <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11.5 }}>
@@ -7593,9 +7605,9 @@ function MonitoramentoOP({ currentUser }) {
                 </tr>
               </thead>
               <tbody>
-                {[...cardsConhecPronto, ...cardsOpsGeradas.filter(o => !cardsConhecPronto.some(c => c.id === o.id))].length === 0 ? (
+                {todosDaPlanilha.length === 0 ? (
                   <tr><td colSpan={10} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Nada por aqui.</td></tr>
-                ) : [...cardsConhecPronto, ...cardsOpsGeradas.filter(o => !cardsConhecPronto.some(c => c.id === o.id))].map(c => {
+                ) : todosDaPlanilha.map(c => {
                   const etapa = c.data_finalizado
                     ? (c.finalizado_com_duvida ? '⚠ Dúvidas Técnicas' : (c.status_verificacao_op === 'finalizado' ? '✓ Concluído' : "OP's Geradas"))
                     : c.data_iniciado ? 'Projeto em andamento'
@@ -7621,15 +7633,16 @@ function MonitoramentoOP({ currentUser }) {
             </table>
           </div>
           <div style={{ padding: '10px 0 0', fontSize: 11, color: T.inkFaint, display: 'flex', justifyContent: 'space-between' }}>
-            <span>{cardsConhecPronto.length + cardsOpsGeradas.filter(o => !cardsConhecPronto.some(c => c.id === o.id)).length} projetos</span>
+            <span>{todosDaPlanilha.length} projetos</span>
             <BotaoExportar small onClick={() => exportCSV(
-              [...cardsConhecPronto, ...cardsOpsGeradas.filter(o => !cardsConhecPronto.some(c => c.id === o.id))],
+              todosDaPlanilha,
               'fluxo_conhecimento_op.csv',
               ['br', 'cliente_nome', 'data_abertura_cp', 'data_iniciado', 'data_prevista_finalizacao', 'data_finalizado', 'projetista', 'motivo_atraso', 'observacao_duvida', 'pendencias']
             )} />
           </div>
         </Panel>
-      )}
+        );
+      })()}
 
       {abaMonitoramento === 'conhecimento_pronto' && visualizacaoConhecPronto === 'cards' && (
         <Panel subtitle="Cards na coluna 'Engenharia - Conhecimento Pronto' — clica em Iniciar quando começar o projeto, e Finalizar quando terminar. Ao finalizar, o card é movido automaticamente no Planner (via Power Automate).">
