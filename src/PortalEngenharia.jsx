@@ -7128,7 +7128,7 @@ function MonitoramentoOP({ currentUser }) {
     const codStr = String(codProduto);
     const [rProduto, rOps, rPedidos] = await Promise.all([
       supabaseSGQ.from('produtos').select('materiais').eq('codigo_pa', codStr).maybeSingle(),
-      supabaseSGQ.from('ordens_producao_sankhya')
+      supabase.from('ordens_producao_sankhya')
         .select('nro_ordem_producao, br, data_apontamento')
         .eq('cod_produto_acabado', codStr)
         .order('data_apontamento', { ascending: false })
@@ -7282,11 +7282,18 @@ function MonitoramentoOP({ currentUser }) {
     setSyncing(true);
     setSyncStatus(null);
     try {
-      const res = await fetch(`${SUPABASE_URL}/functions/v1/sankhya-monitorar-op-pedidos`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-      }).then(r => r.json());
+      const [res, resOps] = await Promise.all([
+        fetch(`${SUPABASE_URL}/functions/v1/sankhya-monitorar-op-pedidos`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+        }).then(r => r.json()),
+        // Mantém a cópia local de ordens_producao_sankhya em dia -- usada
+        // pelo histórico de produto e pela busca/vínculo manual de OP.
+        fetch(`${SUPABASE_URL}/functions/v1/sankhya-ordens-producao-sync`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+        }).then(r => r.json()).catch(e => ({ ok: false, erro: String(e) })),
+      ]);
       if (res.ok) {
-        setSyncStatus({ ok: true, message: `Analisado: ${res.total} itens de pedido · ${res.sem_op} sem OP · ${res.producao_generica} com produção genérica (últimos 180 dias).` });
+        setSyncStatus({ ok: true, message: `Analisado: ${res.total} itens de pedido · ${res.sem_op} sem OP · ${res.producao_generica} com produção genérica (últimos 180 dias).${resOps.ok ? ` · OPs sincronizadas: ${resOps.itens_sincronizados}.` : ''}` });
         await carregar();
       } else {
         setSyncStatus({ ok: false, message: res.erro || 'Erro desconhecido.' });
