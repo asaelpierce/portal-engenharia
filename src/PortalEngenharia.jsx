@@ -7059,12 +7059,19 @@ function MonitoramentoOP({ currentUser }) {
     return lista;
   }, [solicitacoes, filtroStatus, filtroDataInicio, filtroDataFim, buscaSolic]);
 
+  const [marcandoCard, setMarcandoCard] = useState(null); // id da solicitação sendo processada agora
   const marcarCardSolicitado = async (id) => {
+    if (marcandoCard === id) return; // já está processando esse -- ignora clique duplo
+    setMarcandoCard(id);
+    // .eq('card_planner_solicitado', false) -- proteção extra no banco, não só
+    // no estado local: mesmo que a pessoa clique em duas abas diferentes ao
+    // mesmo tempo, só a PRIMEIRA atualização de verdade acontece.
     await supabase.from('solicitacoes_compra_planner').update({
       card_planner_solicitado: true,
       card_planner_solicitado_em: new Date().toISOString(),
-    }).eq('id', id);
+    }).eq('id', id).eq('card_planner_solicitado', false);
     await carregarSolicitacoes();
+    setMarcandoCard(null);
   };
 
   const [linhas, setLinhas] = useState([]);
@@ -7544,9 +7551,9 @@ function MonitoramentoOP({ currentUser }) {
                       ) : s.card_planner_solicitado ? (
                         <span style={{ fontSize: 10.5, fontWeight: 700, color: T.amberText, background: T.amberSoft, padding: '3px 8px', borderRadius: 4 }}>Aguardando Power Automate</span>
                       ) : (
-                        <button onClick={() => marcarCardSolicitado(s.id)}
-                          style={{ fontSize: 11, fontWeight: 700, color: '#fff', background: T.terracotta, border: 'none', borderRadius: 5, padding: '5px 12px', cursor: 'pointer' }}>
-                          Marcar pra criar Card
+                        <button onClick={() => marcarCardSolicitado(s.id)} disabled={marcandoCard === s.id}
+                          style={{ fontSize: 11, fontWeight: 700, color: '#fff', background: T.terracotta, border: 'none', borderRadius: 5, padding: '5px 12px', cursor: marcandoCard === s.id ? 'default' : 'pointer', opacity: marcandoCard === s.id ? 0.6 : 1 }}>
+                          {marcandoCard === s.id ? 'Marcando…' : 'Marcar pra criar Card'}
                         </button>
                       )}
                     </td>
