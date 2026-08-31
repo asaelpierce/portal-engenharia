@@ -561,6 +561,7 @@ function PortalConteudo({ currentUser, session }) {
           {renderTab('monitoramento_op', <TabErrorBoundary tab="Monitoramento OP"><MonitoramentoOP currentUser={currentUser} /></TabErrorBoundary>)}
           {renderTab('proposta_tecnica', <TabErrorBoundary tab="Proposta Técnica"><PropostaTecnica currentUser={currentUser} /></TabErrorBoundary>)}
           {renderTab('plaquinha_equipamento', <TabErrorBoundary tab="Plaquinha de Equipamento"><PlaquinhaEquipamento currentUser={currentUser} /></TabErrorBoundary>)}
+          {renderTab('plaquinha_engenharia', <TabErrorBoundary tab="Plaquinha — Engenharia"><PlaquinhaEngenharia currentUser={currentUser} /></TabErrorBoundary>)}
           {renderTab('conf_apontamento', <TabErrorBoundary tab="Conf. Apontamento"><ConfApontamento /></TabErrorBoundary>)}
           {renderTab('reservas_pendentes', <TabErrorBoundary tab="Reservas Pendentes"><ReservasPendentes /></TabErrorBoundary>)}
           {renderTab('verificacao_projetos', <TabErrorBoundary tab="Verificação de Projetos"><VerificacaoProjetos currentUser={currentUser} /></TabErrorBoundary>)}
@@ -620,6 +621,7 @@ function Sidebar({ view, setView, pendCount, papel, telasPermitidas }) {
     { id: 'monitoramento_op', label: 'Monitoramento OP', icon: Gauge },
     { id: 'proposta_tecnica', label: 'Proposta Técnica', icon: FileStack },
     { id: 'plaquinha_equipamento', label: 'Plaquinha de Equipamento', icon: Package },
+    { id: 'plaquinha_engenharia', label: 'Plaquinha — Engenharia', icon: ClipboardCheck },
     { id: 'conf_apontamento', label: 'Conf. Apontamento', icon: ClipboardCheck },
     { id: 'reservas_pendentes', label: 'Reservas Pendentes', icon: AlertTriangle },
     { id: 'verificacao_projetos', label: 'Verificação de Projetos', icon: ClipboardCheck },
@@ -5601,7 +5603,6 @@ function PlaquinhaEquipamento({ currentUser }) {
   const [salvandoId, setSalvandoId] = useState(null);
   const [busca, setBusca] = useState('');
   const [mostrarCriarManual, setMostrarCriarManual] = useState(false);
-  const [modalEmail, setModalEmail] = useState(null); // { grupos: [...], modo: 'concluir'|'enviar'|'massa' }
 
   const carregar = useCallback(async () => {
     setLoading(true);
@@ -5623,7 +5624,7 @@ function PlaquinhaEquipamento({ currentUser }) {
   }, [itens]);
 
   const pendentes = itens.filter(i => i.status === 'pendente');
-  const preenchidas = itens.filter(i => i.status === 'preenchida');
+  const preenchidas = itens.filter(i => i.status === 'aguardando_engenharia' || i.status === 'preenchida');
   const listaAtual = (aba === 'pendentes' ? pendentes : preenchidas).filter(i => {
     const chave = i.br || `sem-br-${i.id}`;
     if (origemPorBr.get(chave) !== origemAba) return false;
@@ -5640,17 +5641,6 @@ function PlaquinhaEquipamento({ currentUser }) {
     return [...mapa.entries()].map(([chave, items]) => ({ chave, items }));
   }, [listaAtual]);
 
-  // Grupos preenchidos que ainda não tiveram e-mail disparado (pro botão de disparo em massa)
-  const gruposSemEmail = useMemo(() => {
-    const mapa = new Map();
-    itens.filter(i => i.status === 'preenchida' && !i.email_enviado).forEach(item => {
-      const chave = item.br || `sem-br-${item.id}`;
-      if (!mapa.has(chave)) mapa.set(chave, []);
-      mapa.get(chave).push(item);
-    });
-    return [...mapa.entries()].map(([chave, items]) => ({ chave, items }));
-  }, [itens]);
-
   const MESES_PT = ['JANEIRO','FEVEREIRO','MARÇO','ABRIL','MAIO','JUNHO','JULHO','AGOSTO','SETEMBRO','OUTUBRO','NOVEMBRO','DEZEMBRO'];
   const fmtMesAno = (d) => {
     if (!d) return '—';
@@ -5661,41 +5651,8 @@ function PlaquinhaEquipamento({ currentUser }) {
   const campo = (item, nome) => edicoes[item.id]?.[nome] ?? item[nome] ?? '';
   const setCampo = (itemId, nome, valor) => setEdicoes(prev => ({ ...prev, [itemId]: { ...prev[itemId], [nome]: valor } }));
 
-  // Monta o texto padrão (assunto + corpo) pra um grupo de itens de um mesmo BR
-  // -- usa campo(it, x) (que prioriza o que a usuária acabou de digitar na
-  // tela, ainda não salvo) em vez de it.x direto (que só pega o que já tá
-  // salvo no banco). Sem isso, o e-mail saía com dado antigo/vazio sempre
-  // que ela preenchia e mandava concluir na sequência, sem dar tempo do
-  // salvamento acontecer antes de montar o texto.
-  const montarTemplateGrupo = (items) => {
-    const primeiro = items[0];
-    const blocos = items.map(it => (
-      `N. Ordem de serviço: ${campo(it, 'numero_ordem_servico') || '—'}\n` +
-      `N. Desenho: ${campo(it, 'numero_desenho') || '—'}\n` +
-      `Mês/ano: ${fmtMesAno(campo(it, 'mes_ano'))}\n` +
-      `N. Pedido de compra: ${campo(it, 'numero_pedido_compra') || '—'}\n` +
-      `N. Projeto: ${campo(it, 'br') || '—'}\n` +
-      `Cliente: ${campo(it, 'cliente_nome') || '—'}`
-    )).join('\n\n—\n\n');
-    const brOuId = campo(primeiro, 'br');
-    const linkDownload = `https://sieztnpchjjmrwrmrhoa.supabase.co/functions/v1/gerar-plaquinha-docx?${brOuId ? `br=${encodeURIComponent(brOuId)}` : `id=${primeiro.id}`}`;
-    const assinatura = currentUser?.assinatura_email || currentUser?.nome || '';
-    const assunto = `Plaquinha de Equipamento — ${brOuId || campo(primeiro, 'numero_desenho')}`;
-    const corpo = `PLAQUINHA DE EQUIPAMENTO\n\n${blocos}\n\nBaixar o arquivo Word: ${linkDownload}\n\n${assinatura}`;
-    return { assunto, corpo };
-  };
-
-  // Converte o texto normal (o que ela vê e edita) pro HTML que vai de verdade no e-mail —
-  // ela nunca precisa ver tag nenhuma, só texto legível.
-  const textoParaHtmlEmail = (texto) => {
-    const escapado = texto.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    const comLinks = escapado.replace(/(https?:\/\/[^\s]+)/g, '<a href="$1">$1</a>');
-    return comLinks.replace(/\n/g, '<br>');
-  };
-
   const validarGrupo = (items) => {
     for (const it of items) {
-      if (!campo(it, 'numero_desenho')) return `Falta o N. Desenho em um dos itens de ${it.br || 'sem BR'}.`;
       if (!campo(it, 'mes_ano')) return `Falta o Mês/Ano em um dos itens de ${it.br || 'sem BR'}.`;
     }
     return null;
@@ -5704,88 +5661,28 @@ function PlaquinhaEquipamento({ currentUser }) {
   const concluirGrupo = async (items) => {
     const erro = validarGrupo(items);
     if (erro) { alert(erro); return; }
-    // Salva os dados JÁ AGORA (antes de abrir o modal), e monta uma cópia
-    // "congelada" de cada item com os valores confirmados. Isso evita
-    // depender de sincronização fina entre edicoes/campo() no momento de
-    // montar o e-mail -- o modal sempre trabalha com dado que JÁ está no
-    // banco, não com uma leitura indireta que pode ficar dessincronizada.
+    // Sem e-mail nenhum nesse fluxo -- salva os dados do comercial (tudo
+    // menos o N. Desenho, que é responsabilidade da Engenharia) e manda
+    // pra fila dela (status 'aguardando_engenharia'). Direto, sem modal.
     setSalvandoId(items[0].id);
-    const itensSalvos = [];
     const erros = [];
     for (const it of items) {
       const dados = {
         br: campo(it, 'br') || null,
         cliente_nome: campo(it, 'cliente_nome') || null,
         numero_pedido_compra: campo(it, 'numero_pedido_compra') || null,
-        numero_desenho: campo(it, 'numero_desenho'),
         numero_ordem_servico: campo(it, 'numero_ordem_servico') || null,
         mes_ano: campo(it, 'mes_ano'),
+        status: 'aguardando_engenharia',
+        preenchido_por: currentUser?.nome || null,
+        preenchido_em: new Date().toISOString(),
       };
       const { error } = await supabase.from('plaquinhas_equipamento').update(dados).eq('id', it.id);
       if (error) erros.push(`Item ${it.id}: ${error.message}`);
-      itensSalvos.push({ ...it, ...dados });
     }
     setSalvandoId(null);
-    if (erros.length) { alert('Não consegui salvar antes de continuar:\n\n' + erros.join('\n')); return; }
-    setModalEmail({ grupos: [{ items: itensSalvos }], modo: 'concluir' });
-  };
-
-  const enviarEmailGrupo = (items) => {
-    setModalEmail({ grupos: [{ items }], modo: 'enviar' });
-  };
-
-  const dispararTodos = () => {
-    if (gruposSemEmail.length === 0) return;
-    setModalEmail({ grupos: gruposSemEmail, modo: 'massa' });
-  };
-
-  const confirmarEnvio = async ({ grupos: gruposModal, modo, destinatarios, assunto, corpo }) => {
-    setSalvandoId('modal');
-    const erros = [];
-    for (const { items } of gruposModal) {
-      // Se veio de "concluir", os dados (br, desenho, mês/ano etc.) já foram
-      // salvos em concluirGrupo (antes do modal abrir) -- aqui só marca
-      // como preenchida de verdade.
-      if (modo === 'concluir') {
-        for (const it of items) {
-          const { error } = await supabase.from('plaquinhas_equipamento').update({
-            status: 'preenchida',
-            preenchido_por: currentUser?.nome || null,
-            preenchido_em: new Date().toISOString(),
-          }).eq('id', it.id);
-          if (error) erros.push(`Salvar plaquinha ${it.id}: ${error.message}`);
-        }
-      }
-      if (destinatarios.length > 0) {
-        const { assunto: assuntoDoGrupo, corpo: corpoDoGrupo } = (gruposModal.length > 1) ? montarTemplateGrupo(items) : { assunto, corpo };
-        const corpoHtml = textoParaHtmlEmail(corpoDoGrupo);
-        // IMPORTANTE: a automação que dispara o e-mail de verdade (Power
-        // Automate) só sabe ler os campos no singular (plaquinha_id,
-        // destinatario_email) -- isso rodava certo antes de existir suporte
-        // a vários destinatários/plaquinhas por e-mail. Manda os campos no
-        // plural TAMBÉM (pra quem usa eles), mas grava um registro POR
-        // destinatário nos campos singulares, senão a automação nunca
-        // enxerga a solicitação e ela fica "pendente" pra sempre.
-        for (const destinatario of destinatarios) {
-          const { error } = await supabase.from('solicitacoes_email_plaquinha').insert({
-            plaquinha_id: items[0].id,
-            plaquinha_ids: items.map(i => i.id),
-            destinatario_email: destinatario,
-            destinatarios,
-            assunto: assuntoDoGrupo,
-            corpo: corpoHtml,
-            status: 'pendente',
-          });
-          if (error) erros.push(`Solicitar e-mail pra ${destinatario}: ${error.message}`);
-        }
-        const { error: errorUpdate } = await supabase.from('plaquinhas_equipamento').update({ email_enviado: true }).in('id', items.map(i => i.id));
-        if (errorUpdate) erros.push(`Marcar e-mail enviado: ${errorUpdate.message}`);
-      }
-    }
-    setModalEmail(null);
+    if (erros.length) { alert('Não consegui concluir:\n\n' + erros.join('\n')); return; }
     await carregar();
-    setSalvandoId(null);
-    if (erros.length) alert('Algumas coisas deram erro ao salvar:\n\n' + erros.join('\n'));
   };
 
   const refazerGrupo = async (items) => {
@@ -5828,29 +5725,20 @@ function PlaquinhaEquipamento({ currentUser }) {
 
   return (
     <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 18, maxWidth: 900 }}>
-      {(pendentes.length > 0 || gruposSemEmail.length > 0) && (
+      {pendentes.length > 0 && (
         <div style={{ background: T.amberSoft, border: `1px solid ${T.amber}55`, borderRadius: 8, padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 8 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <AlertTriangle size={16} color={T.amberText} />
             <strong style={{ fontSize: 13, color: T.amberText }}>Tem coisa pendente aqui</strong>
           </div>
-          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', fontSize: 12.5 }}>
-            {pendentes.length > 0 && (
-              <button onClick={() => setAba('pendentes')} style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: T.amberText, textDecoration: 'underline', fontSize: 12.5 }}>
-                {pendentes.length} plaquinha(s) ainda por preencher
-              </button>
-            )}
-            {gruposSemEmail.length > 0 && (
-              <button onClick={() => { setAba('preenchidas'); }} style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: T.amberText, textDecoration: 'underline', fontSize: 12.5 }}>
-                {gruposSemEmail.length} projeto(s) concluído(s) mas <strong>sem e-mail enviado</strong>
-              </button>
-            )}
-          </div>
+          <button onClick={() => setAba('pendentes')} style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: T.amberText, textDecoration: 'underline', fontSize: 12.5, textAlign: 'left' }}>
+            {pendentes.length} plaquinha(s) ainda por preencher
+          </button>
         </div>
       )}
 
       <div style={{ fontSize: 12.5, color: T.inkFaint, background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 8, padding: '10px 14px' }}>
-        Todos os campos são editáveis — corrige se algo vier errado. Itens do mesmo BR ficam sempre agrupados juntos e o Word/e-mail saem juntos também.
+        Preenche tudo exceto o N. Desenho — isso é a Engenharia quem completa. Itens do mesmo BR ficam sempre agrupados juntos.
       </div>
 
       <div style={{ display: 'flex', gap: 4, borderBottom: `1px solid ${T.line}` }}>
@@ -5872,7 +5760,7 @@ function PlaquinhaEquipamento({ currentUser }) {
       <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'space-between' }}>
         <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
           <div style={{ display: 'flex', gap: 4 }}>
-            {[{ id: 'pendentes', label: `Pendentes (${pendentes.length})` }, { id: 'preenchidas', label: `Preenchidas (${preenchidas.length})` }].map(a => (
+            {[{ id: 'pendentes', label: `Pendentes (${pendentes.length})` }, { id: 'preenchidas', label: `Enviadas p/ Engenharia (${preenchidas.length})` }].map(a => (
               <button key={a.id} onClick={() => setAba(a.id)}
                 style={{
                   fontSize: 12.5, fontWeight: 700, padding: '7px 14px', borderRadius: 6, cursor: 'pointer',
@@ -5890,12 +5778,6 @@ function PlaquinhaEquipamento({ currentUser }) {
           </div>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
-          {aba === 'preenchidas' && gruposSemEmail.length > 0 && (
-            <button onClick={dispararTodos}
-              style={{ fontSize: 12.5, fontWeight: 700, color: '#fff', background: T.terracotta, border: 'none', borderRadius: 6, padding: '8px 14px', cursor: 'pointer' }}>
-              🚀 Disparar e-mails pendentes ({gruposSemEmail.length})
-            </button>
-          )}
           <button onClick={() => setMostrarCriarManual(true)}
             style={{ fontSize: 12.5, fontWeight: 700, color: '#fff', background: T.blueText, border: 'none', borderRadius: 6, padding: '8px 14px', cursor: 'pointer' }}>
             + Criar Nova Manualmente
@@ -5913,7 +5795,8 @@ function PlaquinhaEquipamento({ currentUser }) {
         ) : grupos.map(({ chave, items }) => {
           const primeiro = items[0];
           const todosPendentes = items.every(i => i.status === 'pendente');
-          const todosPreenchidos = items.every(i => i.status === 'preenchida');
+          const todosNaoPendentes = items.every(i => i.status !== 'pendente'); // pro botão "Refazer todos"
+          const todosCompletos = items.every(i => i.status === 'preenchida'); // pro botão de baixar Word em lote
           return (
             <div key={chave} style={{ background: T.panel, border: `1.5px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
               <div style={{ padding: '10px 16px', background: T.panelAlt, borderBottom: `1px solid ${T.line}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
@@ -5930,7 +5813,7 @@ function PlaquinhaEquipamento({ currentUser }) {
                         ✓ Concluir os {items.length} itens
                       </button>
                     )}
-                    {todosPreenchidos && (
+                    {todosNaoPendentes && (
                       <button onClick={() => refazerGrupo(items)}
                         style={{ fontSize: 11.5, fontWeight: 600, color: T.amberText, background: 'transparent', border: `1px solid ${T.amber}66`, borderRadius: 5, padding: '5px 10px', cursor: 'pointer' }}>
                         ↺ Refazer todos
@@ -5961,7 +5844,7 @@ function PlaquinhaEquipamento({ currentUser }) {
                       <tbody>
                         {[
                           ['N. Ordem de serviço', 'numero_ordem_servico', 'text', 'Preenche manualmente…'],
-                          ['N. Desenho', 'numero_desenho', 'text', 'Preenche manualmente… *obrigatório'],
+                          ['N. Desenho', 'numero_desenho', 'text', null],
                           ['Mês/ano', 'mes_ano', 'month', null],
                           ['N. Pedido de compra', 'numero_pedido_compra', 'text', null],
                           ['N. Projeto (BR)', 'br', 'text', null],
@@ -5970,7 +5853,10 @@ function PlaquinhaEquipamento({ currentUser }) {
                           <tr key={nome} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
                             <td style={{ padding: '7px 16px', fontWeight: 700, color: T.inkDim, width: 180, background: `${T.panelAlt}88` }}>{label}</td>
                             <td style={{ padding: '7px 16px' }}>
-                              {item.status === 'preenchida' ? (
+                              {nome === 'numero_desenho' ? (
+                                // N. Desenho nunca é do comercial -- é a Engenharia quem completa
+                                item[nome] ? item[nome] : <span style={{ color: T.inkFaint, fontStyle: 'italic' }}>A Engenharia preenche isso</span>
+                              ) : item.status !== 'pendente' ? (
                                 nome === 'mes_ano' ? (item[nome] ? fmtMesAno(item[nome]) : '—') : (item[nome] || '—')
                               ) : nome === 'mes_ano' ? (
                                 <div style={{ display: 'flex', gap: 6 }}>
@@ -6011,15 +5897,28 @@ function PlaquinhaEquipamento({ currentUser }) {
                         {items.length === 1 && (
                           <button onClick={() => concluirGrupo(items)} disabled={salvandoId === item.id}
                             style={{ fontSize: 12.5, fontWeight: 700, color: '#fff', background: T.oliveText, border: 'none', borderRadius: 6, padding: '8px 16px', cursor: 'pointer', opacity: salvandoId === item.id ? 0.6 : 1 }}>
-                            {salvandoId === item.id ? 'Salvando…' : '✓ Concluir plaquinha'}
+                            {salvandoId === item.id ? 'Salvando…' : '✓ Concluir e enviar pra Engenharia'}
+                          </button>
+                        )}
+                      </div>
+                    ) : item.status === 'aguardando_engenharia' ? (
+                      <div style={{ padding: '8px 16px 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                        <span style={{ fontSize: 11, color: T.inkFaint }}>
+                          Preenchido por {item.preenchido_por || '?'} em {new Date(item.preenchido_em).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                          {' · '}<span style={{ color: T.amberText, fontWeight: 700 }}>⏳ Aguardando a Engenharia preencher o Desenho</span>
+                        </span>
+                        {items.length === 1 && (
+                          <button onClick={() => refazerGrupo(items)}
+                            style={{ fontSize: 11.5, fontWeight: 600, color: T.amberText, background: 'transparent', border: `1px solid ${T.amber}66`, borderRadius: 5, padding: '5px 10px', cursor: 'pointer' }}>
+                            ↺ Refazer
                           </button>
                         )}
                       </div>
                     ) : (
                       <div style={{ padding: '8px 16px 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                         <span style={{ fontSize: 11, color: T.inkFaint }}>
-                          Preenchido por {item.preenchido_por || '?'} em {new Date(item.preenchido_em).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' })}
-                          {item.email_enviado && <span style={{ color: T.oliveText, fontWeight: 700 }}> · ✓ e-mail enviado</span>}
+                          Preenchido por {item.preenchido_por || '?'} · Desenho por {item.desenho_preenchido_por || '?'} em {item.desenho_preenchido_em ? new Date(item.desenho_preenchido_em).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' }) : '?'}
+                          {' · '}<span style={{ color: T.oliveText, fontWeight: 700 }}>✓ Completo</span>
                         </span>
                         {items.length === 1 && (
                           <div style={{ display: 'flex', gap: 8 }}>
@@ -6027,10 +5926,6 @@ function PlaquinhaEquipamento({ currentUser }) {
                               style={{ fontSize: 11.5, fontWeight: 700, color: '#fff', background: T.blueText, borderRadius: 5, padding: '5px 12px', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 5 }}>
                               ⬇ Baixar Word
                             </a>
-                            <button onClick={() => enviarEmailGrupo(items)}
-                              style={{ fontSize: 11.5, fontWeight: 700, color: '#fff', background: T.terracotta, border: 'none', borderRadius: 5, padding: '5px 12px', cursor: 'pointer' }}>
-                              📧 Enviar e-mail
-                            </button>
                             <button onClick={() => refazerGrupo(items)}
                               style={{ fontSize: 11.5, fontWeight: 600, color: T.amberText, background: 'transparent', border: `1px solid ${T.amber}66`, borderRadius: 5, padding: '5px 10px', cursor: 'pointer' }}>
                               ↺ Refazer
@@ -6042,16 +5937,12 @@ function PlaquinhaEquipamento({ currentUser }) {
                   </div>
                 ))}
               </div>
-              {items.length > 1 && todosPreenchidos && (
+              {items.length > 1 && todosCompletos && (
                 <div style={{ padding: '8px 16px 12px', borderTop: `1px dashed ${T.lineSoft}`, display: 'flex', gap: 8 }}>
                   <a href={`https://sieztnpchjjmrwrmrhoa.supabase.co/functions/v1/gerar-plaquinha-docx?br=${encodeURIComponent(primeiro.br)}`}
                     style={{ fontSize: 11.5, fontWeight: 700, color: '#fff', background: T.blueText, borderRadius: 5, padding: '6px 14px', textDecoration: 'none' }}>
                     ⬇ Baixar Word (com os {items.length} itens)
                   </a>
-                  <button onClick={() => enviarEmailGrupo(items)}
-                    style={{ fontSize: 11.5, fontWeight: 700, color: '#fff', background: T.terracotta, border: 'none', borderRadius: 5, padding: '6px 14px', cursor: 'pointer' }}>
-                    📧 Enviar e-mail (com os {items.length} itens)
-                  </button>
                 </div>
               )}
               {aba === 'pendentes' && (
@@ -6066,170 +5957,7 @@ function PlaquinhaEquipamento({ currentUser }) {
           );
         })}
       </div>
-
-      {modalEmail && (
-        <ModalEmailPlaquinha modalEmail={modalEmail} currentUser={currentUser}
-          montarTemplateGrupo={montarTemplateGrupo}
-          onFechar={() => setModalEmail(null)}
-          onConfirmar={confirmarEnvio}
-          salvando={salvandoId === 'modal'} />
-      )}
     </div>
-  );
-}
-
-function ModalEmailPlaquinha({ modalEmail, currentUser, montarTemplateGrupo, onFechar, onConfirmar, salvando }) {
-  const { grupos, modo } = modalEmail;
-  const ehMassa = grupos.length > 1;
-  const primeiroGrupo = grupos[0].items;
-  const templateInicial = montarTemplateGrupo(primeiroGrupo);
-
-  const [destinatarios, setDestinatarios] = useState([]);
-  const [textoNome, setTextoNome] = useState('');
-  const [colaboradores, setColaboradores] = useState([]);
-  const [mostrarSugestoes, setMostrarSugestoes] = useState(false);
-  const [modelos, setModelos] = useState([]);
-  const [assunto, setAssunto] = useState(templateInicial.assunto);
-  const [corpo, setCorpo] = useState(templateInicial.corpo);
-  const [nomeNovoModelo, setNomeNovoModelo] = useState('');
-  const [mostrarSalvarModelo, setMostrarSalvarModelo] = useState(false);
-
-  useEffect(() => {
-    supabase.from('colaboradores').select('nome,email').eq('ativo', true).not('email', 'is', null).order('nome')
-      .then(({ data }) => setColaboradores(data || []));
-    supabase.from('modelos_email_plaquinha').select('*').order('nome_modelo')
-      .then(({ data }) => setModelos(data || []));
-  }, []);
-
-  const sugestoes = textoNome.trim() ? colaboradores.filter(c => c.nome.toLowerCase().includes(textoNome.toLowerCase()) && !destinatarios.includes(c.email)) : [];
-
-  const adicionarDestinatario = (email) => {
-    if (!email || destinatarios.includes(email)) return;
-    setDestinatarios(prev => [...prev, email]);
-    setTextoNome('');
-    setMostrarSugestoes(false);
-  };
-  const removerDestinatario = (email) => setDestinatarios(prev => prev.filter(e => e !== email));
-
-  const usarModelo = (modelo) => {
-    setDestinatarios(modelo.destinatarios || []);
-  };
-
-  const salvarModelo = async () => {
-    if (!nomeNovoModelo.trim()) return;
-    if (destinatarios.length === 0) {
-      // Antes falhava em silêncio aqui (parecia que salvou, mas nunca
-      // salvava nada) -- geralmente porque o e-mail foi digitado mas
-      // ninguém apertou Enter pra confirmar, então nunca virou destinatário
-      // de verdade. Agora avisa claramente em vez de fingir que funcionou.
-      alert('Adiciona pelo menos um destinatário antes de salvar (digita o e-mail e aperta Enter pra confirmar).');
-      return;
-    }
-    const { error } = await supabase.from('modelos_email_plaquinha').insert({
-      nome_modelo: nomeNovoModelo.trim(), destinatarios, criado_por: currentUser?.nome || null,
-    });
-    if (error) { alert('Não consegui salvar o modelo: ' + error.message); return; }
-    const { data } = await supabase.from('modelos_email_plaquinha').select('*').order('nome_modelo');
-    setModelos(data || []);
-    setNomeNovoModelo('');
-    setMostrarSalvarModelo(false);
-  };
-
-  return (
-    <Overlay onClose={onFechar}>
-      <div className="scale-in" style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, width: '100%', maxWidth: 820, padding: 24, boxShadow: '0 24px 60px rgba(0,0,0,.18)', maxHeight: '90vh', overflowY: 'auto' }}>
-        <h3 style={{ fontFamily: FONT_DISPLAY, fontSize: 17, fontWeight: 700, margin: '0 0 4px' }}>
-          {modo === 'concluir' ? `Concluir plaquinha${ehMassa ? 's' : ''}` : ehMassa ? `Enviar ${grupos.length} e-mails pendentes` : 'Enviar e-mail'}
-        </h3>
-        <p style={{ fontSize: 12.5, color: T.inkFaint, margin: '0 0 16px' }}>
-          {ehMassa
-            ? `Cada projeto abaixo vai virar um e-mail separado, todos pros mesmos destinatários: ${grupos.map(g => g.items[0].br).join(', ')}.`
-            : 'Escolhe pra quem manda, e confere o texto antes de enviar.'}
-        </p>
-
-        {/* Destinatários */}
-        <label style={{ fontSize: 11.5, fontWeight: 600, color: T.inkDim, display: 'block', marginBottom: 4 }}>Destinatários</label>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 6 }}>
-          {destinatarios.map(email => (
-            <span key={email} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11.5, background: T.blueSoft, color: T.blueText, padding: '4px 8px', borderRadius: 5 }}>
-              {email}
-              <span onClick={() => removerDestinatario(email)} style={{ cursor: 'pointer', fontWeight: 700 }}>×</span>
-            </span>
-          ))}
-        </div>
-        <div style={{ position: 'relative', marginBottom: 10 }}>
-          <input value={textoNome}
-            onChange={e => { setTextoNome(e.target.value); setMostrarSugestoes(true); }}
-            onFocus={() => setMostrarSugestoes(true)}
-            onKeyDown={e => { if (e.key === 'Enter' && textoNome.includes('@')) { adicionarDestinatario(textoNome.trim()); } }}
-            onBlur={() => { if (textoNome.trim().includes('@')) adicionarDestinatario(textoNome.trim()); }}
-            placeholder="Digita o nome ou e-mail e aperta Enter…" style={{ ...inputStyle(), width: '100%' }} />
-          {mostrarSugestoes && sugestoes.length > 0 && (
-            <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, background: T.panel, border: `1px solid ${T.line}`, borderRadius: 8, marginTop: 4, boxShadow: '0 8px 24px rgba(0,0,0,.12)', zIndex: 10, maxHeight: 180, overflowY: 'auto' }}>
-              {sugestoes.map(c => (
-                <div key={c.email} onClick={() => adicionarDestinatario(c.email)} onMouseDown={e => e.preventDefault()}
-                  style={{ padding: '8px 12px', cursor: 'pointer', fontSize: 12.5, borderBottom: `1px solid ${T.lineSoft}` }}>
-                  <div style={{ fontWeight: 700 }}>{c.nome}</div>
-                  <div style={{ color: T.inkFaint, fontSize: 11 }}>{c.email}</div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* Modelos salvos */}
-        {modelos.length > 0 && (
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
-            <span style={{ fontSize: 11, color: T.inkFaint, alignSelf: 'center' }}>Modelos salvos:</span>
-            {modelos.map(m => (
-              <button key={m.id} onClick={() => usarModelo(m)}
-                style={{ fontSize: 11, fontWeight: 600, color: T.inkDim, background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 5, padding: '3px 9px', cursor: 'pointer' }}>
-                {m.nome_modelo}
-              </button>
-            ))}
-          </div>
-        )}
-        {destinatarios.length > 0 && !mostrarSalvarModelo && (
-          <button onClick={() => setMostrarSalvarModelo(true)} style={{ fontSize: 10.5, color: T.blueText, background: 'none', border: 'none', cursor: 'pointer', padding: 0, marginBottom: 12 }}>
-            💾 Salvar esses destinatários como modelo
-          </button>
-        )}
-        {mostrarSalvarModelo && (
-          <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
-            <input value={nomeNovoModelo} onChange={e => setNomeNovoModelo(e.target.value)} placeholder="Nome do modelo (ex: Time Ternium)" style={{ ...inputStyle(), flex: 1 }} />
-            <button onClick={salvarModelo} style={{ fontSize: 11.5, fontWeight: 700, color: '#fff', background: T.oliveText, border: 'none', borderRadius: 5, padding: '6px 12px', cursor: 'pointer' }}>Salvar</button>
-          </div>
-        )}
-
-        {/* Assunto/corpo — só edita de verdade se for envio único (em massa usa o template automático por projeto) */}
-        {!ehMassa && (
-          <>
-            <label style={{ fontSize: 11.5, fontWeight: 600, color: T.inkDim, display: 'block', marginBottom: 4, marginTop: 6 }}>Assunto</label>
-            <input value={assunto} onChange={e => setAssunto(e.target.value)} style={{ ...inputStyle(), width: '100%', marginBottom: 10 }} />
-            <label style={{ fontSize: 11.5, fontWeight: 600, color: T.inkDim, display: 'block', marginBottom: 4 }}>Corpo do e-mail</label>
-            <textarea value={corpo} onChange={e => setCorpo(e.target.value)} rows={16}
-              style={{ ...inputStyle(), width: '100%', resize: 'vertical', fontSize: 12.5 }} />
-            <p style={{ fontSize: 10, color: T.inkFaint, marginTop: 4 }}>Escreve normal — as quebras de linha e o link já ficam certos no e-mail final.</p>
-          </>
-        )}
-
-        <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
-          <button onClick={() => onConfirmar({ grupos, modo, destinatarios, assunto, corpo })} disabled={salvando || destinatarios.length === 0}
-            style={{ fontSize: 13, fontWeight: 700, color: '#fff', background: T.oliveText, border: 'none', borderRadius: 8, padding: '10px 18px', cursor: 'pointer', opacity: (salvando || destinatarios.length === 0) ? 0.5 : 1 }}>
-            {salvando ? 'Enviando…' : ehMassa ? `✓ Disparar ${grupos.length} e-mails` : modo === 'concluir' ? '✓ Concluir e enviar' : '✓ Enviar'}
-          </button>
-          {modo === 'concluir' && (
-            <button onClick={() => onConfirmar({ grupos, modo, destinatarios: [], assunto, corpo })} disabled={salvando}
-              style={{ fontSize: 12.5, fontWeight: 600, color: T.inkDim, background: 'transparent', border: `1px solid ${T.line}`, borderRadius: 8, padding: '10px 16px', cursor: 'pointer' }}>
-              Só concluir (sem e-mail)
-            </button>
-          )}
-          <button onClick={onFechar} style={{ fontSize: 12.5, fontWeight: 600, color: T.inkFaint, background: 'transparent', border: `1px solid ${T.line}`, borderRadius: 8, padding: '10px 16px', cursor: 'pointer' }}>
-            Cancelar
-          </button>
-        </div>
-      </div>
-    </Overlay>
   );
 }
 
@@ -6321,6 +6049,198 @@ function CriarPlaquinhaManual({ onFechar, onCriado }) {
         )}
       </div>
     </Panel>
+  );
+}
+
+// ============================================================================
+// Aba separada pra Engenharia: só vê o que o Comercial já concluiu (tudo
+// preenchido, menos o N. Desenho) e completa esse último campo. Sem e-mail
+// em lugar nenhum -- assim que ela conclui, já fica marcado como "Completo"
+// e o Word pode ser baixado direto por qualquer um.
+// ============================================================================
+function PlaquinhaEngenharia({ currentUser }) {
+  const [aba, setAba] = useState('aguardando'); // 'aguardando' | 'concluidas'
+  const [itens, setItens] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [edicoes, setEdicoes] = useState({}); // id -> { numero_desenho: valor }
+  const [salvandoId, setSalvandoId] = useState(null);
+  const [busca, setBusca] = useState('');
+
+  const carregar = useCallback(async () => {
+    setLoading(true);
+    const { data } = await supabase.from('plaquinhas_equipamento').select('*')
+      .in('status', ['aguardando_engenharia', 'preenchida'])
+      .order('preenchido_em', { ascending: false });
+    setItens(data || []);
+    setLoading(false);
+  }, []);
+  useEffect(() => { carregar(); }, [carregar]);
+
+  const aguardando = itens.filter(i => i.status === 'aguardando_engenharia');
+  const concluidas = itens.filter(i => i.status === 'preenchida');
+  const listaAtual = (aba === 'aguardando' ? aguardando : concluidas).filter(i =>
+    !busca.trim() || (i.br || '').toLowerCase().includes(busca.toLowerCase()) || (i.cliente_nome || '').toLowerCase().includes(busca.toLowerCase())
+  );
+
+  const grupos = useMemo(() => {
+    const mapa = new Map();
+    listaAtual.forEach(item => {
+      const chave = item.br || `sem-br-${item.id}`;
+      if (!mapa.has(chave)) mapa.set(chave, []);
+      mapa.get(chave).push(item);
+    });
+    return [...mapa.entries()].map(([chave, items]) => ({ chave, items }));
+  }, [listaAtual]);
+
+  const campo = (item, nome) => edicoes[item.id]?.[nome] ?? item[nome] ?? '';
+  const setCampo = (itemId, nome, valor) => setEdicoes(prev => ({ ...prev, [itemId]: { ...prev[itemId], [nome]: valor } }));
+
+  const MESES_PT = ['JANEIRO','FEVEREIRO','MARÇO','ABRIL','MAIO','JUNHO','JULHO','AGOSTO','SETEMBRO','OUTUBRO','NOVEMBRO','DEZEMBRO'];
+  const fmtMesAno = (d) => {
+    if (!d) return '—';
+    const data = new Date(d + 'T12:00:00');
+    return `${MESES_PT[data.getMonth()]}/${data.getFullYear()}`;
+  };
+
+  const concluirItem = async (item) => {
+    const desenho = campo(item, 'numero_desenho');
+    if (!desenho.trim()) { alert('Preenche o N. Desenho antes de concluir.'); return; }
+    setSalvandoId(item.id);
+    const { error } = await supabase.from('plaquinhas_equipamento').update({
+      numero_desenho: desenho.trim(),
+      status: 'preenchida',
+      desenho_preenchido_por: currentUser?.nome || null,
+      desenho_preenchido_em: new Date().toISOString(),
+    }).eq('id', item.id);
+    setSalvandoId(null);
+    if (error) { alert('Erro ao concluir: ' + error.message); return; }
+    await carregar();
+  };
+
+  const concluirGrupo = async (items) => {
+    for (const it of items) {
+      if (!campo(it, 'numero_desenho').trim()) { alert(`Falta o N. Desenho de um item de ${it.br || 'sem BR'}.`); return; }
+    }
+    setSalvandoId(items[0].id);
+    const erros = [];
+    for (const it of items) {
+      const { error } = await supabase.from('plaquinhas_equipamento').update({
+        numero_desenho: campo(it, 'numero_desenho').trim(),
+        status: 'preenchida',
+        desenho_preenchido_por: currentUser?.nome || null,
+        desenho_preenchido_em: new Date().toISOString(),
+      }).eq('id', it.id);
+      if (error) erros.push(`Item ${it.id}: ${error.message}`);
+    }
+    setSalvandoId(null);
+    if (erros.length) { alert('Não consegui concluir tudo:\n\n' + erros.join('\n')); return; }
+    await carregar();
+  };
+
+  if (loading) return <div style={{ padding: 40, textAlign: 'center', color: T.inkFaint }}>Carregando…</div>;
+
+  return (
+    <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 18, maxWidth: 900 }}>
+      <div style={{ fontSize: 12.5, color: T.inkFaint, background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 8, padding: '10px 14px' }}>
+        O Comercial já preencheu tudo — só falta o N. Desenho. Preenche e conclui.
+      </div>
+
+      <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: 4 }}>
+          {[{ id: 'aguardando', label: `⏳ Aguardando (${aguardando.length})` }, { id: 'concluidas', label: `✓ Concluídas (${concluidas.length})` }].map(a => (
+            <button key={a.id} onClick={() => setAba(a.id)}
+              style={{
+                fontSize: 12.5, fontWeight: 700, padding: '7px 14px', borderRadius: 6, cursor: 'pointer',
+                border: `1.5px solid ${aba === a.id ? T.terracotta : T.line}`,
+                background: aba === a.id ? T.terracotta : 'transparent',
+                color: aba === a.id ? '#fff' : T.inkDim,
+              }}>
+              {a.label}
+            </button>
+          ))}
+        </div>
+        <div style={{ position: 'relative' }}>
+          <Search size={13} style={{ position: 'absolute', left: 9, top: 9, color: T.inkFaint }} />
+          <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Buscar BR ou cliente…" style={{ ...inputStyle(), width: 220, paddingLeft: 28 }} />
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        {grupos.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: 40, color: T.inkFaint, fontSize: 13 }}>Nada por aqui.</div>
+        ) : grupos.map(({ chave, items }) => {
+          const primeiro = items[0];
+          return (
+            <div key={chave} style={{ background: T.panel, border: `1.5px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
+              <div style={{ padding: '10px 16px', background: T.panelAlt, borderBottom: `1px solid ${T.line}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+                <div>
+                  <span style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 14, color: T.blueText }}>{primeiro.br || 'Sem BR'}</span>
+                  {primeiro.cliente_nome && <span style={{ fontSize: 12, color: T.inkDim }}> — {primeiro.cliente_nome}</span>}
+                  {items.length > 1 && <span style={{ fontSize: 10.5, fontWeight: 700, color: T.terracotta, marginLeft: 8, background: `${T.terracotta}18`, padding: '2px 7px', borderRadius: 4 }}>{items.length} itens</span>}
+                </div>
+                {items.length > 1 && aba === 'aguardando' && (
+                  <button onClick={() => concluirGrupo(items)} disabled={salvandoId === items[0].id}
+                    style={{ fontSize: 11.5, fontWeight: 700, color: '#fff', background: T.oliveText, border: 'none', borderRadius: 5, padding: '5px 12px', cursor: 'pointer' }}>
+                    ✓ Concluir os {items.length} itens
+                  </button>
+                )}
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column' }}>
+                {items.map((item, idx) => (
+                  <div key={item.id} style={{ borderTop: idx > 0 ? `1px dashed ${T.lineSoft}` : 'none' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                      <tbody>
+                        {[
+                          ['N. Ordem de serviço', 'numero_ordem_servico'],
+                          ['Mês/ano', 'mes_ano'],
+                          ['N. Pedido de compra', 'numero_pedido_compra'],
+                          ['N. Projeto (BR)', 'br'],
+                          ['Cliente', 'cliente_nome'],
+                        ].map(([label, nome]) => (
+                          <tr key={nome} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                            <td style={{ padding: '7px 16px', fontWeight: 700, color: T.inkDim, width: 180, background: `${T.panelAlt}88` }}>{label}</td>
+                            <td style={{ padding: '7px 16px', color: T.inkDim }}>
+                              {nome === 'mes_ano' ? fmtMesAno(item[nome]) : (item[nome] || '—')}
+                            </td>
+                          </tr>
+                        ))}
+                        <tr style={{ borderBottom: `1px solid ${T.lineSoft}`, background: aba === 'aguardando' ? `${T.terracotta}0d` : 'transparent' }}>
+                          <td style={{ padding: '7px 16px', fontWeight: 700, color: T.inkDim, width: 180, background: `${T.panelAlt}88` }}>N. Desenho</td>
+                          <td style={{ padding: '7px 16px' }}>
+                            {aba === 'concluidas' ? (item.numero_desenho || '—') : (
+                              <input value={campo(item, 'numero_desenho')} onChange={e => setCampo(item.id, 'numero_desenho', e.target.value)}
+                                placeholder="Preenche aqui…" style={{ ...inputStyle(), width: '100%', border: 'none', padding: '2px 0', background: 'transparent', fontWeight: 700, color: T.terracotta }} />
+                            )}
+                          </td>
+                        </tr>
+                      </tbody>
+                    </table>
+                    {aba === 'aguardando' ? (
+                      <div style={{ padding: '10px 16px', display: 'flex', justifyContent: 'flex-end' }}>
+                        <button onClick={() => concluirItem(item)} disabled={salvandoId === item.id}
+                          style={{ fontSize: 12.5, fontWeight: 700, color: '#fff', background: T.oliveText, border: 'none', borderRadius: 6, padding: '8px 16px', cursor: 'pointer', opacity: salvandoId === item.id ? 0.6 : 1 }}>
+                          {salvandoId === item.id ? 'Salvando…' : '✓ Concluir'}
+                        </button>
+                      </div>
+                    ) : (
+                      <div style={{ padding: '8px 16px 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                        <span style={{ fontSize: 11, color: T.inkFaint }}>
+                          Desenho por {item.desenho_preenchido_por || '?'} em {item.desenho_preenchido_em ? new Date(item.desenho_preenchido_em).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' }) : '?'}
+                        </span>
+                        <a href={`https://sieztnpchjjmrwrmrhoa.supabase.co/functions/v1/gerar-plaquinha-docx?id=${item.id}`}
+                          style={{ fontSize: 11.5, fontWeight: 700, color: '#fff', background: T.blueText, borderRadius: 5, padding: '5px 12px', textDecoration: 'none' }}>
+                          ⬇ Baixar Word
+                        </a>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
@@ -15357,6 +15277,7 @@ const TELAS_CATALOGO = [
   { id: 'monitoramento_op', label: 'Monitoramento OP' },
   { id: 'proposta_tecnica', label: 'Proposta Técnica' },
   { id: 'plaquinha_equipamento', label: 'Plaquinha de Equipamento' },
+  { id: 'plaquinha_engenharia', label: 'Plaquinha — Engenharia' },
   { id: 'conf_apontamento', label: 'Conf. Apontamento' },
   { id: 'reservas_pendentes', label: 'Reservas Pendentes' },
   { id: 'verificacao_projetos', label: 'Verificação de Projetos' },
