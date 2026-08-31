@@ -7101,25 +7101,31 @@ function MonitoramentoOP({ currentUser }) {
     setHistoricoItemAberto(codProduto);
     if (historicoItemDados[codProduto]) return; // já em cache
     setHistoricoItemDados(prev => ({ ...prev, [codProduto]: { loading: true } }));
-    const [rComposicao, rApontamentos] = await Promise.all([
-      supabase.from('composicao_produtos').select('cod_prod_mp').eq('cod_prod_pai', codProduto),
-      supabase.from('producao_mp_apontamentos')
-        .select('nro_ordem_producao, br, cliente_nome, data_ref, situacao_op')
-        .eq('cod_prod_acabado', codProduto)
-        .order('data_ref', { ascending: false })
-        .limit(60), // pega bruto, agrupa por OP embaixo (pode ter várias MPs por OP)
+    // IMPORTANTE: essa composição/histórico não vive no banco do Portal
+    // Engenharia -- vive no Supabase do Sistema de Industrialização
+    // (supabaseSGQ), que é a fonte de verdade real (tabelas produtos.materiais
+    // e ordens_producao_sankhya, bem mais completa que o que tinha aqui).
+    const codStr = String(codProduto);
+    const [rProduto, rOps] = await Promise.all([
+      supabaseSGQ.from('produtos').select('materiais').eq('codigo_pa', codStr).maybeSingle(),
+      supabaseSGQ.from('ordens_producao_sankhya')
+        .select('nro_ordem_producao, br, data_apontamento')
+        .eq('cod_produto_acabado', codStr)
+        .order('data_apontamento', { ascending: false })
+        .limit(30),
     ]);
+    const materiais = rProduto.data?.materiais || [];
     // Agrupa por OP -- uma OP tem várias linhas de matéria-prima, só queremos
     // as 3 OPs mais recentes (distintas), não 3 linhas quaisquer.
     const opsVistas = new Map();
-    (rApontamentos.data || []).forEach(r => {
+    (rOps.data || []).forEach(r => {
       if (!r.nro_ordem_producao || opsVistas.has(r.nro_ordem_producao)) return;
       opsVistas.set(r.nro_ordem_producao, r);
     });
     const ultimasOps = [...opsVistas.values()].slice(0, 3);
     setHistoricoItemDados(prev => ({
       ...prev,
-      [codProduto]: { loading: false, temComposicao: (rComposicao.data || []).length > 0, qtdInsumos: (rComposicao.data || []).length, ultimasOps },
+      [codProduto]: { loading: false, temComposicao: materiais.length > 0, qtdInsumos: materiais.length, ultimasOps },
     }));
   };
 
@@ -8233,12 +8239,12 @@ function MonitoramentoOP({ currentUser }) {
                                 <div style={{ fontSize: 11.5 }}>
                                   <span style={{ fontWeight: 700, color: T.inkFaint }}>Últimas OPs desse produto: </span>
                                   {hist.ultimasOps.length === 0 ? (
-                                    <span style={{ color: T.inkFaint }}>nenhuma encontrada nos últimos 180 dias</span>
+                                    <span style={{ color: T.inkFaint }}>nenhuma OP com apontamento de matéria-prima encontrada</span>
                                   ) : (
                                     hist.ultimasOps.map((op, idx) => (
                                       <span key={idx} style={{ marginRight: 12, whiteSpace: 'nowrap' }}>
                                         <span style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText }}>OP {op.nro_ordem_producao}</span>
-                                        {' '}({op.br || '—'}{op.cliente_nome ? ` · ${op.cliente_nome}` : ''} · {fmtData(op.data_ref)})
+                                        {' '}({op.br || '—'} · {fmtData(op.data_apontamento)})
                                       </span>
                                     ))
                                   )}
