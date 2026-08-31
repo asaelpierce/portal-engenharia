@@ -6871,6 +6871,7 @@ function MonitoramentoOP({ currentUser }) {
 
   // ── Aba "Verificação de OP's Geradas" — Iniciar/Pausar/Finalizar + mostra as OPs reais do BR ──
   const [cardsOpsGeradas, setCardsOpsGeradas] = useState([]);
+  const [cardsFinalizados, setCardsFinalizados] = useState([]); // completou as duas etapas -- não sumir da tela
   const [loadingOpsGeradas, setLoadingOpsGeradas] = useState(true);
   const [opsPorBr, setOpsPorBr] = useState({}); // br -> [ops]
   const [modalPendencia, setModalPendencia] = useState(null);
@@ -6890,6 +6891,17 @@ function MonitoramentoOP({ currentUser }) {
       .eq('planner_excluido', false)
       .order('br');
     setCardsOpsGeradas(data || []);
+    // Antes essas cards (que já completaram as DUAS etapas) simplesmente
+    // sumiam da tela -- não apareciam nem aqui (excluídos pelo neq acima)
+    // nem em "Conhecimento Pronto" (excluídos por já ter data_finalizado).
+    // Busca eles separado, pra continuarem visíveis/registrados.
+    const { data: finalizados } = await supabase.from('v_monitoramento_op_cards_planner').select('*')
+      .not('data_finalizado', 'is', null)
+      .eq('status_verificacao_op', 'finalizado')
+      .eq('planner_excluido', false)
+      .order('finalizado_verificacao_em', { ascending: false })
+      .limit(100);
+    setCardsFinalizados(finalizados || []);
     const brs = [...new Set((data || []).map(c => c.br).filter(Boolean))];
     if (brs.length) {
       // Busca direto no Sankhya (não depende de já ter apontamento de produção
@@ -7096,7 +7108,7 @@ function MonitoramentoOP({ currentUser }) {
   const [drillBR, setDrillBR] = useState(null); // BR selecionado — mostra os itens dele
   const [historicoItemAberto, setHistoricoItemAberto] = useState(null); // cod_produto expandido agora
   const [historicoItemDados, setHistoricoItemDados] = useState({}); // cod_produto -> { composicao, ultimasOps, loading }
-  const carregarHistoricoItem = async (codProduto) => {
+  const carregarHistoricoItem = async (codProduto, brAtual) => {
     if (historicoItemAberto === codProduto) { setHistoricoItemAberto(null); return; }
     setHistoricoItemAberto(codProduto);
     if (historicoItemDados[codProduto]) return; // já em cache
@@ -7106,15 +7118,33 @@ function MonitoramentoOP({ currentUser }) {
     // (supabaseSGQ), que é a fonte de verdade real (tabelas produtos.materiais
     // e ordens_producao_sankhya, bem mais completa que o que tinha aqui).
     const codStr = String(codProduto);
-    const [rProduto, rOps] = await Promise.all([
+    const [rProduto, rOps, rPedidos] = await Promise.all([
       supabaseSGQ.from('produtos').select('materiais').eq('codigo_pa', codStr).maybeSingle(),
       supabaseSGQ.from('ordens_producao_sankhya')
         .select('nro_ordem_producao, br, data_apontamento')
         .eq('cod_produto_acabado', codStr)
         .order('data_apontamento', { ascending: false })
         .limit(30),
+      // Referência mais ampla: mesmo sem OP rastreada, o código pode já ter
+      // sido vendido antes (pedido de venda) -- isso conta como precedente
+      // pro usuário avaliar, mesmo sem produção formal registrada.
+      supabase.from('pedidos_itens')
+        .select('br, cliente_nome, numero_pedido, quantidade, data_neg')
+        .eq('cod_produto', codStr)
+        .neq('br', brAtual || '')
+        .order('data_neg', { ascending: false })
+        .limit(5),
     ]);
-    const materiais = rProduto.data?.materiais || [];
+    const materiaisBrutos = rProduto.data?.materiais || [];
+    // Busca a descrição de cada matéria-prima (o JSON só tem o código) --
+    // pra mostrar uma lista de verdade, legível, não só números soltos.
+    let materiais = materiaisBrutos;
+    const codigosMp = [...new Set(materiaisBrutos.map(m => String(m.codigoMP)).filter(Boolean))];
+    if (codigosMp.length) {
+      const { data: descricoes } = await supabaseSGQ.from('produtos').select('codigo_pa, descricao').in('codigo_pa', codigosMp);
+      const descPorCodigo = Object.fromEntries((descricoes || []).map(d => [String(d.codigo_pa), d.descricao]));
+      materiais = materiaisBrutos.map(m => ({ ...m, descricao: descPorCodigo[String(m.codigoMP)] || null }));
+    }
     // Agrupa por OP -- uma OP tem várias linhas de matéria-prima, só queremos
     // as 3 OPs mais recentes (distintas), não 3 linhas quaisquer.
     const opsVistas = new Map();
@@ -7125,7 +7155,7 @@ function MonitoramentoOP({ currentUser }) {
     const ultimasOps = [...opsVistas.values()].slice(0, 3);
     setHistoricoItemDados(prev => ({
       ...prev,
-      [codProduto]: { loading: false, temComposicao: materiais.length > 0, qtdInsumos: materiais.length, ultimasOps },
+      [codProduto]: { loading: false, materiais, ultimasOps, pedidosAnteriores: rPedidos.data || [] },
     }));
   };
 
@@ -7873,6 +7903,35 @@ function MonitoramentoOP({ currentUser }) {
         </Panel>
       )}
 
+      {abaMonitoramento === 'conhecimento_pronto' && visualizacaoConhecPronto === 'cards' && (
+        <>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '22px 0 4px' }}>
+            <span style={{ fontFamily: FONT_DISPLAY, fontSize: 13, fontWeight: 700, color: T.oliveText, textTransform: 'uppercase', letterSpacing: 0.5 }}>✓ Finalizados ({cardsFinalizados.length})</span>
+            <div style={{ flex: 1, height: 1, background: T.line }} />
+          </div>
+          <Panel subtitle="Completaram as duas etapas (Finalizar Projeto + Verificação). Fica registrado aqui pra não sumir da tela.">
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {cardsFinalizados.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: 20, color: T.inkFaint, fontSize: 12.5 }}>Nenhum card finalizado ainda.</div>
+              ) : cardsFinalizados.map(c => (
+                <div key={c.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, padding: '8px 14px', borderRadius: 8, background: T.oliveSoft, flexWrap: 'wrap' }}>
+                  <div style={{ fontSize: 12.5 }}>
+                    <span style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText }}>{c.br}</span>
+                    <span style={{ color: T.inkDim }}> · {c.planner_titulo}</span>
+                    <span style={{ color: T.inkFaint }}> · Projetista: {c.projetista || '—'} · Finalizado em {fmtData(c.finalizado_verificacao_em || c.data_finalizado)}</span>
+                  </div>
+                  <button onClick={() => setConfirmandoReset(c)} disabled={processandoCard === c.id}
+                    title="Desfazer tudo e voltar esse card pro início do fluxo"
+                    style={{ fontSize: 11, fontWeight: 600, color: T.inkFaint, background: 'transparent', border: `1px solid ${T.line}`, borderRadius: 6, padding: '5px 10px', cursor: 'pointer', opacity: processandoCard === c.id ? 0.5 : 1, whiteSpace: 'nowrap' }}>
+                    ↺ Desfazer
+                  </button>
+                </div>
+              ))}
+            </div>
+          </Panel>
+        </>
+      )}
+
       {confirmandoReset && (
         <Overlay onClose={() => setConfirmandoReset(null)}>
           <div className="scale-in" style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, width: '100%', maxWidth: 440, padding: 24, boxShadow: '0 24px 60px rgba(0,0,0,.18)' }}>
@@ -8215,7 +8274,7 @@ function MonitoramentoOP({ currentUser }) {
                           <span style={{ fontSize: 12, fontWeight: 700, color: st.cor, background: st.bg, padding: '3px 8px', borderRadius: 4, whiteSpace: 'nowrap' }}>{st.label}</span>
                         </td>
                         <td style={{ padding: '9px 12px', textAlign: 'center' }}>
-                          <button onClick={() => carregarHistoricoItem(it.cod_produto)}
+                          <button onClick={() => carregarHistoricoItem(it.cod_produto, drillBR.br)}
                             style={{ fontSize: 10.5, fontWeight: 600, color: T.blueText, background: 'transparent', border: `1px solid ${T.blueText}55`, borderRadius: 5, padding: '3px 8px', cursor: 'pointer', whiteSpace: 'nowrap' }}>
                             {aberto ? '✕ Fechar' : '🕘 Histórico'}
                           </button>
@@ -8227,13 +8286,28 @@ function MonitoramentoOP({ currentUser }) {
                             {hist?.loading || !hist ? (
                               <div style={{ fontSize: 11.5, color: T.inkFaint, padding: '6px 4px' }}>Carregando…</div>
                             ) : (
-                              <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', padding: '6px 4px' }}>
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '6px 4px' }}>
                                 <div style={{ fontSize: 11.5 }}>
-                                  <span style={{ fontWeight: 700, color: T.inkFaint }}>Composição (PA): </span>
-                                  {hist.temComposicao ? (
-                                    <span style={{ color: T.oliveText, fontWeight: 700 }}>✓ Cadastrada ({hist.qtdInsumos} insumo{hist.qtdInsumos !== 1 ? 's' : ''})</span>
-                                  ) : (
-                                    <span style={{ color: T.amberText, fontWeight: 700 }}>⚠ Não cadastrada</span>
+                                  <div style={{ fontWeight: 700, color: T.inkFaint, marginBottom: 4 }}>
+                                    Composição (PA):{' '}
+                                    {hist.materiais.length > 0 ? (
+                                      <span style={{ color: T.oliveText, fontWeight: 700 }}>✓ Cadastrada ({hist.materiais.length} insumo{hist.materiais.length !== 1 ? 's' : ''})</span>
+                                    ) : (
+                                      <span style={{ color: T.amberText, fontWeight: 700 }}>⚠ Não cadastrada</span>
+                                    )}
+                                  </div>
+                                  {hist.materiais.length > 0 && (
+                                    <table style={{ borderCollapse: 'collapse', fontSize: 11 }}>
+                                      <tbody>
+                                        {hist.materiais.map((m, idx) => (
+                                          <tr key={idx}>
+                                            <td style={{ padding: '2px 8px 2px 0', color: T.inkFaint, fontFamily: 'monospace' }}>{m.codigoMP}</td>
+                                            <td style={{ padding: '2px 8px 2px 0' }}>{m.descricao || <span style={{ color: T.inkFaint, fontStyle: 'italic' }}>sem descrição cadastrada</span>}</td>
+                                            <td style={{ padding: '2px 0', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 700, whiteSpace: 'nowrap' }}>{m.quantidade} {m.um}</td>
+                                          </tr>
+                                        ))}
+                                      </tbody>
+                                    </table>
                                   )}
                                 </div>
                                 <div style={{ fontSize: 11.5 }}>
@@ -8245,6 +8319,19 @@ function MonitoramentoOP({ currentUser }) {
                                       <span key={idx} style={{ marginRight: 12, whiteSpace: 'nowrap' }}>
                                         <span style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText }}>OP {op.nro_ordem_producao}</span>
                                         {' '}({op.br || '—'} · {fmtData(op.data_apontamento)})
+                                      </span>
+                                    ))
+                                  )}
+                                </div>
+                                <div style={{ fontSize: 11.5 }}>
+                                  <span style={{ fontWeight: 700, color: T.inkFaint }}>Já pedido antes (outros BRs): </span>
+                                  {hist.pedidosAnteriores.length === 0 ? (
+                                    <span style={{ color: T.inkFaint }}>nenhum pedido anterior encontrado com esse código</span>
+                                  ) : (
+                                    hist.pedidosAnteriores.map((p, idx) => (
+                                      <span key={idx} style={{ marginRight: 12, whiteSpace: 'nowrap' }}>
+                                        <span style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText }}>{p.br}</span>
+                                        {' '}({p.cliente_nome || '—'} · qtd {p.quantidade} · {fmtData(p.data_neg)})
                                       </span>
                                     ))
                                   )}
