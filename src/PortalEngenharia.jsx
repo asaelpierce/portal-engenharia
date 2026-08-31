@@ -4987,7 +4987,9 @@ function ReservasPendentes() {
   // e cancela lá no Sankhya.
   const confirmarCancelamentoLote = async () => {
     setConfirmandoLote(false);
-    const itensSelecionados = filtrados.filter(i => selecionados.has(i.id));
+    // Itens vinculados nunca vao conseguir ser cancelados (regra de negocio
+    // do Sankhya) -- ja tira eles do lote pra nao gerar link inutil no checklist.
+    const itensSelecionados = filtrados.filter(i => selecionados.has(i.id) && !i.tem_vinculo);
     if (!itensSelecionados.length) return;
 
     const gruposPorNunota = new Map();
@@ -5076,6 +5078,11 @@ function ReservasPendentes() {
   };
 
   const faturado = (item) => item.nro_pedido ? faturamentoPorPedido[item.nro_pedido] : null;
+  // Parcialmente entregue = já saiu uma parte (qtd_entregue > 0) mas ainda
+  // sobra um resto preso em reserva -- geralmente sinal de um resquício
+  // (ex.: pediu 3, transferiu 2, ficou 1 "esquecido" reservado), diferente
+  // de uma reserva "normal" que ainda não teve nada movimentado.
+  const parcialmenteEntregue = (item) => (Number(item.qtd_entregue) || 0) > 0;
 
   const nunotasUnicasSelecionadas = new Set(itens.filter(i => selecionados.has(i.id)).map(i => i.nunota_reserva)).size;
 
@@ -5084,9 +5091,12 @@ function ReservasPendentes() {
     if (filtroStatus === 'finalizado' && i.status_op !== 'Finalizado') return false;
     if (filtroStatus === 'finalizado_faturado' && (i.status_op !== 'Finalizado' || !faturado(i))) return false;
     if (filtroStatus === 'finalizado_nao_faturado' && (i.status_op !== 'Finalizado' || faturado(i))) return false;
+    if (filtroStatus === 'parcial' && !parcialmenteEntregue(i)) return false;
+    if (filtroStatus === 'vinculada' && !i.tem_vinculo) return false;
+    if (filtroStatus === 'cancelavel' && i.tem_vinculo) return false;
     if (!busca.trim()) return true;
     const b = busca.toLowerCase();
-    return String(i.op || '').includes(b) || (i.descr_produto || '').toLowerCase().includes(b) || (i.br || '').toLowerCase().includes(b);
+    return String(i.op || '').includes(b) || (i.descr_produto || '').toLowerCase().includes(b) || (i.br || '').toLowerCase().includes(b) || String(i.nunota_reserva || '').includes(b);
   }).sort((a, b) => {
     let va, vb;
     if (ordenarPor === 'op') { va = Number(a.op) || 0; vb = Number(b.op) || 0; }
@@ -5101,6 +5111,9 @@ function ReservasPendentes() {
     finalizado: itens.filter(i => i.status_op === 'Finalizado').length,
     finalizadoFaturado: itens.filter(i => i.status_op === 'Finalizado' && faturado(i)).length,
     finalizadoNaoFaturado: itens.filter(i => i.status_op === 'Finalizado' && !faturado(i)).length,
+    parcial: itens.filter(parcialmenteEntregue).length,
+    vinculada: itens.filter(i => i.tem_vinculo).length,
+    cancelavel: itens.filter(i => !i.tem_vinculo).length,
   };
 
   const alternarOrdem = (campo) => {
@@ -5153,6 +5166,9 @@ function ReservasPendentes() {
             { id: 'finalizado', label: `Finalizada (${contagens.finalizado})`, cor: T.rustText },
             { id: 'finalizado_nao_faturado', label: `⚠ Finalizada, não faturada (${contagens.finalizadoNaoFaturado})`, cor: T.rustText },
             { id: 'finalizado_faturado', label: `✓ Finalizada e faturada (${contagens.finalizadoFaturado})`, cor: T.oliveText },
+            { id: 'parcial', label: `◐ Parcialmente entregue (${contagens.parcial})`, cor: T.blueText },
+            { id: 'vinculada', label: `🔗 Vinculada, não cancelável (${contagens.vinculada})`, cor: T.rustText },
+            { id: 'cancelavel', label: `✓ Cancelável (${contagens.cancelavel})`, cor: T.oliveText },
           ].map(f => (
             <button key={f.id} onClick={() => setFiltroStatus(f.id)}
               style={{
@@ -5202,21 +5218,23 @@ function ReservasPendentes() {
                 <th style={{ ...thFat(90), cursor: 'pointer', userSelect: 'none' }} onClick={() => alternarOrdem('br')}>
                   BR {ordenarPor === 'br' && (ordemAsc ? '▲' : '▼')}
                 </th>
+                <th style={thFat(80)}>Nro. Único</th>
                 <th style={thFat(70)}>Código</th>
                 <th style={thFat(220)}>Produto</th>
-                <th style={{ ...thFat(90), textAlign: 'right' }}>Reservada</th>
+                <th style={{ ...thFat(120), textAlign: 'right' }}>Negociado / Entregue / Reservado</th>
                 <th style={thFat(90)}>Lote</th>
                 <th style={thFat(80)}>Local</th>
                 <th style={thFat(90)}>Status OP</th>
+                <th style={thFat(90)}>Vínculo</th>
                 <th style={thFat(100)}>Faturado</th>
                 <th style={thFat(100)}></th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={11} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Carregando…</td></tr>
+                <tr><td colSpan={13} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Carregando…</td></tr>
               ) : filtrados.length === 0 ? (
-                <tr><td colSpan={11} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Nada aqui — nenhuma reserva pendente!</td></tr>
+                <tr><td colSpan={13} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Nada aqui — nenhuma reserva pendente!</td></tr>
               ) : filtrados.slice(0, 300).map(i => {
                 const nf = faturado(i);
                 return (
@@ -5226,9 +5244,21 @@ function ReservasPendentes() {
                   </td>
                   <td style={{ padding: '7px 12px', fontFamily: FONT_DISPLAY, fontWeight: 700 }}>{i.op || '—'}</td>
                   <td style={{ padding: '7px 12px', color: T.blueText, fontWeight: 600 }}>{i.br || '—'}</td>
+                  <td style={{ padding: '7px 12px', color: T.inkFaint, fontFamily: 'monospace', fontSize: 11.5 }}>{i.nunota_reserva}</td>
                   <td style={{ padding: '7px 12px', color: T.inkFaint, fontFamily: 'monospace', fontSize: 11.5 }}>{i.cod_produto}</td>
                   <td style={{ padding: '7px 12px', maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={i.descr_produto}>{i.descr_produto}</td>
-                  <td style={{ padding: '7px 12px', textAlign: 'right', fontWeight: 700, color: T.amberText }}>{fmtNum(i.qtd_reservada)}</td>
+                  <td style={{ padding: '7px 12px', textAlign: 'right' }}>
+                    {parcialmenteEntregue(i) ? (
+                      <div title={`Negociado: ${fmtNum(i.qtd_negociada)} · Já entregue: ${fmtNum(i.qtd_entregue)} · Ainda reservado: ${fmtNum(i.qtd_reservada)}`}>
+                        <div style={{ fontSize: 10.5, color: T.inkFaint, lineHeight: 1.3 }}>
+                          {fmtNum(i.qtd_entregue)} de {fmtNum(i.qtd_negociada)} entregue
+                        </div>
+                        <div style={{ fontWeight: 700, color: T.blueText }}>◐ {fmtNum(i.qtd_reservada)} preso</div>
+                      </div>
+                    ) : (
+                      <span style={{ fontWeight: 700, color: T.amberText }}>{fmtNum(i.qtd_reservada)}</span>
+                    )}
+                  </td>
                   <td style={{ padding: '7px 12px', color: T.inkFaint }}>{i.controle_lote || '—'}</td>
                   <td style={{ padding: '7px 12px', color: T.inkFaint }}>{i.local_origem || '—'}</td>
                   <td style={{ padding: '7px 12px' }}>
@@ -5238,6 +5268,16 @@ function ReservasPendentes() {
                         color: i.status_op === 'Finalizado' ? T.oliveText : T.amberText,
                         background: i.status_op === 'Finalizado' ? T.oliveSoft : T.amberSoft,
                       }}>{i.status_op}</span>
+                    )}
+                  </td>
+                  <td style={{ padding: '7px 12px' }}>
+                    {i.tem_vinculo ? (
+                      <span title={`Essa nota já gerou outra(s) nota(s): ${i.notas_vinculadas}. O Sankhya não deixa cancelar nesse caso.`} style={{
+                        fontSize: 10.5, fontWeight: 700, padding: '2px 7px', borderRadius: 4,
+                        color: T.rustText, background: T.rustSoft, cursor: 'help',
+                      }}>🔗 Vinculada</span>
+                    ) : (
+                      <span style={{ fontSize: 10.5, color: T.oliveText }}>✓ Livre</span>
                     )}
                   </td>
                   <td style={{ padding: '7px 12px' }}>
@@ -5260,13 +5300,14 @@ function ReservasPendentes() {
                       <BotaoAbrirSankhya nunota={i.nunota_reserva} tipmov="J" codtipoper={i.codtipoper} />
                       <button
                         onClick={() => setConfirmando(i)}
-                        disabled={cancelando === i.id}
-                        title="Abrir nota no Sankhya para cancelar"
+                        disabled={cancelando === i.id || i.tem_vinculo}
+                        title={i.tem_vinculo ? `Não dá pra cancelar: essa nota já gerou a(s) nota(s) ${i.notas_vinculadas}` : 'Abrir nota no Sankhya para cancelar'}
                         style={{
                           display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
                           width: 24, height: 24, border: `1px solid ${T.line}`, borderRadius: 5,
-                          background: 'transparent', color: T.rustText, cursor: cancelando === i.id ? 'default' : 'pointer',
-                          opacity: cancelando === i.id ? 0.5 : 1,
+                          background: 'transparent', color: i.tem_vinculo ? T.inkFaint : T.rustText,
+                          cursor: (cancelando === i.id || i.tem_vinculo) ? 'not-allowed' : 'pointer',
+                          opacity: (cancelando === i.id || i.tem_vinculo) ? 0.4 : 1,
                         }}>
                         {cancelando === i.id ? '…' : <Trash2 size={12} />}
                       </button>
@@ -5337,6 +5378,9 @@ function ReservasPendentes() {
                 <> — os {selecionados.size} itens marcados estão distribuídos em {nunotasUnicasSelecionadas} nota(s) (várias linhas podem ser produtos diferentes da mesma nota)</>
               )}, cada uma com um link que abre direto no Sankhya. Você clica em cada link e cancela lá (lixeira) — os itens somem
               daqui sozinhos na próxima sincronização automática (a cada 4h).
+              {itens.filter(i => selecionados.has(i.id) && i.tem_vinculo).length > 0 && (
+                <> <strong>{itens.filter(i => selecionados.has(i.id) && i.tem_vinculo).length} do(s) selecionado(s) já tem vínculo com outra nota e não pode ser cancelado</strong> — vai ficar de fora do checklist.</>
+              )}
             </div>
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
               <button onClick={() => setConfirmandoLote(false)} style={{
@@ -6641,6 +6685,12 @@ function MonitoramentoOP({ currentUser }) {
   const [confirmandoObs, setConfirmandoObs] = useState(null);
   const carregarCandidatosObs = useCallback(async () => {
     setLoadingCandidatosObs(true);
+    // Antes de olhar a view, sincroniza a fonte "direta" (consulta ao vivo no
+    // Sankhya) -- pega OPs que ainda não têm movimentação de material (e por
+    // isso não apareceriam na fonte antiga, baseada em almoxarifado_op_materiais).
+    try {
+      await fetch(`${SUPABASE_URL}/functions/v1/sankhya-op-por-br-direto-sync`, { method: 'POST' });
+    } catch (e) { console.error('Erro sincronizando OPs diretas:', e); }
     const { data } = await supabase.from('v_candidatos_atualizar_observacao').select('*');
     setCandidatosObs(data || []);
     setLoadingCandidatosObs(false);
@@ -6759,7 +6809,49 @@ function MonitoramentoOP({ currentUser }) {
     });
 
     setModalFinalizar(null);
-    await carregarConhecPronto();
+    // Atualiza as DUAS listas na hora -- sem isso, o card some de "Conhecimento
+    // Pronto" mas só aparece em "OP's Geradas" depois de até 30s (o intervalo
+    // automático), dando a impressão de que ficou tudo misturado/sumido no meio.
+    // Também já dispara a busca direta da OP no Sankhya agora, sem esperar
+    // ninguém abrir a aba de novo -- assim, se a OP já existir, ela já vem
+    // pronta pra escrever na observação.
+    await Promise.all([
+      carregarConhecPronto(),
+      carregarOpsGeradas(),
+      fetch(`${SUPABASE_URL}/functions/v1/sankhya-op-por-br-direto-sync`, { method: 'POST' }).catch(e => console.error('Erro sincronizando OP direta:', e)),
+    ]);
+    setProcessandoCard(null);
+  };
+
+  // Desfaz um card que avançou no fluxo por engano (ex.: alguém clicou
+  // "Iniciar"/"Finalizar" sem querer) -- limpa todo o progresso registrado
+  // (inicio, finalizacao, verificacao) e manda o card de volta pro bucket
+  // "Conhecimento Pronto" no Planner, como se nada tivesse acontecido.
+  const [confirmandoReset, setConfirmandoReset] = useState(null);
+  const resetarCardParaConhecimento = async (card) => {
+    setProcessandoCard(card.id);
+    await supabase.from('monitoramento_op_cards_planner').update({
+      data_iniciado: null,
+      iniciado_por: null,
+      data_prevista_finalizacao: null,
+      projetista: null,
+      data_finalizado: null,
+      finalizado_com_duvida: false,
+      observacao_duvida: null,
+      motivo_atraso: null,
+      status_verificacao_op: 'nao_iniciado',
+      tempo_acumulado_segundos: 0,
+      ultimo_inicio_verificacao: null,
+      finalizado_verificacao_em: null,
+    }).eq('id', card.id);
+    await supabase.from('solicitacoes_mover_card_planner').insert({
+      planner_task_id: card.planner_task_id,
+      br: card.br,
+      bucket_destino: BUCKETS_PLANNER.CONHECIMENTO_PRONTO,
+      status: 'pendente',
+    });
+    setConfirmandoReset(null);
+    await Promise.all([carregarConhecPronto(), carregarOpsGeradas()]);
     setProcessandoCard(null);
   };
 
@@ -6782,6 +6874,9 @@ function MonitoramentoOP({ currentUser }) {
   const [opsPorBr, setOpsPorBr] = useState({}); // br -> [ops]
   const [modalPendencia, setModalPendencia] = useState(null);
   const [tick, setTick] = useState(0); // força recálculo do tempo ao vivo a cada segundo
+  const [historicoObs, setHistoricoObs] = useState({}); // planner_task_id -> última solicitação (status/OP/quando)
+  const [opManual, setOpManual] = useState({}); // card.id -> texto digitado no campo manual
+  const [escrevendoOp, setEscrevendoOp] = useState(null); // card.id sendo processado agora
   const carregarOpsGeradas = useCallback(async () => {
     setLoadingOpsGeradas(true);
     // Não usa bucket_atual (isso só é atualizado pelo Fluxo 1, que só rastreia
@@ -6808,6 +6903,19 @@ function MonitoramentoOP({ currentUser }) {
         }
       } catch (e) { console.error('Erro buscando OP por BR:', e); }
     }
+    // Traz a ÚLTIMA solicitação de escrita de OP de cada card -- pra mostrar
+    // exatamente quem/quando/qual OP foi escrita (ou se deu erro), sem
+    // depender de olhar o Planner direto. Isso é o "total controle" pedido.
+    const taskIds = (data || []).map(c => c.planner_task_id).filter(Boolean);
+    if (taskIds.length) {
+      const { data: hist } = await supabase.from('solicitacoes_atualizar_observacao_planner')
+        .select('planner_task_id, op_para_adicionar, status, solicitado_em, atendido_em, erro_msg')
+        .in('planner_task_id', taskIds)
+        .order('solicitado_em', { ascending: false });
+      const ultimaPorTask = {};
+      (hist || []).forEach(h => { if (!ultimaPorTask[h.planner_task_id]) ultimaPorTask[h.planner_task_id] = h; });
+      setHistoricoObs(ultimaPorTask);
+    }
     setLoadingOpsGeradas(false);
   }, []);
   useEffect(() => { if (abaMonitoramento === 'conhecimento_pronto') carregarOpsGeradas(); }, [abaMonitoramento, carregarOpsGeradas]);
@@ -6822,6 +6930,38 @@ function MonitoramentoOP({ currentUser }) {
     const id = setInterval(() => setTick(t => t + 1), 1000);
     return () => clearInterval(id);
   }, [abaMonitoramento]);
+
+  // Escreve a OP no card -- seja a que o sistema achou sozinho, seja uma
+  // digitada manualmente (quando o sistema não achou nada). Sempre passa
+  // pela mesma tabela de solicitações, então o histórico fica completo e
+  // rastreável dos dois jeitos.
+  const escreverOpNoCard = async (card, opTexto) => {
+    if (!opTexto || !opTexto.trim()) return;
+    setEscrevendoOp(card.id);
+    await supabase.from('solicitacoes_atualizar_observacao_planner').insert({
+      planner_task_id: card.planner_task_id,
+      br: card.br,
+      op_para_adicionar: opTexto.trim(),
+      status: 'pendente',
+    });
+    setOpManual(prev => ({ ...prev, [card.id]: '' }));
+    await carregarOpsGeradas();
+    setEscrevendoOp(null);
+  };
+
+  const [historicoGeralObs, setHistoricoGeralObs] = useState(null); // null = nunca carregado; [] = carregado e vazio
+  const [mostrandoHistoricoGeral, setMostrandoHistoricoGeral] = useState(false);
+  const carregarHistoricoGeralObs = async () => {
+    if (mostrandoHistoricoGeral) { setMostrandoHistoricoGeral(false); return; }
+    if (historicoGeralObs === null) {
+      const { data } = await supabase.from('solicitacoes_atualizar_observacao_planner')
+        .select('br, op_para_adicionar, status, solicitado_em, atendido_em, erro_msg')
+        .order('solicitado_em', { ascending: false })
+        .limit(40);
+      setHistoricoGeralObs(data || []);
+    }
+    setMostrandoHistoricoGeral(true);
+  };
 
   const iniciarOuRetomarVerificacao = async (card) => {
     await supabase.from('monitoramento_op_cards_planner').update({
@@ -6953,6 +7093,35 @@ function MonitoramentoOP({ currentUser }) {
   const [syncStatus, setSyncStatus] = useState(null);
   const [ultimoSync, setUltimoSync] = useState(null);
   const [drillBR, setDrillBR] = useState(null); // BR selecionado — mostra os itens dele
+  const [historicoItemAberto, setHistoricoItemAberto] = useState(null); // cod_produto expandido agora
+  const [historicoItemDados, setHistoricoItemDados] = useState({}); // cod_produto -> { composicao, ultimasOps, loading }
+  const carregarHistoricoItem = async (codProduto) => {
+    if (historicoItemAberto === codProduto) { setHistoricoItemAberto(null); return; }
+    setHistoricoItemAberto(codProduto);
+    if (historicoItemDados[codProduto]) return; // já em cache
+    setHistoricoItemDados(prev => ({ ...prev, [codProduto]: { loading: true } }));
+    const [rComposicao, rApontamentos] = await Promise.all([
+      supabase.from('composicao_produtos').select('cod_prod_mp').eq('cod_prod_pai', codProduto),
+      supabase.from('producao_mp_apontamentos')
+        .select('nro_ordem_producao, br, cliente_nome, data_ref, situacao_op')
+        .eq('cod_prod_acabado', codProduto)
+        .order('data_ref', { ascending: false })
+        .limit(60), // pega bruto, agrupa por OP embaixo (pode ter várias MPs por OP)
+    ]);
+    // Agrupa por OP -- uma OP tem várias linhas de matéria-prima, só queremos
+    // as 3 OPs mais recentes (distintas), não 3 linhas quaisquer.
+    const opsVistas = new Map();
+    (rApontamentos.data || []).forEach(r => {
+      if (!r.nro_ordem_producao || opsVistas.has(r.nro_ordem_producao)) return;
+      opsVistas.set(r.nro_ordem_producao, r);
+    });
+    const ultimasOps = [...opsVistas.values()].slice(0, 3);
+    setHistoricoItemDados(prev => ({
+      ...prev,
+      [codProduto]: { loading: false, temComposicao: (rComposicao.data || []).length > 0, qtdInsumos: (rComposicao.data || []).length, ultimasOps },
+    }));
+  };
+
   const [tagsCatalogo, setTagsCatalogo] = useState([]);
   const [tagsPorBr, setTagsPorBr] = useState({}); // br -> [tag_id, ...]
   const [anotacoesPorBr, setAnotacoesPorBr] = useState({}); // br -> { observacao, data_referencia }
@@ -7435,10 +7604,17 @@ function MonitoramentoOP({ currentUser }) {
                       ▶ Iniciar Projeto
                     </button>
                   ) : (
-                    <button onClick={() => setModalFinalizar(c)}
-                      style={{ fontSize: 12, fontWeight: 700, color: '#fff', background: T.terracotta, border: 'none', borderRadius: 6, padding: '8px 16px', cursor: 'pointer' }}>
-                      ✓ Finalizar
-                    </button>
+                    <>
+                      <button onClick={() => setConfirmandoReset(c)} disabled={processandoCard === c.id}
+                        title="Desfazer início (voltar esse card pro zero, como se ninguém tivesse clicado em Iniciar)"
+                        style={{ fontSize: 11.5, fontWeight: 600, color: T.inkFaint, background: 'transparent', border: `1px solid ${T.line}`, borderRadius: 6, padding: '8px 12px', cursor: 'pointer', opacity: processandoCard === c.id ? 0.5 : 1 }}>
+                        ↺ Desfazer
+                      </button>
+                      <button onClick={() => setModalFinalizar(c)}
+                        style={{ fontSize: 12, fontWeight: 700, color: '#fff', background: T.terracotta, border: 'none', borderRadius: 6, padding: '8px 16px', cursor: 'pointer' }}>
+                        ✓ Finalizar
+                      </button>
+                    </>
                   )}
                 </div>
               </div>
@@ -7518,7 +7694,49 @@ function MonitoramentoOP({ currentUser }) {
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '22px 0 4px' }}>
             <span style={{ fontFamily: FONT_DISPLAY, fontSize: 13, fontWeight: 700, color: T.inkFaint, textTransform: 'uppercase', letterSpacing: 0.5 }}>Etapa 2 — Verificação de OP's Geradas</span>
             <div style={{ flex: 1, height: 1, background: T.line }} />
+            <button onClick={carregarHistoricoGeralObs}
+              style={{ fontSize: 11, fontWeight: 600, color: T.inkDim, background: 'transparent', border: `1px solid ${T.line}`, borderRadius: 6, padding: '5px 10px', cursor: 'pointer' }}>
+              {mostrandoHistoricoGeral ? '✕ Fechar histórico' : '📋 Histórico de escritas de OP'}
+            </button>
           </div>
+          {mostrandoHistoricoGeral && (
+            <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 8, padding: 12, marginBottom: 14, maxHeight: 280, overflowY: 'auto' }}>
+              {historicoGeralObs === null ? (
+                <div style={{ textAlign: 'center', padding: 16, color: T.inkFaint, fontSize: 12 }}>Carregando…</div>
+              ) : historicoGeralObs.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: 16, color: T.inkFaint, fontSize: 12 }}>Nenhuma escrita de OP registrada ainda.</div>
+              ) : (
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11.5 }}>
+                  <thead>
+                    <tr style={{ textAlign: 'left', color: T.inkFaint, borderBottom: `1px solid ${T.line}` }}>
+                      <th style={{ padding: '4px 8px' }}>BR</th>
+                      <th style={{ padding: '4px 8px' }}>OP</th>
+                      <th style={{ padding: '4px 8px' }}>Solicitado em</th>
+                      <th style={{ padding: '4px 8px' }}>Resultado</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {historicoGeralObs.map((h, idx) => (
+                      <tr key={idx} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                        <td style={{ padding: '4px 8px', fontFamily: FONT_DISPLAY, color: T.blueText }}>{h.br}</td>
+                        <td style={{ padding: '4px 8px', fontWeight: 700 }}>{h.op_para_adicionar}</td>
+                        <td style={{ padding: '4px 8px', color: T.inkFaint }}>{fmtData(h.solicitado_em)}</td>
+                        <td style={{ padding: '4px 8px' }}>
+                          {h.erro_msg ? (
+                            <span style={{ color: T.rustText, fontWeight: 700 }} title={h.erro_msg}>✗ Erro</span>
+                          ) : h.atendido_em ? (
+                            <span style={{ color: T.oliveText, fontWeight: 700 }}>✓ Escrito em {fmtData(h.atendido_em)}</span>
+                          ) : (
+                            <span style={{ color: T.amberText, fontWeight: 700 }}>⏳ Pendente</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          )}
           {cardsOpsGeradas.filter(c => c.status_verificacao_op !== 'finalizado' && (opsPorBr[c.br] || []).length === 0 && c.bucket_atualizado_em && (Date.now() - new Date(c.bucket_atualizado_em).getTime()) > 1.5 * 24 * 3600 * 1000).length > 0 && (
             <div style={{ background: T.rustSoft, border: `1px solid ${T.rust}33`, borderRadius: 8, padding: '12px 16px', marginBottom: 14 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -7563,6 +7781,41 @@ function MonitoramentoOP({ currentUser }) {
                     ))}
                   </div>
 
+                  {/* Escrever a OP no card do Planner -- registrado, rastreável, e com
+                      opção manual quando o sistema não achar nada sozinho. */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', background: T.panelAlt, borderRadius: 8, padding: '8px 12px' }}>
+                    {c.op_registrada_observacao ? (
+                      <span style={{ fontSize: 11, fontWeight: 700, color: T.oliveText, display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <CheckCircle2 size={13} /> OP já escrita no card
+                        {historicoObs[c.planner_task_id]?.op_para_adicionar && ` (${historicoObs[c.planner_task_id].op_para_adicionar})`}
+                        {historicoObs[c.planner_task_id]?.atendido_em && <span style={{ color: T.inkFaint, fontWeight: 400 }}> · {fmtData(historicoObs[c.planner_task_id].atendido_em)}</span>}
+                      </span>
+                    ) : historicoObs[c.planner_task_id]?.erro_msg ? (
+                      <span style={{ fontSize: 11, fontWeight: 700, color: T.rustText, display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <AlertTriangle size={13} /> Falhou escrever "{historicoObs[c.planner_task_id].op_para_adicionar}": {historicoObs[c.planner_task_id].erro_msg}
+                      </span>
+                    ) : historicoObs[c.planner_task_id]?.status === 'pendente' ? (
+                      <span style={{ fontSize: 11, fontWeight: 700, color: T.amberText, display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <Clock3 size={13} /> Escrita de "{historicoObs[c.planner_task_id].op_para_adicionar}" a caminho (aguardando o Planner processar)
+                      </span>
+                    ) : ops.length > 0 ? (
+                      <button onClick={() => escreverOpNoCard(c, ops.join(', '))} disabled={escrevendoOp === c.id}
+                        style={{ fontSize: 11.5, fontWeight: 700, color: '#fff', background: T.blueText, border: 'none', borderRadius: 6, padding: '6px 12px', cursor: 'pointer', opacity: escrevendoOp === c.id ? 0.6 : 1 }}>
+                        {escrevendoOp === c.id ? 'Enviando…' : `✎ Escrever "${ops.join(', ')}" no card`}
+                      </button>
+                    ) : (
+                      <>
+                        <span style={{ fontSize: 11, color: T.inkFaint }}>Sistema não achou OP — inclua na mão:</span>
+                        <input value={opManual[c.id] || ''} onChange={e => setOpManual(prev => ({ ...prev, [c.id]: e.target.value }))}
+                          placeholder="Ex: 7999" style={{ ...inputStyle(), width: 100, padding: '5px 8px', fontSize: 12 }} />
+                        <button onClick={() => escreverOpNoCard(c, opManual[c.id])} disabled={escrevendoOp === c.id || !opManual[c.id]?.trim()}
+                          style={{ fontSize: 11.5, fontWeight: 700, color: '#fff', background: T.terracotta, border: 'none', borderRadius: 6, padding: '6px 12px', cursor: 'pointer', opacity: (escrevendoOp === c.id || !opManual[c.id]?.trim()) ? 0.5 : 1 }}>
+                          {escrevendoOp === c.id ? 'Enviando…' : '✎ Escrever manualmente'}
+                        </button>
+                      </>
+                    )}
+                  </div>
+
                   <div style={{ display: 'flex', gap: 8, alignItems: 'center', borderTop: `1px solid ${T.lineSoft}`, paddingTop: 10, flexWrap: 'wrap' }}>
                     {c.status_verificacao_op === 'nao_iniciado' && (
                       <button onClick={() => iniciarOuRetomarVerificacao(c)}
@@ -7600,12 +7853,40 @@ function MonitoramentoOP({ currentUser }) {
                     {c.status_verificacao_op === 'finalizado' && (
                       <span style={{ fontSize: 10.5, fontWeight: 700, color: T.oliveText, background: T.oliveSoft, padding: '4px 10px', borderRadius: 4 }}>✓ Finalizado — movido pra Finaliza processo</span>
                     )}
+                    <button onClick={() => setConfirmandoReset(c)} disabled={processandoCard === c.id}
+                      title="Desfazer tudo (Iniciar Projeto, Finalizar e Verificação) e voltar esse card pro início do fluxo, como se nada tivesse acontecido"
+                      style={{ marginLeft: 'auto', fontSize: 11.5, fontWeight: 600, color: T.inkFaint, background: 'transparent', border: `1px solid ${T.line}`, borderRadius: 6, padding: '8px 12px', cursor: 'pointer', opacity: processandoCard === c.id ? 0.5 : 1 }}>
+                      ↺ Desfazer tudo (voltar pro início)
+                    </button>
                   </div>
                 </div>
               );
             })}
           </div>
         </Panel>
+      )}
+
+      {confirmandoReset && (
+        <Overlay onClose={() => setConfirmandoReset(null)}>
+          <div className="scale-in" style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, width: '100%', maxWidth: 440, padding: 24, boxShadow: '0 24px 60px rgba(0,0,0,.18)' }}>
+            <h3 style={{ fontFamily: FONT_DISPLAY, fontSize: 17, fontWeight: 700, margin: '0 0 4px' }}>Desfazer progresso — {confirmandoReset.br}</h3>
+            <p style={{ fontSize: 13, color: T.inkDim, margin: '0 0 16px', lineHeight: 1.5 }}>
+              Isso vai apagar tudo que foi registrado (início, finalização, verificação e tempo gasto) e mandar
+              o card de volta pro bucket <strong>"Engenharia - Conhecimento Pronto"</strong> no Planner, como se
+              ninguém tivesse mexido ainda. Use quando alguém clicar em algo por engano.
+            </p>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button onClick={() => resetarCardParaConhecimento(confirmandoReset)}
+                style={{ fontSize: 13, fontWeight: 700, color: '#fff', background: T.rustText, border: 'none', borderRadius: 8, padding: '10px 18px', cursor: 'pointer' }}>
+                Sim, desfazer tudo
+              </button>
+              <button onClick={() => setConfirmandoReset(null)}
+                style={{ fontSize: 12.5, fontWeight: 600, color: T.inkFaint, background: 'transparent', border: `1px solid ${T.line}`, borderRadius: 8, padding: '10px 16px', cursor: 'pointer' }}>
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </Overlay>
       )}
 
       {modalPendencia && (
@@ -7722,7 +8003,7 @@ function MonitoramentoOP({ currentUser }) {
       {abaMonitoramento === 'op' && (<>
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
-        <div style={{ fontSize: 12.5, color: T.inkFaint, background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 8, padding: '10px 14px', flex: 1, minWidth: 280 }}>
+        <div style={{ fontSize: 14, color: T.inkFaint, background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 8, padding: '10px 14px', flex: 1, minWidth: 280 }}>
           Verifica, por <strong>projeto (BR)</strong>, se todos os itens pedidos têm Ordem de Produção
           vinculada no Sankhya — em três níveis: 1) a OP existe e a produção já foi iniciada, 2) a OP existe
           mas a produção ainda não começou, ou 3) não existe OP nem produção próxima do mesmo produto
@@ -7735,7 +8016,7 @@ function MonitoramentoOP({ currentUser }) {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-end', flexShrink: 0 }}>
           <button onClick={handleAtualizar} disabled={syncing} style={{
             display: 'flex', alignItems: 'center', gap: 8, background: T.terracotta, color: '#fff', border: 'none',
-            borderRadius: 8, padding: '10px 18px', fontSize: 13, fontWeight: 700, opacity: syncing ? 0.7 : 1, flexShrink: 0,
+            borderRadius: 8, padding: '10px 18px', fontSize: 14.5, fontWeight: 700, opacity: syncing ? 0.7 : 1, flexShrink: 0,
           }}>
             <RefreshCw size={15} className={syncing ? 'spin' : ''} />
             {syncing ? 'Analisando… (pode levar 1min)' : 'Atualizar do Sankhya'}
@@ -7750,12 +8031,12 @@ function MonitoramentoOP({ currentUser }) {
           background: syncStatus.ok ? T.oliveSoft : T.rustSoft, border: `1px solid ${syncStatus.ok ? T.olive : T.rust}33`,
         }}>
           {syncStatus.ok ? <CheckCircle2 size={14} color={T.oliveText} /> : <AlertTriangle size={14} color={T.rustText} />}
-          <span style={{ fontSize: 12.5, color: syncStatus.ok ? T.oliveText : T.rustText }}>{syncStatus.message}</span>
+          <span style={{ fontSize: 14, color: syncStatus.ok ? T.oliveText : T.rustText }}>{syncStatus.message}</span>
         </div>
       )}
 
       {erro && (
-        <div style={{ background: T.rustSoft, color: T.rustText, borderRadius: 8, padding: '10px 14px', fontSize: 12.5, display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div style={{ background: T.rustSoft, color: T.rustText, borderRadius: 8, padding: '10px 14px', fontSize: 14, display: 'flex', alignItems: 'center', gap: 8 }}>
           <AlertTriangle size={14} /> {erro}
         </div>
       )}
@@ -7774,13 +8055,13 @@ function MonitoramentoOP({ currentUser }) {
       </div>
 
       {kpis.semOp > 0 && (
-        <div style={{ fontSize: 11.5, color: T.inkFaint, background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 8, padding: '8px 14px' }}>
+        <div style={{ fontSize: 13, color: T.inkFaint, background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 8, padding: '8px 14px' }}>
           Média de {kpis.diasMedioSemOp} dia{kpis.diasMedioSemOp !== 1 ? 's' : ''} em aberto entre os projetos "Sem OP".
         </div>
       )}
 
       {kpis.semBR > 0 && (
-        <div style={{ fontSize: 11.5, color: T.inkFaint, background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 8, padding: '8px 14px' }}>
+        <div style={{ fontSize: 13, color: T.inkFaint, background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 8, padding: '8px 14px' }}>
           {kpis.semBR} item{kpis.semBR !== 1 ? 's' : ''} sem BR vinculado no Sankhya (não entram na contagem por projeto acima).
         </div>
       )}
@@ -7809,13 +8090,13 @@ function MonitoramentoOP({ currentUser }) {
               </div>
             </FiltroCampoFat>
           </div>
-          {ultimoSync && <div style={{ fontSize: 11, color: T.inkFaint }}>Última análise: {new Date(ultimoSync).toLocaleString('pt-BR')}</div>}
+          {ultimoSync && <div style={{ fontSize: 12.5, color: T.inkFaint }}>Última análise: {new Date(ultimoSync).toLocaleString('pt-BR')}</div>}
         </div>
       </Panel>
 
       <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
         <div style={{ overflowX: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13.5 }}>
             <thead>
               <tr style={{ background: T.panelAlt, borderBottom: `1px solid ${T.line}` }}>
                 <SortTh label="BR" col="br" />
@@ -7850,23 +8131,23 @@ function MonitoramentoOP({ currentUser }) {
                     <td style={{ padding: '9px 12px', color: T.inkDim, whiteSpace: 'nowrap' }}>{fmtData(p.dataMaisAntiga)}</td>
                     <td style={{ padding: '9px 12px', textAlign: 'right', fontWeight: 700, color: p.diasAberto > 30 ? T.rustText : T.inkDim }}>{p.diasAberto ?? '—'}</td>
                     <td style={{ padding: '9px 12px', textAlign: 'center' }}>
-                      <span style={{ fontSize: 10.5, fontWeight: 700, color: st.cor, background: st.bg, padding: '3px 8px', borderRadius: 4, whiteSpace: 'nowrap' }}>{st.label}</span>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: st.cor, background: st.bg, padding: '3px 8px', borderRadius: 4, whiteSpace: 'nowrap' }}>{st.label}</span>
                     </td>
                     <td style={{ padding: '9px 12px' }}>
                       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3, marginBottom: anotacao?.observacao ? 4 : 0 }}>
                         {tagsDoBr.map(tag => (
-                          <span key={tag.id} style={{ fontSize: 9.5, fontWeight: 700, color: '#fff', background: tag.cor, padding: '2px 7px', borderRadius: 10, whiteSpace: 'nowrap' }}>{tag.nome}</span>
+                          <span key={tag.id} style={{ fontSize: 11, fontWeight: 700, color: '#fff', background: tag.cor, padding: '2px 7px', borderRadius: 10, whiteSpace: 'nowrap' }}>{tag.nome}</span>
                         ))}
                       </div>
                       {anotacao?.observacao && (
-                        <div style={{ fontSize: 10.5, color: T.inkFaint, maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={anotacao.observacao}>
+                        <div style={{ fontSize: 12, color: T.inkFaint, maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={anotacao.observacao}>
                           📝 {anotacao.observacao}{anotacao.data_referencia ? ` (${fmtData(anotacao.data_referencia)})` : ''}
                         </div>
                       )}
                     </td>
                     <td style={{ padding: '9px 12px', textAlign: 'center' }}>
                       <button onClick={(e) => { e.stopPropagation(); setDrillBR(p); }}
-                        style={{ fontSize: 11, color: T.blueText, background: T.blueSoft, border: 'none', borderRadius: 5, padding: '4px 10px', cursor: 'pointer', fontWeight: 600 }}>
+                        style={{ fontSize: 12.5, color: T.blueText, background: T.blueSoft, border: 'none', borderRadius: 5, padding: '4px 10px', cursor: 'pointer', fontWeight: 600 }}>
                         Ver itens
                       </button>
                     </td>
@@ -7876,7 +8157,7 @@ function MonitoramentoOP({ currentUser }) {
             </tbody>
           </table>
         </div>
-        <div style={{ padding: '10px 16px', borderTop: `1px solid ${T.line}`, fontSize: 11, color: T.inkFaint, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div style={{ padding: '10px 16px', borderTop: `1px solid ${T.line}`, fontSize: 12.5, color: T.inkFaint, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <span>{filtrados.length} projeto{filtrados.length !== 1 ? 's' : ''} · linhas em vermelho = "Sem OP" há mais de 30 dias</span>
           <BotaoExportar small onClick={() => exportCSV(filtrados.map(p => ({ ...p, itens: p.itens.map(i => `${i.cod_produto} (${i.status})`).join(' | ') })), 'monitoramento_op_por_projeto.csv',
             ['br','cliente','itensSemOp','totalItens','dataMaisAntiga','diasAberto','status','itens'])} />
@@ -7892,13 +8173,13 @@ function MonitoramentoOP({ currentUser }) {
           }}>
             <div style={{ padding: '18px 22px', borderBottom: `1px solid ${T.line}`, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
               <div>
-                <div style={{ fontFamily: FONT_DISPLAY, fontSize: 17, fontWeight: 700, color: T.ink }}>{drillBR.br}</div>
-                <div style={{ fontSize: 12, color: T.inkFaint, marginTop: 2 }}>{drillBR.cliente} · {drillBR.totalItens} item{drillBR.totalItens !== 1 ? 's' : ''}</div>
+                <div style={{ fontFamily: FONT_DISPLAY, fontSize: 19, fontWeight: 700, color: T.ink }}>{drillBR.br}</div>
+                <div style={{ fontSize: 13.5, color: T.inkFaint, marginTop: 2 }}>{drillBR.cliente} · {drillBR.totalItens} item{drillBR.totalItens !== 1 ? 's' : ''}</div>
               </div>
               <button onClick={() => setDrillBR(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.inkFaint }}><X size={18} /></button>
             </div>
             <div style={{ overflow: 'auto', flex: 1 }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13.5 }}>
                 <thead>
                   <tr style={{ borderBottom: `1px solid ${T.line}`, position: 'sticky', top: 0, background: T.panel }}>
                     <th style={thFat(0)}>Produto</th>
@@ -7906,13 +8187,17 @@ function MonitoramentoOP({ currentUser }) {
                     <th style={thFat(100)}>Data pedido</th>
                     <th style={{ ...thFat(90), textAlign: 'center' }}>Nº OP</th>
                     <th style={{ ...thFat(170), textAlign: 'center' }}>Status</th>
+                    <th style={thFat(90)}></th>
                   </tr>
                 </thead>
                 <tbody>
                   {drillBR.itens.map((it, i) => {
                     const st = statusInfo(it.status);
+                    const hist = historicoItemDados[it.cod_produto];
+                    const aberto = historicoItemAberto === it.cod_produto;
                     return (
-                      <tr key={i} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                      <React.Fragment key={i}>
+                      <tr style={{ borderBottom: aberto ? 'none' : `1px solid ${T.lineSoft}` }}>
                         <td style={{ padding: '9px 12px' }}>
                           <div style={{ fontWeight: 600 }}>{it.cod_produto} — {it.produto_descricao}</div>
                         </td>
@@ -7920,9 +8205,49 @@ function MonitoramentoOP({ currentUser }) {
                         <td style={{ padding: '9px 12px', color: T.inkFaint, whiteSpace: 'nowrap' }}>{fmtData(it.data_pedido)}</td>
                         <td style={{ padding: '9px 12px', textAlign: 'center', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText }}>{it.nro_ordem_producao || '—'}</td>
                         <td style={{ padding: '9px 12px', textAlign: 'center' }}>
-                          <span style={{ fontSize: 10.5, fontWeight: 700, color: st.cor, background: st.bg, padding: '3px 8px', borderRadius: 4, whiteSpace: 'nowrap' }}>{st.label}</span>
+                          <span style={{ fontSize: 12, fontWeight: 700, color: st.cor, background: st.bg, padding: '3px 8px', borderRadius: 4, whiteSpace: 'nowrap' }}>{st.label}</span>
+                        </td>
+                        <td style={{ padding: '9px 12px', textAlign: 'center' }}>
+                          <button onClick={() => carregarHistoricoItem(it.cod_produto)}
+                            style={{ fontSize: 10.5, fontWeight: 600, color: T.blueText, background: 'transparent', border: `1px solid ${T.blueText}55`, borderRadius: 5, padding: '3px 8px', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                            {aberto ? '✕ Fechar' : '🕘 Histórico'}
+                          </button>
                         </td>
                       </tr>
+                      {aberto && (
+                        <tr style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                          <td colSpan={6} style={{ padding: '4px 12px 12px', background: T.panelAlt }}>
+                            {hist?.loading || !hist ? (
+                              <div style={{ fontSize: 11.5, color: T.inkFaint, padding: '6px 4px' }}>Carregando…</div>
+                            ) : (
+                              <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', padding: '6px 4px' }}>
+                                <div style={{ fontSize: 11.5 }}>
+                                  <span style={{ fontWeight: 700, color: T.inkFaint }}>Composição (PA): </span>
+                                  {hist.temComposicao ? (
+                                    <span style={{ color: T.oliveText, fontWeight: 700 }}>✓ Cadastrada ({hist.qtdInsumos} insumo{hist.qtdInsumos !== 1 ? 's' : ''})</span>
+                                  ) : (
+                                    <span style={{ color: T.amberText, fontWeight: 700 }}>⚠ Não cadastrada</span>
+                                  )}
+                                </div>
+                                <div style={{ fontSize: 11.5 }}>
+                                  <span style={{ fontWeight: 700, color: T.inkFaint }}>Últimas OPs desse produto: </span>
+                                  {hist.ultimasOps.length === 0 ? (
+                                    <span style={{ color: T.inkFaint }}>nenhuma encontrada nos últimos 180 dias</span>
+                                  ) : (
+                                    hist.ultimasOps.map((op, idx) => (
+                                      <span key={idx} style={{ marginRight: 12, whiteSpace: 'nowrap' }}>
+                                        <span style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText }}>OP {op.nro_ordem_producao}</span>
+                                        {' '}({op.br || '—'}{op.cliente_nome ? ` · ${op.cliente_nome}` : ''} · {fmtData(op.data_ref)})
+                                      </span>
+                                    ))
+                                  )}
+                                </div>
+                              </div>
+                            )}
+                          </td>
+                        </tr>
+                      )}
+                      </React.Fragment>
                     );
                   })}
                 </tbody>
@@ -7931,14 +8256,14 @@ function MonitoramentoOP({ currentUser }) {
 
             {/* ── ETIQUETAS + OBSERVAÇÃO ────────────────────────────────── */}
             <div style={{ borderTop: `1px solid ${T.line}`, padding: '16px 22px', flexShrink: 0 }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: T.inkFaint, textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 8 }}>Etiquetas</div>
+              <div style={{ fontSize: 12.5, fontWeight: 700, color: T.inkFaint, textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 8 }}>Etiquetas</div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 10 }}>
                 {tagsCatalogo.map(tag => {
                   const marcado = (tagsPorBr[drillBR.br] || []).includes(tag.id);
                   return (
                     <button key={tag.id} onClick={() => alternarTagNoBr(drillBR.br, tag.id)}
                       style={{
-                        fontSize: 11, fontWeight: 700, padding: '4px 11px', borderRadius: 12, cursor: 'pointer',
+                        fontSize: 12.5, fontWeight: 700, padding: '4px 11px', borderRadius: 12, cursor: 'pointer',
                         border: `1.5px solid ${tag.cor}`, background: marcado ? tag.cor : 'transparent', color: marcado ? '#fff' : tag.cor,
                       }}>
                       {marcado ? '✓ ' : '+ '}{tag.nome}
@@ -7948,21 +8273,21 @@ function MonitoramentoOP({ currentUser }) {
               </div>
               <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 16 }}>
                 <input value={novaTagNome} onChange={e => setNovaTagNome(e.target.value)} placeholder="Nova etiqueta…"
-                  style={{ ...inputStyle(), fontSize: 12, flex: 1, padding: '6px 10px' }} />
+                  style={{ ...inputStyle(), fontSize: 13.5, flex: 1, padding: '6px 10px' }} />
                 <input type="color" value={novaTagCor} onChange={e => setNovaTagCor(e.target.value)}
                   style={{ width: 32, height: 32, border: `1px solid ${T.line}`, borderRadius: 6, padding: 2, cursor: 'pointer' }} />
-                <button onClick={criarNovaTag} style={{ ...ghostBtn(T.inkFaint), padding: '6px 12px', fontSize: 12 }}>Criar</button>
+                <button onClick={criarNovaTag} style={{ ...ghostBtn(T.inkFaint), padding: '6px 12px', fontSize: 13.5 }}>Criar</button>
               </div>
 
-              <div style={{ fontSize: 11, fontWeight: 700, color: T.inkFaint, textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 8 }}>Observação</div>
+              <div style={{ fontSize: 12.5, fontWeight: 700, color: T.inkFaint, textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 8 }}>Observação</div>
               <textarea rows={3} value={observacaoEdit} onChange={e => setObservacaoEdit(e.target.value)}
                 placeholder="Ex: aguardando retorno do cliente sobre o desenho técnico — cobrar comercial se não voltar até a data abaixo."
-                style={{ ...inputStyle(), fontSize: 12.5, width: '100%', resize: 'vertical' }} />
+                style={{ ...inputStyle(), fontSize: 14, width: '100%', resize: 'vertical' }} />
               <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginTop: 8 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <span style={{ fontSize: 11.5, color: T.inkFaint }}>Retomar em:</span>
+                  <span style={{ fontSize: 13, color: T.inkFaint }}>Retomar em:</span>
                   <input type="date" value={dataEdit || ''} onChange={e => setDataEdit(e.target.value)}
-                    style={{ ...inputStyle(), fontSize: 12, padding: '5px 8px' }} />
+                    style={{ ...inputStyle(), fontSize: 13.5, padding: '5px 8px' }} />
                 </div>
                 <button onClick={() => salvarAnotacao(drillBR.br, observacaoEdit, dataEdit)} disabled={salvandoAnotacao}
                   style={{ ...solidBtn(T.terracotta, true), marginLeft: 'auto', opacity: salvandoAnotacao ? 0.7 : 1 }}>
