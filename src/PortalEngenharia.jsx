@@ -7144,11 +7144,14 @@ function MonitoramentoOP({ currentUser }) {
     const materiaisBrutos = rProduto.data?.materiais || [];
     // Busca a descrição de cada matéria-prima (o JSON só tem o código) --
     // pra mostrar uma lista de verdade, legível, não só números soltos.
+    // IMPORTANTE: matéria-prima é uma tabela DIFERENTE de produto acabado
+    // (estoque_mp, não produtos/codigo_pa) -- eram códigos de naturezas
+    // diferentes, por isso a descrição nunca era encontrada antes.
     let materiais = materiaisBrutos;
     const codigosMp = [...new Set(materiaisBrutos.map(m => String(m.codigoMP)).filter(Boolean))];
     if (codigosMp.length) {
-      const { data: descricoes } = await supabaseSGQ.from('produtos').select('codigo_pa, descricao').in('codigo_pa', codigosMp);
-      const descPorCodigo = Object.fromEntries((descricoes || []).map(d => [String(d.codigo_pa), d.descricao]));
+      const { data: descricoes } = await supabaseSGQ.from('estoque_mp').select('codigo_mp, descricao').in('codigo_mp', codigosMp);
+      const descPorCodigo = Object.fromEntries((descricoes || []).map(d => [String(d.codigo_mp), d.descricao]));
       materiais = materiaisBrutos.map(m => ({ ...m, descricao: descPorCodigo[String(m.codigoMP)] || null }));
     }
     // Agrupa por OP -- uma OP tem várias linhas de matéria-prima, só queremos
