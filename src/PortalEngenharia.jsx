@@ -7190,6 +7190,7 @@ function MonitoramentoOP({ currentUser }) {
   };
 
 
+  const [tagsCatalogo, setTagsCatalogo] = useState([]);
   const [tagsPorBr, setTagsPorBr] = useState({}); // br -> [tag_id, ...]
   const [anotacoesPorBr, setAnotacoesPorBr] = useState({}); // br -> { observacao, data_referencia }
   const [novaTagNome, setNovaTagNome] = useState('');
