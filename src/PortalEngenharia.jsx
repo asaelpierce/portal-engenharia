@@ -8350,7 +8350,7 @@ function MonitoramentoOP({ currentUser }) {
                       </tr>
                       {aberto && (
                         <tr style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
-                          <td colSpan={6} style={{ padding: '4px 12px 12px', background: T.panelAlt }}>
+                          <td colSpan={6} style={{ padding: '4px 12px 12px', background: T.panelAlt, maxWidth: 1 }}>
                             {hist?.loading || !hist ? (
                               <div style={{ fontSize: 11.5, color: T.inkFaint, padding: '6px 4px' }}>Carregando…</div>
                             ) : (
@@ -8379,25 +8379,27 @@ function MonitoramentoOP({ currentUser }) {
                                   )}
                                 </div>
                                 <div style={{ fontSize: 11.5 }}>
-                                  <span style={{ fontWeight: 700, color: T.inkFaint }}>Últimas OPs desse produto: </span>
+                                  <div style={{ fontWeight: 700, color: T.inkFaint, marginBottom: 4 }}>Últimas OPs desse produto:</div>
                                   {hist.ultimasOps.length === 0 ? (
                                     <span style={{ color: T.inkFaint }}>nenhuma OP com apontamento de matéria-prima encontrada</span>
                                   ) : (
-                                    hist.ultimasOps.map((op, idx) => (
-                                      <span key={idx} style={{ marginRight: 12, whiteSpace: 'nowrap' }}>
-                                        <span style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText }}>OP {op.nro_ordem_producao}</span>
-                                        {' '}({op.br || '—'} · {fmtData(op.data_apontamento)})
-                                        {' '}
-                                        <button onClick={() => vincularOpManual(drillBR.br, it.cod_produto, op.nro_ordem_producao)}
-                                          disabled={vinculando === `${drillBR.br}|${it.cod_produto}`}
-                                          style={{ fontSize: 10, color: T.oliveText, background: 'transparent', border: `1px solid ${T.oliveText}55`, borderRadius: 4, padding: '1px 6px', cursor: 'pointer' }}>
-                                          vincular a esse item
-                                        </button>
-                                      </span>
-                                    ))
+                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                                      {hist.ultimasOps.map((op, idx) => (
+                                        <span key={idx} style={{ whiteSpace: 'nowrap' }}>
+                                          <span style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText }}>OP {op.nro_ordem_producao}</span>
+                                          {' '}({op.br || '—'} · {fmtData(op.data_apontamento)})
+                                          {' '}
+                                          <button onClick={() => vincularOpManual(drillBR.br, it.cod_produto, op.nro_ordem_producao)}
+                                            disabled={vinculando === `${drillBR.br}|${it.cod_produto}`}
+                                            style={{ fontSize: 10, color: T.oliveText, background: 'transparent', border: `1px solid ${T.oliveText}55`, borderRadius: 4, padding: '1px 6px', cursor: 'pointer' }}>
+                                            vincular a esse item
+                                          </button>
+                                        </span>
+                                      ))}
+                                    </div>
                                   )}
                                 </div>
-                                <div style={{ fontSize: 11.5, display: 'flex', alignItems: 'center', gap: 6 }}>
+                                <div style={{ fontSize: 11.5, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                                   <span style={{ fontWeight: 700, color: T.inkFaint }}>Buscar/incluir OP manualmente: </span>
                                   <input value={opManualMonitoramento[`${drillBR.br}|${it.cod_produto}`] || ''}
                                     onChange={e => setOpManualMonitoramento(prev => ({ ...prev, [`${drillBR.br}|${it.cod_produto}`]: e.target.value }))}
@@ -8409,16 +8411,18 @@ function MonitoramentoOP({ currentUser }) {
                                   </button>
                                 </div>
                                 <div style={{ fontSize: 11.5 }}>
-                                  <span style={{ fontWeight: 700, color: T.inkFaint }}>Já pedido antes (outros BRs): </span>
+                                  <div style={{ fontWeight: 700, color: T.inkFaint, marginBottom: 4 }}>Já pedido antes (outros BRs):</div>
                                   {hist.pedidosAnteriores.length === 0 ? (
                                     <span style={{ color: T.inkFaint }}>nenhum pedido anterior encontrado com esse código</span>
                                   ) : (
-                                    hist.pedidosAnteriores.map((p, idx) => (
-                                      <span key={idx} style={{ marginRight: 12, whiteSpace: 'nowrap' }}>
-                                        <span style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText }}>{p.br}</span>
-                                        {' '}({p.cliente_nome || '—'} · qtd {p.quantidade} · {fmtData(p.data_neg)})
-                                      </span>
-                                    ))
+                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                                      {hist.pedidosAnteriores.map((p, idx) => (
+                                        <span key={idx} style={{ whiteSpace: 'nowrap' }}>
+                                          <span style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText }}>{p.br}</span>
+                                          {' '}({p.cliente_nome || '—'} · qtd {p.quantidade} · {fmtData(p.data_neg)})
+                                        </span>
+                                      ))}
+                                    </div>
                                   )}
                                 </div>
                               </div>
