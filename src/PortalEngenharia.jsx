@@ -7363,6 +7363,26 @@ function MonitoramentoOP({ currentUser }) {
     };
   }, [linhas, vinculosManuais]);
 
+  // drillBR guarda uma "foto" do projeto no momento em que o modal abriu --
+  // sem isso, vincular uma OP (ou qualquer outra mudança) não aparece na
+  // tela até fechar e abrir o modal de novo. Mantém sincronizado sempre
+  // que a lista de projetos for recalculada.
+  useEffect(() => {
+    if (!drillBR) return;
+    const atualizado = projetos.lista.find(p => p.br === drillBR.br);
+    if (atualizado && atualizado !== drillBR) setDrillBR(atualizado);
+  }, [projetos]);
+
+  // Mesma lógica -- o modal de histórico guarda uma cópia do item, então
+  // também precisa se atualizar quando o vínculo manual mudar (senão o
+  // botão "vincular" parece não fazer nada até fechar e abrir de novo).
+  useEffect(() => {
+    if (!historicoModalItem || !drillBR) return;
+    const atualizado = drillBR.itens.find(i => i.cod_produto === historicoModalItem.cod_produto);
+    if (atualizado && atualizado !== historicoModalItem) setHistoricoModalItem(atualizado);
+  }, [drillBR]);
+
+
   const filtrados = useMemo(() => {
     return projetos.lista
       .filter(p => statusFiltro === 'todos' || p.status === statusFiltro)
