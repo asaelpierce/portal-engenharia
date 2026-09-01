@@ -3625,10 +3625,7 @@ function AlmoxarifadoFluxo({ currentUser }) {
       )}
 
       {abaAtiva === 'produtividade_produto' && (
-        <Panel subtitle="Média de dias de produção e produtividade por CÓDIGO DE PRODUTO (não por projeto) — considera só movimentações registradas a partir de agora pelo portal, não o histórico importado da planilha">
-          <div style={{ fontSize: 11, color: T.inkFaint, marginBottom: 12, background: T.panelAlt, padding: '8px 12px', borderRadius: 6 }}>
-            💡 Essa tabela começa vazia e vai enchendo conforme o time registra movimentações pelo portal (aba "Registrar"). O histórico antigo da planilha não entra aqui de propósito.
-          </div>
+        <Panel subtitle="Média de dias de produção e produtividade por CÓDIGO DE PRODUTO (não por projeto) — considera todo o histórico de movimentações (planilha antiga + o que for registrado pelo portal)">
           <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
               <thead>
@@ -3645,7 +3642,7 @@ function AlmoxarifadoFluxo({ currentUser }) {
                 {loading ? (
                   <tr><td colSpan={6} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Carregando…</td></tr>
                 ) : produtividadeProduto.length === 0 ? (
-                  <tr><td colSpan={6} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Ainda sem dados — vai populando conforme o time registra movimentações novas pelo portal.</td></tr>
+                  <tr><td colSpan={6} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Sem dados suficientes ainda (precisa ter movimentação registrada e nota de venda pro mesmo BR).</td></tr>
                 ) : produtividadeProduto.map((p, i) => (
                   <tr key={i} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
                     <td style={{ padding: '8px 12px', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText }}>{p.cod_produto}</td>
