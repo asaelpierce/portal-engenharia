@@ -5746,8 +5746,13 @@ function PlaquinhaEquipamento({ currentUser }) {
   };
 
   const excluir = async (item) => {
-    if (!confirm(`Excluir esse item${item.numero_desenho ? ` (${item.numero_desenho})` : ''}? Essa ação não pode ser desfeita.`)) return;
-    const { error } = await supabase.from('plaquinhas_equipamento').delete().eq('id', item.id);
+    if (!confirm(`Excluir esse item${item.numero_desenho ? ` (${item.numero_desenho})` : ''}? Fica registrado (não recria sozinho se o Sankhya mandar de novo), mas some da lista.`)) return;
+    // Soft-delete (não apaga a linha de vez) -- assim, se o mesmo BR for
+    // detectado de novo (Sankhya ou criação manual), o sistema sabe que já
+    // foi excluído de propósito e não recria sozinho.
+    const { error } = await supabase.from('plaquinhas_equipamento').update({
+      status: 'excluida', excluido_por: currentUser?.nome || null, excluido_em: new Date().toISOString(),
+    }).eq('id', item.id);
     if (error) { alert(`Erro ao excluir: ${error.message}`); return; }
     await carregar();
   };
@@ -5996,14 +6001,25 @@ function CriarPlaquinhaManual({ onFechar, onCriado }) {
   const [encontrado, setEncontrado] = useState(null);
   const [naoAchou, setNaoAchou] = useState(false);
   const [criando, setCriando] = useState(false);
+  const [jaExistentes, setJaExistentes] = useState([]); // plaquinhas já criadas pra esse BR
+
+  const STATUS_LABEL = { pendente: 'ainda pendente', aguardando_engenharia: 'já enviada pra Engenharia', preenchida: 'já concluída', excluida: 'excluída antes' };
 
   const buscar = async () => {
     if (!br.trim()) return;
     setBuscando(true);
     setNaoAchou(false);
     setEncontrado(null);
-    const { data } = await supabase.from('pedidos_itens').select('br,cliente_nome,numero_pedido,data_prevista_entrega,produto_descricao')
-      .ilike('br', br.trim()).limit(1).maybeSingle();
+    setJaExistentes([]);
+    const [{ data }, { data: existentes }] = await Promise.all([
+      supabase.from('pedidos_itens').select('br,cliente_nome,numero_pedido,data_prevista_entrega,produto_descricao')
+        .ilike('br', br.trim()).limit(1).maybeSingle(),
+      // Checa se já existe plaquinha pra esse BR -- antes não checava nada,
+      // e dava pra criar duplicata sem perceber (foi exatamente o que
+      // aconteceu com pelo menos 2 BRs diferentes).
+      supabase.from('plaquinhas_equipamento').select('id, status, created_at').ilike('br', br.trim()).order('created_at'),
+    ]);
+    setJaExistentes(existentes || []);
     if (data) {
       setEncontrado(data);
     } else {
@@ -6040,6 +6056,13 @@ function CriarPlaquinhaManual({ onFechar, onCriado }) {
 
         {naoAchou && <div style={{ fontSize: 12, color: T.amberText }}>⚠ Não achamos esse BR — pode preencher tudo na mão abaixo.</div>}
 
+        {jaExistentes.length > 0 && (
+          <div style={{ fontSize: 12, color: T.rustText, background: T.rustSoft, border: `1px solid ${T.rust}55`, borderRadius: 6, padding: '8px 12px' }}>
+            ⚠ Já existe {jaExistentes.length > 1 ? `${jaExistentes.length} plaquinhas` : 'uma plaquinha'} pra esse BR: {jaExistentes.map(e => STATUS_LABEL[e.status] || e.status).join(', ')}.
+            {' '}Se for outro item (peça diferente) do mesmo projeto, pode criar mesmo assim.
+          </div>
+        )}
+
         {encontrado && (
           <>
             {encontrado.produto_descricao && (
@@ -6062,8 +6085,8 @@ function CriarPlaquinhaManual({ onFechar, onCriado }) {
             </div>
             <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
               <button onClick={criar} disabled={criando}
-                style={{ fontSize: 12.5, fontWeight: 700, color: '#fff', background: T.oliveText, border: 'none', borderRadius: 6, padding: '8px 16px', cursor: 'pointer' }}>
-                {criando ? 'Criando…' : '✓ Adicionar à lista de pendentes'}
+                style={{ fontSize: 12.5, fontWeight: 700, color: '#fff', background: jaExistentes.length > 0 ? T.rustText : T.oliveText, border: 'none', borderRadius: 6, padding: '8px 16px', cursor: 'pointer' }}>
+                {criando ? 'Criando…' : jaExistentes.length > 0 ? '✓ Criar mesmo assim (outro item)' : '✓ Adicionar à lista de pendentes'}
               </button>
               <button onClick={onFechar} style={{ fontSize: 12.5, fontWeight: 600, color: T.inkFaint, background: 'transparent', border: `1px solid ${T.line}`, borderRadius: 6, padding: '8px 14px', cursor: 'pointer' }}>
                 Cancelar
