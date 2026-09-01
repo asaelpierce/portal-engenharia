@@ -3577,6 +3577,18 @@ function AlmoxarifadoFluxo({ currentUser }) {
                 </div>
               ))}
             </div>
+            {(() => {
+              const brsUnicos = [...new Map(faturadoMesFiltrado.map(f => [f.br, f])).values()];
+              const semData = brsUnicos.filter(f => f.data_entrega_material_desconhecida).length;
+              if (!brsUnicos.length) return null;
+              return (
+                <div style={{ fontSize: 11.5, color: semData ? T.amberText : T.oliveText, background: semData ? T.amberSoft : T.oliveSoft, padding: '8px 12px', borderRadius: 6, marginBottom: 14 }}>
+                  {semData > 0
+                    ? `⚠ ${semData} de ${brsUnicos.length} projetos (${Math.round(semData / brsUnicos.length * 100)}%) não têm a data de entrega de material registrada — é histórico de antes de usarem o portal pra isso. Daqui pra frente, registrando pela aba "Registrar", isso fica automático.`
+                    : `✓ Todos os ${brsUnicos.length} projetos têm a data de entrega de material registrada.`}
+                </div>
+              );
+            })()}
             <div style={{ overflowX: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                 <thead>
@@ -3584,6 +3596,7 @@ function AlmoxarifadoFluxo({ currentUser }) {
                     <th style={thFat(100)}>Data fat.</th>
                     <th style={thFat(100)}>BR</th>
                     <th style={{ ...thFat(70), textAlign: 'center' }}>OP</th>
+                    <th style={thFat(110)}>Material entregue</th>
                     <th style={{ ...thFat(80), textAlign: 'center' }}>Dias prod.</th>
                     <th style={thFat(90)}>Código PA</th>
                     <th style={thFat(0)}>Descrição PA</th>
@@ -3594,14 +3607,21 @@ function AlmoxarifadoFluxo({ currentUser }) {
                 </thead>
                 <tbody>
                   {loading ? (
-                    <tr><td colSpan={9} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Carregando…</td></tr>
+                    <tr><td colSpan={10} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Carregando…</td></tr>
                   ) : faturadoMesFiltrado.length === 0 ? (
-                    <tr><td colSpan={9} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Nada encontrado.</td></tr>
+                    <tr><td colSpan={10} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Nada encontrado.</td></tr>
                   ) : faturadoMesFiltrado.slice(0, 300).map((f, i) => (
                     <tr key={i} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
                       <td style={{ padding: '8px 12px', color: T.inkDim, whiteSpace: 'nowrap' }}>{fmtData(f.data_faturamento)}</td>
                       <td style={{ padding: '8px 12px', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText }}>{f.br}</td>
                       <td style={{ padding: '8px 12px', textAlign: 'center', color: f.numero_op ? T.inkDim : T.inkFaint }}>{f.numero_op || '—'}</td>
+                      <td style={{ padding: '8px 12px', whiteSpace: 'nowrap' }}>
+                        {f.data_entrega_material_desconhecida ? (
+                          <span title="Não tem esse marco registrado — histórico anterior ao uso do portal pra isso" style={{ fontSize: 10.5, fontWeight: 700, color: T.amberText, background: T.amberSoft, padding: '2px 7px', borderRadius: 4 }}>
+                            ⚠ Não registrado
+                          </span>
+                        ) : fmtData(f.data_entrega_material)}
+                      </td>
                       <td style={{ padding: '8px 12px', textAlign: 'center' }} title={f.dias_producao_estimado ? 'Estimado via data real do Sankhya — não tinha "Projeto Faturado" registrado no formulário' : ''}>
                         {f.dias_em_producao ?? '—'}{f.dias_producao_estimado && <span style={{ color: T.amberText }}> *</span>}
                       </td>
@@ -3620,7 +3640,7 @@ function AlmoxarifadoFluxo({ currentUser }) {
             <div style={{ padding: '10px 0 0', fontSize: 11, color: T.inkFaint, display: 'flex', justifyContent: 'space-between' }}>
               <span>{faturadoMesFiltrado.length} itens faturados (mostrando até 300) · <span style={{ color: T.amberText }}>*</span> = dias estimados via Sankhya (sem "Projeto Faturado" no formulário)</span>
               <BotaoExportar small onClick={() => exportCSV(faturadoMesFiltrado, 'almoxarifado_faturado_mes.csv',
-                ['mes_referencia', 'br', 'numero_op', 'data_faturamento', 'cod_produto', 'produto_descricao', 'quantidade', 'unidade', 'linha', 'dias_em_producao'])} />
+                ['mes_referencia', 'br', 'numero_op', 'data_faturamento', 'data_entrega_material', 'cod_produto', 'produto_descricao', 'quantidade', 'unidade', 'linha', 'dias_em_producao'])} />
             </div>
           </Panel>
         </>
