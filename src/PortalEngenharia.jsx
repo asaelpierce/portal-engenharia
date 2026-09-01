@@ -2746,6 +2746,16 @@ function FunilVisualSVG({ segmentos, total, ativo, onClick }) {
 }
 
 function AlmoxarifadoFluxo({ currentUser }) {
+  // fmtData local (sombreia a global) -- a global só aceita data simples
+  // ("2026-08-31"), quebra em "Invalid Date" com timestamp completo
+  // (a coluna data_entrega_material vem com hora/timezone).
+  const fmtData = (iso) => {
+    if (!iso) return '—';
+    const jaTemHora = /[T ]\d{2}:\d{2}/.test(iso);
+    const d = jaTemHora ? new Date(iso) : new Date(iso + 'T00:00:00');
+    if (isNaN(d.getTime())) return '—';
+    return d.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: '2-digit' });
+  };
   const apenasFilaAtendimento = currentUser?.ve_almoxarifado_apenas_fila === true;
   const [projetos, setProjetos] = useState([]);
   const [perdas, setPerdas] = useState([]);
