@@ -15371,6 +15371,7 @@ function PermissoesManager() {
   const [loading, setLoading] = useState(true);
   const [selecionado, setSelecionado] = useState(null);
   const [salvando, setSalvando] = useState(false);
+  const [criandoUsuario, setCriandoUsuario] = useState(false); // controla o modal
 
   const carregar = useCallback(async () => {
     setLoading(true);
@@ -15463,6 +15464,10 @@ function PermissoesManager() {
     <Panel title="Permissões de acesso por usuário" subtitle="Controla quais telas cada colaborador vê e se a produtividade é própria ou de todos">
       <div style={{ display: 'flex', gap: 20, marginTop: 12, flexWrap: 'wrap' }}>
         <div style={{ minWidth: 220, display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 420, overflow: 'auto' }}>
+          <button onClick={() => setCriandoUsuario(true)}
+            style={{ fontSize: 12, fontWeight: 700, color: '#fff', background: T.oliveText, border: 'none', borderRadius: 6, padding: '8px 10px', cursor: 'pointer', marginBottom: 6 }}>
+            + Criar novo usuário
+          </button>
           {loading && <div style={{ fontSize: 12, color: T.inkFaint }}>Carregando…</div>}
           {colabs.map(c => {
             const restrito = (telasPorUsuario[c.id]?.size || 0) > 0;
@@ -15520,7 +15525,104 @@ function PermissoesManager() {
           )}
         </div>
       </div>
+
+      {criandoUsuario && (
+        <ModalCriarUsuario onFechar={() => setCriandoUsuario(false)} onCriado={async () => { setCriandoUsuario(false); await carregar(); }} />
+      )}
     </Panel>
+  );
+}
+
+function ModalCriarUsuario({ onFechar, onCriado }) {
+  const [nome, setNome] = useState('');
+  const [email, setEmail] = useState('');
+  const [senha, setSenha] = useState('');
+  const [papel, setPapel] = useState('engenheiro');
+  const [bloquearTudo, setBloquearTudo] = useState(false);
+  const [criando, setCriando] = useState(false);
+  const [erro, setErro] = useState(null);
+
+  const PAPEIS = ['engenheiro', 'revisor_tecnico', 'analista_aprovador', 'gestor', 'comercial', 'almoxarifado'];
+
+  const gerarSenha = () => {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789!@#';
+    let s = '';
+    for (let i = 0; i < 10; i++) s += chars[Math.floor(Math.random() * chars.length)];
+    setSenha(s);
+  };
+
+  const criar = async () => {
+    if (!nome.trim() || !email.trim() || !senha.trim()) { setErro('Preenche nome, e-mail e senha.'); return; }
+    setCriando(true);
+    setErro(null);
+    try {
+      const res = await fetch(`${SUPABASE_URL}/functions/v1/admin-criar-colaborador`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          nome: nome.trim(), email: email.trim(), senha, papel,
+          ve_almoxarifado_completo: papel !== 'almoxarifado',
+          ve_almoxarifado_apenas_fila: papel === 'almoxarifado',
+          bloquear_tudo: bloquearTudo,
+        }),
+      }).then(r => r.json());
+      if (!res.ok) { setErro(res.erro || 'Erro desconhecido.'); setCriando(false); return; }
+      await onCriado();
+    } catch (e) {
+      setErro(String(e));
+      setCriando(false);
+    }
+  };
+
+  return (
+    <Overlay onClose={onFechar}>
+      <div className="scale-in" style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, width: '100%', maxWidth: 440, padding: 24, boxShadow: '0 24px 60px rgba(0,0,0,.18)' }}>
+        <h3 style={{ fontFamily: FONT_DISPLAY, fontSize: 16, fontWeight: 700, margin: '0 0 4px' }}>Criar novo usuário</h3>
+        <p style={{ fontSize: 12.5, color: T.inkDim, margin: '0 0 16px' }}>Cria a conta de login e o cadastro de colaborador de uma vez.</p>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div>
+            <label style={{ fontSize: 11.5, fontWeight: 700, color: T.inkFaint, display: 'block', marginBottom: 4 }}>Nome completo</label>
+            <input value={nome} onChange={e => setNome(e.target.value)} placeholder="Ex: Daniela Oliveira" style={{ ...inputStyle(), width: '100%' }} />
+          </div>
+          <div>
+            <label style={{ fontSize: 11.5, fontWeight: 700, color: T.inkFaint, display: 'block', marginBottom: 4 }}>E-mail</label>
+            <input value={email} onChange={e => setEmail(e.target.value)} placeholder="nome@kalenborn.com.br" style={{ ...inputStyle(), width: '100%' }} />
+          </div>
+          <div>
+            <label style={{ fontSize: 11.5, fontWeight: 700, color: T.inkFaint, display: 'block', marginBottom: 4 }}>Senha (mínimo 6 caracteres)</label>
+            <div style={{ display: 'flex', gap: 6 }}>
+              <input value={senha} onChange={e => setSenha(e.target.value)} placeholder="Senha temporária" style={{ ...inputStyle(), flex: 1 }} />
+              <button onClick={gerarSenha} type="button" style={{ fontSize: 11.5, fontWeight: 600, color: T.blueText, background: 'transparent', border: `1px solid ${T.blueText}55`, borderRadius: 6, padding: '0 10px', cursor: 'pointer' }}>
+                Gerar
+              </button>
+            </div>
+            <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 3 }}>Anota e passa pra pessoa — ela pode trocar depois se quiser.</div>
+          </div>
+          <div>
+            <label style={{ fontSize: 11.5, fontWeight: 700, color: T.inkFaint, display: 'block', marginBottom: 4 }}>Papel</label>
+            <select value={papel} onChange={e => setPapel(e.target.value)} style={{ ...inputStyle(), width: '100%' }}>
+              {PAPEIS.map(p => <option key={p} value={p}>{p}</option>)}
+            </select>
+          </div>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5 }}>
+            <input type="checkbox" checked={bloquearTudo} onChange={e => setBloquearTudo(e.target.checked)} />
+            Bloquear todas as telas de início (ajusta o acesso fino depois, na lista)
+          </label>
+
+          {erro && <div style={{ fontSize: 12, color: T.rustText, background: T.rustSoft, padding: '8px 10px', borderRadius: 6 }}>{erro}</div>}
+
+          <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+            <button onClick={criar} disabled={criando}
+              style={{ fontSize: 12.5, fontWeight: 700, color: '#fff', background: T.oliveText, border: 'none', borderRadius: 8, padding: '10px 18px', cursor: 'pointer', opacity: criando ? 0.6 : 1 }}>
+              {criando ? 'Criando…' : '✓ Criar usuário'}
+            </button>
+            <button onClick={onFechar} style={{ fontSize: 12.5, fontWeight: 600, color: T.inkFaint, background: 'transparent', border: `1px solid ${T.line}`, borderRadius: 8, padding: '10px 16px', cursor: 'pointer' }}>
+              Cancelar
+            </button>
+          </div>
+        </div>
+      </div>
+    </Overlay>
   );
 }
 
