@@ -6192,14 +6192,14 @@ function PlaquinhaEngenharia({ currentUser }) {
       const corpo = `PLAQUINHA DE EQUIPAMENTO\n\n${blocos}\n\nBaixar o arquivo Word: ${linkDownload}\n\n${currentUser?.nome || ''}`;
       const corpoHtml = textoParaHtml(corpo);
       const assunto = `Plaquinha de Equipamento — ${primeiro.br || primeiro.numero_desenho}`;
-      for (const destinatario of DESTINATARIOS_PADRAO) {
-        const { error } = await supabase.from('solicitacoes_email_plaquinha').insert({
-          plaquinha_id: primeiro.id, plaquinha_ids: grupo.map(i => i.id),
-          destinatario_email: destinatario, destinatarios: DESTINATARIOS_PADRAO,
-          assunto, corpo: corpoHtml, status: 'pendente',
-        });
-        if (error) erros.push(`${primeiro.br} → ${destinatario}: ${error.message}`);
-      }
+      // Um e-mail só por projeto, com todos os destinatários padrão juntos
+      // no "Para" (separado por ;) -- não um e-mail separado por pessoa.
+      const { error } = await supabase.from('solicitacoes_email_plaquinha').insert({
+        plaquinha_id: primeiro.id, plaquinha_ids: grupo.map(i => i.id),
+        destinatario_email: DESTINATARIOS_PADRAO.join('; '), destinatarios: DESTINATARIOS_PADRAO,
+        assunto, corpo: corpoHtml, status: 'pendente',
+      });
+      if (error) erros.push(`${primeiro.br}: ${error.message}`);
       await supabase.from('plaquinhas_equipamento').update({ email_enviado: true }).in('id', grupo.map(i => i.id));
     }
     setEnviandoTodos(false);
@@ -6428,24 +6428,20 @@ function ModalEnviarEmailPlaquinha({ items, destinatariosPadrao, currentUser, on
     setEnviando(true);
     setErro(null);
     const corpoHtml = textoParaHtml(corpo);
-    const erros = [];
-    // Mesmo formato que a automação (Power Automate) já sabe processar --
-    // um registro por destinatário, com os campos no singular preenchidos.
-    for (const destinatario of destinatarios) {
-      const { error } = await supabase.from('solicitacoes_email_plaquinha').insert({
-        plaquinha_id: primeiro.id,
-        plaquinha_ids: items.map(i => i.id),
-        destinatario_email: destinatario,
-        destinatarios,
-        assunto,
-        corpo: corpoHtml,
-        status: 'pendente',
-      });
-      if (error) erros.push(`${destinatario}: ${error.message}`);
-    }
+    // Um E-MAIL SÓ, com todo mundo junto no "Para" (separado por ;) --
+    // não um e-mail separado pra cada pessoa.
+    const { error } = await supabase.from('solicitacoes_email_plaquinha').insert({
+      plaquinha_id: primeiro.id,
+      plaquinha_ids: items.map(i => i.id),
+      destinatario_email: destinatarios.join('; '),
+      destinatarios,
+      assunto,
+      corpo: corpoHtml,
+      status: 'pendente',
+    });
     await supabase.from('plaquinhas_equipamento').update({ email_enviado: true }).in('id', items.map(i => i.id));
     setEnviando(false);
-    if (erros.length) { setErro('Algumas solicitações falharam:\n' + erros.join('\n')); return; }
+    if (error) { setErro(error.message); return; }
     await onEnviado?.();
     onFechar();
   };
