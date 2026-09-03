@@ -6117,7 +6117,7 @@ function PlaquinhaEngenharia({ currentUser }) {
   const [edicoes, setEdicoes] = useState({}); // id -> { numero_desenho: valor }
   const [salvandoId, setSalvandoId] = useState(null);
   const [busca, setBusca] = useState('');
-  const [modalEmailItem, setModalEmailItem] = useState(null); // item selecionado pra enviar e-mail
+  const [modalEmailItens, setModalEmailItens] = useState(null); // array de itens selecionado pra enviar e-mail
 
   // Sempre pré-marcados nesse e-mail de plaquinha concluída -- muitos não têm
   // cadastro no portal, então ficam fixos aqui em vez de virem de uma busca
@@ -6155,6 +6155,57 @@ function PlaquinhaEngenharia({ currentUser }) {
     });
     return [...mapa.entries()].map(([chave, items]) => ({ chave, items }));
   }, [listaAtual]);
+
+  // Grupos concluídos que ainda não tiveram nenhum e-mail disparado --
+  // usados no botão "Enviar todos pendentes" (dispara pra todos de uma vez,
+  // sem precisar abrir modal um por um).
+  const gruposSemEmail = useMemo(() => {
+    const mapa = new Map();
+    concluidas.filter(i => !i.email_enviado).forEach(item => {
+      const chave = item.br || `sem-br-${item.id}`;
+      if (!mapa.has(chave)) mapa.set(chave, []);
+      mapa.get(chave).push(item);
+    });
+    return [...mapa.entries()].map(([, items]) => items);
+  }, [concluidas]);
+
+  const [enviandoTodos, setEnviandoTodos] = useState(false);
+  const enviarTodosPendentes = async () => {
+    if (gruposSemEmail.length === 0) return;
+    if (!confirm(`Vai mandar ${gruposSemEmail.length} e-mail(s) agora, um por projeto, pros mesmos destinatários padrão. Confirma?`)) return;
+    setEnviandoTodos(true);
+    const MESES_PT = ['JANEIRO','FEVEREIRO','MARÇO','ABRIL','MAIO','JUNHO','JULHO','AGOSTO','SETEMBRO','OUTUBRO','NOVEMBRO','DEZEMBRO'];
+    const fmtMesAno = (d) => { if (!d) return '—'; const data = new Date(d + 'T12:00:00'); return `${MESES_PT[data.getMonth()]}/${data.getFullYear()}`; };
+    const textoParaHtml = (texto) => texto.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/(https?:\/\/[^\s]+)/g, '<a href="$1">$1</a>').replace(/\n/g, '<br>');
+    const erros = [];
+    for (const grupo of gruposSemEmail) {
+      const primeiro = grupo[0];
+      const linkDownload = `https://sieztnpchjjmrwrmrhoa.supabase.co/functions/v1/gerar-plaquinha-docx?${primeiro.br ? `br=${encodeURIComponent(primeiro.br)}` : `id=${primeiro.id}`}`;
+      const blocos = grupo.map(it => (
+        `N. Ordem de serviço: ${it.numero_ordem_servico || '—'}\n` +
+        `N. Desenho: ${it.numero_desenho || '—'}\n` +
+        `Mês/ano: ${fmtMesAno(it.mes_ano)}\n` +
+        `N. Pedido de compra: ${it.numero_pedido_compra || '—'}\n` +
+        `N. Projeto: ${it.br || '—'}\n` +
+        `Cliente: ${it.cliente_nome || '—'}`
+      )).join('\n\n—\n\n');
+      const corpo = `PLAQUINHA DE EQUIPAMENTO\n\n${blocos}\n\nBaixar o arquivo Word: ${linkDownload}\n\n${currentUser?.nome || ''}`;
+      const corpoHtml = textoParaHtml(corpo);
+      const assunto = `Plaquinha de Equipamento — ${primeiro.br || primeiro.numero_desenho}`;
+      for (const destinatario of DESTINATARIOS_PADRAO) {
+        const { error } = await supabase.from('solicitacoes_email_plaquinha').insert({
+          plaquinha_id: primeiro.id, plaquinha_ids: grupo.map(i => i.id),
+          destinatario_email: destinatario, destinatarios: DESTINATARIOS_PADRAO,
+          assunto, corpo: corpoHtml, status: 'pendente',
+        });
+        if (error) erros.push(`${primeiro.br} → ${destinatario}: ${error.message}`);
+      }
+      await supabase.from('plaquinhas_equipamento').update({ email_enviado: true }).in('id', grupo.map(i => i.id));
+    }
+    setEnviandoTodos(false);
+    await carregar();
+    if (erros.length) alert('Algumas solicitações falharam:\n\n' + erros.join('\n'));
+  };
 
   const campo = (item, nome) => edicoes[item.id]?.[nome] ?? item[nome] ?? '';
   const setCampo = (itemId, nome, valor) => setEdicoes(prev => ({ ...prev, [itemId]: { ...prev[itemId], [nome]: valor } }));
@@ -6227,6 +6278,12 @@ function PlaquinhaEngenharia({ currentUser }) {
           <Search size={13} style={{ position: 'absolute', left: 9, top: 9, color: T.inkFaint }} />
           <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Buscar BR ou cliente…" style={{ ...inputStyle(), width: 220, paddingLeft: 28 }} />
         </div>
+        {aba === 'concluidas' && gruposSemEmail.length > 0 && (
+          <button onClick={enviarTodosPendentes} disabled={enviandoTodos}
+            style={{ fontSize: 12.5, fontWeight: 700, color: '#fff', background: T.terracotta, border: 'none', borderRadius: 6, padding: '8px 14px', cursor: 'pointer', opacity: enviandoTodos ? 0.6 : 1 }}>
+            {enviandoTodos ? 'Enviando…' : `🚀 Enviar todos pendentes (${gruposSemEmail.length})`}
+          </button>
+        )}
       </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -6246,6 +6303,12 @@ function PlaquinhaEngenharia({ currentUser }) {
                   <button onClick={() => concluirGrupo(items)} disabled={salvandoId === items[0].id}
                     style={{ fontSize: 11.5, fontWeight: 700, color: '#fff', background: T.oliveText, border: 'none', borderRadius: 5, padding: '5px 12px', cursor: 'pointer' }}>
                     ✓ Concluir os {items.length} itens
+                  </button>
+                )}
+                {items.length > 1 && aba === 'concluidas' && (
+                  <button onClick={() => setModalEmailItens(items)}
+                    style={{ fontSize: 11.5, fontWeight: 700, color: '#fff', background: T.terracotta, border: 'none', borderRadius: 5, padding: '5px 12px', cursor: 'pointer' }}>
+                    📧 Enviar e-mail (grupo — {items.length} itens)
                   </button>
                 )}
               </div>
@@ -6290,13 +6353,14 @@ function PlaquinhaEngenharia({ currentUser }) {
                       <div style={{ padding: '8px 16px 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                         <span style={{ fontSize: 11, color: T.inkFaint }}>
                           Desenho por {item.desenho_preenchido_por || '?'} em {item.desenho_preenchido_em ? new Date(item.desenho_preenchido_em).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' }) : '?'}
+                          {item.email_enviado && <span style={{ color: T.oliveText, fontWeight: 700 }}> · ✓ e-mail enviado</span>}
                         </span>
                         <div style={{ display: 'flex', gap: 8 }}>
                           <a href={`https://sieztnpchjjmrwrmrhoa.supabase.co/functions/v1/gerar-plaquinha-docx?id=${item.id}`}
                             style={{ fontSize: 11.5, fontWeight: 700, color: '#fff', background: T.blueText, borderRadius: 5, padding: '5px 12px', textDecoration: 'none' }}>
                             ⬇ Baixar Word
                           </a>
-                          <button onClick={() => setModalEmailItem(item)}
+                          <button onClick={() => setModalEmailItens([item])}
                             style={{ fontSize: 11.5, fontWeight: 700, color: '#fff', background: T.terracotta, border: 'none', borderRadius: 5, padding: '5px 12px', cursor: 'pointer' }}>
                             📧 Enviar e-mail
                           </button>
@@ -6311,15 +6375,15 @@ function PlaquinhaEngenharia({ currentUser }) {
         })}
       </div>
 
-      {modalEmailItem && (
-        <ModalEnviarEmailPlaquinha item={modalEmailItem} destinatariosPadrao={DESTINATARIOS_PADRAO} currentUser={currentUser}
-          onFechar={() => setModalEmailItem(null)} />
+      {modalEmailItens && (
+        <ModalEnviarEmailPlaquinha items={modalEmailItens} destinatariosPadrao={DESTINATARIOS_PADRAO} currentUser={currentUser}
+          onFechar={() => setModalEmailItens(null)} onEnviado={carregar} />
       )}
     </div>
   );
 }
 
-function ModalEnviarEmailPlaquinha({ item, destinatariosPadrao, currentUser, onFechar }) {
+function ModalEnviarEmailPlaquinha({ items, destinatariosPadrao, currentUser, onFechar, onEnviado }) {
   const [destinatarios, setDestinatarios] = useState(destinatariosPadrao);
   const [textoNovo, setTextoNovo] = useState('');
   const MESES_PT = ['JANEIRO','FEVEREIRO','MARÇO','ABRIL','MAIO','JUNHO','JULHO','AGOSTO','SETEMBRO','OUTUBRO','NOVEMBRO','DEZEMBRO'];
@@ -6328,19 +6392,20 @@ function ModalEnviarEmailPlaquinha({ item, destinatariosPadrao, currentUser, onF
     const data = new Date(d + 'T12:00:00');
     return `${MESES_PT[data.getMonth()]}/${data.getFullYear()}`;
   };
-  const linkDownload = `https://sieztnpchjjmrwrmrhoa.supabase.co/functions/v1/gerar-plaquinha-docx?id=${item.id}`;
-  const [assunto, setAssunto] = useState(`Plaquinha de Equipamento — ${item.br || item.numero_desenho}`);
-  const [corpo, setCorpo] = useState(
-    `PLAQUINHA DE EQUIPAMENTO\n\n` +
-    `N. Ordem de serviço: ${item.numero_ordem_servico || '—'}\n` +
-    `N. Desenho: ${item.numero_desenho || '—'}\n` +
-    `Mês/ano: ${fmtMesAno(item.mes_ano)}\n` +
-    `N. Pedido de compra: ${item.numero_pedido_compra || '—'}\n` +
-    `N. Projeto: ${item.br || '—'}\n` +
-    `Cliente: ${item.cliente_nome || '—'}\n\n` +
-    `Baixar o arquivo Word: ${linkDownload}\n\n` +
-    `${currentUser?.nome || ''}`
-  );
+  const primeiro = items[0];
+  const linkDownload = `https://sieztnpchjjmrwrmrhoa.supabase.co/functions/v1/gerar-plaquinha-docx?${primeiro.br ? `br=${encodeURIComponent(primeiro.br)}` : `id=${primeiro.id}`}`;
+  const [assunto, setAssunto] = useState(`Plaquinha de Equipamento — ${primeiro.br || primeiro.numero_desenho}`);
+  const [corpo, setCorpo] = useState(() => {
+    const blocos = items.map(it => (
+      `N. Ordem de serviço: ${it.numero_ordem_servico || '—'}\n` +
+      `N. Desenho: ${it.numero_desenho || '—'}\n` +
+      `Mês/ano: ${fmtMesAno(it.mes_ano)}\n` +
+      `N. Pedido de compra: ${it.numero_pedido_compra || '—'}\n` +
+      `N. Projeto: ${it.br || '—'}\n` +
+      `Cliente: ${it.cliente_nome || '—'}`
+    )).join('\n\n—\n\n');
+    return `PLAQUINHA DE EQUIPAMENTO\n\n${blocos}\n\nBaixar o arquivo Word: ${linkDownload}\n\n${currentUser?.nome || ''}`;
+  });
   const [enviando, setEnviando] = useState(false);
   const [erro, setErro] = useState(null);
 
@@ -6368,8 +6433,8 @@ function ModalEnviarEmailPlaquinha({ item, destinatariosPadrao, currentUser, onF
     // um registro por destinatário, com os campos no singular preenchidos.
     for (const destinatario of destinatarios) {
       const { error } = await supabase.from('solicitacoes_email_plaquinha').insert({
-        plaquinha_id: item.id,
-        plaquinha_ids: [item.id],
+        plaquinha_id: primeiro.id,
+        plaquinha_ids: items.map(i => i.id),
         destinatario_email: destinatario,
         destinatarios,
         assunto,
@@ -6378,15 +6443,17 @@ function ModalEnviarEmailPlaquinha({ item, destinatariosPadrao, currentUser, onF
       });
       if (error) erros.push(`${destinatario}: ${error.message}`);
     }
+    await supabase.from('plaquinhas_equipamento').update({ email_enviado: true }).in('id', items.map(i => i.id));
     setEnviando(false);
     if (erros.length) { setErro('Algumas solicitações falharam:\n' + erros.join('\n')); return; }
+    await onEnviado?.();
     onFechar();
   };
 
   return (
     <Overlay onClose={onFechar}>
       <div className="scale-in" style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, width: '100%', maxWidth: 560, padding: 24, boxShadow: '0 24px 60px rgba(0,0,0,.18)' }}>
-        <h3 style={{ fontFamily: FONT_DISPLAY, fontSize: 16, fontWeight: 700, margin: '0 0 4px' }}>Enviar e-mail — {item.br}</h3>
+        <h3 style={{ fontFamily: FONT_DISPLAY, fontSize: 16, fontWeight: 700, margin: '0 0 4px' }}>Enviar e-mail — {primeiro.br}{items.length > 1 ? ` (${items.length} itens)` : ''}</h3>
         <p style={{ fontSize: 12.5, color: T.inkDim, margin: '0 0 16px' }}>Confere os destinatários e o texto antes de mandar.</p>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
