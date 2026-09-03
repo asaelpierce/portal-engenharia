@@ -6117,6 +6117,18 @@ function PlaquinhaEngenharia({ currentUser }) {
   const [edicoes, setEdicoes] = useState({}); // id -> { numero_desenho: valor }
   const [salvandoId, setSalvandoId] = useState(null);
   const [busca, setBusca] = useState('');
+  const [modalEmailItem, setModalEmailItem] = useState(null); // item selecionado pra enviar e-mail
+
+  // Sempre pré-marcados nesse e-mail de plaquinha concluída -- muitos não têm
+  // cadastro no portal, então ficam fixos aqui em vez de virem de uma busca
+  // de colaboradores. Dá pra tirar/adicionar na hora de enviar mesmo assim.
+  const DESTINATARIOS_PADRAO = [
+    'franciele.dias@kalenborn.com.br',
+    'leonardo.henrique@kalenborn.com.br',
+    'danilo.lopes@kalenborn.com.br',
+    'kaio.raphael@kalenborn.com.br',
+    'alexandre.pereira@kalenborn.com.br',
+  ];
 
   const carregar = useCallback(async () => {
     setLoading(true);
@@ -6279,10 +6291,16 @@ function PlaquinhaEngenharia({ currentUser }) {
                         <span style={{ fontSize: 11, color: T.inkFaint }}>
                           Desenho por {item.desenho_preenchido_por || '?'} em {item.desenho_preenchido_em ? new Date(item.desenho_preenchido_em).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' }) : '?'}
                         </span>
-                        <a href={`https://sieztnpchjjmrwrmrhoa.supabase.co/functions/v1/gerar-plaquinha-docx?id=${item.id}`}
-                          style={{ fontSize: 11.5, fontWeight: 700, color: '#fff', background: T.blueText, borderRadius: 5, padding: '5px 12px', textDecoration: 'none' }}>
-                          ⬇ Baixar Word
-                        </a>
+                        <div style={{ display: 'flex', gap: 8 }}>
+                          <a href={`https://sieztnpchjjmrwrmrhoa.supabase.co/functions/v1/gerar-plaquinha-docx?id=${item.id}`}
+                            style={{ fontSize: 11.5, fontWeight: 700, color: '#fff', background: T.blueText, borderRadius: 5, padding: '5px 12px', textDecoration: 'none' }}>
+                            ⬇ Baixar Word
+                          </a>
+                          <button onClick={() => setModalEmailItem(item)}
+                            style={{ fontSize: 11.5, fontWeight: 700, color: '#fff', background: T.terracotta, border: 'none', borderRadius: 5, padding: '5px 12px', cursor: 'pointer' }}>
+                            📧 Enviar e-mail
+                          </button>
+                        </div>
                       </div>
                     )}
                   </div>
@@ -6292,7 +6310,129 @@ function PlaquinhaEngenharia({ currentUser }) {
           );
         })}
       </div>
+
+      {modalEmailItem && (
+        <ModalEnviarEmailPlaquinha item={modalEmailItem} destinatariosPadrao={DESTINATARIOS_PADRAO} currentUser={currentUser}
+          onFechar={() => setModalEmailItem(null)} />
+      )}
     </div>
+  );
+}
+
+function ModalEnviarEmailPlaquinha({ item, destinatariosPadrao, currentUser, onFechar }) {
+  const [destinatarios, setDestinatarios] = useState(destinatariosPadrao);
+  const [textoNovo, setTextoNovo] = useState('');
+  const MESES_PT = ['JANEIRO','FEVEREIRO','MARÇO','ABRIL','MAIO','JUNHO','JULHO','AGOSTO','SETEMBRO','OUTUBRO','NOVEMBRO','DEZEMBRO'];
+  const fmtMesAno = (d) => {
+    if (!d) return '—';
+    const data = new Date(d + 'T12:00:00');
+    return `${MESES_PT[data.getMonth()]}/${data.getFullYear()}`;
+  };
+  const linkDownload = `https://sieztnpchjjmrwrmrhoa.supabase.co/functions/v1/gerar-plaquinha-docx?id=${item.id}`;
+  const [assunto, setAssunto] = useState(`Plaquinha de Equipamento — ${item.br || item.numero_desenho}`);
+  const [corpo, setCorpo] = useState(
+    `PLAQUINHA DE EQUIPAMENTO\n\n` +
+    `N. Ordem de serviço: ${item.numero_ordem_servico || '—'}\n` +
+    `N. Desenho: ${item.numero_desenho || '—'}\n` +
+    `Mês/ano: ${fmtMesAno(item.mes_ano)}\n` +
+    `N. Pedido de compra: ${item.numero_pedido_compra || '—'}\n` +
+    `N. Projeto: ${item.br || '—'}\n` +
+    `Cliente: ${item.cliente_nome || '—'}\n\n` +
+    `Baixar o arquivo Word: ${linkDownload}\n\n` +
+    `${currentUser?.nome || ''}`
+  );
+  const [enviando, setEnviando] = useState(false);
+  const [erro, setErro] = useState(null);
+
+  const removerDestinatario = (email) => setDestinatarios(prev => prev.filter(e => e !== email));
+  const adicionarDestinatario = () => {
+    const email = textoNovo.trim();
+    if (!email || !email.includes('@') || destinatarios.includes(email)) return;
+    setDestinatarios(prev => [...prev, email]);
+    setTextoNovo('');
+  };
+
+  const textoParaHtml = (texto) => {
+    const escapado = texto.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const comLinks = escapado.replace(/(https?:\/\/[^\s]+)/g, '<a href="$1">$1</a>');
+    return comLinks.replace(/\n/g, '<br>');
+  };
+
+  const enviar = async () => {
+    if (destinatarios.length === 0) { setErro('Adiciona pelo menos um destinatário.'); return; }
+    setEnviando(true);
+    setErro(null);
+    const corpoHtml = textoParaHtml(corpo);
+    const erros = [];
+    // Mesmo formato que a automação (Power Automate) já sabe processar --
+    // um registro por destinatário, com os campos no singular preenchidos.
+    for (const destinatario of destinatarios) {
+      const { error } = await supabase.from('solicitacoes_email_plaquinha').insert({
+        plaquinha_id: item.id,
+        plaquinha_ids: [item.id],
+        destinatario_email: destinatario,
+        destinatarios,
+        assunto,
+        corpo: corpoHtml,
+        status: 'pendente',
+      });
+      if (error) erros.push(`${destinatario}: ${error.message}`);
+    }
+    setEnviando(false);
+    if (erros.length) { setErro('Algumas solicitações falharam:\n' + erros.join('\n')); return; }
+    onFechar();
+  };
+
+  return (
+    <Overlay onClose={onFechar}>
+      <div className="scale-in" style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, width: '100%', maxWidth: 560, padding: 24, boxShadow: '0 24px 60px rgba(0,0,0,.18)' }}>
+        <h3 style={{ fontFamily: FONT_DISPLAY, fontSize: 16, fontWeight: 700, margin: '0 0 4px' }}>Enviar e-mail — {item.br}</h3>
+        <p style={{ fontSize: 12.5, color: T.inkDim, margin: '0 0 16px' }}>Confere os destinatários e o texto antes de mandar.</p>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div>
+            <label style={{ fontSize: 11.5, fontWeight: 700, color: T.inkFaint, display: 'block', marginBottom: 6 }}>Destinatários</label>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 6 }}>
+              {destinatarios.map(email => (
+                <span key={email} style={{ fontSize: 11.5, background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 5, padding: '4px 8px', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                  {email}
+                  <button onClick={() => removerDestinatario(email)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.inkFaint, padding: 0, lineHeight: 1 }}>✕</button>
+                </span>
+              ))}
+            </div>
+            <div style={{ display: 'flex', gap: 6 }}>
+              <input value={textoNovo} onChange={e => setTextoNovo(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); adicionarDestinatario(); } }}
+                placeholder="Adicionar e-mail…" style={{ ...inputStyle(), flex: 1 }} />
+              <button onClick={adicionarDestinatario} style={{ fontSize: 11.5, fontWeight: 600, color: T.blueText, background: 'transparent', border: `1px solid ${T.blueText}55`, borderRadius: 6, padding: '0 12px', cursor: 'pointer' }}>
+                + Add
+              </button>
+            </div>
+          </div>
+          <div>
+            <label style={{ fontSize: 11.5, fontWeight: 700, color: T.inkFaint, display: 'block', marginBottom: 4 }}>Assunto</label>
+            <input value={assunto} onChange={e => setAssunto(e.target.value)} style={{ ...inputStyle(), width: '100%' }} />
+          </div>
+          <div>
+            <label style={{ fontSize: 11.5, fontWeight: 700, color: T.inkFaint, display: 'block', marginBottom: 4 }}>Corpo do e-mail</label>
+            <textarea value={corpo} onChange={e => setCorpo(e.target.value)} rows={10}
+              style={{ ...inputStyle(), width: '100%', fontFamily: 'inherit', resize: 'vertical' }} />
+          </div>
+
+          {erro && <div style={{ fontSize: 12, color: T.rustText, background: T.rustSoft, padding: '8px 10px', borderRadius: 6, whiteSpace: 'pre-wrap' }}>{erro}</div>}
+
+          <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+            <button onClick={enviar} disabled={enviando}
+              style={{ fontSize: 12.5, fontWeight: 700, color: '#fff', background: T.oliveText, border: 'none', borderRadius: 8, padding: '10px 18px', cursor: 'pointer', opacity: enviando ? 0.6 : 1 }}>
+              {enviando ? 'Enviando…' : '✓ Enviar'}
+            </button>
+            <button onClick={onFechar} style={{ fontSize: 12.5, fontWeight: 600, color: T.inkFaint, background: 'transparent', border: `1px solid ${T.line}`, borderRadius: 8, padding: '10px 16px', cursor: 'pointer' }}>
+              Cancelar
+            </button>
+          </div>
+        </div>
+      </div>
+    </Overlay>
   );
 }
 
