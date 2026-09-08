@@ -2290,7 +2290,7 @@ function PainelComercial() {
     }
 
     // Uma linha por nota (nunota) — já vem deduplicado da faturamento_resumo.
-    const registros = (nfs||[]).map(n => {
+    const registrosFaturados = (nfs||[]).map(n => {
       const chavePedido = `${n.br}||${n.numero_pedido}`;
       const ped = pedMap[chavePedido];
       return {
@@ -2307,10 +2307,56 @@ function PainelComercial() {
         vendedor: n.vendedor_nome || '—',
         kaleng: ped?.produto_kaleng || '—',
         uf: n.uf || '—',
+        faturado: true,
       };
     });
 
-    setRegistros(registros);
+    // Previstos pra faturar dentro do período visualizado, mas que AINDA não
+    // têm nenhuma NF emitida -- mesma regra de atraso, só que comparando com
+    // HOJE em vez da data real de emissão (que ainda não existe).
+    const { data: previstos } = await supabase
+      .from('pedidos_itens')
+      .select('br,numero_pedido,cliente_nome,vendedor_nome,valor_liquido,uf,data_faturamento,data_neg,produto_kaleng,codtipoper')
+      .gte('data_faturamento', inicio)
+      .lte('data_faturamento', fim)
+      .not('data_faturamento', 'is', null);
+
+    const pedidosJaFaturados = new Set((nfs||[]).map(n => `${n.br}||${n.numero_pedido}`));
+    const vistosNaoFaturados = new Set();
+    const registrosNaoFaturados = (previstos||[])
+      .filter(p => !pedidosJaFaturados.has(`${p.br}||${p.numero_pedido}`))
+      .filter(p => {
+        // Um pedido pode ter vários itens -- soma tudo numa linha só por
+        // br+numero_pedido, igual as NFs já vêm uma por nota.
+        const chave = `${p.br}||${p.numero_pedido}`;
+        if (vistosNaoFaturados.has(chave)) return false;
+        vistosNaoFaturados.add(chave);
+        return true;
+      })
+      .map(p => {
+        const chave = `${p.br}||${p.numero_pedido}`;
+        const valorTotal = (previstos||[])
+          .filter(x => `${x.br}||${x.numero_pedido}` === chave)
+          .reduce((s, x) => s + (Number(x.valor_liquido) || 0), 0);
+        return {
+          br: p.br,
+          nf: null,
+          numero_pedido: p.numero_pedido,
+          top: p.codtipoper,
+          cliente: p.cliente_nome || '—',
+          nf_emitida: null,
+          fat_previsto: p.data_faturamento,
+          pedido_criado: p.data_neg,
+          valor: valorTotal,
+          netValue: valorTotal,
+          vendedor: p.vendedor_nome || '—',
+          kaleng: p.produto_kaleng || '—',
+          uf: p.uf || '—',
+          faturado: false,
+        };
+      });
+
+    setRegistros([...registrosFaturados, ...registrosNaoFaturados]);
     setLoading(false);
   }, [deDe, deAte]);
 
@@ -2322,16 +2368,19 @@ function PainelComercial() {
     return () => clearInterval(id);
   }, [carregar]);
 
-  // Atraso = NF emitida - data prevista no pedido
-  // Negativo = antecipado, Zero = no prazo, Positivo = atrasado
+  // Atraso = (NF emitida OU hoje, se ainda não faturado) - data prevista no pedido
+  // Negativo = antecipado/ainda no prazo futuro, Zero = no prazo, Positivo = atrasado
   const diasAtraso = (r) => {
-    if (!r.fat_previsto || !r.nf_emitida) return null;
-    return Math.round((new Date(r.nf_emitida) - new Date(r.fat_previsto)) / 86400000);
+    if (!r.fat_previsto) return null;
+    const dataComparacao = r.nf_emitida || hoje.toISOString().slice(0, 10);
+    return Math.round((new Date(dataComparacao) - new Date(r.fat_previsto)) / 86400000);
   };
 
-  const statusMeta = (dias) => {
+  const statusMeta = (dias, faturado = true) => {
     if (dias === null)  return { cor: T.inkFaint, bg: T.lineSoft,   label: 'Sem data prevista', cat: 'sem_data' };
-    if (dias < 0)       return { cor: T.blueText,  bg: T.blueSoft,   label: `${Math.abs(dias)}d antes`,  cat: 'antecipado' };
+    if (dias < 0)       return faturado
+      ? { cor: T.blueText,  bg: T.blueSoft,   label: `${Math.abs(dias)}d antes`,  cat: 'antecipado' }
+      : { cor: T.blueText,  bg: T.blueSoft,   label: `Faltam ${Math.abs(dias)}d`, cat: 'antecipado' };
     if (dias === 0)     return { cor: T.oliveText,  bg: T.oliveSoft,  label: 'No prazo',          cat: 'prazo' };
     if (dias <= 7)      return { cor: '#065f46',    bg: '#d1fae5',    label: `${dias}d atraso`,   cat: 'leve' };
     if (dias <= 14)     return { cor: T.amberText,  bg: T.amberSoft,  label: `${dias}d atraso`,   cat: 'moderado' };
@@ -2347,7 +2396,7 @@ function PainelComercial() {
     return registros
       .filter(r => {
         const d = diasAtraso(r);
-        const { cat } = statusMeta(d);
+        const { cat } = statusMeta(d, r.faturado);
         const matchVend   = vendFiltro === 'Todos' || r.vendedor === vendFiltro;
         const matchBr     = !brBusca || (r.br||'').toLowerCase().includes(brBusca.toLowerCase());
         const matchCliente = !clienteBusca || (r.cliente||'').toLowerCase().includes(clienteBusca.toLowerCase());
@@ -2364,23 +2413,30 @@ function PainelComercial() {
   }, [registros, vendFiltro, brBusca, clienteBusca, statusFiltro, sortCol, sortDir]);
 
   const kpis = useMemo(() => {
-    const total = filtrados.reduce((s,r) => s + r.valor, 0);
-    const totalNet = filtrados.reduce((s,r) => s + (r.netValue || 0), 0);
-    const comData = filtrados.filter(r => diasAtraso(r) !== null);
+    const faturados = filtrados.filter(r => r.faturado);
+    const pendentes = filtrados.filter(r => !r.faturado);
+    const total = faturados.reduce((s,r) => s + r.valor, 0);
+    const totalNet = faturados.reduce((s,r) => s + (r.netValue || 0), 0);
+    const comData = faturados.filter(r => diasAtraso(r) !== null);
     const n = comData.length || 1;
     const nAntes   = comData.filter(r => diasAtraso(r) < 0).length;
     const nPrazo   = comData.filter(r => diasAtraso(r) === 0).length;
     const nAtraso  = comData.filter(r => diasAtraso(r) > 0).length;
     const atrasados = comData.filter(r => diasAtraso(r) > 0).map(r => diasAtraso(r));
+    const pendentesAtrasados = pendentes.filter(r => (diasAtraso(r) ?? -1) > 0);
     return {
       total,
       totalNet,
-      nfs: filtrados.length,
+      nfs: faturados.length,
       pctAntes:        Math.round(nAntes  / n * 100),
       pctPrazo:        Math.round(nPrazo  / n * 100),
       pctNoPrazoOuAntes: Math.round((nAntes + nPrazo) / n * 100),
       pctAtraso:       Math.round(nAtraso / n * 100),
       mediaAtraso: atrasados.length ? Math.round(atrasados.reduce((s,d)=>s+d,0)/atrasados.length) : null,
+      pendentesQtd: pendentes.length,
+      pendentesValor: pendentes.reduce((s,r) => s + r.valor, 0),
+      pendentesAtrasadosQtd: pendentesAtrasados.length,
+      pendentesAtrasadosValor: pendentesAtrasados.reduce((s,r) => s + r.valor, 0),
     };
   }, [filtrados]);
 
@@ -2476,6 +2532,9 @@ function PainelComercial() {
             color: kpis.pctAtraso > 50 ? T.rustText : kpis.pctAtraso > 20 ? T.amberText : T.oliveText },
           { label: '% antecipado',        value: `${kpis.pctAntes}%`,  color: T.blueText },
           { label: '% no prazo exato',    value: `${kpis.pctPrazo}%`,  color: T.oliveText },
+          { label: '⏳ Pendente de faturar',  value: `${kpis.pendentesQtd} (${fmtMoedaCompacta(kpis.pendentesValor)})`, color: T.amberText },
+          { label: '⚠ Pendente e atrasado', value: `${kpis.pendentesAtrasadosQtd} (${fmtMoedaCompacta(kpis.pendentesAtrasadosValor)})`,
+            color: kpis.pendentesAtrasadosQtd > 0 ? T.rustText : T.oliveText },
           { label: 'Atraso médio (dias)', value: kpis.mediaAtraso !== null ? `${kpis.mediaAtraso}d` : '—',
             color: kpis.mediaAtraso > 14 ? T.rustText : kpis.mediaAtraso > 7 ? T.amberText : T.oliveText },
         ].map(k => (
@@ -2582,24 +2641,26 @@ function PainelComercial() {
                 <tr><td colSpan={11} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Nenhuma NF no período com os filtros aplicados.</td></tr>
               ) : filtrados.map((r, i) => {
                 const d = diasAtraso(r);
-                const { cor, bg, label: sitLabel } = statusMeta(d);
-                const rowBg = d !== null && d > 14 ? `${T.rustSoft}33` : 'transparent';
+                const { cor, bg, label: sitLabel } = statusMeta(d, r.faturado);
+                const rowBg = !r.faturado && d !== null && d > 0 ? `${T.rustSoft}55` : (d !== null && d > 14 ? `${T.rustSoft}33` : 'transparent');
                 return (
                   <tr key={i} style={{ borderBottom: `1px solid ${T.lineSoft}`, background: rowBg }}
                     onMouseEnter={e => e.currentTarget.style.background = T.panelAlt}
                     onMouseLeave={e => e.currentTarget.style.background = rowBg}>
                     <td style={{ padding: '9px 10px', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText, whiteSpace: 'nowrap' }}>{r.br}</td>
-                    <td style={{ padding: '9px 10px', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.oliveText }}>NF {r.nf}</td>
+                    <td style={{ padding: '9px 10px', fontFamily: FONT_DISPLAY, fontWeight: 700, color: r.faturado ? T.oliveText : T.amberText }}>
+                      {r.faturado ? `NF ${r.nf}` : '⏳ Pendente'}
+                    </td>
                     <td style={{ padding: '9px 10px', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.cliente}>{r.cliente}</td>
                     <td style={{ padding: '9px 10px', color: T.blueText, fontWeight: 600, fontSize: 11 }}>{r.kaleng}</td>
                     <td style={{ padding: '9px 10px', maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 11 }}>{r.vendedor}</td>
                     <td style={{ padding: '9px 10px', textAlign: 'center', fontSize: 11 }}>{r.uf}</td>
                     <td style={{ padding: '9px 10px', whiteSpace: 'nowrap', fontSize: 11, color: T.inkDim }}>{fmtData(r.fat_previsto)}</td>
-                    <td style={{ padding: '9px 10px', whiteSpace: 'nowrap', fontSize: 11, fontWeight: 600 }}>{fmtData(r.nf_emitida)}</td>
+                    <td style={{ padding: '9px 10px', whiteSpace: 'nowrap', fontSize: 11, fontWeight: 600 }}>{r.faturado ? fmtData(r.nf_emitida) : '—'}</td>
                     <td style={{ padding: '9px 10px', textAlign: 'center' }}>
                       <span style={{ fontSize: 10.5, fontWeight: 700, color: cor, background: bg, padding: '3px 8px', borderRadius: 4, whiteSpace: 'nowrap' }}>{sitLabel}</span>
                     </td>
-                    <td style={{ padding: '9px 10px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 13, whiteSpace: 'nowrap' }}>{fmtMoedaCompacta(r.valor)}</td>
+                    <td style={{ padding: '9px 10px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 13, whiteSpace: 'nowrap', color: r.faturado ? T.ink : T.inkFaint }}>{fmtMoedaCompacta(r.valor)}{!r.faturado && ' (prev.)'}</td>
                     <td style={{ padding: '9px 10px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 600, fontSize: 13, whiteSpace: 'nowrap', color: T.blueText }}>{r.netValue ? fmtMoedaCompacta(r.netValue) : '—'}</td>
                   </tr>
                 );
@@ -2608,9 +2669,9 @@ function PainelComercial() {
           </table>
         </div>
         <div style={{ padding: '10px 16px', borderTop: `1px solid ${T.line}`, fontSize: 11, color: T.inkFaint, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span>Situação = NF emitida vs data de faturamento prevista no pedido (DTFATUR Sankhya) · negativo = antecipado</span>
+          <span>Situação = NF emitida (ou hoje, se ainda pendente) vs data de faturamento prevista no pedido (DTFATUR Sankhya) · negativo = antecipado/faltam dias · ⏳ Pendente = ainda não faturado</span>
           <BotaoExportar small onClick={() => exportCSV(filtrados.map(r => ({ ...r, dias_atraso: diasAtraso(r) })), `comercial_${deDe}_${deAte}.csv`,
-            ['br','nf','numero_pedido','top','cliente','kaleng','vendedor','uf','fat_previsto','nf_emitida','dias_atraso','valor'])} />
+            ['br','nf','numero_pedido','top','cliente','kaleng','vendedor','uf','fat_previsto','nf_emitida','dias_atraso','valor','faturado'])} />
         </div>
       </div>
     </div>
