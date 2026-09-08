@@ -7094,20 +7094,42 @@ function MonitoramentoOP({ currentUser }) {
   const [opManual, setOpManual] = useState({}); // card.id -> texto digitado no campo manual
   const [escrevendoOp, setEscrevendoOp] = useState(null); // card.id sendo processado agora
   // Preenche cliente_nome quando vier vazio da view -- resgata de
-  // pedidos_itens/nota_venda_itens pelo BR. Usado tanto pro Conhecimento
-  // Pronto quanto pras listas de OPs Geradas/Finalizados (antes só a
-  // primeira tinha esse resgate, deixando os outros dois sempre com
-  // "—" no Cliente mesmo quando o dado existia em outra tabela).
+  // pedidos_itens/nota_venda_itens pelo BR, depois tenta extrair do próprio
+  // título do card do Planner (formato "BR... - CLIENTE - Pedido: ...", o
+  // nome já está ali em texto), e por último consulta ao vivo no Sankhya.
+  // Usado tanto pro Conhecimento Pronto quanto pras listas de OPs
+  // Geradas/Finalizados (antes só a primeira tinha esse resgate).
   const enriquecerComCliente = async (lista) => {
     const brs = [...new Set(lista.map(c => c.br).filter(Boolean))];
     if (!brs.length) return lista;
     const clientePorBr = {};
     const { data: pedidos } = await supabase.from('pedidos_itens').select('br,cliente_nome').in('br', brs);
     (pedidos || []).forEach(p => { if (p.cliente_nome && !clientePorBr[p.br]) clientePorBr[p.br] = p.cliente_nome; });
-    const semCliente = brs.filter(br => !clientePorBr[br]);
+    let semCliente = brs.filter(br => !clientePorBr[br]);
     if (semCliente.length) {
       const { data: vendas } = await supabase.from('nota_venda_itens').select('br,cliente_nome').in('br', semCliente);
       (vendas || []).forEach(v => { if (v.cliente_nome && !clientePorBr[v.br]) clientePorBr[v.br] = v.cliente_nome; });
+    }
+    // Extrai do título do card -- "BR14502/26 - VALE - CARAJAS - Pedido: ..."
+    // -- pega tudo entre o BR e o último " - Pedido:" (o nome do cliente às
+    // vezes tem hífen dentro dele também, tipo "VALE - CARAJAS").
+    semCliente = brs.filter(br => !clientePorBr[br]);
+    if (semCliente.length) {
+      lista.filter(c => semCliente.includes(c.br) && c.planner_titulo).forEach(c => {
+        const m = c.planner_titulo.match(/^\S+\s*-\s*(.+?)\s*-\s*Pedido:/i);
+        if (m && m[1] && !clientePorBr[c.br]) clientePorBr[c.br] = m[1].trim();
+      });
+    }
+    // Último recurso: consulta ao vivo no Sankhya (TCSPRJ -> TGFCAB -> TGFPAR)
+    semCliente = brs.filter(br => !clientePorBr[br]);
+    if (semCliente.length) {
+      try {
+        const res = await fetch(`${SUPABASE_URL}/functions/v1/buscar-cliente-por-br`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ brs: semCliente }),
+        }).then(r => r.json());
+        if (res.ok) Object.assign(clientePorBr, res.clientePorBr);
+      } catch (e) { console.error('Erro buscando cliente no Sankhya:', e); }
     }
     return lista.map(c => ({ ...c, cliente_nome: c.cliente_nome || clientePorBr[c.br] || null }));
   };
