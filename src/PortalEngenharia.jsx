@@ -7341,7 +7341,7 @@ function MonitoramentoOP({ currentUser }) {
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState(null);
   const [busca, setBusca] = useState('');
-  const [statusFiltro, setStatusFiltro] = useState('sem_op');
+  const [statusFiltro, setStatusFiltro] = useState('todos');
   const [sortCol, setSortCol] = useState('diasAberto');
   const [sortDir, setSortDir] = useState('desc');
   const [syncing, setSyncing] = useState(false);
@@ -8562,12 +8562,12 @@ function MonitoramentoOP({ currentUser }) {
             <FiltroCampoFat label="Status">
               <div style={{ position: 'relative' }}>
                 <select value={statusFiltro} onChange={e => setStatusFiltro(e.target.value)} style={selectStyleFat(240)}>
+                  <option value="todos">Todos</option>
                   <option value="sem_op">⚠ Sem OP (risco real)</option>
                   <option value="producao_generica">◐ Só produção genérica</option>
                   <option value="op_planejada">◑ OP criada, não iniciada</option>
                   <option value="em_producao">✓ Em produção</option>
                   <option value="servico">— Só serviço (N/A)</option>
-                  <option value="todos">Todos</option>
                 </select>
                 <ChevronDown size={13} style={chevronStyleFat} />
               </div>
@@ -8576,6 +8576,19 @@ function MonitoramentoOP({ currentUser }) {
           {ultimoSync && <div style={{ fontSize: 12.5, color: T.inkFaint }}>Última análise: {new Date(ultimoSync).toLocaleString('pt-BR')}</div>}
         </div>
       </Panel>
+
+      {statusFiltro !== 'todos' && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: T.amberSoft, border: `1px solid ${T.amber}66`, borderRadius: 8, padding: '10px 16px' }}>
+          <AlertTriangle size={16} color={T.amberText} />
+          <span style={{ fontSize: 12.5, color: T.amberText }}>
+            Mostrando só o filtro <strong>"{statusInfo(statusFiltro).label}"</strong> — {filtrados.length} de {projetos.lista.length} projetos no total.
+          </span>
+          <button onClick={() => setStatusFiltro('todos')}
+            style={{ fontSize: 11.5, fontWeight: 700, color: T.amberText, background: 'transparent', border: `1px solid ${T.amber}`, borderRadius: 5, padding: '4px 10px', cursor: 'pointer', marginLeft: 'auto' }}>
+            Ver todos
+          </button>
+        </div>
+      )}
 
       <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
         <div style={{ overflowX: 'auto' }}>
