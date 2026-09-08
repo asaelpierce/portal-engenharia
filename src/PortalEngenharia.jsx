@@ -7330,6 +7330,12 @@ function MonitoramentoOP({ currentUser }) {
   };
 
   const [linhas, setLinhas] = useState([]);
+  const [diasCongelados, setDiasCongelados] = useState({}); // br -> dias_congelados
+  const carregarDiasCongelados = useCallback(async () => {
+    const { data } = await supabase.from('monitoramento_op_dias_congelados').select('*');
+    setDiasCongelados(Object.fromEntries((data || []).map(d => [d.br, d.dias_congelados])));
+  }, []);
+  useEffect(() => { carregarDiasCongelados(); }, [carregarDiasCongelados]);
   const [vinculosManuais, setVinculosManuais] = useState({}); // "br|cod_produto" -> { nro_ordem_producao, vinculado_por, vinculado_em }
   const carregarVinculosManuais = useCallback(async () => {
     const { data } = await supabase.from('monitoramento_op_vinculo_manual').select('*');
@@ -7586,6 +7592,12 @@ function MonitoramentoOP({ currentUser }) {
           ? itensProducao.reduce((pior, i) => PRIORIDADE_STATUS[i.status] < PRIORIDADE_STATUS[pior] ? i.status : pior, 'em_producao')
           : 'servico'; // projeto 100% serviço (ex: só mão de obra) — não é relevante pra análise de OP
         const itensSemOp = p.itens.filter(i => i.status === 'sem_op').length;
+        // Uma vez que o projeto sai de "sem_op", o contador de dias
+        // congela no valor de quando isso aconteceu -- senão continua
+        // subindo pra sempre mesmo com a OP já criada, dando a falsa
+        // impressão de atraso mesmo com produção rodando normal.
+        const diasAbertoBruto = diasEmAberto(p.dataMaisAntiga);
+        const diasAberto = piorStatus === 'sem_op' ? diasAbertoBruto : (diasCongelados[p.br] ?? diasAbertoBruto);
         return {
           br: p.br,
           cliente: p.cliente,
@@ -7593,12 +7605,28 @@ function MonitoramentoOP({ currentUser }) {
           itensSemOp,
           status: piorStatus,
           dataMaisAntiga: p.dataMaisAntiga,
-          diasAberto: diasEmAberto(p.dataMaisAntiga),
+          diasAberto,
           itens: [...p.itens].sort((a, b) => PRIORIDADE_STATUS[a.status] - PRIORIDADE_STATUS[b.status]),
         };
       }),
     };
-  }, [linhas, vinculosManuais]);
+  }, [linhas, vinculosManuais, diasCongelados]);
+
+  // Congela/descongela o contador automaticamente conforme o status muda --
+  // primeira vez que um projeto deixa de ser "sem_op", trava o valor atual;
+  // se voltar a ser "sem_op" (raro, ex: OP cancelada), destrava de novo.
+  useEffect(() => {
+    projetos.lista.forEach(async (p) => {
+      const jaCongelado = diasCongelados[p.br] !== undefined;
+      if (p.status !== 'sem_op' && !jaCongelado) {
+        await supabase.from('monitoramento_op_dias_congelados').upsert({ br: p.br, dias_congelados: p.diasAberto });
+        setDiasCongelados(prev => ({ ...prev, [p.br]: p.diasAberto }));
+      } else if (p.status === 'sem_op' && jaCongelado) {
+        await supabase.from('monitoramento_op_dias_congelados').delete().eq('br', p.br);
+        setDiasCongelados(prev => { const cp = { ...prev }; delete cp[p.br]; return cp; });
+      }
+    });
+  }, [projetos.lista.map(p => `${p.br}:${p.status}`).join(',')]);
 
   // drillBR guarda uma "foto" do projeto no momento em que o modal abriu --
   // sem isso, vincular uma OP (ou qualquer outra mudança) não aparece na
