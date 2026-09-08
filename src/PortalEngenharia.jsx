@@ -7343,7 +7343,7 @@ function MonitoramentoOP({ currentUser }) {
   const [busca, setBusca] = useState('');
   const [statusFiltro, setStatusFiltro] = useState('todos');
   const [sortCol, setSortCol] = useState('diasAberto');
-  const [sortDir, setSortDir] = useState('desc');
+  const [sortDir, setSortDir] = useState('asc'); // asc em diasAberto = mais recentes primeiro
   const [syncing, setSyncing] = useState(false);
   const [syncStatus, setSyncStatus] = useState(null);
   const [ultimoSync, setUltimoSync] = useState(null);
@@ -8589,6 +8589,27 @@ function MonitoramentoOP({ currentUser }) {
           </button>
         </div>
       )}
+
+      {(() => {
+        // Sempre visível, independente do filtro/ordenação escolhidos --
+        // pra ninguém esquecer dos projetos mais antigos "sem OP" só
+        // porque a lista está ordenada do mais recente pro mais antigo.
+        const LIMITE_DIAS = 30;
+        const antigos = projetos.lista.filter(p => p.status === 'sem_op' && (p.diasAberto ?? 0) > LIMITE_DIAS);
+        if (antigos.length === 0) return null;
+        return (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: T.rustSoft, border: `1px solid ${T.rust}66`, borderRadius: 8, padding: '10px 16px' }}>
+            <AlertTriangle size={16} color={T.rustText} />
+            <span style={{ fontSize: 12.5, color: T.rustText }}>
+              <strong>{antigos.length} projeto{antigos.length !== 1 ? 's' : ''} sem OP há mais de {LIMITE_DIAS} dias</strong> — risco real, não deixa passar batido só porque a lista está ordenada pelos mais recentes.
+            </span>
+            <button onClick={() => { setStatusFiltro('sem_op'); setSortCol('diasAberto'); setSortDir('desc'); }}
+              style={{ fontSize: 11.5, fontWeight: 700, color: T.rustText, background: 'transparent', border: `1px solid ${T.rust}`, borderRadius: 5, padding: '4px 10px', cursor: 'pointer', marginLeft: 'auto', whiteSpace: 'nowrap' }}>
+              Ver esses
+            </button>
+          </div>
+        );
+      })()}
 
       <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
         <div style={{ overflowX: 'auto' }}>
