@@ -555,6 +555,7 @@ function PortalConteudo({ currentUser, session }) {
           {renderTab('analitico_mp', <TabErrorBoundary tab="Analítico"><AnaliticoMP /></TabErrorBoundary>)}
           {renderTab('carteira_estoque', <TabErrorBoundary tab="Carteira x Estoque"><CarteiraEstoque /></TabErrorBoundary>)}
           {renderTab('preco_compra', <TabErrorBoundary tab="Preço de Compra"><PrecoCompra /></TabErrorBoundary>)}
+          {renderTab('estoque_ocs', <TabErrorBoundary tab="Estoque x OCs"><RelatorioEstoqueOCs /></TabErrorBoundary>)}
           {renderTab('almoxarifado', <TabErrorBoundary tab="Almoxarifado"><Almoxarifado currentUser={currentUser} /></TabErrorBoundary>)}
           {renderTab('equipamentos', <TabErrorBoundary tab="Equipamentos de Terceiros"><EquipamentosTerceiros /></TabErrorBoundary>)}
           {renderTab('acompanhamento_servico', <TabErrorBoundary tab="Acompanhamento de Serviço"><AcompanhamentoServico /></TabErrorBoundary>)}
@@ -615,6 +616,7 @@ function Sidebar({ view, setView, pendCount, papel, telasPermitidas }) {
     { id: 'analitico_mp', label: 'Analítico',              icon: BarChart2 },
     { id: 'carteira_estoque', label: 'Carteira x Estoque',  icon: Package },
     { id: 'preco_compra',  label: 'Preço de Compra',        icon: DollarSign },
+    { id: 'estoque_ocs',  label: 'Estoque x OCs',        icon: Package },
     { id: 'almoxarifado', label: 'Almoxarifado',           icon: Package },
     { id: 'equipamentos', label: 'Equip. Terceiros',       icon: Webhook },
     { id: 'acompanhamento_servico', label: 'Falta Nota de Serviço', icon: AlertTriangle },
@@ -13044,6 +13046,201 @@ function AnaliticoMP() {
 }
 
 
+function RelatorioEstoqueOCs() {
+  const [linhas, setLinhas] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [busca, setBusca] = useState('');
+  const [filtroSituacao, setFiltroSituacao] = useState('todos');
+  const [sincronizando, setSincronizando] = useState(false);
+  const [ultimoSync, setUltimoSync] = useState(null);
+  const [drillProduto, setDrillProduto] = useState(null); // cod_prod selecionado -- mostra as OCs dele
+
+  const carregar = useCallback(async () => {
+    setLoading(true);
+    const { data } = await supabase.from('v_relatorio_estoque_ocs').select('*').order('cod_prod');
+    setLinhas(data || []);
+    setLoading(false);
+  }, []);
+  useEffect(() => { carregar(); }, [carregar]);
+
+  const atualizarDoSankhya = async () => {
+    setSincronizando(true);
+    try {
+      const [r1, r2, r3] = await Promise.all([
+        fetch(`${SUPABASE_URL}/functions/v1/sankhya-ordens-compra-sync`, { method: 'POST' }).then(r => r.json()),
+        fetch(`${SUPABASE_URL}/functions/v1/sankhya-ordens-producao-sync`, { method: 'POST' }).then(r => r.json()),
+        fetch(`${SUPABASE_URL}/functions/v1/sincronizar-saldo-mp-espelho`, { method: 'POST' }).then(r => r.json()),
+      ]);
+      setUltimoSync(new Date().toISOString());
+      await carregar();
+      if (!r1.ok || !r2.ok || !r3.ok) {
+        alert('Alguma sincronização deu erro:\n' + [r1, r2, r3].filter(r => !r.ok).map(r => r.erro).join('\n'));
+      }
+    } catch (e) {
+      alert('Erro ao sincronizar: ' + e);
+    }
+    setSincronizando(false);
+  };
+
+  const filtradas = useMemo(() => {
+    return linhas.filter(l => {
+      if (filtroSituacao !== 'todos' && l.situacao !== filtroSituacao) return false;
+      if (!busca.trim()) return true;
+      const b = busca.toLowerCase();
+      return String(l.cod_prod).includes(b) || (l.descr_prod || '').toLowerCase().includes(b);
+    });
+  }, [linhas, busca, filtroSituacao]);
+
+  const kpis = useMemo(() => {
+    const comOc = linhas.filter(l => l.qtd_ocs > 0);
+    const porSituacao = {};
+    linhas.forEach(l => { porSituacao[l.situacao] = (porSituacao[l.situacao] || 0) + 1; });
+    const valorTotal = comOc.reduce((s, l) => s + (l.valor_total_ocs || 0), 0);
+    return { total: linhas.length, comOc: comOc.length, porSituacao, valorTotal };
+  }, [linhas]);
+
+  const SITUACOES = ['— Sem OC', '⚠ Estoque zerado', '🔴 Estoque crítico', '🟡 Estoque baixo', '✅ Normal'];
+  const corSituacao = (s) => ({
+    '— Sem OC': { cor: T.inkFaint, bg: T.panelAlt },
+    '⚠ Estoque zerado': { cor: T.rustText, bg: T.rustSoft },
+    '🔴 Estoque crítico': { cor: '#c0392b', bg: '#fadbd8' },
+    '🟡 Estoque baixo': { cor: T.amberText, bg: T.amberSoft },
+    '✅ Normal': { cor: T.oliveText, bg: T.oliveSoft },
+  }[s] || { cor: T.inkFaint, bg: T.panelAlt });
+
+  const fmtMoeda = (v) => v == null ? '—' : v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+  const fmtData = (iso) => !iso ? '—' : new Date(iso + 'T00:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit' });
+
+  const [ocsDoProduto, setOcsDoProduto] = useState([]);
+  useEffect(() => {
+    if (!drillProduto) return;
+    supabase.from('ordens_compra_sankhya').select('*').eq('cod_prod', drillProduto).order('data_pedido', { ascending: false })
+      .then(({ data }) => setOcsDoProduto(data || []));
+  }, [drillProduto]);
+
+  if (loading) return <div style={{ padding: 40, textAlign: 'center', color: T.inkFaint }}>Carregando…</div>;
+
+  return (
+    <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+      <Panel title="Estoque × Consumo × Ordens de Compra 2026" subtitle="Cruza estoque disponível, consumo do ano e OCs abertas — pros códigos de matéria-prima monitorados.">
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 4 }}>
+          <div style={{ background: T.panelAlt, borderRadius: 8, padding: '10px 16px', fontSize: 12.5 }}>
+            <strong>{kpis.total}</strong> produtos monitorados
+          </div>
+          <div style={{ background: T.panelAlt, borderRadius: 8, padding: '10px 16px', fontSize: 12.5 }}>
+            <strong>{kpis.comOc}</strong> com OC em 2026
+          </div>
+          <div style={{ background: T.panelAlt, borderRadius: 8, padding: '10px 16px', fontSize: 12.5 }}>
+            Valor total OCs: <strong>{fmtMoeda(kpis.valorTotal)}</strong>
+          </div>
+          {ultimoSync && <div style={{ fontSize: 11.5, color: T.inkFaint, alignSelf: 'center' }}>Sincronizado às {new Date(ultimoSync).toLocaleTimeString('pt-BR')}</div>}
+        </div>
+      </Panel>
+
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+        <div style={{ position: 'relative' }}>
+          <Search size={13} style={{ position: 'absolute', left: 9, top: 9, color: T.inkFaint }} />
+          <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Buscar código ou descrição…" style={{ ...inputStyle(), width: 260, paddingLeft: 28 }} />
+        </div>
+        <select value={filtroSituacao} onChange={e => setFiltroSituacao(e.target.value)} style={selectStyleFat(220)}>
+          <option value="todos">Todos os status</option>
+          {SITUACOES.map(s => <option key={s} value={s}>{s} ({kpis.porSituacao[s] || 0})</option>)}
+        </select>
+        <button onClick={atualizarDoSankhya} disabled={sincronizando}
+          style={{ fontSize: 12.5, fontWeight: 700, color: '#fff', background: T.terracotta, border: 'none', borderRadius: 6, padding: '8px 14px', cursor: 'pointer', opacity: sincronizando ? 0.6 : 1, marginLeft: 'auto' }}>
+          {sincronizando ? 'Sincronizando…' : '🔄 Atualizar do Sankhya'}
+        </button>
+        <BotaoExportar small onClick={() => exportCSV(filtradas, 'estoque_ocs_2026.csv',
+          ['cod_prod', 'descr_prod', 'unidade', 'consumo_2026', 'estoque_total', 'reservado', 'disponivel', 'qtd_ocs', 'numeros_ocs', 'qtd_total_comprada', 'valor_total_ocs', 'cobertura', 'situacao', 'observacao'])} />
+      </div>
+
+      <Panel>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11.5 }}>
+            <thead>
+              <tr style={{ background: T.panelAlt, borderBottom: `1px solid ${T.line}` }}>
+                <th style={thFat(60)}>Cód</th>
+                <th style={thFat(0)}>Descrição</th>
+                <th style={{ ...thFat(60), textAlign: 'center' }}>Unid</th>
+                <th style={{ ...thFat(80), textAlign: 'right' }}>Consumo 2026</th>
+                <th style={{ ...thFat(80), textAlign: 'right' }}>Estoque</th>
+                <th style={{ ...thFat(80), textAlign: 'right' }}>Reservado</th>
+                <th style={{ ...thFat(80), textAlign: 'right' }}>Disponível</th>
+                <th style={{ ...thFat(70), textAlign: 'center' }}>Nº OCs</th>
+                <th style={{ ...thFat(90), textAlign: 'right' }}>Vlr Total OCs</th>
+                <th style={{ ...thFat(70), textAlign: 'center' }}>Cobertura</th>
+                <th style={thFat(140)}>Situação</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtradas.length === 0 ? (
+                <tr><td colSpan={11} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Nada encontrado.</td></tr>
+              ) : filtradas.map(l => {
+                const cor = corSituacao(l.situacao);
+                return (
+                  <tr key={l.cod_prod} style={{ borderBottom: `1px solid ${T.lineSoft}`, cursor: l.qtd_ocs > 0 ? 'pointer' : 'default' }}
+                    onClick={() => l.qtd_ocs > 0 && setDrillProduto(l.cod_prod)}>
+                    <td style={{ padding: '7px 12px', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText }}>{l.cod_prod}</td>
+                    <td style={{ padding: '7px 12px' }}>{l.descr_prod || <span style={{ color: T.inkFaint, fontStyle: 'italic' }}>sem cadastro de estoque</span>}</td>
+                    <td style={{ padding: '7px 12px', textAlign: 'center', color: T.inkFaint }}>{l.unidade || '—'}</td>
+                    <td style={{ padding: '7px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY }}>{l.consumo_2026 ? Number(l.consumo_2026).toLocaleString('pt-BR') : '—'}</td>
+                    <td style={{ padding: '7px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY }}>{l.estoque_total ?? '—'}</td>
+                    <td style={{ padding: '7px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, color: T.inkFaint }}>{l.reservado ?? '—'}</td>
+                    <td style={{ padding: '7px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 700, color: (l.disponivel ?? 0) < 0 ? T.rustText : T.ink }}>{l.disponivel ?? '—'}</td>
+                    <td style={{ padding: '7px 12px', textAlign: 'center', fontFamily: FONT_DISPLAY, fontWeight: l.qtd_ocs ? 700 : 400, color: l.qtd_ocs ? T.blueText : T.inkFaint }}>{l.qtd_ocs || '—'}</td>
+                    <td style={{ padding: '7px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY }}>{fmtMoeda(l.valor_total_ocs)}</td>
+                    <td style={{ padding: '7px 12px', textAlign: 'center', fontFamily: FONT_DISPLAY }}>{l.cobertura ?? '—'}</td>
+                    <td style={{ padding: '7px 12px' }}>
+                      <span style={{ fontSize: 11, fontWeight: 700, color: cor.cor, background: cor.bg, padding: '3px 8px', borderRadius: 4, whiteSpace: 'nowrap' }}>{l.situacao}</span>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </Panel>
+
+      {drillProduto && (
+        <Overlay onClose={() => setDrillProduto(null)}>
+          <div className="scale-in" style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, width: '100%', maxWidth: 720, maxHeight: '85vh', overflowY: 'auto', boxShadow: '0 24px 60px rgba(0,0,0,.18)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 20px', borderBottom: `1px solid ${T.line}` }}>
+              <div style={{ fontFamily: FONT_DISPLAY, fontSize: 15, fontWeight: 700 }}>OCs do produto {drillProduto}</div>
+              <button onClick={() => setDrillProduto(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.inkFaint }}><X size={18} /></button>
+            </div>
+            <div style={{ padding: '12px 20px' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                <thead>
+                  <tr style={{ textAlign: 'left', color: T.inkFaint, borderBottom: `1px solid ${T.line}` }}>
+                    <th style={{ padding: '4px 8px' }}>OC</th>
+                    <th style={{ padding: '4px 8px' }}>Data</th>
+                    <th style={{ padding: '4px 8px' }}>Fornecedor</th>
+                    <th style={{ padding: '4px 8px', textAlign: 'right' }}>Qtd</th>
+                    <th style={{ padding: '4px 8px', textAlign: 'right' }}>Vlr Total</th>
+                    <th style={{ padding: '4px 8px' }}>Prev. Entrega</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {ocsDoProduto.map(oc => (
+                    <tr key={oc.pedido_oc} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                      <td style={{ padding: '5px 8px', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText }}>{oc.pedido_oc}</td>
+                      <td style={{ padding: '5px 8px' }}>{fmtData(oc.data_pedido)}</td>
+                      <td style={{ padding: '5px 8px' }}>{oc.fornecedor}</td>
+                      <td style={{ padding: '5px 8px', textAlign: 'right', fontFamily: FONT_DISPLAY }}>{oc.qtd_pedida} {oc.unidade}</td>
+                      <td style={{ padding: '5px 8px', textAlign: 'right', fontFamily: FONT_DISPLAY }}>{fmtMoeda(oc.valor_total)}</td>
+                      <td style={{ padding: '5px 8px' }}>{fmtData(oc.prev_entrega)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </Overlay>
+      )}
+    </div>
+  );
+}
+
 function PrecoCompra() {
   const [busca, setBusca] = useState('');
   const [buscando, setBuscando] = useState(false);
@@ -15646,6 +15843,7 @@ const TELAS_CATALOGO = [
   { id: 'analitico_mp', label: 'Analítico' },
   { id: 'carteira_estoque', label: 'Carteira x Estoque' },
   { id: 'preco_compra', label: 'Preço de Compra' },
+  { id: 'estoque_ocs', label: 'Estoque x OCs' },
   { id: 'almoxarifado', label: 'Almoxarifado' },
   { id: 'equipamentos', label: 'Equip. Terceiros' },
   { id: 'acompanhamento_servico', label: 'Falta Nota de Serviço' },
