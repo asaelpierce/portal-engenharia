@@ -6949,25 +6949,12 @@ function MonitoramentoOP({ currentUser }) {
       .eq('bucket_atual', 'Engenharia - Conhecimento Pronto').eq('planner_excluido', false)
       .is('data_finalizado', null)
       .order('br');
-    let lista = data || [];
-    const brs = [...new Set(lista.map(c => c.br).filter(Boolean))];
-    if (brs.length) {
-      const clientePorBr = {};
-      const { data: pedidos } = await supabase.from('pedidos_itens').select('br,cliente_nome').in('br', brs);
-      (pedidos || []).forEach(p => { if (p.cliente_nome && !clientePorBr[p.br]) clientePorBr[p.br] = p.cliente_nome; });
-      const semCliente = brs.filter(br => !clientePorBr[br]);
-      if (semCliente.length) {
-        const { data: vendas } = await supabase.from('nota_venda_itens').select('br,cliente_nome').in('br', semCliente);
-        (vendas || []).forEach(v => { if (v.cliente_nome && !clientePorBr[v.br]) clientePorBr[v.br] = v.cliente_nome; });
-      }
-      lista = lista.map(c => ({ ...c, cliente_nome: c.cliente_nome || clientePorBr[c.br] || null }));
-    }
-    setCardsConhecPronto(lista);
+    setCardsConhecPronto(await enriquecerComCliente(data || []));
     setLoadingConhecPronto(false);
 
     // Marca "visto" automaticamente (igual WhatsApp) pra quem ainda não foi visto —
     // não espera clique nenhum, só de aparecer na tela já conta.
-    const naoVistos = lista.filter(c => !c.visto_em && !c.data_finalizado);
+    const naoVistos = (data || []).filter(c => !c.visto_em && !c.data_finalizado);
     if (naoVistos.length) {
       const agora = new Date().toISOString();
       await supabase.from('monitoramento_op_cards_planner')
@@ -7106,6 +7093,25 @@ function MonitoramentoOP({ currentUser }) {
   const [historicoObs, setHistoricoObs] = useState({}); // planner_task_id -> última solicitação (status/OP/quando)
   const [opManual, setOpManual] = useState({}); // card.id -> texto digitado no campo manual
   const [escrevendoOp, setEscrevendoOp] = useState(null); // card.id sendo processado agora
+  // Preenche cliente_nome quando vier vazio da view -- resgata de
+  // pedidos_itens/nota_venda_itens pelo BR. Usado tanto pro Conhecimento
+  // Pronto quanto pras listas de OPs Geradas/Finalizados (antes só a
+  // primeira tinha esse resgate, deixando os outros dois sempre com
+  // "—" no Cliente mesmo quando o dado existia em outra tabela).
+  const enriquecerComCliente = async (lista) => {
+    const brs = [...new Set(lista.map(c => c.br).filter(Boolean))];
+    if (!brs.length) return lista;
+    const clientePorBr = {};
+    const { data: pedidos } = await supabase.from('pedidos_itens').select('br,cliente_nome').in('br', brs);
+    (pedidos || []).forEach(p => { if (p.cliente_nome && !clientePorBr[p.br]) clientePorBr[p.br] = p.cliente_nome; });
+    const semCliente = brs.filter(br => !clientePorBr[br]);
+    if (semCliente.length) {
+      const { data: vendas } = await supabase.from('nota_venda_itens').select('br,cliente_nome').in('br', semCliente);
+      (vendas || []).forEach(v => { if (v.cliente_nome && !clientePorBr[v.br]) clientePorBr[v.br] = v.cliente_nome; });
+    }
+    return lista.map(c => ({ ...c, cliente_nome: c.cliente_nome || clientePorBr[c.br] || null }));
+  };
+
   const carregarOpsGeradas = useCallback(async () => {
     setLoadingOpsGeradas(true);
     // Não usa bucket_atual (isso só é atualizado pelo Fluxo 1, que só rastreia
@@ -7117,7 +7123,7 @@ function MonitoramentoOP({ currentUser }) {
       .neq('status_verificacao_op', 'finalizado')
       .eq('planner_excluido', false)
       .order('br');
-    setCardsOpsGeradas(data || []);
+    setCardsOpsGeradas(await enriquecerComCliente(data || []));
     // Antes essas cards (que já completaram as DUAS etapas) simplesmente
     // sumiam da tela -- não apareciam nem aqui (excluídos pelo neq acima)
     // nem em "Conhecimento Pronto" (excluídos por já ter data_finalizado).
@@ -7128,7 +7134,7 @@ function MonitoramentoOP({ currentUser }) {
       .eq('planner_excluido', false)
       .order('finalizado_verificacao_em', { ascending: false })
       .limit(100);
-    setCardsFinalizados(finalizados || []);
+    setCardsFinalizados(await enriquecerComCliente(finalizados || []));
     const brs = [...new Set((data || []).map(c => c.br).filter(Boolean))];
     if (brs.length) {
       // Busca direto no Sankhya (não depende de já ter apontamento de produção
