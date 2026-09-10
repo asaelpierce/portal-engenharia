@@ -9468,6 +9468,8 @@ function ValidacaoRecebimento({ currentUser }) {
   const [loading, setLoading] = useState(true);
   const [brEdit, setBrEdit] = useState({});        // id -> texto digitado
   const [obsEdit, setObsEdit] = useState({});
+  const [plaqEdit, setPlaqEdit] = useState({});    // id -> 'sim' | 'nao' (precisa de plaquinha)
+  const [plaqExistente, setPlaqExistente] = useState({}); // br normalizado -> plaquinha já cadastrada
   const [salvandoId, setSalvandoId] = useState(null);
   const [fotoAmpliada, setFotoAmpliada] = useState(null);
   const [busca, setBusca] = useState('');
@@ -9496,12 +9498,54 @@ function ValidacaoRecebimento({ currentUser }) {
   }, []);
   useEffect(() => { carregar(); }, [carregar]);
 
+  // Compara BR ignorando barra/hífen -- é comum digitarem "BR14501-26" no
+  // lugar de "BR14501/26", e nesse caso é o mesmo projeto.
+  const normalizaBr = (br) => (br || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+
+  // Enquanto o Comercial digita o BR, procura se aquele projeto já tem
+  // plaquinha aberta -- se tiver, associa a essa em vez de criar outra
+  // (evita o problema de plaquinha duplicada que já corrigimos antes).
+  const buscarPlaquinhaDoBr = async (itemId, br) => {
+    const chave = normalizaBr(br);
+    if (chave.length < 5) { setPlaqExistente(p => ({ ...p, [itemId]: null })); return; }
+    const { data } = await supabase.from('plaquinhas_equipamento')
+      .select('id, br, status, numero_desenho').neq('status', 'excluida');
+    const achada = (data || []).find(p => normalizaBr(p.br) === chave);
+    setPlaqExistente(p => ({ ...p, [itemId]: achada || null }));
+  };
+
   const confirmarBr = async (item) => {
     const br = (brEdit[item.id] || '').trim();
     if (!br) { alert('Informe o número do BR antes de confirmar.'); return; }
+    const escolhaPlaq = plaqEdit[item.id];
+    if (!escolhaPlaq) { alert('Responda se esse material vai precisar de plaquinha.'); return; }
     setSalvandoId(item.id);
     const agora = new Date().toISOString();
     const obsComercial = (obsEdit[item.id] || '').trim() || null;
+    const precisaPlaquinha = escolhaPlaq === 'sim';
+
+    // Se precisa de plaquinha: reaproveita a do BR se já existir, senão cria
+    // uma nova pendente pro Comercial preencher na aba de plaquinhas.
+    let plaquinhaId = null;
+    if (precisaPlaquinha) {
+      const chave = normalizaBr(br);
+      const { data: todas } = await supabase.from('plaquinhas_equipamento')
+        .select('id, br, status').neq('status', 'excluida');
+      const achada = (todas || []).find(p => normalizaBr(p.br) === chave);
+      if (achada) {
+        plaquinhaId = achada.id;
+      } else {
+        const { data: nova, error: errPlaq } = await supabase.from('plaquinhas_equipamento').insert({
+          br, cliente_nome: item.cliente || null,
+          origem_deteccao: 'recebimento_terceiros', status: 'pendente',
+        }).select().single();
+        if (errPlaq) {
+          alert(`Erro ao criar a plaquinha: ${errPlaq.message}`);
+          setSalvandoId(null); return;
+        }
+        plaquinhaId = nova.id;
+      }
+    }
 
     // .eq('status','aguardando_br') -- se duas pessoas abrirem a mesma tela e
     // clicarem quase junto, só a primeira validação vale (evita mandar duas
@@ -9509,6 +9553,7 @@ function ValidacaoRecebimento({ currentUser }) {
     const { data: atualizado, error } = await supabase.from('recebimentos_terceiros').update({
       br, status: 'validado', validado_por: currentUser?.nome || null,
       validado_em: agora, observacao_comercial: obsComercial,
+      precisa_plaquinha: precisaPlaquinha, plaquinha_id: plaquinhaId,
     }).eq('id', item.id).eq('status', 'aguardando_br').select();
     if (error) { alert(`Erro ao salvar: ${error.message}`); setSalvandoId(null); return; }
     if (!atualizado || atualizado.length === 0) {
@@ -9519,7 +9564,8 @@ function ValidacaoRecebimento({ currentUser }) {
     const { error: errFila } = await supabase.from('solicitacoes_recebimento_validado').insert({
       recebimento_id: item.id, br, cliente: item.cliente,
       numero_nota_fiscal: item.numero_nota_fiscal, observacao: item.observacao,
-      observacao_comercial: obsComercial, validado_por: currentUser?.nome || null, status: 'pendente',
+      observacao_comercial: obsComercial, validado_por: currentUser?.nome || null,
+      precisa_plaquinha: precisaPlaquinha, status: 'pendente',
     });
     if (errFila) alert(`Salvou o BR, mas falhou ao avisar o almoxarifado: ${errFila.message}`);
 
@@ -9619,6 +9665,8 @@ function ValidacaoRecebimento({ currentUser }) {
               {item.status === 'validado' && (
                 <span style={{ fontSize: 11, fontWeight: 700, color: T.oliveText, background: T.oliveSoft, padding: '4px 10px', borderRadius: 5 }}>
                   ✓ {item.validado_por || '—'} em {fmtDataHora(item.validado_em)}
+                  {item.precisa_plaquinha === true && ' · 🏷 com plaquinha'}
+                  {item.precisa_plaquinha === false && ' · sem plaquinha'}
                 </span>
               )}
               {item.status === 'descartado' && (
@@ -9646,10 +9694,36 @@ function ValidacaoRecebimento({ currentUser }) {
               <div style={{ borderTop: `1px solid ${T.line}`, paddingTop: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
                 <label style={{ fontSize: 11.5, fontWeight: 700, color: T.inkFaint }}>Número do BR do projeto</label>
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                  <input value={brEdit[item.id] || ''} onChange={e => setBrEdit(p => ({ ...p, [item.id]: e.target.value }))}
+                  <input value={brEdit[item.id] || ''}
+                    onChange={e => { setBrEdit(p => ({ ...p, [item.id]: e.target.value })); buscarPlaquinhaDoBr(item.id, e.target.value); }}
                     placeholder="Ex: BR14501/26" style={{ ...inputStyle(), width: 200 }} />
                   <input value={obsEdit[item.id] || ''} onChange={e => setObsEdit(p => ({ ...p, [item.id]: e.target.value }))}
                     placeholder="Observação (opcional)" style={{ ...inputStyle(), flex: 1, minWidth: 200 }} />
+                </div>
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginTop: 4 }}>
+                  <span style={{ fontSize: 11.5, fontWeight: 700, color: T.inkFaint }}>Vai precisar de plaquinha?</span>
+                  {[{ v: 'sim', txt: 'Sim' }, { v: 'nao', txt: 'Não' }].map(o => (
+                    <button key={o.v} onClick={() => setPlaqEdit(p => ({ ...p, [item.id]: o.v }))}
+                      style={{ fontSize: 12, fontWeight: 700, padding: '5px 16px', borderRadius: 6, cursor: 'pointer',
+                        border: `1px solid ${plaqEdit[item.id] === o.v ? (o.v === 'sim' ? T.oliveText : T.inkFaint) : T.line}`,
+                        background: plaqEdit[item.id] === o.v ? (o.v === 'sim' ? T.oliveSoft : T.panelAlt) : 'transparent',
+                        color: plaqEdit[item.id] === o.v ? (o.v === 'sim' ? T.oliveText : T.inkDim) : T.inkFaint }}>
+                      {o.txt}
+                    </button>
+                  ))}
+                  {plaqEdit[item.id] === 'sim' && (
+                    plaqExistente[item.id]
+                      ? <span style={{ fontSize: 11.5, color: T.blueText, background: T.blueSoft, padding: '4px 10px', borderRadius: 5 }}>
+                          🔗 Esse BR já tem plaquinha ({plaqExistente[item.id].status}) — será associada a ela, sem criar outra
+                        </span>
+                      : <span style={{ fontSize: 11.5, color: T.oliveText, background: T.oliveSoft, padding: '4px 10px', borderRadius: 5 }}>
+                          ✚ Será criada uma plaquinha pendente pro Comercial preencher
+                        </span>
+                  )}
+                </div>
+
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 4 }}>
                   <button onClick={() => confirmarBr(item)} disabled={salvandoId === item.id}
                     style={{ fontSize: 12.5, fontWeight: 700, color: '#fff', background: T.oliveText, border: 'none', borderRadius: 6, padding: '8px 16px', cursor: 'pointer', opacity: salvandoId === item.id ? 0.6 : 1 }}>
                     {salvandoId === item.id ? 'Salvando…' : '✓ Confirmar BR'}
