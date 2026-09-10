@@ -558,6 +558,7 @@ function PortalConteudo({ currentUser, session }) {
           {renderTab('estoque_ocs', <TabErrorBoundary tab="Estoque x OCs"><RelatorioEstoqueOCs /></TabErrorBoundary>)}
           {renderTab('almoxarifado', <TabErrorBoundary tab="Almoxarifado"><Almoxarifado currentUser={currentUser} /></TabErrorBoundary>)}
           {renderTab('equipamentos', <TabErrorBoundary tab="Equipamentos de Terceiros"><EquipamentosTerceiros /></TabErrorBoundary>)}
+          {renderTab('recebimento_terceiros', <TabErrorBoundary tab="Validação de Recebimento"><ValidacaoRecebimento currentUser={currentUser} /></TabErrorBoundary>)}
           {renderTab('acompanhamento_servico', <TabErrorBoundary tab="Acompanhamento de Serviço"><AcompanhamentoServico /></TabErrorBoundary>)}
           {renderTab('monitoramento_op', <TabErrorBoundary tab="Monitoramento OP"><MonitoramentoOP currentUser={currentUser} /></TabErrorBoundary>)}
           {renderTab('proposta_tecnica', <TabErrorBoundary tab="Proposta Técnica"><PropostaTecnica currentUser={currentUser} /></TabErrorBoundary>)}
@@ -619,6 +620,7 @@ function Sidebar({ view, setView, pendCount, papel, telasPermitidas }) {
     { id: 'estoque_ocs',  label: 'Estoque x OCs',        icon: Package },
     { id: 'almoxarifado', label: 'Almoxarifado',           icon: Package },
     { id: 'equipamentos', label: 'Equip. Terceiros',       icon: Webhook },
+    { id: 'recebimento_terceiros', label: 'Validação de Recebimento', icon: ClipboardCheck },
     { id: 'acompanhamento_servico', label: 'Falta Nota de Serviço', icon: AlertTriangle },
     { id: 'monitoramento_op', label: 'Monitoramento OP', icon: Gauge },
     { id: 'proposta_tecnica', label: 'Proposta Técnica', icon: FileStack },
@@ -9448,6 +9450,230 @@ function AcompanhamentoServico() {
   );
 }
 
+function ValidacaoRecebimento({ currentUser }) {
+  const [aba, setAba] = useState('aguardando'); // aguardando | validados | descartados
+  const [itens, setItens] = useState([]);
+  const [fotosPorId, setFotosPorId] = useState({}); // recebimento_id -> [{ tipo, url }]
+  const [loading, setLoading] = useState(true);
+  const [brEdit, setBrEdit] = useState({});        // id -> texto digitado
+  const [obsEdit, setObsEdit] = useState({});
+  const [salvandoId, setSalvandoId] = useState(null);
+  const [fotoAmpliada, setFotoAmpliada] = useState(null);
+  const [busca, setBusca] = useState('');
+
+  const carregar = useCallback(async () => {
+    setLoading(true);
+    const { data } = await supabase.from('recebimentos_terceiros').select('*').order('recebido_em', { ascending: false });
+    const lista = data || [];
+    setItens(lista);
+
+    // As fotos ficam num bucket privado (tem nota fiscal de cliente ali), então
+    // o link é gerado na hora com validade de 1h em vez de ser público fixo.
+    if (lista.length) {
+      const { data: fotos } = await supabase.from('recebimentos_terceiros_fotos')
+        .select('*').in('recebimento_id', lista.map(i => i.id)).order('id');
+      const mapa = {};
+      for (const f of (fotos || [])) {
+        const { data: assinada } = await supabase.storage.from('recebimentos-terceiros')
+          .createSignedUrl(f.caminho_storage, 3600);
+        if (!mapa[f.recebimento_id]) mapa[f.recebimento_id] = [];
+        mapa[f.recebimento_id].push({ tipo: f.tipo, url: assinada?.signedUrl || null, nome: f.nome_arquivo });
+      }
+      setFotosPorId(mapa);
+    }
+    setLoading(false);
+  }, []);
+  useEffect(() => { carregar(); }, [carregar]);
+
+  const confirmarBr = async (item) => {
+    const br = (brEdit[item.id] || '').trim();
+    if (!br) { alert('Informe o número do BR antes de confirmar.'); return; }
+    setSalvandoId(item.id);
+    const agora = new Date().toISOString();
+    const obsComercial = (obsEdit[item.id] || '').trim() || null;
+
+    // .eq('status','aguardando_br') -- se duas pessoas abrirem a mesma tela e
+    // clicarem quase junto, só a primeira validação vale (evita mandar duas
+    // solicitações pro almoxarifado pro mesmo recebimento).
+    const { data: atualizado, error } = await supabase.from('recebimentos_terceiros').update({
+      br, status: 'validado', validado_por: currentUser?.nome || null,
+      validado_em: agora, observacao_comercial: obsComercial,
+    }).eq('id', item.id).eq('status', 'aguardando_br').select();
+    if (error) { alert(`Erro ao salvar: ${error.message}`); setSalvandoId(null); return; }
+    if (!atualizado || atualizado.length === 0) {
+      alert('Esse recebimento já foi validado por outra pessoa. Atualizando a lista.');
+      setSalvandoId(null); await carregar(); return;
+    }
+
+    const { error: errFila } = await supabase.from('solicitacoes_recebimento_validado').insert({
+      recebimento_id: item.id, br, cliente: item.cliente,
+      numero_nota_fiscal: item.numero_nota_fiscal, observacao: item.observacao,
+      observacao_comercial: obsComercial, validado_por: currentUser?.nome || null, status: 'pendente',
+    });
+    if (errFila) alert(`Salvou o BR, mas falhou ao avisar o almoxarifado: ${errFila.message}`);
+
+    setSalvandoId(null);
+    await carregar();
+  };
+
+  const descartar = async (item) => {
+    const motivo = prompt('Por que esse recebimento deve ser descartado? (ex: duplicado, enviado por engano)');
+    if (motivo === null) return;
+    setSalvandoId(item.id);
+    await supabase.from('recebimentos_terceiros').update({
+      status: 'descartado', descartado_por: currentUser?.nome || null,
+      descartado_em: new Date().toISOString(), motivo_descarte: motivo.trim() || null,
+    }).eq('id', item.id);
+    setSalvandoId(null);
+    await carregar();
+  };
+
+  const aguardando = itens.filter(i => i.status === 'aguardando_br');
+  const validados = itens.filter(i => i.status === 'validado');
+  const descartados = itens.filter(i => i.status === 'descartado');
+  const listaAtual = (aba === 'aguardando' ? aguardando : aba === 'validados' ? validados : descartados)
+    .filter(i => !busca.trim() ||
+      (i.cliente || '').toLowerCase().includes(busca.toLowerCase()) ||
+      (i.numero_nota_fiscal || '').toLowerCase().includes(busca.toLowerCase()) ||
+      (i.br || '').toLowerCase().includes(busca.toLowerCase()));
+
+  const fmtDataHora = (iso) => !iso ? '—' :
+    new Date(iso).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' });
+
+  const Galeria = ({ fotos, titulo }) => {
+    if (!fotos || fotos.length === 0) return null;
+    return (
+      <div style={{ marginBottom: 12 }}>
+        <div style={{ fontSize: 11.5, fontWeight: 700, color: T.inkFaint, marginBottom: 6 }}>{titulo} ({fotos.length})</div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          {fotos.map((f, i) => (
+            <button key={i} onClick={() => setFotoAmpliada(f)}
+              style={{ padding: 0, border: `1px solid ${T.line}`, borderRadius: 8, overflow: 'hidden', cursor: 'zoom-in', background: T.panelAlt, lineHeight: 0 }}
+              title="Clique para ampliar">
+              {f.url
+                ? <img src={f.url} alt={f.nome || 'foto'} style={{ width: 150, height: 150, objectFit: 'cover', display: 'block' }} />
+                : <div style={{ width: 150, height: 150, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, color: T.inkFaint }}>sem preview</div>}
+            </button>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 18, maxWidth: 1000 }}>
+      <Panel title="Validação de Recebimento (Terceiros)"
+        subtitle="O recebimento registra o material pelo formulário; aqui o Comercial confere as fotos e informa o BR do projeto. Ao confirmar, o almoxarifado é avisado automaticamente.">
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          {[
+            { id: 'aguardando', label: `⏳ Aguardando BR (${aguardando.length})` },
+            { id: 'validados', label: `✓ Validados (${validados.length})` },
+            { id: 'descartados', label: `Descartados (${descartados.length})` },
+          ].map(t => (
+            <button key={t.id} onClick={() => setAba(t.id)}
+              style={{ fontSize: 12.5, fontWeight: 700, padding: '7px 14px', borderRadius: 6, cursor: 'pointer',
+                border: `1px solid ${aba === t.id ? T.terracotta : T.line}`,
+                background: aba === t.id ? T.terracotta : 'transparent',
+                color: aba === t.id ? '#fff' : T.inkDim }}>
+              {t.label}
+            </button>
+          ))}
+          <div style={{ position: 'relative', marginLeft: 'auto' }}>
+            <Search size={13} style={{ position: 'absolute', left: 9, top: 9, color: T.inkFaint }} />
+            <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Buscar cliente, NF ou BR…"
+              style={{ ...inputStyle(), width: 230, paddingLeft: 28 }} />
+          </div>
+        </div>
+      </Panel>
+
+      {loading ? (
+        <div style={{ padding: 40, textAlign: 'center', color: T.inkFaint }}>Carregando…</div>
+      ) : listaAtual.length === 0 ? (
+        <Panel><div style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Nada por aqui.</div></Panel>
+      ) : listaAtual.map(item => {
+        const fotos = fotosPorId[item.id] || [];
+        return (
+          <Panel key={item.id}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12, gap: 12, flexWrap: 'wrap' }}>
+              <div>
+                <div style={{ fontFamily: FONT_DISPLAY, fontSize: 15, fontWeight: 700 }}>
+                  {item.cliente || 'Cliente não informado'}
+                  {item.br && <span style={{ color: T.blueText }}> · {item.br}</span>}
+                </div>
+                <div style={{ fontSize: 11.5, color: T.inkFaint, marginTop: 2 }}>
+                  NF {item.numero_nota_fiscal || '—'} · recebido em {fmtDataHora(item.recebido_em)}
+                  {item.respondente && ` · por ${item.respondente}`}
+                </div>
+              </div>
+              {item.status === 'validado' && (
+                <span style={{ fontSize: 11, fontWeight: 700, color: T.oliveText, background: T.oliveSoft, padding: '4px 10px', borderRadius: 5 }}>
+                  ✓ {item.validado_por || '—'} em {fmtDataHora(item.validado_em)}
+                </span>
+              )}
+              {item.status === 'descartado' && (
+                <span style={{ fontSize: 11, fontWeight: 700, color: T.inkFaint, background: T.panelAlt, padding: '4px 10px', borderRadius: 5 }}>
+                  Descartado por {item.descartado_por || '—'}
+                </span>
+              )}
+            </div>
+
+            {item.observacao && (
+              <div style={{ fontSize: 12.5, background: T.panelAlt, padding: '8px 12px', borderRadius: 6, marginBottom: 12 }}>
+                <strong style={{ fontSize: 11, color: T.inkFaint }}>OBS DO RECEBIMENTO:</strong><br />{item.observacao}
+              </div>
+            )}
+
+            <Galeria fotos={fotos.filter(f => f.tipo === 'material')} titulo="📷 Fotos do material / equipamento" />
+            <Galeria fotos={fotos.filter(f => f.tipo === 'nota_fiscal')} titulo="📄 Fotos da nota fiscal" />
+            {fotos.length === 0 && (
+              <div style={{ fontSize: 12, color: T.amberText, background: T.amberSoft, padding: '8px 12px', borderRadius: 6, marginBottom: 12 }}>
+                ⚠ Esse registro chegou sem nenhuma foto anexada.
+              </div>
+            )}
+
+            {item.status === 'aguardando_br' ? (
+              <div style={{ borderTop: `1px solid ${T.line}`, paddingTop: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <label style={{ fontSize: 11.5, fontWeight: 700, color: T.inkFaint }}>Número do BR do projeto</label>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  <input value={brEdit[item.id] || ''} onChange={e => setBrEdit(p => ({ ...p, [item.id]: e.target.value }))}
+                    placeholder="Ex: BR14501/26" style={{ ...inputStyle(), width: 200 }} />
+                  <input value={obsEdit[item.id] || ''} onChange={e => setObsEdit(p => ({ ...p, [item.id]: e.target.value }))}
+                    placeholder="Observação (opcional)" style={{ ...inputStyle(), flex: 1, minWidth: 200 }} />
+                  <button onClick={() => confirmarBr(item)} disabled={salvandoId === item.id}
+                    style={{ fontSize: 12.5, fontWeight: 700, color: '#fff', background: T.oliveText, border: 'none', borderRadius: 6, padding: '8px 16px', cursor: 'pointer', opacity: salvandoId === item.id ? 0.6 : 1 }}>
+                    {salvandoId === item.id ? 'Salvando…' : '✓ Confirmar BR'}
+                  </button>
+                  <button onClick={() => descartar(item)} disabled={salvandoId === item.id}
+                    style={{ fontSize: 12.5, fontWeight: 600, color: T.inkFaint, background: 'transparent', border: `1px solid ${T.line}`, borderRadius: 6, padding: '8px 14px', cursor: 'pointer' }}>
+                    Descartar
+                  </button>
+                </div>
+              </div>
+            ) : item.observacao_comercial ? (
+              <div style={{ fontSize: 12.5, borderTop: `1px solid ${T.line}`, paddingTop: 10 }}>
+                <strong style={{ fontSize: 11, color: T.inkFaint }}>OBS DO COMERCIAL:</strong> {item.observacao_comercial}
+              </div>
+            ) : null}
+          </Panel>
+        );
+      })}
+
+      {fotoAmpliada && (
+        <Overlay onClose={() => setFotoAmpliada(null)}>
+          <div onClick={() => setFotoAmpliada(null)} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, cursor: 'zoom-out' }}>
+            <img src={fotoAmpliada.url} alt={fotoAmpliada.nome || 'foto'}
+              style={{ maxWidth: '90vw', maxHeight: '85vh', objectFit: 'contain', borderRadius: 8, boxShadow: '0 24px 60px rgba(0,0,0,.4)' }} />
+            <a href={fotoAmpliada.url} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()}
+              style={{ fontSize: 12.5, fontWeight: 700, color: '#fff', background: T.blueText, padding: '8px 16px', borderRadius: 6, textDecoration: 'none' }}>
+              ⬇ Abrir em nova aba
+            </a>
+          </div>
+        </Overlay>
+      )}
+    </div>
+  );
+}
+
 function EquipamentosTerceiros() {
   const [dados, setDados] = useState([]);
   const [pedidosVenda, setPedidosVenda] = useState([]);
@@ -15907,6 +16133,7 @@ const TELAS_CATALOGO = [
   { id: 'estoque_ocs', label: 'Estoque x OCs' },
   { id: 'almoxarifado', label: 'Almoxarifado' },
   { id: 'equipamentos', label: 'Equip. Terceiros' },
+  { id: 'recebimento_terceiros', label: 'Validação de Recebimento' },
   { id: 'acompanhamento_servico', label: 'Falta Nota de Serviço' },
   { id: 'monitoramento_op', label: 'Monitoramento OP' },
   { id: 'proposta_tecnica', label: 'Proposta Técnica' },
