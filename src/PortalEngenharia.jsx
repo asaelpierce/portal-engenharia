@@ -9577,6 +9577,38 @@ function ValidacaoRecebimento({ currentUser }) {
     await carregar();
   };
 
+  const recusar = async (item) => {
+    const motivo = prompt(
+      'Por que precisa ser refeito? (ex: foto da nota ilegível, faltou foto do material)\n\n' +
+      'Esse texto será enviado para quem preencheu o formulário.'
+    );
+    if (motivo === null) return;
+    if (!motivo.trim()) { alert('Explique o motivo — é o que a pessoa vai ler pra saber o que corrigir.'); return; }
+    setSalvandoId(item.id);
+
+    // Só recusa se ainda estiver aguardando -- evita recusar algo que outra
+    // pessoa acabou de validar na mesma hora.
+    const { data: atualizado, error } = await supabase.from('recebimentos_terceiros').update({
+      status: 'recusado', recusado_por: currentUser?.nome || null,
+      recusado_em: new Date().toISOString(), motivo_recusa: motivo.trim(),
+    }).eq('id', item.id).eq('status', 'aguardando_br').select();
+    if (error) { alert(`Erro ao recusar: ${error.message}`); setSalvandoId(null); return; }
+    if (!atualizado || atualizado.length === 0) {
+      alert('Esse recebimento já foi tratado por outra pessoa. Atualizando a lista.');
+      setSalvandoId(null); await carregar(); return;
+    }
+
+    const { error: errFila } = await supabase.from('solicitacoes_recebimento_recusado').insert({
+      recebimento_id: item.id, destinatario_email: item.respondente,
+      cliente: item.cliente, numero_nota_fiscal: item.numero_nota_fiscal,
+      motivo_recusa: motivo.trim(), recusado_por: currentUser?.nome || null, status: 'pendente',
+    });
+    if (errFila) alert(`Recusou, mas falhou ao avisar quem preencheu: ${errFila.message}`);
+
+    setSalvandoId(null);
+    await carregar();
+  };
+
   const descartar = async (item) => {
     const motivo = prompt('Por que esse recebimento deve ser descartado? (ex: duplicado, enviado por engano)');
     if (motivo === null) return;
@@ -9591,8 +9623,10 @@ function ValidacaoRecebimento({ currentUser }) {
 
   const aguardando = itens.filter(i => i.status === 'aguardando_br');
   const validados = itens.filter(i => i.status === 'validado');
+  const recusados = itens.filter(i => i.status === 'recusado');
   const descartados = itens.filter(i => i.status === 'descartado');
-  const listaAtual = (aba === 'aguardando' ? aguardando : aba === 'validados' ? validados : descartados)
+  const listaAtual = (aba === 'aguardando' ? aguardando : aba === 'validados' ? validados
+      : aba === 'recusados' ? recusados : descartados)
     .filter(i => !busca.trim() ||
       (i.cliente || '').toLowerCase().includes(busca.toLowerCase()) ||
       (i.numero_nota_fiscal || '').toLowerCase().includes(busca.toLowerCase()) ||
@@ -9629,6 +9663,7 @@ function ValidacaoRecebimento({ currentUser }) {
           {[
             { id: 'aguardando', label: `⏳ Aguardando BR (${aguardando.length})` },
             { id: 'validados', label: `✓ Validados (${validados.length})` },
+            { id: 'recusados', label: `↩ Recusados (${recusados.length})` },
             { id: 'descartados', label: `Descartados (${descartados.length})` },
           ].map(t => (
             <button key={t.id} onClick={() => setAba(t.id)}
@@ -9685,12 +9720,23 @@ function ValidacaoRecebimento({ currentUser }) {
                       </span>}
                 </div>
               )}
+              {item.status === 'recusado' && (
+                <span style={{ fontSize: 11, fontWeight: 700, color: T.amberText, background: T.amberSoft, padding: '4px 10px', borderRadius: 5 }}>
+                  ↩ Recusado por {item.recusado_por || '—'} em {fmtDataHora(item.recusado_em)}
+                </span>
+              )}
               {item.status === 'descartado' && (
                 <span style={{ fontSize: 11, fontWeight: 700, color: T.inkFaint, background: T.panelAlt, padding: '4px 10px', borderRadius: 5 }}>
                   Descartado por {item.descartado_por || '—'}
                 </span>
               )}
             </div>
+
+            {item.status === 'recusado' && item.motivo_recusa && (
+              <div style={{ fontSize: 12.5, background: T.amberSoft, border: `1px solid ${T.amber}66`, padding: '8px 12px', borderRadius: 6, marginBottom: 12 }}>
+                <strong style={{ fontSize: 11, color: T.amberText }}>MOTIVO DA RECUSA:</strong><br />{item.motivo_recusa}
+              </div>
+            )}
 
             {item.observacao && (
               <div style={{ fontSize: 12.5, background: T.panelAlt, padding: '8px 12px', borderRadius: 6, marginBottom: 12 }}>
@@ -9744,7 +9790,13 @@ function ValidacaoRecebimento({ currentUser }) {
                     style={{ fontSize: 12.5, fontWeight: 700, color: '#fff', background: T.oliveText, border: 'none', borderRadius: 6, padding: '8px 16px', cursor: 'pointer', opacity: salvandoId === item.id ? 0.6 : 1 }}>
                     {salvandoId === item.id ? 'Salvando…' : '✓ Confirmar BR'}
                   </button>
+                  <button onClick={() => recusar(item)} disabled={salvandoId === item.id}
+                    title="Devolve pra quem preencheu refazer (foto ruim, dado faltando)"
+                    style={{ fontSize: 12.5, fontWeight: 700, color: T.amberText, background: 'transparent', border: `1px solid ${T.amber}`, borderRadius: 6, padding: '8px 14px', cursor: 'pointer' }}>
+                    ↩ Recusar (refazer)
+                  </button>
                   <button onClick={() => descartar(item)} disabled={salvandoId === item.id}
+                    title="Arquiva de vez — duplicado ou enviado por engano"
                     style={{ fontSize: 12.5, fontWeight: 600, color: T.inkFaint, background: 'transparent', border: `1px solid ${T.line}`, borderRadius: 6, padding: '8px 14px', cursor: 'pointer' }}>
                     Descartar
                   </button>
