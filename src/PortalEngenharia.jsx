@@ -335,7 +335,18 @@ function TelaCarregando({ texto = 'Carregando…' }) {
 }
 
 function PortalConteudo({ currentUser, session }) {
-  const [view, setView] = useState('dashboard');
+  // Aceita ?tela=<id> na URL pra abrir direto numa aba específica -- usado
+  // pelos links que chegam pelo Teams/e-mail (ex: notificação de recebimento
+  // aponta direto pra tela de validação, em vez de cair na Visão geral).
+  const [view, setView] = useState(() => {
+    try {
+      const alvo = (new URLSearchParams(window.location.search).get('tela') || '').trim();
+      // Valida contra o catálogo -- link com id errado cairia numa tela em
+      // branco (nenhum renderTab casaria), então melhor voltar pra Visão geral.
+      const existe = alvo && (alvo === 'dashboard' || TELAS_CATALOGO.some(t => t.id === alvo));
+      return existe ? alvo : 'dashboard';
+    } catch { return 'dashboard'; }
+  });
 
   // Keep-alive de abas: uma vez visitada, a aba fica montada (só escondida via CSS quando
   // não é a ativa) — preserva filtros/estado local ao trocar de aba e voltar, sem precisar
