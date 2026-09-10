@@ -9569,6 +9569,10 @@ function ValidacaoRecebimento({ currentUser }) {
     });
     if (errFila) alert(`Salvou o BR, mas falhou ao avisar o almoxarifado: ${errFila.message}`);
 
+    // Roda a verificação na hora: se o pedido já estiver lançado no Sankhya,
+    // a plaquinha já sai completa e o card não fica com alerta à toa.
+    await supabase.rpc('fn_recebimento_verificar_pedido_sankhya').catch(() => {});
+
     setSalvandoId(null);
     await carregar();
   };
@@ -9663,11 +9667,23 @@ function ValidacaoRecebimento({ currentUser }) {
                 </div>
               </div>
               {item.status === 'validado' && (
-                <span style={{ fontSize: 11, fontWeight: 700, color: T.oliveText, background: T.oliveSoft, padding: '4px 10px', borderRadius: 5 }}>
-                  ✓ {item.validado_por || '—'} em {fmtDataHora(item.validado_em)}
-                  {item.precisa_plaquinha === true && ' · 🏷 com plaquinha'}
-                  {item.precisa_plaquinha === false && ' · sem plaquinha'}
-                </span>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: T.oliveText, background: T.oliveSoft, padding: '4px 10px', borderRadius: 5 }}>
+                    ✓ {item.validado_por || '—'} em {fmtDataHora(item.validado_em)}
+                    {item.precisa_plaquinha === true && ' · 🏷 com plaquinha'}
+                    {item.precisa_plaquinha === false && ' · sem plaquinha'}
+                  </span>
+                  {/* Equipamento de terceiros costuma chegar antes do pedido
+                      existir no Sankhya -- fica sinalizado até aparecer. */}
+                  {item.pedido_sankhya_em
+                    ? <span style={{ fontSize: 11, fontWeight: 700, color: T.blueText, background: T.blueSoft, padding: '4px 10px', borderRadius: 5 }}>
+                        ✓ Pedido {item.pedido_sankhya_numero || ''} lançado
+                      </span>
+                    : <span title="O material chegou antes do pedido ser lançado. O portal verifica sozinho a cada 30 min e completa a plaquinha quando aparecer."
+                        style={{ fontSize: 11, fontWeight: 700, color: T.amberText, background: T.amberSoft, padding: '4px 10px', borderRadius: 5 }}>
+                        ⏳ Sem pedido no Sankhya ainda
+                      </span>}
+                </div>
               )}
               {item.status === 'descartado' && (
                 <span style={{ fontSize: 11, fontWeight: 700, color: T.inkFaint, background: T.panelAlt, padding: '4px 10px', borderRadius: 5 }}>
