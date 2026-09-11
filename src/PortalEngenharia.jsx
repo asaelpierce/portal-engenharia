@@ -2350,12 +2350,92 @@ function ContextoCliente({ ctx, serie }) {
   );
 }
 
+// O dado interno responde o que a web nao responde: se todos os itens pararam,
+// cheira a conta perdida; se alguns pararam e outros seguem, cheira a ciclo de
+// desgaste por area. E o preco unitario separa "ficamos caros" do resto.
+function AnaliseProduto({ diag, itens }) {
+  if (!diag) return null;
+  const moeda = (v) => fmtMoedaCompacta(v);
+  const pararam = itens.filter(i => i.situacao_item === 'Item parou')
+    .sort((a, b) => (b.v2025 || 0) - (a.v2025 || 0));
+  const cresceram = itens.filter(i => i.situacao_item === 'Item cresceu');
+  const contaPerdida = diag.itens_ativos === 0;
+
+  return (
+    <div style={{ marginBottom: 16, paddingBottom: 14, borderBottom: `1px solid ${T.line}` }}>
+      <div style={{ fontSize: 10.5, color: T.inkFaint, fontWeight: 600, marginBottom: 8 }}>
+        O QUE O NOSSO PRÓPRIO DADO DIZ
+      </div>
+
+      <div style={{
+        fontSize: 12.5, color: T.ink, lineHeight: 1.6, background: contaPerdida ? T.rustSoft : T.panelAlt,
+        border: `1px solid ${contaPerdida ? T.rustSoft : T.line}`, borderRadius: 6,
+        padding: '10px 12px', marginBottom: 12,
+      }}>
+        <strong>{diag.leitura}</strong>
+        {diag.var_preco_media != null && (
+          <span style={{ color: T.inkDim }}>
+            {' '}· Preço unitário variou {diag.var_preco_media > 0 ? '+' : ''}{diag.var_preco_media}% na média,
+            {Math.abs(diag.var_preco_media) <= 5 ? ' ou seja, preço não explica a queda.' : ' o que merece verificação.'}
+          </span>
+        )}
+        {diag.vendedores === 1 && (
+          <span style={{ color: T.inkDim }}> O vendedor é o mesmo do período anterior.</span>
+        )}
+      </div>
+
+      <div style={{ display: 'flex', gap: 26, flexWrap: 'wrap', marginBottom: 10 }}>
+        {[['Itens que pararam', diag.itens_pararam, T.rustText],
+          ['Itens ainda ativos', diag.itens_ativos, diag.itens_ativos ? T.oliveText : T.rustText],
+          ['Itens no histórico', diag.itens, T.inkDim]].map(([l, v, c]) => (
+          <div key={l}>
+            <div style={{ fontSize: 10.5, color: T.inkFaint }}>{l}</div>
+            <div style={{ fontSize: 17, fontWeight: 700, color: c, fontVariantNumeric: 'tabular-nums' }}>{v}</div>
+          </div>
+        ))}
+      </div>
+
+      {pararam.length > 0 && (
+        <div>
+          <div style={{ fontSize: 10.5, color: T.inkFaint, fontWeight: 600, margin: '10px 0 5px' }}>
+            ITENS QUE DEIXARAM DE SER COMPRADOS
+          </div>
+          {pararam.slice(0, 6).map(i => (
+            <div key={i.cod_produto} style={{
+              display: 'flex', justifyContent: 'space-between', gap: 12,
+              fontSize: 12, padding: '4px 0', color: T.inkDim,
+            }}>
+              <span>
+                <span style={{ color: T.inkFaint, fontVariantNumeric: 'tabular-nums', marginRight: 7 }}>
+                  {i.cod_produto}</span>
+                {i.produto}
+              </span>
+              <span style={{ whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
+                <span style={{ color: T.ink }}>{moeda(i.v2025)}</span>
+                <span style={{ color: T.inkFaint }}> em 2025 · última {String(i.ultima).slice(0, 10)}</span>
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {cresceram.length > 0 && (
+        <div style={{ fontSize: 11.5, color: T.oliveText, marginTop: 8 }}>
+          {cresceram.length} item(ns) deste cliente cresceram em 2026 — a conta não está inativa.
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ModeloPreditivo() {
   const [visao, setVisao] = useState('top');      // top | vale | alerta
   const [indic, setIndic] = useState(null);
   const [alertas, setAlertas] = useState([]);
   const [investigando, setInvestigando] = useState(null);
   const [abertoAlerta, setAbertoAlerta] = useState(null);
+  const [diagProd, setDiagProd] = useState({});
+  const [prodMov, setProdMov] = useState({});
   const [linhas, setLinhas] = useState([]);
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState('');
@@ -2393,6 +2473,13 @@ function ModeloPreditivo() {
       setIndic(ind?.[0] || null);
       const { data: al } = await supabase.from('modelo_alerta_completo').select('*');
       setAlertas(al || []);
+      const { data: dg } = await supabase.from('cliente_diagnostico_produto').select('*');
+      setDiagProd(Object.fromEntries((dg || []).map(d => [d.cliente, d])));
+      const { data: pm } = await supabase.from('cliente_produto_movimento')
+        .select('*').neq('situacao_item', 'Estável');
+      const porCli = {};
+      (pm || []).forEach(r => { (porCli[r.cliente] = porCli[r.cliente] || []).push(r); });
+      setProdMov(porCli);
     } catch (e) { setErro(e.message || String(e)); }
     setLoading(false);
   }, []);
@@ -2621,6 +2708,7 @@ function ModeloPreditivo() {
                     {aberto && (
                       <tr style={{ background: T.panelAlt }}>
                         <td colSpan={7} style={{ padding: '14px 16px', borderBottom: `1px solid ${T.line}` }}>
+                          <AnaliseProduto diag={diagProd[a.cliente]} itens={prodMov[a.cliente] || []} />
                           {!a.investigado_em ? (
                             <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
                               <button disabled={investigando === a.cliente}
