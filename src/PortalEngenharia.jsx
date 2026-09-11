@@ -15997,6 +15997,9 @@ function CriarBR({ currentUser }) {
   const [refCliente, setRefCliente] = useState('');
   const [ativo, setAtivo] = useState(true);
   const [analitico, setAnalitico] = useState(true);
+  // Data de início já vem com hoje/agora preenchido, que é o caso normal.
+  const [dataInicio, setDataInicio] = useState(() => new Date().toISOString().slice(0, 10));
+  const [horaInicio, setHoraInicio] = useState(() => new Date().toTimeString().slice(0, 5));
 
   const [buscaParc, setBuscaParc] = useState('');
   const [resultParc, setResultParc] = useState([]);
@@ -16068,7 +16071,8 @@ function CriarBR({ currentUser }) {
       `Criar o projeto no Sankhya?\n\n` +
       `Projeto: ${codproj}\nIdentificação: ${identificacao}\n` +
       `Cliente: ${parceiro.cod} — ${parceiro.nome}\nVendedor: ${vend?.nome || codVendedor}\n` +
-      `Ativo: ${ativo ? 'Sim' : 'Não'} · Analítico: ${analitico ? 'Sim' : 'Não'}\n\n` +
+      `Ativo: ${ativo ? 'Sim' : 'Não'} · Analítico: ${analitico ? 'Sim' : 'Não'}\n` +
+      `Data início: ${dataInicio ? dataInicio.split('-').reverse().join('/') : '(vazio)'} ${horaInicio || ''}\n\n` +
       `Isso grava direto no Sankhya e não tem desfazer pelo portal.`
     )) return;
 
@@ -16081,6 +16085,7 @@ function CriarBR({ currentUser }) {
       cod_vendedor: codVendedor, nome_vendedor: vend?.nome || '',
       referencia_cliente: refCliente.trim() || null,
       ativo, analitico,
+      data_inicio: dataInicio || null, hora_inicio: horaInicio || null,
     });
     setCriando(false);
 
@@ -16168,7 +16173,15 @@ function CriarBR({ currentUser }) {
                   {vendedores.map(v => <option key={v.cod} value={v.cod}>{v.cod} — {v.nome}</option>)}
                 </select>
               </div>
-              <div style={{ flex: 1, minWidth: 200 }}>
+              <div style={{ width: 150 }}>
+                {label('Data de início')}
+                <input type="date" value={dataInicio} onChange={e => setDataInicio(e.target.value)} style={{ ...inputStyle(), width: '100%' }} />
+              </div>
+              <div style={{ width: 100 }}>
+                {label('Hora')}
+                <input type="time" value={horaInicio} onChange={e => setHoraInicio(e.target.value)} style={{ ...inputStyle(), width: '100%' }} />
+              </div>
+              <div style={{ flex: 1, minWidth: 180 }}>
                 {label('Referência do cliente (opcional)')}
                 <input value={refCliente} onChange={e => setRefCliente(e.target.value)} style={{ ...inputStyle(), width: '100%' }} />
               </div>
