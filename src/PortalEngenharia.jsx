@@ -15995,6 +15995,8 @@ function CriarBR({ currentUser }) {
   const [identificacao, setIdentificacao] = useState('');
   const [abreviatura, setAbreviatura] = useState('');
   const [refCliente, setRefCliente] = useState('');
+  const [ativo, setAtivo] = useState(true);
+  const [analitico, setAnalitico] = useState(true);
 
   const [buscaParc, setBuscaParc] = useState('');
   const [resultParc, setResultParc] = useState([]);
@@ -16032,7 +16034,7 @@ function CriarBR({ currentUser }) {
   }, []);
 
   const carregarHistorico = useCallback(async () => {
-    const { data } = await supabase.from('brs_criados_portal').select('*').order('criado_em', { ascending: false }).limit(20);
+    const { data } = await supabase.from('brs_criados_portal').select('*').order('criado_em', { ascending: false }).limit(100);
     setHistorico(data || []);
   }, []);
 
@@ -16042,16 +16044,16 @@ function CriarBR({ currentUser }) {
     chamar({ acao: 'listar_vendedores' }).then(r => { if (r.ok) setVendedores(r.itens || []); });
   }, [carregarSugestao, carregarHistorico]);
 
-  // Busca só dispara com 2+ letras e depois que para de digitar, pra não
-  // martelar o Sankhya a cada tecla.
+  // Sugere já a partir de 1 caractere -- o padrão da casa é digitar o código
+  // do parceiro, e com 1 dígito já dá pra ir estreitando a lista.
   useEffect(() => {
-    if (buscaParc.trim().length < 2) { setResultParc([]); return; }
+    if (buscaParc.trim().length < 1) { setResultParc([]); return; }
     const t = setTimeout(async () => {
       setBuscandoParc(true);
       const r = await chamar({ acao: 'buscar_parceiro', termo: buscaParc.trim() });
       setResultParc(r.ok ? (r.itens || []) : []);
       setBuscandoParc(false);
-    }, 400);
+    }, 350);
     return () => clearTimeout(t);
   }, [buscaParc]);
 
@@ -16065,7 +16067,8 @@ function CriarBR({ currentUser }) {
     if (!confirm(
       `Criar o projeto no Sankhya?\n\n` +
       `Projeto: ${codproj}\nIdentificação: ${identificacao}\n` +
-      `Cliente: ${parceiro.nome}\nVendedor: ${vend?.nome || codVendedor}\n\n` +
+      `Cliente: ${parceiro.cod} — ${parceiro.nome}\nVendedor: ${vend?.nome || codVendedor}\n` +
+      `Ativo: ${ativo ? 'Sim' : 'Não'} · Analítico: ${analitico ? 'Sim' : 'Não'}\n\n` +
       `Isso grava direto no Sankhya e não tem desfazer pelo portal.`
     )) return;
 
@@ -16077,6 +16080,7 @@ function CriarBR({ currentUser }) {
       cod_parceiro: parceiro.cod, nome_parceiro: parceiro.nome,
       cod_vendedor: codVendedor, nome_vendedor: vend?.nome || '',
       referencia_cliente: refCliente.trim() || null,
+      ativo, analitico,
     });
     setCriando(false);
 
@@ -16140,7 +16144,7 @@ function CriarBR({ currentUser }) {
               ) : (
                 <>
                   <input value={buscaParc} onChange={e => setBuscaParc(e.target.value)}
-                    placeholder="Digite o nome ou o código do cliente…" style={{ ...inputStyle(), width: '100%' }} />
+                    placeholder="Digite o código do cliente (ex: 516) — ou o nome" style={{ ...inputStyle(), width: '100%' }} />
                   {buscandoParc && <div style={{ fontSize: 11.5, color: T.inkFaint, marginTop: 4 }}>Buscando…</div>}
                   {resultParc.length > 0 && (
                     <div style={{ border: `1px solid ${T.line}`, borderRadius: 6, marginTop: 4, maxHeight: 200, overflowY: 'auto' }}>
@@ -16170,8 +16174,23 @@ function CriarBR({ currentUser }) {
               </div>
             </div>
 
-            <div style={{ fontSize: 12, color: T.inkFaint, background: T.panelAlt, padding: '8px 12px', borderRadius: 6 }}>
-              Empresa: <strong>1 — KALENBORN DO BRASIL LTDA</strong> (fixo) · Ativo: Sim
+            <div style={{ display: 'flex', alignItems: 'center', gap: 18, flexWrap: 'wrap', background: T.panelAlt, padding: '10px 14px', borderRadius: 6 }}>
+              <span style={{ fontSize: 12, color: T.inkFaint }}>
+                Empresa: <strong style={{ color: T.ink }}>1 — KALENBORN DO BRASIL LTDA</strong> (fixo)
+              </span>
+              {[
+                { txt: 'Ativo', val: ativo, set: setAtivo },
+                { txt: 'Analítico', val: analitico, set: setAnalitico },
+              ].map(c => (
+                <label key={c.txt} style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12.5, cursor: 'pointer' }}>
+                  <button onClick={() => c.set(!c.val)} type="button"
+                    style={{ width: 40, height: 22, borderRadius: 11, border: 'none', cursor: 'pointer', position: 'relative',
+                      background: c.val ? T.oliveText : T.line, transition: 'background .15s' }}>
+                    <span style={{ position: 'absolute', top: 3, left: c.val ? 21 : 3, width: 16, height: 16, borderRadius: '50%', background: '#fff', transition: 'left .15s' }} />
+                  </button>
+                  <span style={{ fontWeight: 600, color: c.val ? T.ink : T.inkFaint }}>{c.txt}</span>
+                </label>
+              ))}
             </div>
 
             {erro && <div style={{ fontSize: 12.5, color: T.rustText, background: T.rustSoft, padding: '9px 12px', borderRadius: 6 }}>{erro}</div>}
@@ -16191,34 +16210,36 @@ function CriarBR({ currentUser }) {
         )}
       </Panel>
 
-      {historico.length > 0 && (
-        <Panel title="Criados pelo portal" subtitle="Últimos 20 — o projeto em si fica no Sankhya; aqui é só o registro de quem criou.">
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-            <thead>
-              <tr style={{ background: T.panelAlt, borderBottom: `1px solid ${T.line}` }}>
-                <th style={thFat(110)}>BR</th>
-                <th style={thFat(0)}>Cliente</th>
-                <th style={thFat(140)}>Vendedor</th>
-                <th style={thFat(130)}>Criado por</th>
-                <th style={thFat(120)}>Quando</th>
+      <Panel title="Criados pelo portal" subtitle="Registro de tudo que foi criado por aqui — o projeto em si fica no Sankhya.">
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+          <thead>
+            <tr style={{ background: T.panelAlt, borderBottom: `1px solid ${T.line}` }}>
+              <th style={thFat(110)}>BR</th>
+              <th style={thFat(70)}>Cód.</th>
+              <th style={thFat(0)}>Cliente</th>
+              <th style={thFat(130)}>Vendedor</th>
+              <th style={thFat(130)}>Criado por</th>
+              <th style={thFat(120)}>Quando</th>
+            </tr>
+          </thead>
+          <tbody>
+            {historico.length === 0 ? (
+              <tr><td colSpan={6} style={{ padding: 24, textAlign: 'center', color: T.inkFaint }}>Nenhum BR criado pelo portal ainda.</td></tr>
+            ) : historico.map(h => (
+              <tr key={h.id} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                <td style={{ padding: '7px 12px', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText }}>{h.identificacao}</td>
+                <td style={{ padding: '7px 12px', fontFamily: FONT_DISPLAY, color: T.inkDim }}>{h.cod_parceiro ?? '—'}</td>
+                <td style={{ padding: '7px 12px' }}>{h.nome_parceiro || '—'}</td>
+                <td style={{ padding: '7px 12px' }}>{h.nome_vendedor || '—'}</td>
+                <td style={{ padding: '7px 12px' }}>{h.criado_por || '—'}</td>
+                <td style={{ padding: '7px 12px', color: T.inkFaint }}>
+                  {new Date(h.criado_em).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                </td>
               </tr>
-            </thead>
-            <tbody>
-              {historico.map(h => (
-                <tr key={h.id} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
-                  <td style={{ padding: '7px 12px', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText }}>{h.identificacao}</td>
-                  <td style={{ padding: '7px 12px' }}>{h.nome_parceiro || '—'}</td>
-                  <td style={{ padding: '7px 12px' }}>{h.nome_vendedor || '—'}</td>
-                  <td style={{ padding: '7px 12px' }}>{h.criado_por || '—'}</td>
-                  <td style={{ padding: '7px 12px', color: T.inkFaint }}>
-                    {new Date(h.criado_em).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' })}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </Panel>
-      )}
+            ))}
+          </tbody>
+        </table>
+      </Panel>
     </div>
   );
 }
