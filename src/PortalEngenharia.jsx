@@ -2259,7 +2259,291 @@ function CicloComercial() {
 /* ============================================================================
    PAINEL COMERCIAL — Pedidos faturados no mês com ciclo pedido→NF
 ============================================================================ */
+// ============================================================================
+// Modelo Preditivo — top 10 clientes
+//
+// Base: nota_venda_itens filtrada por sankhya_tops_venda (só TOPs de venda;
+// sem isso entram devolução, remessa e amostra como se fosse faturamento).
+// Serviço (TOP 3219/3220) não tem classificação de material, então vira uma
+// categoria própria em vez de cair em "sem classificação".
+//
+// A projeção é regressão linear sobre os 3 anos. É tendência, não promessa:
+// clientes que compram por projeto oscilam demais para uma reta explicar, e
+// por isso a tela mostra o R² e rebaixa a confiança quando ele é baixo.
+// ============================================================================
+function ModeloPreditivo() {
+  const [linhas, setLinhas] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [erro, setErro] = useState('');
+  const [expandido, setExpandido] = useState(null);
+  const ANOS = [2023, 2024, 2025];
+
+  const carregar = useCallback(async () => {
+    setLoading(true); setErro('');
+    try {
+      const { data: tops } = await supabase.from('sankhya_tops_venda').select('codtipoper');
+      const validos = new Set((tops || []).map(t => t.codtipoper));
+
+      let todos = [], de = 0, passo = 1000;
+      for (;;) {
+        const { data, error } = await supabase
+          .from('nota_venda_itens')
+          .select('cliente_nome,segmento_descricao,produto_kaleng,codtipoper,valor_bruto,data_faturamento')
+          .gte('data_faturamento', '2023-01-01')
+          .lte('data_faturamento', '2025-12-31')
+          .range(de, de + passo - 1);
+        if (error) throw error;
+        todos = todos.concat(data || []);
+        if (!data || data.length < passo) break;
+        de += passo;
+      }
+      setLinhas(todos.filter(r => validos.has(r.codtipoper)));
+    } catch (e) { setErro(e.message || String(e)); }
+    setLoading(false);
+  }, []);
+  useEffect(() => { carregar(); }, [carregar]);
+
+  const dados = useMemo(() => {
+    const porCliente = new Map();
+    for (const r of linhas) {
+      const nome = r.cliente_nome || '—';
+      const ano = Number(String(r.data_faturamento).slice(0, 4));
+      const mes = String(r.data_faturamento).slice(0, 7);
+      const v = Number(r.valor_bruto) || 0;
+      const tipo = [3219, 3220].includes(r.codtipoper) ? 'Serviço'
+        : (r.produto_kaleng && r.produto_kaleng.trim()) ? r.produto_kaleng.trim()
+        : 'Sem classificação';
+
+      if (!porCliente.has(nome)) {
+        porCliente.set(nome, {
+          cliente: nome, segmento: r.segmento_descricao || 'Não informado',
+          total: 0, anos: {}, tipos: {}, meses: new Set(),
+        });
+      }
+      const c = porCliente.get(nome);
+      c.total += v;
+      c.anos[ano] = (c.anos[ano] || 0) + v;
+      c.tipos[tipo] = (c.tipos[tipo] || 0) + v;
+      c.meses.add(mes);
+      if (!c.segmento || c.segmento === 'Não informado') c.segmento = r.segmento_descricao || c.segmento;
+    }
+
+    const top = [...porCliente.values()].sort((a, b) => b.total - a.total).slice(0, 10);
+
+    return top.map(c => {
+      const serie = ANOS.map(a => c.anos[a] || 0);
+      // regressão linear simples sobre x = 0,1,2
+      const n = 3, mx = 1, my = serie.reduce((s, v) => s + v, 0) / n;
+      let sxy = 0, sxx = 0;
+      serie.forEach((y, i) => { sxy += (i - mx) * (y - my); sxx += (i - mx) ** 2; });
+      const incl = sxx ? sxy / sxx : 0;
+      const proj = Math.max(0, my + incl * (3 - mx));
+      // R²: quanto da variação a reta explica
+      let ssTot = 0, ssRes = 0;
+      serie.forEach((y, i) => {
+        const yh = my + incl * (i - mx);
+        ssTot += (y - my) ** 2; ssRes += (y - yh) ** 2;
+      });
+      const r2 = ssTot > 0 ? Math.max(0, 1 - ssRes / ssTot) : 0;
+
+      const [a23, a24, a25] = serie;
+      const varUlt = a24 > 0 ? (a25 - a24) / a24 : (a25 > 0 ? 1 : 0);
+      let sinal;
+      if (a25 === 0) sinal = { k: 'perdido', rot: 'Sem compra em 2025', cor: T.rustText, bg: T.rustSoft };
+      else if (varUlt <= -0.5) sinal = { k: 'queda', rot: 'Queda forte', cor: T.rustText, bg: T.rustSoft };
+      else if (varUlt <= -0.2) sinal = { k: 'atencao', rot: 'Em retração', cor: T.amberText, bg: T.amberSoft };
+      else if (varUlt >= 0.2) sinal = { k: 'cresce', rot: 'Em crescimento', cor: T.oliveText, bg: T.oliveSoft };
+      else sinal = { k: 'estavel', rot: 'Estável', cor: T.blueText, bg: T.blueSoft };
+
+      const confianca = r2 >= 0.8 ? 'Alta' : r2 >= 0.4 ? 'Média' : 'Baixa';
+      const mesesAtivos = c.meses.size;
+
+      return {
+        ...c, serie, a23, a24, a25, proj, r2, sinal, confianca, varUlt,
+        mediaMes: c.total / 36, mesesAtivos,
+        tiposOrd: Object.entries(c.tipos).sort((x, y) => y[1] - x[1]),
+      };
+    });
+  }, [linhas]);
+
+  const totais = useMemo(() => ({
+    total: dados.reduce((s, c) => s + c.total, 0),
+    proj: dados.reduce((s, c) => s + c.proj, 0),
+    a25: dados.reduce((s, c) => s + c.a25, 0),
+    risco: dados.filter(c => ['perdido', 'queda'].includes(c.sinal.k)).length,
+  }), [dados]);
+
+  const moeda = (v) => fmtMoedaCompacta(v);
+  const pct = (v) => `${v >= 0 ? '+' : ''}${Math.round(v * 100)}%`;
+
+  if (loading) return <div style={{ padding: 40, color: T.inkFaint, fontSize: 13 }}>Carregando 3 anos de faturamento…</div>;
+  if (erro) return <div style={{ padding: 20, color: T.rustText, fontSize: 13 }}>Erro: {erro}</div>;
+
+  const maxSerie = Math.max(1, ...dados.flatMap(c => c.serie));
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '14px 18px' }}>
+        <div style={{ fontSize: 12.5, color: T.inkDim, lineHeight: 1.6 }}>
+          Os 10 maiores clientes por faturamento de 2023 a 2025, com a projeção de 2026 por tendência
+          linear. Só entram TOPs de venda — devolução, remessa e amostra ficam de fora.
+          Serviço aparece como categoria própria porque não tem classificação de material.
+        </div>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 12 }}>
+        {[
+          { l: 'Faturado 23–25 (top 10)', v: moeda(totais.total), c: T.terracotta, big: true },
+          { l: 'Fechado em 2025', v: moeda(totais.a25), c: T.ink },
+          { l: 'Projeção 2026', v: moeda(totais.proj), c: T.blueText },
+          { l: 'Clientes em risco', v: String(totais.risco), c: totais.risco > 0 ? T.rustText : T.oliveText },
+        ].map(k => (
+          <div key={k.l} style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '14px 16px', boxShadow: SHADOW_SM }}>
+            <div style={{ fontSize: 11, color: T.inkFaint, fontWeight: 600 }}>{k.l}</div>
+            <div style={{ fontFamily: FONT_DISPLAY, fontSize: k.big ? 24 : 22, fontWeight: 700, color: k.c, marginTop: 6 }}>{k.v}</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 1020 }}>
+            <thead>
+              <tr style={{ background: T.panelAlt }}>
+                {['Cliente', 'Segmento', 'Tipo de material', '2023', '2024', '2025', 'Média/mês', 'Tendência', 'Projeção 2026', 'Sinal']
+                  .map((h, i) => (
+                  <th key={h} style={{
+                    padding: '10px 12px', fontSize: 11, fontWeight: 600, color: T.inkFaint,
+                    textAlign: i >= 3 && i <= 8 ? 'right' : 'left',
+                    borderBottom: `1px solid ${T.line}`, whiteSpace: 'nowrap',
+                  }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {dados.map((c) => {
+                const aberto = expandido === c.cliente;
+                return (
+                  <React.Fragment key={c.cliente}>
+                    <tr onClick={() => setExpandido(aberto ? null : c.cliente)}
+                        style={{ borderBottom: `1px solid ${T.lineSoft}`, cursor: 'pointer' }}>
+                      <td style={{ padding: '11px 12px', fontSize: 12.5, color: T.ink, fontWeight: 600 }}>
+                        {c.cliente}
+                      </td>
+                      <td style={{ padding: '11px 12px', fontSize: 11.5, color: T.inkDim }}>{c.segmento}</td>
+                      <td style={{ padding: '11px 12px', fontSize: 11.5, color: T.inkDim }}>
+                        {c.tiposOrd.slice(0, 2).map(([t, v]) =>
+                          `${t} ${Math.round(v / c.total * 100)}%`).join(' · ')}
+                      </td>
+                      {c.serie.map((v, i) => (
+                        <td key={i} style={{
+                          padding: '11px 12px', fontSize: 12, textAlign: 'right',
+                          color: v === 0 ? T.rustText : T.ink, fontVariantNumeric: 'tabular-nums',
+                        }}>{v === 0 ? '—' : moeda(v)}</td>
+                      ))}
+                      <td style={{ padding: '11px 12px', fontSize: 12, textAlign: 'right', color: T.inkDim, fontVariantNumeric: 'tabular-nums' }}>
+                        {moeda(c.mediaMes)}
+                      </td>
+                      <td style={{ padding: '11px 12px', textAlign: 'right' }}>
+                        <svg width="64" height="22" style={{ verticalAlign: 'middle' }}>
+                          {c.serie.map((v, i) => {
+                            const h = Math.max(2, (v / maxSerie) * 18);
+                            return <rect key={i} x={i * 22 + 2} y={20 - h} width={16} height={h}
+                                         fill={c.sinal.cor} opacity={0.35 + i * 0.25} rx={1} />;
+                          })}
+                        </svg>
+                      </td>
+                      <td style={{
+                        padding: '11px 12px', fontSize: 12.5, textAlign: 'right', fontWeight: 600,
+                        color: T.blueText, fontVariantNumeric: 'tabular-nums',
+                      }}>
+                        {moeda(c.proj)}
+                        <div style={{ fontSize: 10, color: T.inkFaint, fontWeight: 400 }}>
+                          confiança {c.confianca.toLowerCase()}
+                        </div>
+                      </td>
+                      <td style={{ padding: '11px 12px' }}>
+                        <span style={{
+                          fontSize: 10.5, fontWeight: 700, color: c.sinal.cor, background: c.sinal.bg,
+                          padding: '3px 8px', borderRadius: 5, whiteSpace: 'nowrap',
+                        }}>{c.sinal.rot}</span>
+                      </td>
+                    </tr>
+                    {aberto && (
+                      <tr style={{ background: T.panelAlt }}>
+                        <td colSpan={10} style={{ padding: '14px 16px', borderBottom: `1px solid ${T.line}` }}>
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(230px,1fr))', gap: 18 }}>
+                            <div>
+                              <div style={{ fontSize: 10.5, color: T.inkFaint, fontWeight: 600, marginBottom: 7 }}>
+                                COMPOSIÇÃO POR TIPO
+                              </div>
+                              {c.tiposOrd.map(([t, v]) => (
+                                <div key={t} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, padding: '3px 0', color: T.inkDim }}>
+                                  <span>{t}</span>
+                                  <span style={{ fontVariantNumeric: 'tabular-nums', color: T.ink }}>
+                                    {moeda(v)} · {Math.round(v / c.total * 100)}%
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                            <div>
+                              <div style={{ fontSize: 10.5, color: T.inkFaint, fontWeight: 600, marginBottom: 7 }}>
+                                VARIAÇÃO
+                              </div>
+                              <div style={{ fontSize: 12, color: T.inkDim, lineHeight: 1.9 }}>
+                                <div>2023 → 2024: <strong style={{ color: T.ink }}>
+                                  {c.a23 > 0 ? pct((c.a24 - c.a23) / c.a23) : '—'}</strong></div>
+                                <div>2024 → 2025: <strong style={{ color: c.sinal.cor }}>
+                                  {c.a24 > 0 ? pct(c.varUlt) : '—'}</strong></div>
+                                <div>Meses com compra: <strong style={{ color: T.ink }}>{c.mesesAtivos} de 36</strong></div>
+                              </div>
+                            </div>
+                            <div>
+                              <div style={{ fontSize: 10.5, color: T.inkFaint, fontWeight: 600, marginBottom: 7 }}>
+                                SOBRE A PROJEÇÃO
+                              </div>
+                              <div style={{ fontSize: 11.5, color: T.inkDim, lineHeight: 1.65 }}>
+                                Reta sobre 3 pontos, R² de {c.r2.toFixed(2)}.{' '}
+                                {c.r2 >= 0.8
+                                  ? 'A tendência explica bem o histórico.'
+                                  : c.r2 >= 0.4
+                                    ? 'A tendência explica em parte; há oscilação relevante.'
+                                    : 'O histórico oscila demais para uma reta prever. Trate como referência, não como meta.'}
+                                {c.mesesAtivos <= 12 && ' Compra concentrada em poucos meses, típico de venda por projeto.'}
+                              </div>
+                            </div>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </React.Fragment>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        <div style={{ padding: '10px 16px', borderTop: `1px solid ${T.line}`, fontSize: 11, color: T.inkFaint, display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+          <span>
+            Clique na linha para abrir o detalhe · Projeção por regressão linear sobre 2023–2025 ·
+            R² baixo significa histórico irregular, não erro de cálculo
+          </span>
+          <BotaoExportar small onClick={() => exportCSV(
+            dados.map(c => ({
+              cliente: c.cliente, segmento: c.segmento,
+              tipo_principal: c.tiposOrd[0]?.[0] || '—',
+              v2023: Math.round(c.a23), v2024: Math.round(c.a24), v2025: Math.round(c.a25),
+              media_mes: Math.round(c.mediaMes), projecao_2026: Math.round(c.proj),
+              r2: c.r2.toFixed(2), confianca: c.confianca, sinal: c.sinal.rot,
+            })), 'modelo_preditivo_top10.csv',
+            ['cliente','segmento','tipo_principal','v2023','v2024','v2025','media_mes','projecao_2026','r2','confianca','sinal'])} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function PainelComercial() {
+  const [subAba, setSubAba] = useState('faturamento');
   const hoje = new Date();
   const mesAtual = `${hoje.getFullYear()}-${String(hoje.getMonth()+1).padStart(2,'0')}`;
   const [registros, setRegistros] = useState([]);
@@ -2508,6 +2792,23 @@ function PainelComercial() {
   return (
     <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 18, maxWidth: 1300 }}>
 
+      {/* Sub-abas do Painel Comercial */}
+      <div style={{ display: 'flex', gap: 2, borderBottom: `1px solid ${T.line}` }}>
+        {[{ id: 'faturamento', label: 'Faturado x Previsto' },
+          { id: 'modelo', label: 'Modelo Preditivo' }].map(ab => (
+          <button key={ab.id} onClick={() => setSubAba(ab.id)} style={{
+            background: 'none', border: 'none', cursor: 'pointer', padding: '9px 16px',
+            fontSize: 13, fontFamily: 'inherit',
+            fontWeight: subAba === ab.id ? 700 : 500,
+            color: subAba === ab.id ? T.terracotta : T.inkFaint,
+            borderBottom: `2px solid ${subAba === ab.id ? T.terracotta : 'transparent'}`,
+            marginBottom: -1,
+          }}>{ab.label}</button>
+        ))}
+      </div>
+
+      {subAba === 'modelo' ? <ModeloPreditivo /> : <>
+
       {/* Filtro de período — de/até */}
       <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '14px 18px' }}>
         <span style={{ fontSize: 12, fontWeight: 600, color: T.inkDim }}>Período:</span>
@@ -2689,6 +2990,8 @@ function PainelComercial() {
             ['br','nf','numero_pedido','top','cliente','kaleng','vendedor','uf','fat_previsto','nf_emitida','dias_atraso','valor','faturado'])} />
         </div>
       </div>
+
+      </>}
     </div>
   );
 }
