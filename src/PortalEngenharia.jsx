@@ -2354,6 +2354,8 @@ function ModeloPreditivo() {
   const [visao, setVisao] = useState('top');      // top | vale | alerta
   const [indic, setIndic] = useState(null);
   const [alertas, setAlertas] = useState([]);
+  const [investigando, setInvestigando] = useState(null);
+  const [abertoAlerta, setAbertoAlerta] = useState(null);
   const [linhas, setLinhas] = useState([]);
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState('');
@@ -2389,12 +2391,26 @@ function ModeloPreditivo() {
       setMercado(merc || []);
       const { data: ind } = await supabase.from('modelo_indicadores').select('*');
       setIndic(ind?.[0] || null);
-      const { data: al } = await supabase.from('modelo_alerta').select('*');
+      const { data: al } = await supabase.from('modelo_alerta_completo').select('*');
       setAlertas(al || []);
     } catch (e) { setErro(e.message || String(e)); }
     setLoading(false);
   }, []);
   useEffect(() => { carregar(); }, [carregar]);
+
+  const investigar = async (cliente) => {
+    setInvestigando(cliente);
+    try {
+      await fetch(`${SUPABASE_URL}/functions/v1/investigar-queda-cliente`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', apikey: SUPABASE_ANON_KEY },
+        body: JSON.stringify({ cliente, limite: 1 }),
+      });
+      await carregar();
+      setAbertoAlerta(cliente);
+    } catch (e) { setErro(String(e?.message ?? e)); }
+    setInvestigando(null);
+  };
 
   const dados = useMemo(() => {
     const porCliente = new Map();
@@ -2560,8 +2576,11 @@ function ModeloPreditivo() {
                   const cor = a.gravidade === 'Parou de comprar' ? T.rustText
                     : a.gravidade === 'Queda severa' ? T.rustText : T.amberText;
                   const bg = a.gravidade === 'Queda relevante' ? T.amberSoft : T.rustSoft;
+                  const aberto = abertoAlerta === a.cliente;
                   return (
-                    <tr key={a.cliente} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                    <React.Fragment key={a.cliente}>
+                    <tr onClick={() => setAbertoAlerta(aberto ? null : a.cliente)}
+                        style={{ borderBottom: `1px solid ${T.lineSoft}`, cursor: 'pointer' }}>
                       <td style={{ padding: '11px 12px', fontSize: 12.5, color: T.ink, fontWeight: 600 }}>
                         {a.cliente}
                         {a.e_vale && <span style={{ fontSize: 9.5, fontWeight: 700, color: T.blueText,
@@ -2582,8 +2601,76 @@ function ModeloPreditivo() {
                       <td style={{ padding: '11px 12px', fontSize: 12, textAlign: 'right', fontVariantNumeric: 'tabular-nums',
                         color: a.dias_sem_comprar > 180 ? T.rustText : a.dias_sem_comprar > 90 ? T.amberText : T.inkDim,
                         fontWeight: a.dias_sem_comprar > 180 ? 700 : 400 }}>
-                        {a.dias_sem_comprar} d</td>
+                        {a.dias_sem_comprar} d
+                        {a.investigado_em && <span title="Já investigado" style={{ marginLeft: 6, color: T.blueText }}>◆</span>}
+                      </td>
                     </tr>
+                    {aberto && (
+                      <tr style={{ background: T.panelAlt }}>
+                        <td colSpan={7} style={{ padding: '14px 16px', borderBottom: `1px solid ${T.line}` }}>
+                          {!a.investigado_em ? (
+                            <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+                              <button disabled={investigando === a.cliente}
+                                onClick={(ev) => { ev.stopPropagation(); investigar(a.cliente); }}
+                                style={{
+                                  fontFamily: 'inherit', fontSize: 12.5, cursor: 'pointer', padding: '7px 14px',
+                                  border: 'none', background: T.ink, color: T.panel, borderRadius: 6,
+                                  opacity: investigando === a.cliente ? .6 : 1,
+                                }}>
+                                {investigando === a.cliente ? 'Pesquisando na web…' : 'Investigar este cliente'}
+                              </button>
+                              <span style={{ fontSize: 11.5, color: T.inkFaint }}>
+                                Busca a situação do cliente, concorrentes atuando e hipóteses. Leva cerca de um minuto.
+                              </span>
+                            </div>
+                          ) : (
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(280px,1fr))', gap: 20 }}>
+                              <div>
+                                <div style={{ fontSize: 10.5, color: T.inkFaint, fontWeight: 600, marginBottom: 6 }}>SITUAÇÃO DO CLIENTE</div>
+                                <div style={{ fontSize: 12, color: T.inkDim, lineHeight: 1.6 }}>{a.situacao || '—'}</div>
+                              </div>
+                              <div>
+                                <div style={{ fontSize: 10.5, color: T.inkFaint, fontWeight: 600, marginBottom: 6 }}>CONCORRÊNCIA</div>
+                                <div style={{ fontSize: 12, color: T.inkDim, lineHeight: 1.6 }}>{a.concorrencia || '—'}</div>
+                              </div>
+                              <div>
+                                <div style={{ fontSize: 10.5, color: T.inkFaint, fontWeight: 600, marginBottom: 6 }}>HIPÓTESES</div>
+                                {(a.hipoteses || []).map((h, k) => (
+                                  <div key={k} style={{ fontSize: 12, color: T.inkDim, padding: '4px 0', lineHeight: 1.5 }}>
+                                    <span style={{
+                                      fontSize: 9.5, fontWeight: 700, marginRight: 6, padding: '2px 6px', borderRadius: 4,
+                                      color: /fonte/i.test(h.apoio || '') ? T.oliveText : T.amberText,
+                                      background: /fonte/i.test(h.apoio || '') ? T.oliveSoft : T.amberSoft,
+                                    }}>{/fonte/i.test(h.apoio || '') ? 'COM FONTE' : 'SUPOSIÇÃO'}</span>
+                                    {h.causa}
+                                    {h.peso && <span style={{ color: T.inkFaint }}> · peso {h.peso}</span>}
+                                  </div>
+                                ))}
+                                {a.recomendacao && (
+                                  <div style={{ fontSize: 12, color: T.ink, marginTop: 10, paddingTop: 9,
+                                    borderTop: `1px solid ${T.line}`, lineHeight: 1.6 }}>
+                                    <strong>O que fazer: </strong>{a.recomendacao}
+                                  </div>
+                                )}
+                                {a.fontes && (
+                                  <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 8, wordBreak: 'break-all', lineHeight: 1.5 }}>
+                                    {String(a.fontes).split(';').slice(0, 4).map((u, k) => (
+                                      <a key={k} href={u.trim()} target="_blank" rel="noreferrer"
+                                         style={{ color: T.blueText, display: 'block' }}>{u.trim().slice(0, 70)}…</a>
+                                    ))}
+                                  </div>
+                                )}
+                                <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 8 }}>
+                                  Pesquisa automática com busca na web. Hipótese marcada como suposição não tem
+                                  respaldo público — a resposta está com o cliente.
+                                </div>
+                              </div>
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    )}
+                    </React.Fragment>
                   );
                 })}
               </tbody>
