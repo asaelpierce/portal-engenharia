@@ -2376,7 +2376,7 @@ function ModeloPreditivo() {
           .from('nota_venda_itens')
           .select('cliente_nome,segmento_descricao,produto_kaleng,codtipoper,valor_bruto,data_faturamento')
           .gte('data_faturamento', '2023-01-01')
-          .lte('data_faturamento', '2025-12-31')
+          .lte('data_faturamento', '2026-12-31')
           .range(de, de + passo - 1);
         if (error) throw error;
         todos = todos.concat(data || []);
@@ -2414,9 +2414,14 @@ function ModeloPreditivo() {
 
   const dados = useMemo(() => {
     const porCliente = new Map();
+    // até que dia de 2026 temos dado: o confronto com 2025 usa o mesmo corte
+    const corte = linhas
+      .filter(r => String(r.data_faturamento).startsWith('2026'))
+      .reduce((m, r) => { const d = String(r.data_faturamento).slice(5, 10); return d > m ? d : m; }, '01-01');
     for (const r of linhas) {
       const nome = r.cliente_nome || '—';
       const ano = Number(String(r.data_faturamento).slice(0, 4));
+      const md = String(r.data_faturamento).slice(5, 10);
       const mes = String(r.data_faturamento).slice(0, 7);
       const v = Number(r.valor_bruto) || 0;
       const tipo = [3219, 3220].includes(r.codtipoper) ? 'Serviço'
@@ -2426,13 +2431,16 @@ function ModeloPreditivo() {
       if (!porCliente.has(nome)) {
         porCliente.set(nome, {
           cliente: nome, segmento: r.segmento_descricao || 'Não informado',
-          total: 0, anos: {}, tipos: {}, meses: new Set(),
+          total: 0, anos: {}, tipos: {}, meses: new Set(), ytd26: 0, ytd25: 0,
         });
       }
       const c = porCliente.get(nome);
-      c.total += v;
+      // total e composição continuam sendo 2023-2025: é a base da projeção
+      if (ano <= 2025) { c.total += v; c.tipos[tipo] = (c.tipos[tipo] || 0) + v; }
       c.anos[ano] = (c.anos[ano] || 0) + v;
-      c.tipos[tipo] = (c.tipos[tipo] || 0) + v;
+      if (ano === 2026) c.ytd26 = (c.ytd26 || 0) + v;
+      // mesmo intervalo do ano anterior, para o confronto ser justo
+      if (ano === 2025 && md <= corte) c.ytd25 = (c.ytd25 || 0) + v;
       c.meses.add(mes);
       if (!c.segmento || c.segmento === 'Não informado') c.segmento = r.segmento_descricao || c.segmento;
     }
@@ -2473,8 +2481,13 @@ function ModeloPreditivo() {
       const confianca = r2 >= 0.8 ? 'Alta' : r2 >= 0.4 ? 'Média' : 'Baixa';
       const mesesAtivos = c.meses.size;
 
+      const ytd26 = c.ytd26 || 0, ytd25 = c.ytd25 || 0;
+      const varYtd = ytd25 > 0 ? (ytd26 - ytd25) / ytd25 : null;
+      // quanto da projeção já foi realizado
+      const atingido = proj > 0 ? ytd26 / proj : null;
       return {
         ...c, serie, a23, a24, a25, proj, r2, sinal, confianca, varUlt,
+        ytd26, ytd25, varYtd, atingido,
         mediaMes: c.total / 36, mesesAtivos,
         tiposOrd: Object.entries(c.tipos).sort((x, y) => y[1] - x[1]),
       };
@@ -2711,11 +2724,11 @@ function ModeloPreditivo() {
           <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 1020 }}>
             <thead>
               <tr style={{ background: T.panelAlt }}>
-                {['Cliente', 'Segmento', 'Tipo de material', '2023', '2024', '2025', 'Média/mês', 'Tendência', 'Projeção 2026', 'Sinal']
+                {['Cliente', 'Segmento', 'Tipo de material', '2023', '2024', '2025', 'Tendência', 'Projeção 2026', '2026 até hoje', 'vs 2025 igual', 'Sinal']
                   .map((h, i) => (
                   <th key={h} style={{
                     padding: '10px 12px', fontSize: 11, fontWeight: 600, color: T.inkFaint,
-                    textAlign: i >= 3 && i <= 8 ? 'right' : 'left',
+                    textAlign: i >= 3 && i <= 9 ? 'right' : 'left',
                     borderBottom: `1px solid ${T.line}`, whiteSpace: 'nowrap',
                   }}>{h}</th>
                 ))}
@@ -2742,9 +2755,6 @@ function ModeloPreditivo() {
                           color: v === 0 ? T.rustText : T.ink, fontVariantNumeric: 'tabular-nums',
                         }}>{v === 0 ? '—' : moeda(v)}</td>
                       ))}
-                      <td style={{ padding: '11px 12px', fontSize: 12, textAlign: 'right', color: T.inkDim, fontVariantNumeric: 'tabular-nums' }}>
-                        {moeda(c.mediaMes)}
-                      </td>
                       <td style={{ padding: '11px 12px', textAlign: 'right' }}>
                         <svg width="64" height="22" style={{ verticalAlign: 'middle' }}>
                           {c.serie.map((v, i) => {
@@ -2763,6 +2773,26 @@ function ModeloPreditivo() {
                           confiança {c.confianca.toLowerCase()}
                         </div>
                       </td>
+                      <td style={{
+                        padding: '11px 12px', fontSize: 12.5, textAlign: 'right', fontWeight: 600,
+                        fontVariantNumeric: 'tabular-nums',
+                        color: c.ytd26 === 0 ? T.rustText : T.ink,
+                      }}>
+                        {c.ytd26 > 0 ? moeda(c.ytd26) : '—'}
+                        {c.atingido != null && c.ytd26 > 0 && (
+                          <div style={{ fontSize: 10, color: T.inkFaint, fontWeight: 400 }}>
+                            {Math.round(c.atingido * 100)}% da projeção
+                          </div>
+                        )}
+                      </td>
+                      <td style={{
+                        padding: '11px 12px', fontSize: 12.5, textAlign: 'right', fontWeight: 600,
+                        fontVariantNumeric: 'tabular-nums',
+                        color: c.varYtd == null ? T.inkFaint
+                          : c.varYtd >= 0 ? T.oliveText : T.rustText,
+                      }}>
+                        {c.varYtd == null ? '—' : pct(c.varYtd)}
+                      </td>
                       <td style={{ padding: '11px 12px' }}>
                         <span style={{
                           fontSize: 10.5, fontWeight: 700, color: c.sinal.cor, background: c.sinal.bg,
@@ -2772,7 +2802,7 @@ function ModeloPreditivo() {
                     </tr>
                     {aberto && (
                       <tr style={{ background: T.panelAlt }}>
-                        <td colSpan={10} style={{ padding: '14px 16px', borderBottom: `1px solid ${T.line}` }}>
+                        <td colSpan={11} style={{ padding: '14px 16px', borderBottom: `1px solid ${T.line}` }}>
                           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(230px,1fr))', gap: 18 }}>
                             <div>
                               <div style={{ fontSize: 10.5, color: T.inkFaint, fontWeight: 600, marginBottom: 7 }}>
@@ -2828,7 +2858,9 @@ function ModeloPreditivo() {
         <div style={{ padding: '10px 16px', borderTop: `1px solid ${T.line}`, fontSize: 11, color: T.inkFaint, display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
           <span>
             Clique na linha para abrir o detalhe · Projeção por regressão linear sobre 2023–2025 ·
-            R² baixo significa histórico irregular, não erro de cálculo
+            <strong> 2026 até hoje</strong> é o realizado parcial, e <strong>vs 2025 igual</strong> compara
+            com o mesmo intervalo do ano passado, não com o ano fechado · R² baixo significa histórico
+            irregular, não erro de cálculo
           </span>
           <BotaoExportar small onClick={() => exportCSV(
             dados.map(c => ({
@@ -2836,9 +2868,12 @@ function ModeloPreditivo() {
               tipo_principal: c.tiposOrd[0]?.[0] || '—',
               v2023: Math.round(c.a23), v2024: Math.round(c.a24), v2025: Math.round(c.a25),
               media_mes: Math.round(c.mediaMes), projecao_2026: Math.round(c.proj),
+              realizado_2026_ytd: Math.round(c.ytd26), mesmo_periodo_2025: Math.round(c.ytd25),
+              var_ytd_pct: c.varYtd == null ? '' : Math.round(c.varYtd * 100),
               r2: c.r2.toFixed(2), confianca: c.confianca, sinal: c.sinal.rot,
             })), 'modelo_preditivo_top10.csv',
-            ['cliente','segmento','tipo_principal','v2023','v2024','v2025','media_mes','projecao_2026','r2','confianca','sinal'])} />
+            ['cliente','segmento','tipo_principal','v2023','v2024','v2025','media_mes','projecao_2026',
+             'realizado_2026_ytd','mesmo_periodo_2025','var_ytd_pct','r2','confianca','sinal'])} />
         </div>
       </div>
       )}
