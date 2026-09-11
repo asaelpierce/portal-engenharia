@@ -2351,6 +2351,9 @@ function ContextoCliente({ ctx, serie }) {
 }
 
 function ModeloPreditivo() {
+  const [visao, setVisao] = useState('top');      // top | vale | alerta
+  const [indic, setIndic] = useState(null);
+  const [alertas, setAlertas] = useState([]);
   const [linhas, setLinhas] = useState([]);
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState('');
@@ -2384,6 +2387,10 @@ function ModeloPreditivo() {
       setContexto(Object.fromEntries((ctx || []).map(c => [c.cliente, c])));
       const { data: merc } = await supabase.from('mercado_eventos').select('*');
       setMercado(merc || []);
+      const { data: ind } = await supabase.from('modelo_indicadores').select('*');
+      setIndic(ind?.[0] || null);
+      const { data: al } = await supabase.from('modelo_alerta').select('*');
+      setAlertas(al || []);
     } catch (e) { setErro(e.message || String(e)); }
     setLoading(false);
   }, []);
@@ -2414,7 +2421,13 @@ function ModeloPreditivo() {
       if (!c.segmento || c.segmento === 'Não informado') c.segmento = r.segmento_descricao || c.segmento;
     }
 
-    const top = [...porCliente.values()].sort((a, b) => b.total - a.total).slice(0, 10);
+    let universo = [...porCliente.values()].sort((a, b) => b.total - a.total);
+    if (visao === 'vale') {
+      universo = universo.filter(c => /^(VALE|CVRD)/i.test(c.cliente));
+    } else {
+      universo = universo.slice(0, 15);
+    }
+    const top = universo;
 
     return top.map(c => {
       const serie = ANOS.map(a => c.anos[a] || 0);
@@ -2450,7 +2463,7 @@ function ModeloPreditivo() {
         tiposOrd: Object.entries(c.tipos).sort((x, y) => y[1] - x[1]),
       };
     });
-  }, [linhas]);
+  }, [linhas, visao]);
 
   const totais = useMemo(() => ({
     total: dados.reduce((s, c) => s + c.total, 0),
@@ -2469,13 +2482,46 @@ function ModeloPreditivo() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <div style={{ display: 'flex', gap: 3 }}>
+        {[{ id: 'top', l: 'Top 15 clientes' },
+          { id: 'vale', l: 'Grupo Vale' },
+          { id: 'alerta', l: `Quedas${alertas.length ? ` (${alertas.length})` : ''}` }].map(v => (
+          <button key={v.id} onClick={() => setVisao(v.id)} style={{
+            fontFamily: 'inherit', fontSize: 12.5, cursor: 'pointer', padding: '6px 14px',
+            border: `1px solid ${visao === v.id ? T.ink : T.line}`,
+            background: visao === v.id ? T.ink : T.panel,
+            color: visao === v.id ? T.panel : T.inkDim, borderRadius: 6,
+            fontWeight: visao === v.id ? 600 : 400,
+          }}>{v.l}</button>
+        ))}
+      </div>
+
+      {indic && (
+        <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '14px 18px' }}>
+          <div style={{ fontSize: 12.5, color: T.inkDim, lineHeight: 1.65 }}>
+            Até hoje em 2026 a empresa faturou <strong style={{ color: T.ink }}>
+            {fmtMoedaCompacta(indic.ytd_2026)}</strong>, contra <strong style={{ color: T.ink }}>
+            {fmtMoedaCompacta(indic.ytd_2025)}</strong> no mesmo intervalo de 2025 —{' '}
+            <strong style={{ color: indic.var_pct >= 0 ? T.oliveText : T.rustText }}>
+            {indic.var_pct >= 0 ? '+' : ''}{indic.var_pct}%</strong>. Mesmo com o total em alta,{' '}
+            <strong style={{ color: T.rustText }}>{indic.quedas_relevantes} clientes caíram mais de 50%</strong> e{' '}
+            <strong style={{ color: T.rustText }}>{indic.clientes_sumiram} pararam de comprar</strong>.
+            O crescimento de uns esconde a perda de outros, e é isso que a aba Quedas mostra.
+          </div>
+        </div>
+      )}
+
+      {visao !== 'alerta' && (
       <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '14px 18px' }}>
         <div style={{ fontSize: 12.5, color: T.inkDim, lineHeight: 1.6 }}>
-          Os 10 maiores clientes por faturamento de 2023 a 2025, com a projeção de 2026 por tendência
-          linear. Só entram TOPs de venda — devolução, remessa e amostra ficam de fora.
-          Serviço aparece como categoria própria porque não tem classificação de material.
+          {visao === 'vale'
+            ? 'Todas as unidades do Grupo Vale, incluindo CVRD. O grupo responde por cerca de 30% do faturamento.'
+            : 'Os 15 maiores clientes por faturamento de 2023 a 2025, com a projeção de 2026 por tendência'}
+          {visao === 'vale' ? '' : ' linear.'} Só entram TOPs de venda — devolução, remessa e amostra
+          ficam de fora. Serviço aparece como categoria própria porque não tem classificação de material.
         </div>
       </div>
+      )}
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 12 }}>
         {[
@@ -2490,6 +2536,66 @@ function ModeloPreditivo() {
           </div>
         ))}
       </div>
+
+      {visao === 'alerta' && (
+        <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
+          <div style={{ padding: '12px 16px', borderBottom: `1px solid ${T.line}`, fontSize: 12, color: T.inkDim, lineHeight: 1.6 }}>
+            Clientes que compravam acima de R$ 50 mil no mesmo período de 2025 e caíram mais de 30%.
+            Ordenado pela perda em reais. <strong style={{ color: T.ink }}>Dias sem comprar</strong> é o
+            que distingue queda de cliente perdido.
+          </div>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 860 }}>
+              <thead>
+                <tr style={{ background: T.panelAlt }}>
+                  {['Cliente','Situação','2025 no período','2026 até hoje','Variação','Perda','Sem comprar']
+                    .map((h,i) => (
+                    <th key={h} style={{ padding: '10px 12px', fontSize: 11, fontWeight: 600, color: T.inkFaint,
+                      textAlign: i >= 2 ? 'right' : 'left', borderBottom: `1px solid ${T.line}`, whiteSpace: 'nowrap' }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {alertas.map(a => {
+                  const cor = a.gravidade === 'Parou de comprar' ? T.rustText
+                    : a.gravidade === 'Queda severa' ? T.rustText : T.amberText;
+                  const bg = a.gravidade === 'Queda relevante' ? T.amberSoft : T.rustSoft;
+                  return (
+                    <tr key={a.cliente} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                      <td style={{ padding: '11px 12px', fontSize: 12.5, color: T.ink, fontWeight: 600 }}>
+                        {a.cliente}
+                        {a.e_vale && <span style={{ fontSize: 9.5, fontWeight: 700, color: T.blueText,
+                          background: T.blueSoft, padding: '2px 5px', borderRadius: 4, marginLeft: 7 }}>VALE</span>}
+                      </td>
+                      <td style={{ padding: '11px 12px' }}>
+                        <span style={{ fontSize: 10.5, fontWeight: 700, color: cor, background: bg,
+                          padding: '3px 8px', borderRadius: 5, whiteSpace: 'nowrap' }}>{a.gravidade}</span>
+                      </td>
+                      <td style={{ padding: '11px 12px', fontSize: 12, textAlign: 'right', color: T.inkDim, fontVariantNumeric: 'tabular-nums' }}>
+                        {fmtMoedaCompacta(a.ytd25)}</td>
+                      <td style={{ padding: '11px 12px', fontSize: 12, textAlign: 'right', color: T.ink, fontVariantNumeric: 'tabular-nums' }}>
+                        {a.ytd26 > 0 ? fmtMoedaCompacta(a.ytd26) : '—'}</td>
+                      <td style={{ padding: '11px 12px', fontSize: 12.5, textAlign: 'right', color: cor, fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>
+                        {a.var_ytd_pct}%</td>
+                      <td style={{ padding: '11px 12px', fontSize: 12.5, textAlign: 'right', color: T.rustText, fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>
+                        {fmtMoedaCompacta(a.perda_no_periodo)}</td>
+                      <td style={{ padding: '11px 12px', fontSize: 12, textAlign: 'right', fontVariantNumeric: 'tabular-nums',
+                        color: a.dias_sem_comprar > 180 ? T.rustText : a.dias_sem_comprar > 90 ? T.amberText : T.inkDim,
+                        fontWeight: a.dias_sem_comprar > 180 ? 700 : 400 }}>
+                        {a.dias_sem_comprar} d</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ padding: '10px 16px', borderTop: `1px solid ${T.line}`, fontSize: 11, color: T.inkFaint }}>
+            Acima de 180 dias sem comprar, trate como cliente perdido e não como queda.
+            <BotaoExportar small onClick={() => exportCSV(alertas, 'clientes_em_queda.csv',
+              ['cliente','segmento','gravidade','ytd25','ytd26','var_ytd_pct','perda_no_periodo','dias_sem_comprar','ultima_compra'])} />
+          </div>
+        </div>
+      )}
 
       {mercado.length > 0 && (
         <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '14px 18px' }}>
@@ -2512,6 +2618,7 @@ function ModeloPreditivo() {
         </div>
       )}
 
+      {visao !== 'alerta' && (
       <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 1020 }}>
@@ -2647,6 +2754,7 @@ function ModeloPreditivo() {
             ['cliente','segmento','tipo_principal','v2023','v2024','v2025','media_mes','projecao_2026','r2','confianca','sinal'])} />
         </div>
       </div>
+      )}
     </div>
   );
 }
