@@ -8,7 +8,7 @@ import {
   Filter, FileWarning, Stamp, ArrowUpRight, ArrowDownRight, Minus, Zap,
   CircleDot, ShieldCheck, MessageSquareWarning, ListFilter, Webhook, Users,
   RefreshCw, TrendingUp, DollarSign, CheckCircle2, Package, Layers, Bell, BarChart2, Download, History, ClipboardList,
-  Trophy, Repeat, UserPlus, Trash2,
+  Trophy, Repeat, UserPlus, Trash2, FilePlus,
 } from 'lucide-react';
 
 /* ============================================================================
@@ -583,6 +583,7 @@ function PortalConteudo({ currentUser, session }) {
           {renderTab('almoxarifado_fluxo', <TabErrorBoundary tab="Fluxo de Materiais"><AlmoxarifadoFluxo currentUser={currentUser} /></TabErrorBoundary>)}
           {renderTab('pedidosvale', <PedidosVale />)}
           {renderTab('aberturacotacao', <TabErrorBoundary tab="Abertura de Cotação"><AberturaCotacao currentUser={currentUser} /></TabErrorBoundary>)}
+          {renderTab('criar_br', <TabErrorBoundary tab="Criar BR"><CriarBR currentUser={currentUser} /></TabErrorBoundary>)}
           {renderTab('ranking', <TabErrorBoundary tab="Ranking"><RankingPontuacao /></TabErrorBoundary>)}
           {renderTab('metas', <TabErrorBoundary tab="Metas"><PainelMetas currentUser={currentUser} /></TabErrorBoundary>)}
           {renderTab('auditoria', <TabErrorBoundary tab="Auditoria"><Auditoria /></TabErrorBoundary>)}
@@ -645,6 +646,7 @@ function Sidebar({ view, setView, pendCount, papel, telasPermitidas }) {
     { id: 'almoxarifado_fluxo', label: 'Fluxo de Materiais', icon: Package },
     { id: 'pedidosvale',  label: 'Pedidos Vale',           icon: FileWarning },
     { id: 'aberturacotacao', label: 'Abertura de Cotação',  icon: FileStack },
+    { id: 'criar_br', label: 'Criar BR',            icon: FilePlus },
     { id: 'ranking',      label: 'Ranking de Pontuação',    icon: TrendingUp },
     { id: 'metas',        label: 'Metas',                   icon: SlidersHorizontal },
     { id: 'auditoria',    label: 'Auditoria',              icon: History },
@@ -15986,6 +15988,241 @@ const CAMPO_LABEL = {
    mantendo a thread do e-mail (Outlook/Power Automate) depende de uma
    integração à parte que ainda não está configurada neste portal.
 ============================================================================ */
+function CriarBR({ currentUser }) {
+  const [sugestao, setSugestao] = useState(null);   // { codproj, identificacao }
+  const [carregandoSug, setCarregandoSug] = useState(true);
+  const [codproj, setCodproj] = useState('');
+  const [identificacao, setIdentificacao] = useState('');
+  const [abreviatura, setAbreviatura] = useState('');
+  const [refCliente, setRefCliente] = useState('');
+
+  const [buscaParc, setBuscaParc] = useState('');
+  const [resultParc, setResultParc] = useState([]);
+  const [buscandoParc, setBuscandoParc] = useState(false);
+  const [parceiro, setParceiro] = useState(null);   // { cod, nome }
+
+  const [vendedores, setVendedores] = useState([]);
+  const [codVendedor, setCodVendedor] = useState('');
+
+  const [criando, setCriando] = useState(false);
+  const [erro, setErro] = useState(null);
+  const [sucesso, setSucesso] = useState(null);
+  const [historico, setHistorico] = useState([]);
+
+  const chamar = async (payload) => {
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/sankhya-criar-br`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }).then(r => r.json());
+    return res;
+  };
+
+  const carregarSugestao = useCallback(async () => {
+    setCarregandoSug(true);
+    const r = await chamar({ acao: 'proximo' });
+    if (r.ok) {
+      setSugestao(r);
+      setCodproj(String(r.codproj));
+      setIdentificacao(r.identificacao);
+      setAbreviatura(r.identificacao);
+    } else {
+      setErro(r.erro || 'Não consegui calcular o próximo número.');
+    }
+    setCarregandoSug(false);
+  }, []);
+
+  const carregarHistorico = useCallback(async () => {
+    const { data } = await supabase.from('brs_criados_portal').select('*').order('criado_em', { ascending: false }).limit(20);
+    setHistorico(data || []);
+  }, []);
+
+  useEffect(() => {
+    carregarSugestao();
+    carregarHistorico();
+    chamar({ acao: 'listar_vendedores' }).then(r => { if (r.ok) setVendedores(r.itens || []); });
+  }, [carregarSugestao, carregarHistorico]);
+
+  // Busca só dispara com 2+ letras e depois que para de digitar, pra não
+  // martelar o Sankhya a cada tecla.
+  useEffect(() => {
+    if (buscaParc.trim().length < 2) { setResultParc([]); return; }
+    const t = setTimeout(async () => {
+      setBuscandoParc(true);
+      const r = await chamar({ acao: 'buscar_parceiro', termo: buscaParc.trim() });
+      setResultParc(r.ok ? (r.itens || []) : []);
+      setBuscandoParc(false);
+    }, 400);
+    return () => clearTimeout(t);
+  }, [buscaParc]);
+
+  const criar = async () => {
+    setErro(null); setSucesso(null);
+    if (!identificacao.trim()) { setErro('Informe a identificação do projeto.'); return; }
+    if (!parceiro) { setErro('Selecione o parceiro (cliente).'); return; }
+    if (!codVendedor) { setErro('Selecione o vendedor.'); return; }
+
+    const vend = vendedores.find(v => String(v.cod) === String(codVendedor));
+    if (!confirm(
+      `Criar o projeto no Sankhya?\n\n` +
+      `Projeto: ${codproj}\nIdentificação: ${identificacao}\n` +
+      `Cliente: ${parceiro.nome}\nVendedor: ${vend?.nome || codVendedor}\n\n` +
+      `Isso grava direto no Sankhya e não tem desfazer pelo portal.`
+    )) return;
+
+    setCriando(true);
+    const r = await chamar({
+      acao: 'criar',
+      codproj: Number(codproj), identificacao: identificacao.trim(),
+      abreviatura: (abreviatura || identificacao).trim(),
+      cod_parceiro: parceiro.cod, nome_parceiro: parceiro.nome,
+      cod_vendedor: codVendedor, nome_vendedor: vend?.nome || '',
+      referencia_cliente: refCliente.trim() || null,
+    });
+    setCriando(false);
+
+    if (!r.ok) { setErro(r.erro || 'Falhou ao criar.'); return; }
+
+    await supabase.from('brs_criados_portal').insert({
+      codproj: Number(codproj), identificacao: identificacao.trim(),
+      abreviatura: (abreviatura || identificacao).trim(),
+      cod_parceiro: parceiro.cod, nome_parceiro: parceiro.nome,
+      cod_vendedor: Number(codVendedor), nome_vendedor: vend?.nome || null,
+      referencia_cliente: refCliente.trim() || null,
+      criado_por: currentUser?.nome || null,
+    });
+
+    setSucesso(`Projeto ${r.identificacao} criado no Sankhya.`);
+    setParceiro(null); setBuscaParc(''); setRefCliente(''); setCodVendedor('');
+    await carregarSugestao();
+    await carregarHistorico();
+  };
+
+  const label = (t) => <label style={{ fontSize: 11.5, fontWeight: 700, color: T.inkFaint, display: 'block', marginBottom: 4 }}>{t}</label>;
+
+  return (
+    <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 18, maxWidth: 760 }}>
+      <Panel title="Criar BR" subtitle="Cria o projeto direto no Sankhya. O número é sugerido automaticamente (próximo livre da série), mas dá pra editar se precisar.">
+        {carregandoSug ? (
+          <div style={{ padding: 20, textAlign: 'center', color: T.inkFaint }}>Consultando o próximo número no Sankhya…</div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+              <div style={{ width: 160 }}>
+                {label('Projeto (CODPROJ)')}
+                <input value={codproj} onChange={e => setCodproj(e.target.value)} style={{ ...inputStyle(), width: '100%' }} />
+              </div>
+              <div style={{ width: 180 }}>
+                {label('Identificação')}
+                <input value={identificacao}
+                  onChange={e => { setIdentificacao(e.target.value); setAbreviatura(e.target.value); }}
+                  style={{ ...inputStyle(), width: '100%' }} />
+              </div>
+              <div style={{ width: 180 }}>
+                {label('Abreviação do projeto')}
+                <input value={abreviatura} onChange={e => setAbreviatura(e.target.value)} style={{ ...inputStyle(), width: '100%' }} />
+              </div>
+            </div>
+            {sugestao && identificacao !== sugestao.identificacao && (
+              <div style={{ fontSize: 11.5, color: T.amberText, background: T.amberSoft, padding: '6px 10px', borderRadius: 5 }}>
+                ⚠ Você mudou o número sugerido ({sugestao.identificacao}). Confira se esse já não está em uso.
+              </div>
+            )}
+
+            <div>
+              {label('Parceiro (cliente)')}
+              {parceiro ? (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 6, padding: '8px 12px' }}>
+                  <span style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText }}>{parceiro.cod}</span>
+                  <span style={{ fontSize: 13 }}>{parceiro.nome}</span>
+                  <button onClick={() => { setParceiro(null); setBuscaParc(''); }}
+                    style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', color: T.inkFaint }}>✕</button>
+                </div>
+              ) : (
+                <>
+                  <input value={buscaParc} onChange={e => setBuscaParc(e.target.value)}
+                    placeholder="Digite o nome ou o código do cliente…" style={{ ...inputStyle(), width: '100%' }} />
+                  {buscandoParc && <div style={{ fontSize: 11.5, color: T.inkFaint, marginTop: 4 }}>Buscando…</div>}
+                  {resultParc.length > 0 && (
+                    <div style={{ border: `1px solid ${T.line}`, borderRadius: 6, marginTop: 4, maxHeight: 200, overflowY: 'auto' }}>
+                      {resultParc.map(p => (
+                        <button key={p.cod} onClick={() => { setParceiro(p); setResultParc([]); }}
+                          style={{ display: 'block', width: '100%', textAlign: 'left', padding: '7px 12px', background: 'transparent', border: 'none', borderBottom: `1px solid ${T.lineSoft}`, cursor: 'pointer', fontSize: 12.5 }}>
+                          <strong style={{ color: T.blueText }}>{p.cod}</strong> — {p.nome}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+
+            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+              <div style={{ width: 240 }}>
+                {label('Vendedor')}
+                <select value={codVendedor} onChange={e => setCodVendedor(e.target.value)} style={{ ...inputStyle(), width: '100%' }}>
+                  <option value="">Selecione…</option>
+                  {vendedores.map(v => <option key={v.cod} value={v.cod}>{v.cod} — {v.nome}</option>)}
+                </select>
+              </div>
+              <div style={{ flex: 1, minWidth: 200 }}>
+                {label('Referência do cliente (opcional)')}
+                <input value={refCliente} onChange={e => setRefCliente(e.target.value)} style={{ ...inputStyle(), width: '100%' }} />
+              </div>
+            </div>
+
+            <div style={{ fontSize: 12, color: T.inkFaint, background: T.panelAlt, padding: '8px 12px', borderRadius: 6 }}>
+              Empresa: <strong>1 — KALENBORN DO BRASIL LTDA</strong> (fixo) · Ativo: Sim
+            </div>
+
+            {erro && <div style={{ fontSize: 12.5, color: T.rustText, background: T.rustSoft, padding: '9px 12px', borderRadius: 6 }}>{erro}</div>}
+            {sucesso && <div style={{ fontSize: 12.5, color: T.oliveText, background: T.oliveSoft, padding: '9px 12px', borderRadius: 6 }}>✓ {sucesso}</div>}
+
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button onClick={criar} disabled={criando}
+                style={{ fontSize: 13, fontWeight: 700, color: '#fff', background: T.oliveText, border: 'none', borderRadius: 8, padding: '10px 20px', cursor: 'pointer', opacity: criando ? 0.6 : 1 }}>
+                {criando ? 'Criando no Sankhya…' : '✓ Criar projeto'}
+              </button>
+              <button onClick={carregarSugestao} disabled={criando}
+                style={{ fontSize: 12.5, fontWeight: 600, color: T.inkFaint, background: 'transparent', border: `1px solid ${T.line}`, borderRadius: 8, padding: '10px 16px', cursor: 'pointer' }}>
+                ↻ Atualizar número
+              </button>
+            </div>
+          </div>
+        )}
+      </Panel>
+
+      {historico.length > 0 && (
+        <Panel title="Criados pelo portal" subtitle="Últimos 20 — o projeto em si fica no Sankhya; aqui é só o registro de quem criou.">
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+            <thead>
+              <tr style={{ background: T.panelAlt, borderBottom: `1px solid ${T.line}` }}>
+                <th style={thFat(110)}>BR</th>
+                <th style={thFat(0)}>Cliente</th>
+                <th style={thFat(140)}>Vendedor</th>
+                <th style={thFat(130)}>Criado por</th>
+                <th style={thFat(120)}>Quando</th>
+              </tr>
+            </thead>
+            <tbody>
+              {historico.map(h => (
+                <tr key={h.id} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                  <td style={{ padding: '7px 12px', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText }}>{h.identificacao}</td>
+                  <td style={{ padding: '7px 12px' }}>{h.nome_parceiro || '—'}</td>
+                  <td style={{ padding: '7px 12px' }}>{h.nome_vendedor || '—'}</td>
+                  <td style={{ padding: '7px 12px' }}>{h.criado_por || '—'}</td>
+                  <td style={{ padding: '7px 12px', color: T.inkFaint }}>
+                    {new Date(h.criado_em).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Panel>
+      )}
+    </div>
+  );
+}
+
 function AberturaCotacao({ currentUser }) {
   const vazio = { brNumero: '', clienteNome: '', projeto: '', categoriaCliente: '', contato: '', prazoEnvio: '', escopoExtra: '', emailThreadReferencia: '' };
   const [form, setForm] = useState(vazio);
@@ -16300,6 +16537,7 @@ const TELAS_CATALOGO = [
   { id: 'almoxarifado_fluxo', label: 'Fluxo de Materiais' },
   { id: 'pedidosvale',  label: 'Pedidos Vale' },
   { id: 'aberturacotacao', label: 'Abertura de Cotação' },
+  { id: 'criar_br', label: 'Criar BR' },
   { id: 'ranking',      label: 'Ranking de Pontuação' },
   { id: 'metas',        label: 'Metas' },
   { id: 'auditoria',    label: 'Auditoria' },
