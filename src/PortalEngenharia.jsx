@@ -2271,11 +2271,92 @@ function CicloComercial() {
 // clientes que compram por projeto oscilam demais para uma reta explicar, e
 // por isso a tela mostra o R² e rebaixa a confiança quando ele é baixo.
 // ============================================================================
+// Contexto público do cliente: produção, capex e eventos. Serve para
+// responder se a variação da nossa venda acompanhou o cliente ou não —
+// quando diverge, o motivo é participação, não mercado.
+function ContextoCliente({ ctx, serie }) {
+  if (!ctx || ((ctx.contexto || []).length === 0 && (ctx.eventos || []).length === 0)) {
+    return (
+      <div style={{ marginTop: 14, paddingTop: 12, borderTop: `1px solid ${T.line}`, fontSize: 11.5, color: T.inkFaint }}>
+        Sem dado público para este cliente. Empresas de capital fechado não publicam produção nem capex,
+        então a projeção fica apenas com o nosso histórico.
+      </div>
+    );
+  }
+  const anos = (ctx.contexto || []).filter(c => c.producao != null);
+  const eventos = ctx.eventos || [];
+  const corDir = { favoravel: T.oliveText, desfavoravel: T.rustText, neutro: T.inkDim };
+  const bgDir  = { favoravel: T.oliveSoft, desfavoravel: T.rustSoft, neutro: T.lineSoft };
+
+  // compara a direção da produção do cliente com a da nossa venda
+  let leitura = null;
+  if (anos.length >= 2) {
+    const p0 = anos[0].producao, p1 = anos[anos.length - 1].producao;
+    const v0 = serie[0], v1 = serie[serie.length - 1];
+    const dP = p0 ? (p1 - p0) / p0 : 0;
+    const dV = v0 ? (v1 - v0) / v0 : 0;
+    if (Math.abs(dP) < 0.05 && dV > 0.2) leitura = 'A produção do cliente ficou estável e a nossa venda cresceu: o ganho veio de participação dentro do cliente, não do mercado.';
+    else if (dP < -0.05 && dV < -0.05) leitura = 'A produção do cliente caiu e a nossa venda acompanhou: o movimento é de mercado.';
+    else if (dP > 0.05 && dV < -0.05) leitura = 'O cliente produziu mais e a nossa venda caiu: sinal de perda de espaço, vale investigar.';
+    else if (dP > 0.05 && dV > 0.05) leitura = 'Cliente e venda cresceram juntos.';
+  }
+
+  return (
+    <div style={{ marginTop: 14, paddingTop: 12, borderTop: `1px solid ${T.line}` }}>
+      <div style={{ fontSize: 10.5, color: T.inkFaint, fontWeight: 600, marginBottom: 9 }}>
+        CONTEXTO PÚBLICO DO CLIENTE{ctx.grupo ? ` · ${ctx.grupo}` : ''}
+      </div>
+
+      {anos.length > 0 && (
+        <div style={{ display: 'flex', gap: 22, flexWrap: 'wrap', marginBottom: 10 }}>
+          {anos.map(a => (
+            <div key={a.ano}>
+              <div style={{ fontSize: 10.5, color: T.inkFaint }}>{a.ano}{a.ativo ? ` · ${a.ativo}` : ''}</div>
+              <div style={{ fontSize: 13, color: T.ink, fontVariantNumeric: 'tabular-nums' }}>
+                {a.producao} Mt
+                {a.capex ? <span style={{ color: T.inkDim, fontSize: 11.5 }}> · capex US$ {a.capex} mi</span> : null}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {leitura && (
+        <div style={{
+          fontSize: 12, color: T.ink, background: T.panelAlt, border: `1px solid ${T.line}`,
+          borderRadius: 6, padding: '9px 12px', marginBottom: 10, lineHeight: 1.55,
+        }}>{leitura}</div>
+      )}
+
+      {eventos.map((e, i) => (
+        <div key={i} style={{ display: 'flex', gap: 9, alignItems: 'baseline', padding: '5px 0' }}>
+          <span style={{
+            fontSize: 9.5, fontWeight: 700, color: corDir[e.direcao], background: bgDir[e.direcao],
+            padding: '2px 6px', borderRadius: 4, whiteSpace: 'nowrap',
+          }}>{e.direcao === 'favoravel' ? '▲' : e.direcao === 'desfavoravel' ? '▼' : '•'} {e.tipo}</span>
+          <span style={{ fontSize: 11, color: T.inkFaint, minWidth: 66, fontVariantNumeric: 'tabular-nums' }}>
+            {new Date(e.data + 'T00:00:00').toLocaleDateString('pt-BR')}
+          </span>
+          <span style={{ fontSize: 12, color: T.inkDim, lineHeight: 1.5 }}>
+            {e.url
+              ? <a href={e.url} target="_blank" rel="noreferrer" style={{ color: T.ink, fontWeight: 600, textDecoration: 'none', borderBottom: `1px dotted ${T.inkFaint}` }}>{e.titulo}</a>
+              : <strong style={{ color: T.ink }}>{e.titulo}</strong>}
+            {e.resumo ? ` — ${e.resumo}` : ''}
+            {e.fonte ? <span style={{ color: T.inkFaint }}> ({e.fonte})</span> : null}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function ModeloPreditivo() {
   const [linhas, setLinhas] = useState([]);
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState('');
   const [expandido, setExpandido] = useState(null);
+  const [contexto, setContexto] = useState({});
+  const [mercado, setMercado] = useState([]);
   const ANOS = [2023, 2024, 2025];
 
   const carregar = useCallback(async () => {
@@ -2298,6 +2379,11 @@ function ModeloPreditivo() {
         de += passo;
       }
       setLinhas(todos.filter(r => validos.has(r.codtipoper)));
+
+      const { data: ctx } = await supabase.from('modelo_contexto_cliente').select('*');
+      setContexto(Object.fromEntries((ctx || []).map(c => [c.cliente, c])));
+      const { data: merc } = await supabase.from('mercado_eventos').select('*');
+      setMercado(merc || []);
     } catch (e) { setErro(e.message || String(e)); }
     setLoading(false);
   }, []);
@@ -2404,6 +2490,27 @@ function ModeloPreditivo() {
           </div>
         ))}
       </div>
+
+      {mercado.length > 0 && (
+        <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '14px 18px' }}>
+          <div style={{ fontSize: 10.5, color: T.inkFaint, fontWeight: 600, marginBottom: 9 }}>
+            CONTEXTO DE MERCADO
+          </div>
+          {mercado.map((e, i) => (
+            <div key={i} style={{ display: 'flex', gap: 10, alignItems: 'baseline', padding: '5px 0' }}>
+              <span style={{ fontSize: 11, color: T.inkFaint, minWidth: 72, fontVariantNumeric: 'tabular-nums' }}>
+                {new Date(e.data_evento + 'T00:00:00').toLocaleDateString('pt-BR')}
+              </span>
+              <span style={{ fontSize: 12.5, color: T.ink }}>
+                {e.url ? <a href={e.url} target="_blank" rel="noreferrer"
+                   style={{ color: T.ink, textDecoration: 'none', borderBottom: `1px dotted ${T.inkFaint}` }}>
+                  {e.titulo}</a> : e.titulo}
+                <span style={{ color: T.inkFaint, marginLeft: 8, fontSize: 11 }}>{e.fonte}</span>
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
 
       <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
         <div style={{ overflowX: 'auto' }}>
@@ -2513,6 +2620,8 @@ function ModeloPreditivo() {
                               </div>
                             </div>
                           </div>
+
+                          <ContextoCliente ctx={contexto[c.cliente]} serie={c.serie} />
                         </td>
                       </tr>
                     )}
