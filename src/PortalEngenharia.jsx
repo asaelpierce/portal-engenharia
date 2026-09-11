@@ -2353,6 +2353,136 @@ function ContextoCliente({ ctx, serie }) {
 // O dado interno responde o que a web nao responde: se todos os itens pararam,
 // cheira a conta perdida; se alguns pararam e outros seguem, cheira a ciclo de
 // desgaste por area. E o preco unitario separa "ficamos caros" do resto.
+// Potencial: o cliente pode ser grande e comprar pouco de nós. R$ por Mt
+// produzida compara penetração DENTRO do mesmo segmento — entre segmentos
+// não faz sentido, porque consumo de revestimento por tonelada é diferente.
+function AbaPotencial({ dados }) {
+  const comDado = dados.filter(d => d.rs_por_mt != null);
+  const melhor = Math.max(1, ...comDado.map(d => d.rs_por_mt || 0));
+  const moeda = (v) => fmtMoedaCompacta(v);
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '14px 18px' }}>
+        <div style={{ fontSize: 12.5, color: T.inkDim, lineHeight: 1.65 }}>
+          Quanto o cliente compra de nós por milhão de tonelada que ele produz. Serve para achar
+          cliente <strong>grande onde vendemos pouco</strong> — vale investir mesmo com projeção modesta,
+          porque o teto é outro. A comparação só faz sentido dentro do mesmo segmento.
+        </div>
+      </div>
+
+      {comDado.length === 0 ? (
+        <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: 20, fontSize: 12.5, color: T.inkFaint }}>
+          Nenhum cliente com dado público de produção cadastrado ainda.
+        </div>
+      ) : (
+        <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 880 }}>
+            <thead>
+              <tr style={{ background: T.panelAlt }}>
+                {['Cliente','Segmento','Produção','Venda 2025','R$ por Mt','Penetração relativa'].map((h, i) => (
+                  <th key={h} style={{ padding: '10px 12px', fontSize: 11, fontWeight: 600, color: T.inkFaint,
+                    textAlign: i >= 2 ? 'right' : 'left', borderBottom: `1px solid ${T.line}` }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {comDado.sort((a, b) => (a.rs_por_mt || 0) - (b.rs_por_mt || 0)).map(d => {
+                const rel = (d.rs_por_mt || 0) / melhor;
+                const cor = rel < 0.35 ? T.rustText : rel < 0.7 ? T.amberText : T.oliveText;
+                return (
+                  <tr key={d.cliente} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                    <td style={{ padding: '11px 12px', fontSize: 12.5, color: T.ink, fontWeight: 600 }}>
+                      {d.cliente}
+                      {d.ativo_cliente && <span style={{ color: T.inkFaint, fontWeight: 400 }}> · {d.ativo_cliente}</span>}
+                    </td>
+                    <td style={{ padding: '11px 12px', fontSize: 11.5, color: T.inkDim }}>{d.segmento}</td>
+                    <td style={{ padding: '11px 12px', fontSize: 12, textAlign: 'right', color: T.inkDim, fontVariantNumeric: 'tabular-nums' }}>
+                      {d.producao_mt} Mt</td>
+                    <td style={{ padding: '11px 12px', fontSize: 12, textAlign: 'right', color: T.ink, fontVariantNumeric: 'tabular-nums' }}>
+                      {moeda(d.venda_2025)}</td>
+                    <td style={{ padding: '11px 12px', fontSize: 12.5, textAlign: 'right', color: cor, fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>
+                      {Number(d.rs_por_mt).toLocaleString('pt-BR')}</td>
+                    <td style={{ padding: '11px 12px', textAlign: 'right' }}>
+                      <span style={{ display: 'inline-block', width: 110, height: 8, background: T.lineSoft, borderRadius: 4, verticalAlign: 'middle' }}>
+                        <span style={{ display: 'block', width: `${Math.round(rel * 100)}%`, height: '100%', background: cor, borderRadius: 4 }} />
+                      </span>
+                      <span style={{ fontSize: 11, color: T.inkFaint, marginLeft: 7, fontVariantNumeric: 'tabular-nums' }}>
+                        {Math.round(rel * 100)}%</span>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          <div style={{ padding: '10px 16px', borderTop: `1px solid ${T.line}`, fontSize: 11, color: T.inkFaint, lineHeight: 1.5 }}>
+            Penetração relativa compara cada cliente com o melhor do grupo. Vermelho significa que o
+            cliente é grande e compra pouco de nós — é onde há espaço, não onde há problema.
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Painel de concorrência: quem são, o que fazem e que movimento tiveram.
+function AbaConcorrencia({ dados }) {
+  const corAmeaca = (a) => /alta/i.test(a || '') ? T.rustText : /m[eé]dia/i.test(a || '') ? T.amberText : T.inkDim;
+  const bgAmeaca = (a) => /alta/i.test(a || '') ? T.rustSoft : /m[eé]dia/i.test(a || '') ? T.amberSoft : T.lineSoft;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '14px 18px' }}>
+        <div style={{ fontSize: 12.5, color: T.inkDim, lineHeight: 1.65 }}>
+          Busca mensal no site, LinkedIn, feiras e vagas de cada concorrente — não em notícia.
+          Testado em 11/09/2026: Google News retorna zero para os seis, porque são fabricantes B2B
+          que não anunciam contrato em imprensa. O que interessa aqui é <strong>sinal de movimento</strong>:
+          entrou em cliente, abriu representante, lançou produto, está contratando.
+        </div>
+      </div>
+
+      {dados.map(c => (
+        <div key={c.nome} style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '14px 18px' }}>
+          <div style={{ display: 'flex', gap: 10, alignItems: 'baseline', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 14.5, fontWeight: 700, color: T.ink }}>{c.nome}</span>
+            <span style={{ fontSize: 11, color: T.inkFaint }}>
+              {[c.origem, c.pais, c.sede].filter(Boolean).join(' · ')}
+            </span>
+            <div style={{ flex: 1 }} />
+            {c.ameaca && (
+              <span style={{ fontSize: 10.5, fontWeight: 700, color: corAmeaca(c.ameaca),
+                background: bgAmeaca(c.ameaca), padding: '3px 9px', borderRadius: 5 }}>
+                ameaça {c.ameaca}</span>
+            )}
+            {c.site && <a href={c.site} target="_blank" rel="noreferrer" style={{ fontSize: 11.5, color: T.blueText }}>site</a>}
+            {c.linkedin && <a href={c.linkedin} target="_blank" rel="noreferrer" style={{ fontSize: 11.5, color: T.blueText }}>LinkedIn</a>}
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(250px,1fr))', gap: 18, marginTop: 12 }}>
+            {[['Tecnologia', c.tecnologia], ['Diferencial', c.diferencial],
+              ['Movimento recente', c.movimento], ['Clientes que menciona', c.clientes_mencionados],
+              ['Expansão', c.expansao]].filter(([, v]) => v).map(([k, v]) => (
+              <div key={k}>
+                <div style={{ fontSize: 10.5, color: T.inkFaint, fontWeight: 600, marginBottom: 5 }}>{k.toUpperCase()}</div>
+                <div style={{ fontSize: 12, color: T.inkDim, lineHeight: 1.55 }}>{v}</div>
+              </div>
+            ))}
+          </div>
+
+          {c.observacao && (
+            <div style={{ fontSize: 12, color: T.ink, background: T.panelAlt, border: `1px solid ${T.line}`,
+              borderRadius: 6, padding: '9px 12px', marginTop: 12, lineHeight: 1.55 }}>{c.observacao}</div>
+          )}
+          {c.ultimo_movimento && (
+            <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 8 }}>
+              Última pesquisa em {new Date(c.ultimo_movimento).toLocaleDateString('pt-BR')}
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function AnaliseProduto({ diag, itens }) {
   if (!diag) return null;
   const moeda = (v) => fmtMoedaCompacta(v);
@@ -2439,6 +2569,8 @@ function ModeloPreditivo() {
   const [pendentes, setPendentes] = useState([]);
   const [buscando, setBuscando] = useState(false);
   const [msgBusca, setMsgBusca] = useState('');
+  const [concorrentes, setConcorrentes] = useState([]);
+  const [potencial, setPotencial] = useState([]);
   const [linhas, setLinhas] = useState([]);
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState('');
@@ -2474,6 +2606,11 @@ function ModeloPreditivo() {
       setMercado(merc || []);
       const { data: pend } = await supabase.from('evento_pendente').select('*').limit(40);
       setPendentes(pend || []);
+      const { data: cc } = await supabase.from('concorrente_painel').select('*');
+      setConcorrentes(cc || []);
+      const { data: pt } = await supabase.from('cliente_potencial').select('*')
+        .eq('tem_dado_publico', true).order('venda_3anos', { ascending: false });
+      setPotencial(pt || []);
       const { data: ind } = await supabase.from('modelo_indicadores').select('*');
       setIndic(ind?.[0] || null);
       const { data: al } = await supabase.from('modelo_alerta_completo').select('*');
@@ -2643,7 +2780,9 @@ function ModeloPreditivo() {
       <div style={{ display: 'flex', gap: 3 }}>
         {[{ id: 'top', l: 'Top 15 clientes' },
           { id: 'vale', l: 'Grupo Vale' },
-          { id: 'alerta', l: `Quedas${alertas.length ? ` (${alertas.length})` : ''}` }].map(v => (
+          { id: 'alerta', l: `Quedas${alertas.length ? ` (${alertas.length})` : ''}` },
+          { id: 'potencial', l: 'Potencial' },
+          { id: 'concorrencia', l: 'Concorrência' }].map(v => (
           <button key={v.id} onClick={() => setVisao(v.id)} style={{
             fontFamily: 'inherit', fontSize: 12.5, cursor: 'pointer', padding: '6px 14px',
             border: `1px solid ${visao === v.id ? T.ink : T.line}`,
@@ -2669,7 +2808,7 @@ function ModeloPreditivo() {
         </div>
       )}
 
-      {visao !== 'alerta' && (
+      {['top','vale'].includes(visao) && (
       <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '14px 18px' }}>
         <div style={{ fontSize: 12.5, color: T.inkDim, lineHeight: 1.6 }}>
           {visao === 'vale'
@@ -2827,6 +2966,9 @@ function ModeloPreditivo() {
         </div>
       )}
 
+      {visao === 'potencial' && <AbaPotencial dados={potencial} />}
+      {visao === 'concorrencia' && <AbaConcorrencia dados={concorrentes} />}
+
       <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '14px 18px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 10 }}>
           <div style={{ fontSize: 10.5, color: T.inkFaint, fontWeight: 600 }}>
@@ -2906,7 +3048,7 @@ function ModeloPreditivo() {
         )}
       </div>
 
-      {visao !== 'alerta' && (
+      {['top','vale'].includes(visao) && (
       <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 1020 }}>
