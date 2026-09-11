@@ -2436,6 +2436,9 @@ function ModeloPreditivo() {
   const [abertoAlerta, setAbertoAlerta] = useState(null);
   const [diagProd, setDiagProd] = useState({});
   const [prodMov, setProdMov] = useState({});
+  const [pendentes, setPendentes] = useState([]);
+  const [buscando, setBuscando] = useState(false);
+  const [msgBusca, setMsgBusca] = useState('');
   const [linhas, setLinhas] = useState([]);
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState('');
@@ -2469,6 +2472,8 @@ function ModeloPreditivo() {
       setContexto(Object.fromEntries((ctx || []).map(c => [c.cliente, c])));
       const { data: merc } = await supabase.from('mercado_eventos').select('*');
       setMercado(merc || []);
+      const { data: pend } = await supabase.from('evento_pendente').select('*').limit(40);
+      setPendentes(pend || []);
       const { data: ind } = await supabase.from('modelo_indicadores').select('*');
       setIndic(ind?.[0] || null);
       const { data: al } = await supabase.from('modelo_alerta_completo').select('*');
@@ -2484,6 +2489,43 @@ function ModeloPreditivo() {
     setLoading(false);
   }, []);
   useEffect(() => { carregar(); }, [carregar]);
+
+  const atualizarNoticias = async () => {
+    setBuscando(true); setMsgBusca('Buscando notícias dos clientes e do mercado…');
+    try {
+      const r = await fetch(`${SUPABASE_URL}/functions/v1/noticias-clientes`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', apikey: SUPABASE_ANON_KEY, 'x-api-key': 'kb2026sync!' },
+        body: JSON.stringify({ dias: 15 }),
+      });
+      const d = await r.json().catch(() => ({}));
+      await carregar();
+      setMsgBusca(d?.ok
+        ? `${d.enviados ?? 0} notícia(s) trazida(s). Valide abaixo o que for relevante.`
+        : 'Não consegui concluir a busca.');
+    } catch (e) { setMsgBusca(String(e?.message ?? e)); }
+    setBuscando(false);
+    setTimeout(() => setMsgBusca(''), 8000);
+  };
+
+  const decidirEvento = async (id, aprovar) => {
+    try {
+      if (aprovar) {
+        await fetch(`${SUPABASE_URL}/rest/v1/cliente_evento?id=eq.${id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', apikey: SUPABASE_ANON_KEY,
+                     Authorization: `Bearer ${SUPABASE_ANON_KEY}`, Prefer: 'return=minimal' },
+          body: JSON.stringify({ validado: true }),
+        });
+      } else {
+        await fetch(`${SUPABASE_URL}/rest/v1/cliente_evento?id=eq.${id}`, {
+          method: 'DELETE',
+          headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}` },
+        });
+      }
+      setPendentes(p => p.filter(x => x.id !== id));
+    } catch (e) { setErro(String(e?.message ?? e)); }
+  };
 
   const investigar = async (cliente) => {
     setInvestigando(cliente);
@@ -2785,11 +2827,65 @@ function ModeloPreditivo() {
         </div>
       )}
 
-      {mercado.length > 0 && (
-        <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '14px 18px' }}>
-          <div style={{ fontSize: 10.5, color: T.inkFaint, fontWeight: 600, marginBottom: 9 }}>
+      <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '14px 18px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 10 }}>
+          <div style={{ fontSize: 10.5, color: T.inkFaint, fontWeight: 600 }}>
             CONTEXTO DE MERCADO
           </div>
+          <div style={{ flex: 1 }} />
+          {pendentes.length > 0 && (
+            <span style={{
+              fontSize: 11, fontWeight: 700, color: T.amberText, background: T.amberSoft,
+              padding: '3px 9px', borderRadius: 5,
+            }}>{pendentes.length} aguardando validação</span>
+          )}
+          <button onClick={atualizarNoticias} disabled={buscando} style={{
+            display: 'flex', alignItems: 'center', gap: 6, fontFamily: 'inherit', fontSize: 12,
+            cursor: buscando ? 'default' : 'pointer', padding: '6px 12px',
+            border: `1px solid ${T.line}`, background: T.panelAlt, color: T.inkDim, borderRadius: 6,
+            opacity: buscando ? .6 : 1,
+          }}>
+            <RefreshCw size={12} /> {buscando ? 'Buscando…' : 'Buscar notícias agora'}
+          </button>
+        </div>
+
+        {msgBusca && (
+          <div style={{ fontSize: 12, color: T.blueText, marginBottom: 10 }}>{msgBusca}</div>
+        )}
+
+        {pendentes.length > 0 && (
+          <div style={{ marginBottom: 14, paddingBottom: 12, borderBottom: `1px solid ${T.line}` }}>
+            <div style={{ fontSize: 11.5, color: T.inkDim, marginBottom: 8, lineHeight: 1.5 }}>
+              Trazidas pela busca automática. Só aparecem no painel do cliente depois de validadas —
+              busca por termo traz ruído junto.
+            </div>
+            {pendentes.slice(0, 12).map(e => (
+              <div key={e.id} style={{
+                display: 'flex', gap: 10, alignItems: 'flex-start', padding: '6px 0',
+                borderTop: `1px solid ${T.lineSoft}`,
+              }}>
+                <span style={{ fontSize: 10.5, color: T.inkFaint, minWidth: 66, paddingTop: 3, fontVariantNumeric: 'tabular-nums' }}>
+                  {new Date(e.data_evento + 'T00:00:00').toLocaleDateString('pt-BR')}
+                </span>
+                <span style={{ flex: 1, fontSize: 12, color: T.inkDim, lineHeight: 1.5 }}>
+                  {e.url
+                    ? <a href={e.url} target="_blank" rel="noreferrer" style={{ color: T.ink, textDecoration: 'none', borderBottom: `1px dotted ${T.inkFaint}` }}>{e.titulo}</a>
+                    : e.titulo}
+                  <span style={{ color: T.inkFaint }}> · {e.fonte}{e.cliente_chave ? ` · ${e.cliente_chave}` : ' · mercado'}</span>
+                </span>
+                <button onClick={() => decidirEvento(e.id, true)} title="Validar"
+                  style={{ border: `1px solid ${T.oliveSoft}`, background: T.oliveSoft, color: T.oliveText,
+                    borderRadius: 4, cursor: 'pointer', fontSize: 11, padding: '3px 9px', fontFamily: 'inherit' }}>
+                  Validar</button>
+                <button onClick={() => decidirEvento(e.id, false)} title="Descartar"
+                  style={{ border: `1px solid ${T.line}`, background: T.panel, color: T.inkFaint,
+                    borderRadius: 4, cursor: 'pointer', fontSize: 11, padding: '3px 9px', fontFamily: 'inherit' }}>
+                  Descartar</button>
+              </div>
+            ))}
+          </div>
+        )}
+
           {mercado.map((e, i) => (
             <div key={i} style={{ display: 'flex', gap: 10, alignItems: 'baseline', padding: '5px 0' }}>
               <span style={{ fontSize: 11, color: T.inkFaint, minWidth: 72, fontVariantNumeric: 'tabular-nums' }}>
@@ -2803,8 +2899,12 @@ function ModeloPreditivo() {
               </span>
             </div>
           ))}
-        </div>
-      )}
+        {mercado.length === 0 && pendentes.length === 0 && (
+          <div style={{ fontSize: 12, color: T.inkFaint }}>
+            Nenhuma notícia registrada. Use o botão acima para buscar.
+          </div>
+        )}
+      </div>
 
       {visao !== 'alerta' && (
       <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
