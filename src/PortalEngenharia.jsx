@@ -14762,9 +14762,10 @@ function Custeio() {
         <div style={{ fontSize: 12.5, color: T.inkDim, lineHeight: 1.65 }}>
           <strong style={{ color: T.ink }}>Fase 1 — materiais diretos.</strong>{' '}
           Custo de matéria-prima por produto, apurado a partir da ordem de produção e valorizado
-          a custo médio <strong>sem ICMS</strong>, porque imposto recuperável não compõe custo de
-          estoque. Ainda não inclui mão de obra nem custos indiretos: o custo cheio virá nas
-          próximas fases.
+          pelo <strong>custo líquido de impostos recuperáveis</strong> (CUSSEMICM), como pede o
+          CPC 16. O CUSMED do Sankhya, disponível no seletor acima, é outro conceito: além do
+          ICMS ele embute frete, seguro e despesas de entrada, e serve para reconciliar contra o
+          estoque do ERP. Ainda não inclui mão de obra nem custos indiretos.
         </div>
       </div>
 
@@ -14792,16 +14793,17 @@ function Custeio() {
           <option value="2022-01">a partir de jan/2022</option>
           <option value="2021-01">tudo desde jan/2021</option>
         </select>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: T.inkDim, cursor: 'pointer' }}>
+        <label title="CUSMED do Sankhya: além do ICMS, embute frete, seguro e despesas de entrada"
+               style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: T.inkDim, cursor: 'pointer' }}>
           <input type="checkbox" checked={comICMS} onChange={e => setComICMS(e.target.checked)} />
-          mostrar com ICMS
+          usar custo médio do ERP
         </label>
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(160px,1fr))', gap: 12 }}>
         {[
-          { l: comICMS ? 'Material com ICMS' : 'Material sem ICMS', v: moeda(comICMS ? totais.custoIcms : totais.custo), c: T.terracotta },
-          { l: 'Diferença do ICMS', v: moeda(totais.custoIcms - totais.custo), c: T.inkDim },
+          { l: comICMS ? 'Material a custo médio do ERP' : 'Material líquido de impostos', v: moeda(comICMS ? totais.custoIcms : totais.custo), c: T.terracotta },
+          { l: 'Diferença entre os dois', v: moeda(totais.custoIcms - totais.custo), c: T.inkDim },
           { l: 'Produtos apurados', v: String(totais.produtos), c: T.ink },
           { l: 'Ordens de produção', v: String(totais.ops), c: T.ink },
         ].map(k => (
