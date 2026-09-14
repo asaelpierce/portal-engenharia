@@ -14789,10 +14789,11 @@ function Custeio() {
         <div style={{ fontSize: 12.5, color: T.inkDim, lineHeight: 1.65 }}>
           <strong style={{ color: T.ink }}>Fase 1 — materiais diretos.</strong>{' '}
           Custo de matéria-prima por produto, apurado a partir da ordem de produção e valorizado
-          pelo <strong>custo líquido de impostos recuperáveis</strong> (CUSSEMICM), como pede o
-          CPC 16. O CUSMED do Sankhya, disponível no seletor acima, é outro conceito: além do
-          ICMS ele embute frete, seguro e despesas de entrada, e serve para reconciliar contra o
-          estoque do ERP. Ainda não inclui mão de obra nem custos indiretos.
+          pelo <strong>Custo Médio sem ICMS</strong> (CUSSEMICM), como pede o CPC 16: imposto
+          recuperável não compõe custo de estoque. O seletor acima troca para o Custo Médio
+          Gerencial (CUSMED), que é parametrizado pela empresa e não segue fórmula contábil —
+          serve para comparação, não para o custeio. Ainda não inclui mão de obra nem custos
+          indiretos.
         </div>
       </div>
 
@@ -14820,17 +14821,17 @@ function Custeio() {
           <option value="2022-01">a partir de jan/2022</option>
           <option value="2021-01">tudo desde jan/2021</option>
         </select>
-        <label title="CUSMED do Sankhya: além do ICMS, embute frete, seguro e despesas de entrada"
+        <label title="CUSMED: Custo Médio Gerencial do Sankhya, parametrizado pela empresa. Não é o custo médio contábil."
                style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: T.inkDim, cursor: 'pointer' }}>
           <input type="checkbox" checked={comICMS} onChange={e => setComICMS(e.target.checked)} />
-          usar custo médio do ERP
+          usar custo gerencial
         </label>
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(160px,1fr))', gap: 12 }}>
         {[
-          { l: comICMS ? 'Material a custo médio do ERP' : 'Material líquido de impostos', v: moeda(comICMS ? totais.custoIcms : totais.custo), c: T.terracotta },
-          { l: 'Diferença entre os dois', v: moeda(totais.custoIcms - totais.custo), c: T.inkDim },
+          { l: comICMS ? 'Material a custo gerencial' : 'Material a custo médio sem ICMS', v: moeda(comICMS ? totais.custoIcms : totais.custo), c: T.terracotta },
+          { l: 'Médio sem ICMS × gerencial', v: moeda(totais.custoIcms - totais.custo), c: T.inkDim },
           { l: 'Produtos apurados', v: String(totais.produtos), c: T.ink },
           { l: 'Ordens de produção', v: String(totais.ops), c: T.ink },
         ].map(k => (
