@@ -566,6 +566,7 @@ function PortalConteudo({ currentUser, session }) {
           {renderTab('analitico_mp', <TabErrorBoundary tab="Analítico"><AnaliticoMP /></TabErrorBoundary>)}
           {renderTab('carteira_estoque', <TabErrorBoundary tab="Carteira x Estoque"><CarteiraEstoque /></TabErrorBoundary>)}
           {renderTab('preco_compra', <TabErrorBoundary tab="Preço de Compra"><PrecoCompra /></TabErrorBoundary>)}
+          {renderTab('custeio', <TabErrorBoundary tab="Custeio"><Custeio /></TabErrorBoundary>)}
           {renderTab('estoque_ocs', <TabErrorBoundary tab="Estoque x OCs"><RelatorioEstoqueOCs /></TabErrorBoundary>)}
           {renderTab('almoxarifado', <TabErrorBoundary tab="Almoxarifado"><Almoxarifado currentUser={currentUser} /></TabErrorBoundary>)}
           {renderTab('equipamentos', <TabErrorBoundary tab="Equipamentos de Terceiros"><EquipamentosTerceiros /></TabErrorBoundary>)}
@@ -629,6 +630,7 @@ function Sidebar({ view, setView, pendCount, papel, telasPermitidas }) {
     { id: 'analitico_mp', label: 'Analítico',              icon: BarChart2 },
     { id: 'carteira_estoque', label: 'Carteira x Estoque',  icon: Package },
     { id: 'preco_compra',  label: 'Preço de Compra',        icon: DollarSign },
+    { id: 'custeio',       label: 'Custeio',                icon: DollarSign },
     { id: 'estoque_ocs',  label: 'Estoque x OCs',        icon: Package },
     { id: 'almoxarifado', label: 'Almoxarifado',           icon: Package },
     { id: 'equipamentos', label: 'Equip. Terceiros',       icon: Webhook },
@@ -14655,6 +14657,373 @@ function RelatorioEstoqueOCs() {
   );
 }
 
+// ============================================================================
+// Custeio — Fase 1: materiais diretos
+//
+// Custo de material por produto, a partir da ORDEM DE PRODUÇÃO (não da
+// conclusão), valorizado a custo médio SEM ICMS: imposto recuperável não
+// compõe custo de estoque (CPC 16 / IAS 2). O valor com ICMS fica visível
+// ao lado porque é ele que reconcilia contra o custo médio do Sankhya.
+//
+// Grão: OP + SEQ_PA. Uma OP pode produzir mais de um lote, e a quantidade
+// se repete em cada linha de matéria-prima — somar direto multiplica a
+// produção pelo número de insumos.
+//
+// Unidade importa: custo unitário só é calculado quando o produto é
+// contável. Em conjunto (CJ) ou metro quadrado, mostra custo por OP.
+// ============================================================================
+function Custeio() {
+  const [aba, setAba] = useState('produto');
+  const [produtos, setProdutos] = useState([]);
+  const [brs, setBrs] = useState([]);
+  const [lotes, setLotes] = useState([]);
+  const [detalhe, setDetalhe] = useState(null);
+  const [itensDetalhe, setItensDetalhe] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [erro, setErro] = useState(null);
+  const [busca, setBusca] = useState('');
+  const [compIni, setCompIni] = useState('2026-01');
+  const [comICMS, setComICMS] = useState(false);
+
+  const carregar = useCallback(async () => {
+    setLoading(true); setErro(null);
+    try {
+      const [rp, rb, rl] = await Promise.all([
+        supabase.from('custeio_produto_material').select('*').gte('competencia', compIni),
+        supabase.from('custeio_br_material').select('*').order('custo_material', { ascending: false }).limit(200),
+        supabase.from('custeio_lote').select('*').gte('competencia', compIni),
+      ]);
+      if (rp.error) throw rp.error;
+      setProdutos(rp.data || []); setBrs(rb.data || []); setLotes(rl.data || []);
+    } catch (e) { setErro(e.message || String(e)); }
+    setLoading(false);
+  }, [compIni]);
+  useEffect(() => { carregar(); }, [carregar]);
+
+  const abrirProduto = async (cod) => {
+    setDetalhe(cod); setItensDetalhe([]);
+    const { data } = await supabase.from('producao_mp_apontamentos')
+      .select('data_ref,cod_materia_prima,desc_materia_prima,qtd_mp,unidade_mp,custo_unitario,custo_unitario_sem_icms,custo_total,custo_total_sem_icms,nro_ordem_producao,qtd_lote_pa,nuapo,seq_pa')
+      .eq('cod_prod_acabado', cod)
+      .gte('data_ref', `${compIni}-01`)
+      .order('data_ref', { ascending: false });
+    setItensDetalhe(data || []);
+  };
+
+  const campoCusto = comICMS ? 'custo_com_icms' : 'custo_material';
+
+  // consolida por produto somando as competências do período
+  const porProduto = useMemo(() => {
+    const m = new Map();
+    for (const p of produtos) {
+      const k = p.cod_prod_acabado;
+      if (!m.has(k)) m.set(k, {
+        cod: k, produto: p.produto, unidade: p.unidade, classe: p.classe_unidade,
+        ressalva: p.ressalva, qtd: 0, custo: 0, custoIcms: 0, ops: 0, comps: [],
+      });
+      const x = m.get(k);
+      x.qtd += Number(p.qtd_produzida) || 0;
+      x.custo += Number(p.custo_material) || 0;
+      x.custoIcms += Number(p.custo_com_icms) || 0;
+      x.ops += Number(p.ops) || 0;
+      x.comps.push({ c: p.competencia, unit: p.custo_unitario, qtd: p.qtd_produzida, custo: p.custo_material });
+    }
+    return [...m.values()]
+      .map(x => ({
+        ...x,
+        comps: x.comps.sort((a, b) => a.c.localeCompare(b.c)),
+        unitario: x.classe === 'contavel' && x.qtd > 0 ? x.custo / x.qtd : null,
+        porOp: x.classe !== 'contavel' && x.ops > 0 ? x.custo / x.ops : null,
+      }))
+      .filter(x => !busca || `${x.cod} ${x.produto}`.toLowerCase().includes(busca.toLowerCase()))
+      .sort((a, b) => (comICMS ? b.custoIcms - a.custoIcms : b.custo - a.custo));
+  }, [produtos, busca, comICMS]);
+
+  const totais = useMemo(() => ({
+    custo: produtos.reduce((s, p) => s + (Number(p.custo_material) || 0), 0),
+    custoIcms: produtos.reduce((s, p) => s + (Number(p.custo_com_icms) || 0), 0),
+    produtos: new Set(produtos.map(p => p.cod_prod_acabado)).size,
+    ops: new Set(lotes.map(l => l.op)).size,
+    semUnidade: porProduto.filter(p => !p.unidade).length,
+    semCusto: produtos.reduce((s, p) => s + (Number(p.linhas_sem_custo) || 0), 0),
+  }), [produtos, lotes, porProduto]);
+
+  const moeda = (v) => fmtMoedaCompacta(v);
+  const num2 = (v) => v == null ? '—'
+    : Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  if (loading) return <div style={{ padding: 40, color: T.inkFaint, fontSize: 13 }}>Apurando custo de material…</div>;
+  if (erro) return <div style={{ padding: 20, color: T.rustText, fontSize: 13 }}>Erro: {erro}</div>;
+
+  return (
+    <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 1300 }}>
+
+      <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '14px 18px' }}>
+        <div style={{ fontSize: 12.5, color: T.inkDim, lineHeight: 1.65 }}>
+          <strong style={{ color: T.ink }}>Fase 1 — materiais diretos.</strong>{' '}
+          Custo de matéria-prima por produto, apurado a partir da ordem de produção e valorizado
+          a custo médio <strong>sem ICMS</strong>, porque imposto recuperável não compõe custo de
+          estoque. Ainda não inclui mão de obra nem custos indiretos: o custo cheio virá nas
+          próximas fases.
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: 2 }}>
+          {[{ id: 'produto', l: 'Por produto' }, { id: 'br', l: 'Por projeto (BR)' }].map(x => (
+            <button key={x.id} onClick={() => setAba(x.id)} style={{
+              fontFamily: 'inherit', fontSize: 12.5, cursor: 'pointer', padding: '6px 14px',
+              border: `1px solid ${aba === x.id ? T.ink : T.line}`, borderRadius: 6,
+              background: aba === x.id ? T.ink : T.panel, color: aba === x.id ? T.panel : T.inkDim,
+              fontWeight: aba === x.id ? 600 : 400,
+            }}>{x.l}</button>
+          ))}
+        </div>
+        <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Buscar produto…"
+          style={{ fontFamily: 'inherit', fontSize: 12.5, padding: '6px 10px', border: `1px solid ${T.line}`,
+                   borderRadius: 6, background: T.panel, color: T.ink, width: 230 }} />
+        <select value={compIni} onChange={e => setCompIni(e.target.value)}
+          style={{ fontFamily: 'inherit', fontSize: 12.5, padding: '6px 10px', border: `1px solid ${T.line}`,
+                   borderRadius: 6, background: T.panel, color: T.ink }}>
+          <option value="2026-01">a partir de jan/2026</option>
+          <option value="2025-07">a partir de jul/2025</option>
+          <option value="2025-01">tudo desde jan/2025</option>
+        </select>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: T.inkDim, cursor: 'pointer' }}>
+          <input type="checkbox" checked={comICMS} onChange={e => setComICMS(e.target.checked)} />
+          mostrar com ICMS
+        </label>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(160px,1fr))', gap: 12 }}>
+        {[
+          { l: comICMS ? 'Material com ICMS' : 'Material sem ICMS', v: moeda(comICMS ? totais.custoIcms : totais.custo), c: T.terracotta },
+          { l: 'Diferença do ICMS', v: moeda(totais.custoIcms - totais.custo), c: T.inkDim },
+          { l: 'Produtos apurados', v: String(totais.produtos), c: T.ink },
+          { l: 'Ordens de produção', v: String(totais.ops), c: T.ink },
+        ].map(k => (
+          <div key={k.l} style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '14px 16px', boxShadow: SHADOW_SM }}>
+            <div style={{ fontSize: 11, color: T.inkFaint, fontWeight: 600 }}>{k.l}</div>
+            <div style={{ fontFamily: FONT_DISPLAY, fontSize: 22, fontWeight: 700, color: k.c, marginTop: 6 }}>{k.v}</div>
+          </div>
+        ))}
+      </div>
+
+      {(totais.semUnidade > 0 || totais.semCusto > 0) && (
+        <div style={{ background: T.amberSoft, border: `1px solid ${T.amberSoft}`, borderRadius: 8, padding: '10px 14px', fontSize: 12, color: T.amberText, lineHeight: 1.5 }}>
+          {totais.semUnidade > 0 && <>‣ {totais.semUnidade} produto(s) sem unidade cadastrada — o custo unitário deles não é calculado até a unidade ser sincronizada.<br /></>}
+          {totais.semCusto > 0 && <>‣ {totais.semCusto} linha(s) de matéria-prima sem custo no Sankhya na data do apontamento — entram com zero e puxam o custo para baixo.</>}
+        </div>
+      )}
+
+      {aba === 'produto' && (
+        <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 940 }}>
+              <thead>
+                <tr style={{ background: T.panelAlt }}>
+                  {['Produto', 'Un.', 'OPs', 'Produzido', 'Custo material', 'Custo unitário', 'Evolução'].map((h, i) => (
+                    <th key={h} style={{ padding: '10px 12px', fontSize: 11, fontWeight: 600, color: T.inkFaint,
+                      textAlign: i >= 2 && i <= 5 ? 'right' : 'left', borderBottom: `1px solid ${T.line}`, whiteSpace: 'nowrap' }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {porProduto.slice(0, 60).map(p => {
+                  const maxUnit = Math.max(...p.comps.map(c => Number(c.unit) || 0), 1);
+                  return (
+                    <React.Fragment key={p.cod}>
+                      <tr onClick={() => abrirProduto(detalhe === p.cod ? null : p.cod)}
+                          style={{ borderBottom: `1px solid ${T.lineSoft}`, cursor: 'pointer' }}>
+                        <td style={{ padding: '10px 12px', fontSize: 12 }}>
+                          <div style={{ fontWeight: 600, color: T.ink }}>{p.cod}</div>
+                          <div style={{ color: T.inkFaint, fontSize: 11, maxWidth: 330, overflow: 'hidden',
+                                        textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={p.produto}>{p.produto}</div>
+                        </td>
+                        <td style={{ padding: '10px 12px', fontSize: 11.5, color: p.unidade ? T.inkDim : T.amberText }}>
+                          {p.unidade || 'sem un.'}
+                        </td>
+                        <td style={{ padding: '10px 12px', fontSize: 12, textAlign: 'right', color: T.inkDim, fontVariantNumeric: 'tabular-nums' }}>{p.ops}</td>
+                        <td style={{ padding: '10px 12px', fontSize: 12, textAlign: 'right', color: T.inkDim, fontVariantNumeric: 'tabular-nums' }}>
+                          {Number(p.qtd).toLocaleString('pt-BR')}
+                        </td>
+                        <td style={{ padding: '10px 12px', fontSize: 12.5, textAlign: 'right', fontWeight: 600, color: T.ink, fontVariantNumeric: 'tabular-nums' }}>
+                          {moeda(comICMS ? p.custoIcms : p.custo)}
+                        </td>
+                        <td style={{ padding: '10px 12px', fontSize: 12.5, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                          {p.unitario != null
+                            ? <span style={{ fontWeight: 700, color: T.terracotta }}>R$ {num2(p.unitario)}</span>
+                            : p.porOp != null
+                              ? <span title={p.ressalva || ''} style={{ color: T.inkDim }}>R$ {num2(p.porOp)} <span style={{ fontSize: 10, color: T.inkFaint }}>/OP</span></span>
+                              : <span style={{ color: T.inkFaint }}>—</span>}
+                        </td>
+                        <td style={{ padding: '10px 12px' }}>
+                          <svg width={Math.max(40, p.comps.length * 13)} height="22">
+                            {p.comps.map((c, i) => {
+                              const h = Math.max(2, ((Number(c.unit) || 0) / maxUnit) * 18);
+                              return <rect key={i} x={i * 13 + 1} y={20 - h} width={10} height={h}
+                                           fill={T.terracotta} opacity={0.3 + (i / Math.max(1, p.comps.length)) * 0.7} rx={1}>
+                                <title>{c.c}: R$ {num2(c.unit)}</title>
+                              </rect>;
+                            })}
+                          </svg>
+                        </td>
+                      </tr>
+                      {detalhe === p.cod && (
+                        <tr style={{ background: T.panelAlt }}>
+                          <td colSpan={7} style={{ padding: '14px 16px', borderBottom: `1px solid ${T.line}` }}>
+                            <DetalheCusteio itens={itensDetalhe} comps={p.comps} comICMS={comICMS} />
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ padding: '10px 16px', borderTop: `1px solid ${T.line}`, fontSize: 11, color: T.inkFaint, display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10 }}>
+            <span>Clique no produto para ver a composição de custo · barras = custo unitário por competência</span>
+            <BotaoExportar small onClick={() => exportCSV(porProduto.map(p => ({
+              cod: p.cod, produto: p.produto, unidade: p.unidade, ops: p.ops, produzido: p.qtd,
+              custo_material_sem_icms: Math.round(p.custo), custo_material_com_icms: Math.round(p.custoIcms),
+              custo_unitario: p.unitario != null ? p.unitario.toFixed(2) : '',
+              custo_por_op: p.porOp != null ? p.porOp.toFixed(2) : '',
+            })), 'custeio_material_por_produto.csv',
+            ['cod','produto','unidade','ops','produzido','custo_material_sem_icms','custo_material_com_icms','custo_unitario','custo_por_op'])} />
+          </div>
+        </div>
+      )}
+
+      {aba === 'br' && (
+        <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 800 }}>
+            <thead>
+              <tr style={{ background: T.panelAlt }}>
+                {['BR', 'Cliente', 'OPs', 'Produtos', 'Custo material', 'Período'].map((h, i) => (
+                  <th key={h} style={{ padding: '10px 12px', fontSize: 11, fontWeight: 600, color: T.inkFaint,
+                    textAlign: i >= 2 && i <= 4 ? 'right' : 'left', borderBottom: `1px solid ${T.line}` }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {brs.filter(b => !busca || `${b.br} ${b.cliente || ''}`.toLowerCase().includes(busca.toLowerCase()))
+                  .slice(0, 80).map(b => (
+                <tr key={b.br} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                  <td style={{ padding: '10px 12px', fontSize: 12.5, fontWeight: 600, color: T.ink }}>{b.br}</td>
+                  <td style={{ padding: '10px 12px', fontSize: 11.5, color: T.inkDim, maxWidth: 260,
+                               overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{b.cliente}</td>
+                  <td style={{ padding: '10px 12px', fontSize: 12, textAlign: 'right', color: T.inkDim, fontVariantNumeric: 'tabular-nums' }}>{b.ops}</td>
+                  <td style={{ padding: '10px 12px', fontSize: 12, textAlign: 'right', color: T.inkDim, fontVariantNumeric: 'tabular-nums' }}>{b.produtos}</td>
+                  <td style={{ padding: '10px 12px', fontSize: 12.5, textAlign: 'right', fontWeight: 600, color: T.ink, fontVariantNumeric: 'tabular-nums' }}>
+                    {moeda(b.custo_material)}
+                  </td>
+                  <td style={{ padding: '10px 12px', fontSize: 11, color: T.inkFaint }}>
+                    {b.primeiro_apontamento} → {b.ultimo_apontamento}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Composição de custo do produto: quanto cada insumo entra por peça e a
+// que preço. É o que responde "o custo caiu, mas caiu de quê".
+function DetalheCusteio({ itens, comps, comICMS }) {
+  const num2 = (v) => v == null ? '—'
+    : Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  const porMp = useMemo(() => {
+    const pecasPorComp = {};
+    const lotesVistos = new Set();
+    itens.forEach(i => {
+      const k = `${i.nuapo}-${i.seq_pa}`;
+      if (lotesVistos.has(k)) return;
+      lotesVistos.add(k);
+      const c = String(i.data_ref).slice(0, 7);
+      pecasPorComp[c] = (pecasPorComp[c] || 0) + (Number(i.qtd_lote_pa) || 0);
+    });
+    const pecasTotal = Object.values(pecasPorComp).reduce((s, v) => s + v, 0) || 1;
+
+    const m = new Map();
+    itens.forEach(i => {
+      const k = i.cod_materia_prima;
+      if (!m.has(k)) m.set(k, { cod: k, desc: i.desc_materia_prima, un: i.unidade_mp, qtd: 0, custo: 0 });
+      const x = m.get(k);
+      x.qtd += Number(i.qtd_mp) || 0;
+      x.custo += Number(comICMS ? i.custo_total : i.custo_total_sem_icms) || 0;
+    });
+    return [...m.values()].map(x => ({
+      ...x,
+      porPeca: x.qtd / pecasTotal,
+      custoPorPeca: x.custo / pecasTotal,
+      precoMedio: x.qtd > 0 ? x.custo / x.qtd : null,
+    })).sort((a, b) => b.custo - a.custo);
+  }, [itens, comICMS]);
+
+  const total = porMp.reduce((s, x) => s + x.custo, 0) || 1;
+
+  if (!itens.length) return <div style={{ fontSize: 12, color: T.inkFaint }}>Carregando composição…</div>;
+
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(320px,1fr))', gap: 22 }}>
+      <div>
+        <div style={{ fontSize: 10.5, color: T.inkFaint, fontWeight: 600, marginBottom: 8 }}>
+          COMPOSIÇÃO DO CUSTO ({porMp.length} insumos)
+        </div>
+        {porMp.slice(0, 12).map(x => (
+          <div key={x.cod} style={{ padding: '5px 0', borderTop: `1px solid ${T.lineSoft}` }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 12 }}>
+              <span style={{ color: T.inkDim, maxWidth: 210, overflow: 'hidden',
+                             textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={x.desc}>
+                <span style={{ color: T.inkFaint, marginRight: 6 }}>{x.cod}</span>{x.desc}
+              </span>
+              <span style={{ color: T.ink, fontWeight: 600, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+                R$ {num2(x.custoPorPeca)}/pç
+              </span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 2 }}>
+              <span style={{ flex: 1, height: 4, background: T.lineSoft, borderRadius: 2 }}>
+                <span style={{ display: 'block', width: `${(x.custo / total) * 100}%`, height: '100%',
+                               background: T.terracotta, borderRadius: 2 }} />
+              </span>
+              <span style={{ fontSize: 10.5, color: T.inkFaint, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+                {num2(x.porPeca)} {x.un} × R$ {num2(x.precoMedio)}
+              </span>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div>
+        <div style={{ fontSize: 10.5, color: T.inkFaint, fontWeight: 600, marginBottom: 8 }}>
+          CUSTO UNITÁRIO POR COMPETÊNCIA
+        </div>
+        {comps.map(c => (
+          <div key={c.c} style={{ display: 'flex', justifyContent: 'space-between', gap: 10,
+                                  fontSize: 12, padding: '4px 0', borderTop: `1px solid ${T.lineSoft}` }}>
+            <span style={{ color: T.inkDim }}>{c.c}</span>
+            <span style={{ color: T.inkFaint, fontVariantNumeric: 'tabular-nums' }}>
+              {Number(c.qtd).toLocaleString('pt-BR')} un
+            </span>
+            <span style={{ color: T.ink, fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>
+              {c.unit != null ? `R$ ${num2(c.unit)}` : '—'}
+            </span>
+          </div>
+        ))}
+        <div style={{ fontSize: 11, color: T.inkFaint, marginTop: 10, lineHeight: 1.5 }}>
+          Consumo por peça e preço aparecem separados de propósito: quando o custo muda, é preciso
+          saber se foi o preço do insumo, a quantidade consumida ou a composição que mudou.
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function PrecoCompra() {
   const [busca, setBusca] = useState('');
   const [buscando, setBuscando] = useState(false);
@@ -17526,6 +17895,7 @@ const TELAS_CATALOGO = [
   { id: 'analitico_mp', label: 'Analítico' },
   { id: 'carteira_estoque', label: 'Carteira x Estoque' },
   { id: 'preco_compra', label: 'Preço de Compra' },
+  { id: 'custeio', label: 'Custeio' },
   { id: 'estoque_ocs', label: 'Estoque x OCs' },
   { id: 'almoxarifado', label: 'Almoxarifado' },
   { id: 'equipamentos', label: 'Equip. Terceiros' },
