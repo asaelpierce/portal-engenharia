@@ -14685,29 +14685,56 @@ function Custeio() {
   const [compIni, setCompIni] = useState('2026-01');
   const [comICMS, setComICMS] = useState(false);
 
+  // O cliente do Supabase corta em 1.000 linhas por padrão. Com o histórico
+  // desde 2021 isso truncava a lista silenciosamente: buscar um produto que
+  // não estivesse nas primeiras mil linhas devolvia tabela vazia, e os
+  // cartões mostravam totais parciais com cara de completos.
+  const lerTudo = useCallback(async (tabela, aplicar) => {
+    const PASSO = 1000;
+    let todas = [];
+    for (let de = 0; ; de += PASSO) {
+      let q = supabase.from(tabela).select('*').range(de, de + PASSO - 1);
+      if (aplicar) q = aplicar(q);
+      const { data, error } = await q;
+      if (error) throw error;
+      todas = todas.concat(data || []);
+      if (!data || data.length < PASSO) break;
+      if (todas.length > 60000) break;   // trava de segurança
+    }
+    return todas;
+  }, []);
+
   const carregar = useCallback(async () => {
     setLoading(true); setErro(null);
     try {
       const [rp, rb, rl] = await Promise.all([
-        supabase.from('custeio_produto_material').select('*').gte('competencia', compIni),
-        supabase.from('custeio_br_material').select('*').order('custo_material', { ascending: false }).limit(200),
-        supabase.from('custeio_lote').select('*').gte('competencia', compIni),
+        lerTudo('custeio_produto_material', q => q.gte('competencia', compIni)),
+        lerTudo('custeio_br_material'),
+        lerTudo('custeio_lote', q => q.gte('competencia', compIni)),
       ]);
-      if (rp.error) throw rp.error;
-      setProdutos(rp.data || []); setBrs(rb.data || []); setLotes(rl.data || []);
+      setProdutos(rp); setLotes(rl);
+      setBrs(rb.sort((a, b) => (Number(b.custo_material) || 0) - (Number(a.custo_material) || 0)));
     } catch (e) { setErro(e.message || String(e)); }
     setLoading(false);
-  }, [compIni]);
+  }, [compIni, lerTudo]);
   useEffect(() => { carregar(); }, [carregar]);
 
   const abrirProduto = async (cod) => {
     setDetalhe(cod); setItensDetalhe([]);
-    const { data } = await supabase.from('producao_mp_apontamentos')
-      .select('data_ref,cod_materia_prima,desc_materia_prima,qtd_mp,unidade_mp,custo_unitario,custo_unitario_sem_icms,custo_total,custo_total_sem_icms,nro_ordem_producao,qtd_lote_pa,nuapo,seq_pa')
-      .eq('cod_prod_acabado', cod)
-      .gte('data_ref', `${compIni}-01`)
-      .order('data_ref', { ascending: false });
-    setItensDetalhe(data || []);
+    const campos = 'data_ref,cod_materia_prima,desc_materia_prima,qtd_mp,unidade_mp,custo_unitario,custo_unitario_sem_icms,custo_total,custo_total_sem_icms,nro_ordem_producao,qtd_lote_pa,nuapo,seq_pa';
+    const PASSO = 1000;
+    let todos = [];
+    for (let de = 0; ; de += PASSO) {
+      const { data } = await supabase.from('producao_mp_apontamentos')
+        .select(campos)
+        .eq('cod_prod_acabado', cod)
+        .gte('data_ref', `${compIni}-01`)
+        .order('data_ref', { ascending: false })
+        .range(de, de + PASSO - 1);
+      todos = todos.concat(data || []);
+      if (!data || data.length < PASSO) break;
+    }
+    setItensDetalhe(todos);
   };
 
   const campoCusto = comICMS ? 'custo_com_icms' : 'custo_material';
