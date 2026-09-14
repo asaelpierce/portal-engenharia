@@ -14786,8 +14786,11 @@ function Custeio() {
           style={{ fontFamily: 'inherit', fontSize: 12.5, padding: '6px 10px', border: `1px solid ${T.line}`,
                    borderRadius: 6, background: T.panel, color: T.ink }}>
           <option value="2026-01">a partir de jan/2026</option>
-          <option value="2025-07">a partir de jul/2025</option>
-          <option value="2025-01">tudo desde jan/2025</option>
+          <option value="2025-01">a partir de jan/2025</option>
+          <option value="2024-01">a partir de jan/2024</option>
+          <option value="2023-01">a partir de jan/2023</option>
+          <option value="2022-01">a partir de jan/2022</option>
+          <option value="2021-01">tudo desde jan/2021</option>
         </select>
         <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: T.inkDim, cursor: 'pointer' }}>
           <input type="checkbox" checked={comICMS} onChange={e => setComICMS(e.target.checked)} />
@@ -14829,7 +14832,7 @@ function Custeio() {
                 </tr>
               </thead>
               <tbody>
-                {porProduto.slice(0, 60).map(p => {
+                {porProduto.slice(0, 120).map(p => {
                   const maxUnit = Math.max(...p.comps.map(c => Number(c.unit) || 0), 1);
                   return (
                     <React.Fragment key={p.cod}>
@@ -14883,7 +14886,10 @@ function Custeio() {
             </table>
           </div>
           <div style={{ padding: '10px 16px', borderTop: `1px solid ${T.line}`, fontSize: 11, color: T.inkFaint, display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10 }}>
-            <span>Clique no produto para ver a composição de custo · barras = custo unitário por competência</span>
+            <span>
+              Clique no produto para ver a composição de custo · barras = custo unitário por competência
+              {porProduto.length > 120 && ` · mostrando 120 de ${porProduto.length}, use a busca ou exporte`}
+            </span>
             <BotaoExportar small onClick={() => exportCSV(porProduto.map(p => ({
               cod: p.cod, produto: p.produto, unidade: p.unidade, ops: p.ops, produzido: p.qtd,
               custo_material_sem_icms: Math.round(p.custo), custo_material_com_icms: Math.round(p.custoIcms),
