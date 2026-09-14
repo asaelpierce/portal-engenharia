@@ -14753,12 +14753,12 @@ function Custeio() {
       x.custo += Number(p.custo_material) || 0;
       x.custoIcms += Number(p.custo_com_icms) || 0;
       x.ops += Number(p.ops) || 0;
-      // guarda o custo do ERP da competência mais recente do período
-      if (p.erp_medio_sem_icms != null && (!x.erpUlt || p.competencia > x.erpUlt.c)) {
-        x.erpUlt = { c: p.competencia, valor: Number(p.erp_medio_sem_icms) };
+      // o custo atual do ERP é o mesmo em toda linha do produto
+      if (p.erp_atual != null && !x.erpUlt) {
+        x.erpUlt = { valor: Number(p.erp_atual), data: p.erp_atual_data };
       }
       x.comps.push({ c: p.competencia, unit: p.custo_unitario, qtd: p.qtd_produzida,
-                     custo: p.custo_material, erp: p.erp_medio_sem_icms, desvio: p.desvio_pct });
+                     custo: p.custo_material, erp: p.erp_na_competencia, desvio: p.desvio_pct });
     }
     return [...m.values()]
       .map(x => ({
@@ -14860,7 +14860,7 @@ function Custeio() {
             <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 940 }}>
               <thead>
                 <tr style={{ background: T.panelAlt }}>
-                  {['Produto', 'Un.', 'OPs', 'Produzido', 'Custo material', 'Custo unitário', 'Sankhya (méd. s/ICMS)', 'Evolução'].map((h, i) => (
+                  {['Produto', 'Un.', 'OPs', 'Produzido', 'Custo material', 'Custo unitário', 'Último custo médio (Sankhya)', 'Evolução'].map((h, i) => (
                     <th key={h} style={{ padding: '10px 12px', fontSize: 11, fontWeight: 600, color: T.inkFaint,
                       textAlign: i >= 2 && i <= 6 ? 'right' : 'left', borderBottom: `1px solid ${T.line}`, whiteSpace: 'nowrap' }}>{h}</th>
                   ))}
@@ -14896,22 +14896,12 @@ function Custeio() {
                               : <span style={{ color: T.inkFaint }}>—</span>}
                         </td>
                         <td style={{ padding: '10px 12px', fontSize: 12.5, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
-                          {p.erpUlt ? (() => {
-                            const meu = p.unitario;
-                            const dv = meu != null && p.erpUlt.valor > 0
-                              ? ((meu - p.erpUlt.valor) / p.erpUlt.valor) * 100 : null;
-                            const perto = dv != null && Math.abs(dv) <= 2;
-                            return (
-                              <span title={`Custo Médio sem ICMS do Sankhya em ${p.erpUlt.c}`}>
-                                <span style={{ color: T.inkDim }}>R$ {num2(p.erpUlt.valor)}</span>
-                                {dv != null && (
-                                  <div style={{ fontSize: 10, color: perto ? T.oliveText : T.amberText }}>
-                                    {perto ? '✓ confere' : `${dv > 0 ? '+' : ''}${dv.toFixed(1)}%`}
-                                  </div>
-                                )}
-                              </span>
-                            );
-                          })() : <span style={{ color: T.inkFaint }}>—</span>}
+                          {p.erpUlt ? (
+                            <span title={`Último Custo Médio sem ICMS do produto no Sankhya, em ${p.erpUlt.data}`}>
+                              <span style={{ color: T.ink, fontWeight: 600 }}>R$ {num2(p.erpUlt.valor)}</span>
+                              <div style={{ fontSize: 10, color: T.inkFaint }}>{p.erpUlt.data}</div>
+                            </span>
+                          ) : <span style={{ color: T.inkFaint }}>—</span>}
                         </td>
                         <td style={{ padding: '10px 12px' }}>
                           <svg width={Math.max(40, p.comps.length * 13)} height="22">
@@ -15064,7 +15054,7 @@ function DetalheCusteio({ itens, comps, comICMS }) {
         </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 10.5,
                       color: T.inkFaint, fontWeight: 600, paddingBottom: 3 }}>
-          <span>COMP.</span><span>QTD</span><span>NOSSO</span><span>SANKHYA</span><span>DESVIO</span>
+          <span>COMP.</span><span>QTD</span><span>NOSSO</span><span>ERP NO MÊS</span><span>DESVIO</span>
         </div>
         {comps.map(c => {
           const dv = c.desvio != null ? Number(c.desvio) : null;
@@ -15092,9 +15082,11 @@ function DetalheCusteio({ itens, comps, comICMS }) {
         <div style={{ fontSize: 11, color: T.inkFaint, marginTop: 10, lineHeight: 1.5 }}>
           Consumo por peça e preço aparecem separados de propósito: quando o custo muda, é preciso
           saber se foi o preço do insumo, a quantidade consumida ou a composição que mudou.
-          A coluna Sankhya é o Custo Médio sem ICMS do produto acabado no próprio ERP: é a
-          contraprova do nosso cálculo, que vem por outro caminho — somando o consumo de
-          matéria-prima apontado em cada OP.
+          Há dois pontos de comparação com o ERP, e eles respondem coisas diferentes. Na tabela
+          acima, o <strong>último custo médio</strong> do produto: é a referência corrente, o que
+          vale hoje. Aqui, o valor <strong>vigente em cada mês</strong>, que é o que valida a
+          apuração — comparar o custo de abril com o custo médio de hoje acusaria desvio onde na
+          época batia exato.
         </div>
       </div>
     </div>
