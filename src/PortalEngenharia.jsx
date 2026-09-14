@@ -14746,14 +14746,19 @@ function Custeio() {
       const k = p.cod_prod_acabado;
       if (!m.has(k)) m.set(k, {
         cod: k, produto: p.produto, unidade: p.unidade, classe: p.classe_unidade,
-        ressalva: p.ressalva, qtd: 0, custo: 0, custoIcms: 0, ops: 0, comps: [],
+        ressalva: p.ressalva, qtd: 0, custo: 0, custoIcms: 0, ops: 0, comps: [], erpUlt: null,
       });
       const x = m.get(k);
       x.qtd += Number(p.qtd_produzida) || 0;
       x.custo += Number(p.custo_material) || 0;
       x.custoIcms += Number(p.custo_com_icms) || 0;
       x.ops += Number(p.ops) || 0;
-      x.comps.push({ c: p.competencia, unit: p.custo_unitario, qtd: p.qtd_produzida, custo: p.custo_material });
+      // guarda o custo do ERP da competência mais recente do período
+      if (p.erp_medio_sem_icms != null && (!x.erpUlt || p.competencia > x.erpUlt.c)) {
+        x.erpUlt = { c: p.competencia, valor: Number(p.erp_medio_sem_icms) };
+      }
+      x.comps.push({ c: p.competencia, unit: p.custo_unitario, qtd: p.qtd_produzida,
+                     custo: p.custo_material, erp: p.erp_medio_sem_icms, desvio: p.desvio_pct });
     }
     return [...m.values()]
       .map(x => ({
@@ -14855,9 +14860,9 @@ function Custeio() {
             <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 940 }}>
               <thead>
                 <tr style={{ background: T.panelAlt }}>
-                  {['Produto', 'Un.', 'OPs', 'Produzido', 'Custo material', 'Custo unitário', 'Evolução'].map((h, i) => (
+                  {['Produto', 'Un.', 'OPs', 'Produzido', 'Custo material', 'Custo unitário', 'Sankhya (méd. s/ICMS)', 'Evolução'].map((h, i) => (
                     <th key={h} style={{ padding: '10px 12px', fontSize: 11, fontWeight: 600, color: T.inkFaint,
-                      textAlign: i >= 2 && i <= 5 ? 'right' : 'left', borderBottom: `1px solid ${T.line}`, whiteSpace: 'nowrap' }}>{h}</th>
+                      textAlign: i >= 2 && i <= 6 ? 'right' : 'left', borderBottom: `1px solid ${T.line}`, whiteSpace: 'nowrap' }}>{h}</th>
                   ))}
                 </tr>
               </thead>
@@ -14890,6 +14895,24 @@ function Custeio() {
                               ? <span title={p.ressalva || ''} style={{ color: T.inkDim }}>R$ {num2(p.porOp)} <span style={{ fontSize: 10, color: T.inkFaint }}>/OP</span></span>
                               : <span style={{ color: T.inkFaint }}>—</span>}
                         </td>
+                        <td style={{ padding: '10px 12px', fontSize: 12.5, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                          {p.erpUlt ? (() => {
+                            const meu = p.unitario;
+                            const dv = meu != null && p.erpUlt.valor > 0
+                              ? ((meu - p.erpUlt.valor) / p.erpUlt.valor) * 100 : null;
+                            const perto = dv != null && Math.abs(dv) <= 2;
+                            return (
+                              <span title={`Custo Médio sem ICMS do Sankhya em ${p.erpUlt.c}`}>
+                                <span style={{ color: T.inkDim }}>R$ {num2(p.erpUlt.valor)}</span>
+                                {dv != null && (
+                                  <div style={{ fontSize: 10, color: perto ? T.oliveText : T.amberText }}>
+                                    {perto ? '✓ confere' : `${dv > 0 ? '+' : ''}${dv.toFixed(1)}%`}
+                                  </div>
+                                )}
+                              </span>
+                            );
+                          })() : <span style={{ color: T.inkFaint }}>—</span>}
+                        </td>
                         <td style={{ padding: '10px 12px' }}>
                           <svg width={Math.max(40, p.comps.length * 13)} height="22">
                             {p.comps.map((c, i) => {
@@ -14904,7 +14927,7 @@ function Custeio() {
                       </tr>
                       {detalhe === p.cod && (
                         <tr style={{ background: T.panelAlt }}>
-                          <td colSpan={7} style={{ padding: '14px 16px', borderBottom: `1px solid ${T.line}` }}>
+                          <td colSpan={8} style={{ padding: '14px 16px', borderBottom: `1px solid ${T.line}` }}>
                             <DetalheCusteio itens={itensDetalhe} comps={p.comps} comICMS={comICMS} />
                           </td>
                         </tr>
@@ -15039,21 +15062,39 @@ function DetalheCusteio({ itens, comps, comICMS }) {
         <div style={{ fontSize: 10.5, color: T.inkFaint, fontWeight: 600, marginBottom: 8 }}>
           CUSTO UNITÁRIO POR COMPETÊNCIA
         </div>
-        {comps.map(c => (
-          <div key={c.c} style={{ display: 'flex', justifyContent: 'space-between', gap: 10,
-                                  fontSize: 12, padding: '4px 0', borderTop: `1px solid ${T.lineSoft}` }}>
-            <span style={{ color: T.inkDim }}>{c.c}</span>
-            <span style={{ color: T.inkFaint, fontVariantNumeric: 'tabular-nums' }}>
-              {Number(c.qtd).toLocaleString('pt-BR')} un
-            </span>
-            <span style={{ color: T.ink, fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>
-              {c.unit != null ? `R$ ${num2(c.unit)}` : '—'}
-            </span>
-          </div>
-        ))}
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 10.5,
+                      color: T.inkFaint, fontWeight: 600, paddingBottom: 3 }}>
+          <span>COMP.</span><span>QTD</span><span>NOSSO</span><span>SANKHYA</span><span>DESVIO</span>
+        </div>
+        {comps.map(c => {
+          const dv = c.desvio != null ? Number(c.desvio) : null;
+          const perto = dv != null && Math.abs(dv) <= 2;
+          return (
+            <div key={c.c} style={{ display: 'flex', justifyContent: 'space-between', gap: 10,
+                                    fontSize: 12, padding: '4px 0', borderTop: `1px solid ${T.lineSoft}` }}>
+              <span style={{ color: T.inkDim }}>{c.c}</span>
+              <span style={{ color: T.inkFaint, fontVariantNumeric: 'tabular-nums' }}>
+                {Number(c.qtd).toLocaleString('pt-BR')}
+              </span>
+              <span style={{ color: T.ink, fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>
+                {c.unit != null ? `R$ ${num2(c.unit)}` : '—'}
+              </span>
+              <span style={{ color: T.inkDim, fontVariantNumeric: 'tabular-nums' }}>
+                {c.erp != null ? `R$ ${num2(c.erp)}` : '—'}
+              </span>
+              <span style={{ fontVariantNumeric: 'tabular-nums', fontWeight: 600,
+                             color: dv == null ? T.inkFaint : perto ? T.oliveText : T.amberText }}>
+                {dv == null ? '—' : perto ? '✓' : `${dv > 0 ? '+' : ''}${dv.toFixed(1)}%`}
+              </span>
+            </div>
+          );
+        })}
         <div style={{ fontSize: 11, color: T.inkFaint, marginTop: 10, lineHeight: 1.5 }}>
           Consumo por peça e preço aparecem separados de propósito: quando o custo muda, é preciso
           saber se foi o preço do insumo, a quantidade consumida ou a composição que mudou.
+          A coluna Sankhya é o Custo Médio sem ICMS do produto acabado no próprio ERP: é a
+          contraprova do nosso cálculo, que vem por outro caminho — somando o consumo de
+          matéria-prima apontado em cada OP.
         </div>
       </div>
     </div>
