@@ -16314,7 +16314,7 @@ function Custeio() {
             <div style={{ fontSize: 11.5, color: T.inkDim, background: T.panelAlt, padding: '9px 12px', borderRadius: 6 }}>
               Compara as 3 etapas do material: <strong>orçado</strong> (matéria-prima do orçamento de precificação) →
               <strong> solicitado</strong> (solicitação de compra) → <strong>comprado</strong> (ordem de compra).
-              Valores <strong>líquidos</strong>: o custo tira o ICMS (recuperável) e a receita é o Net Offer Value da nota de venda. Só a <strong>nota fiscal</strong> conta como custo — é ela que traz o valor líquido real. Ordem de compra sem nota aparece em \"A receber (OC)\": é compromisso, ainda não virou custo. Positivo no desvio = comprou acima do orçado.
+              Valores <strong>líquidos</strong>: o custo tira o ICMS (recuperável) e a receita é o Net Offer Value da nota de venda. \"Do estoque\" conta só material sem compra no projeto — o que foi comprado e depois transferido já está em \"Comprado líq.\". Só a <strong>nota fiscal</strong> conta como custo — é ela que traz o valor líquido real. Ordem de compra sem nota aparece em \"A receber (OC)\": é compromisso, ainda não virou custo. Positivo no desvio = comprou acima do orçado.
             </div>
 
             <input value={brOrc} onChange={e => setBrOrc(e.target.value)} placeholder="Filtrar por BR — ex: BR14332"
@@ -16348,7 +16348,7 @@ function Custeio() {
                         <td style={{ padding: '9px 12px', fontSize: 12.5, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}
                             title={`Bruto ${moeda(b.com)} — líquido tira o ICMS, que é recuperável`}>{moeda(b.comLiq)}</td>
                         <td style={{ padding: '9px 12px', fontSize: 12.5, textAlign: 'right', color: T.blueText, fontVariantNumeric: 'tabular-nums' }}
-                            title="Material que já tínhamos e foi usado — deixou de ser comprado">{b.est ? moeda(b.est) : '—'}</td>
+                            title="Material que a empresa já tinha e usou — só entra aqui se NÃO houve compra dele neste projeto (senão contaria duas vezes)">{b.est ? moeda(b.est) : '—'}</td>
                         <td style={{ padding: '9px 12px', fontSize: 12.5, textAlign: 'right', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{moeda(b.comLiq + b.est)}</td>
                         <td style={{ padding: '9px 12px', fontSize: 12.5, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}
                             title="Net Offer Value da nota de venda">{b.rec ? moeda(b.rec) : '—'}</td>
