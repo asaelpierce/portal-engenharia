@@ -16280,24 +16280,27 @@ function Custeio() {
         // 3 etapas do material, cada uma vinda de uma tela do Sankhya:
         // orcamento (AD_ORCITEMAT) -> solicitacao de compra (mov. interna)
         // -> ordem de compra (portal de compras). Tudo amarrado pelo projeto.
-        const porBr = {};
+        // Um BR pode ter varios orcamentos (revisao, escopo adicional), cada
+        // um com seu pedido de venda -- por isso a linha e por ORCAMENTO.
+        const porOrc = {};
         orcComp.forEach(r => {
-          const k = r.br || `proj ${r.codproj}`;
-          if (!porBr[k]) porBr[k] = { br: k, orc: 0, sol: 0, com: 0, itens: 0, semOrc: 0 };
-          porBr[k].orc += Number(r.valor_orcado) || 0;
-          porBr[k].sol += Number(r.valor_solicitado) || 0;
-          porBr[k].com += Number(r.valor_comprado) || 0;
-          porBr[k].itens += 1;
-          if (r.situacao === 'comprado_sem_orcamento') porBr[k].semOrc += 1;
+          const k = `${r.br || 'proj ' + r.codproj}|${r.nureg}`;
+          if (!porOrc[k]) porOrc[k] = { chave: k, br: r.br || `proj ${r.codproj}`, nureg: r.nureg,
+            pedido: r.pedido_venda, data: r.data_ref_orcamento, orc: 0, sol: 0, com: 0, itens: 0, semOrc: 0 };
+          porOrc[k].orc += Number(r.valor_orcado) || 0;
+          porOrc[k].sol += Number(r.valor_solicitado) || 0;
+          porOrc[k].com += Number(r.valor_comprado) || 0;
+          porOrc[k].itens += 1;
+          if (r.situacao === 'comprado_sem_orcamento') porOrc[k].semOrc += 1;
         });
-        const listaBr = Object.values(porBr)
+        const listaBr = Object.values(porOrc)
           .filter(b => b.orc > 0 || b.com > 0)
           .filter(b => !brOrc || b.br.toLowerCase().includes(brOrc.toLowerCase()))
           .map(b => ({ ...b, desvio: b.com - b.orc, pct: b.orc > 0 ? (b.com - b.orc) / b.orc * 100 : null }))
           .sort((a, b) => b.desvio - a.desvio);
 
         const detalhe = brOrc ? orcComp.filter(r => (r.br || '').toLowerCase().includes(brOrc.toLowerCase())) : [];
-        const rotSit = { comprado_sem_orcamento: '⚠ comprado sem orçamento', orcado_nao_comprado: 'orçado, não comprado', so_solicitado: 'só solicitado', ok: 'ok' };
+        const rotSit = { comprado_sem_orcamento: '⚠ comprado sem orçamento', orcado_nao_comprado: 'orçado, não comprado', so_solicitado: 'só solicitado', orcado_sem_codigo: 'orçado sem código (texto livre)', ok: 'ok' };
 
         return (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -16317,19 +16320,22 @@ function Custeio() {
               <div style={{ overflowX: 'auto' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 820 }}>
                   <thead><tr style={{ background: T.panelAlt }}>
-                    {['BR', 'Itens', 'Orçado', 'Solicitado', 'Comprado', 'Desvio', '%'].map((h, i) => (
+                    {['BR', 'Pedido venda', 'Itens', 'Orçado', 'Solicitado', 'Comprado', 'Desvio', '%'].map((h, i) => (
                       <th key={h} style={{ padding: '10px 12px', fontSize: 11, fontWeight: 600, color: T.inkFaint, textAlign: i === 0 ? 'left' : 'right' }}>{h}</th>
                     ))}
                   </tr></thead>
                   <tbody>
                     {listaBr.length === 0 ? (
-                      <tr><td colSpan={7} style={{ padding: 24, textAlign: 'center', color: T.inkFaint }}>Nada nesse filtro.</td></tr>
+                      <tr><td colSpan={8} style={{ padding: 24, textAlign: 'center', color: T.inkFaint }}>Nada nesse filtro.</td></tr>
                     ) : listaBr.slice(0, 150).map(b => (
-                      <tr key={b.br} onClick={() => setBrOrc(b.br)}
+                      <tr key={b.chave} onClick={() => setBrOrc(b.br)}
                           style={{ borderBottom: `1px solid ${T.lineSoft}`, cursor: 'pointer', background: b.desvio > 0 ? `${T.rustSoft}44` : 'transparent' }}>
                         <td style={{ padding: '9px 12px', fontSize: 12.5, fontWeight: 600 }}>
                           {b.br}
                           {b.semOrc > 0 && <span style={{ marginLeft: 6, fontSize: 10, color: T.rustText, background: T.rustSoft, padding: '2px 6px', borderRadius: 4 }}>{b.semOrc} sem orçamento</span>}
+                        </td>
+                        <td style={{ padding: '9px 12px', fontSize: 11.5, textAlign: 'right', color: T.inkDim, whiteSpace: 'nowrap' }}>
+                          {b.pedido || '—'}{b.data && <span style={{ color: T.inkFaint }}> · {b.data.split('-').reverse().join('/')}</span>}
                         </td>
                         <td style={{ padding: '9px 12px', fontSize: 12, textAlign: 'right', color: T.inkDim }}>{b.itens}</td>
                         <td style={{ padding: '9px 12px', fontSize: 12.5, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{moeda(b.orc)}</td>
@@ -16354,14 +16360,15 @@ function Custeio() {
                 <div style={{ overflowX: 'auto' }}>
                   <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 900 }}>
                     <thead><tr style={{ background: T.panelAlt }}>
-                      {['Cód', 'Produto', 'Qtd orç.', 'Orçado', 'Solicitado', 'Qtd compr.', 'Comprado', 'Desvio', 'Situação'].map((h, i) => (
-                        <th key={h} style={{ padding: '9px 12px', fontSize: 11, fontWeight: 600, color: T.inkFaint, textAlign: i >= 2 && i <= 7 ? 'right' : 'left' }}>{h}</th>
+                      {['Orç.', 'Cód', 'Produto', 'Qtd orç.', 'Orçado', 'Solicitado', 'Qtd compr.', 'Comprado', 'Desvio', 'Situação'].map((h, i) => (
+                        <th key={h} style={{ padding: '9px 12px', fontSize: 11, fontWeight: 600, color: T.inkFaint, textAlign: i >= 3 && i <= 8 ? 'right' : 'left' }}>{h}</th>
                       ))}
                     </tr></thead>
                     <tbody>
                       {detalhe.sort((a, b) => (Number(b.desvio_valor) || 0) - (Number(a.desvio_valor) || 0)).map(r => (
-                        <tr key={`${r.codproj}-${r.cod_prod}`} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
-                          <td style={{ padding: '8px 12px', fontSize: 12 }}>{r.cod_prod}</td>
+                        <tr key={`${r.codproj}-${r.nureg}-${r.chave_item}`} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                          <td style={{ padding: '8px 12px', fontSize: 11, color: T.inkFaint }} title={`Pedido de venda ${r.pedido_venda || '—'}`}>{r.nureg}</td>
+                          <td style={{ padding: '8px 12px', fontSize: 12 }}>{r.cod_prod ?? '—'}</td>
                           <td style={{ padding: '8px 12px', fontSize: 11.5, maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.descr_prod}>{r.descr_prod}</td>
                           <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', color: T.inkDim }}>{r.qtd_orcada ?? '—'}</td>
                           <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{r.valor_orcado != null ? moeda(r.valor_orcado) : '—'}</td>
@@ -16384,7 +16391,7 @@ function Custeio() {
                 </div>
                 <div style={{ padding: '10px 12px', borderTop: `1px solid ${T.line}`, display: 'flex', justifyContent: 'flex-end' }}>
                   <BotaoExportar small onClick={() => exportCSV(detalhe, `orcado_comprado_${brOrc}.csv`,
-                    ['br','cod_prod','descr_prod','qtd_orcada','valor_orcado','valor_solicitado','qtd_comprada','valor_comprado','desvio_valor','desvio_pct','situacao','notas_compra'])} />
+                    ['br','nureg','pedido_venda','cod_prod','descr_prod','qtd_orcada','valor_orcado','valor_solicitado','qtd_comprada','valor_comprado','desvio_valor','desvio_pct','situacao','notas_compra'])} />
                 </div>
               </div>
             )}
