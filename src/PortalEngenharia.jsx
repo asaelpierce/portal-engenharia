@@ -16286,11 +16286,15 @@ function Custeio() {
         orcComp.forEach(r => {
           const k = `${r.br || 'proj ' + r.codproj}|${r.nureg}`;
           if (!porOrc[k]) porOrc[k] = { chave: k, br: r.br || `proj ${r.codproj}`, nureg: r.nureg,
-            pedido: r.pedido_venda, data: r.data_ref_orcamento, orc: 0, sol: 0, com: 0, emp: 0, itens: 0, semOrc: 0 };
+            pedido: r.pedido_venda, data: r.data_ref_orcamento, orc: 0, sol: 0, com: 0, emp: 0, est: 0, itens: 0, semOrc: 0, cats: {} };
           porOrc[k].orc += Number(r.valor_orcado) || 0;
           porOrc[k].sol += Number(r.valor_solicitado) || 0;
           porOrc[k].com += Number(r.valor_comprado) || 0;
           porOrc[k].emp += Number(r.valor_empenhado) || 0;
+          porOrc[k].est += Number(r.valor_estoque) || 0;
+          const cat = r.categoria || 'sem_classificacao';
+          const vc = (Number(r.valor_comprado) || 0) + (Number(r.valor_estoque) || 0);
+          if (vc) porOrc[k].cats[cat] = (porOrc[k].cats[cat] || 0) + vc;
           porOrc[k].itens += 1;
           if (r.situacao === 'comprado_sem_orcamento') porOrc[k].semOrc += 1;
         });
@@ -16301,7 +16305,7 @@ function Custeio() {
           .sort((a, b) => b.desvio - a.desvio);
 
         const detalhe = brOrc ? orcComp.filter(r => (r.br || '').toLowerCase().includes(brOrc.toLowerCase())) : [];
-        const rotSit = { comprado_sem_orcamento: '⚠ comprado sem orçamento', orcado_nao_comprado: 'orçado, não comprado', so_solicitado: 'só solicitado', orcado_sem_codigo: 'orçado sem código (texto livre)', aguardando_nota: 'OC emitida, aguardando NF', ok: 'ok' };
+        const rotSit = { comprado_sem_orcamento: '⚠ comprado sem orçamento', orcado_nao_comprado: 'orçado, não comprado', so_solicitado: 'só solicitado', orcado_sem_codigo: 'orçado sem código (texto livre)', aguardando_nota: 'OC emitida, aguardando NF', atendido_do_estoque: '📦 atendido do estoque', ok: 'ok' };
 
         return (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -16321,13 +16325,13 @@ function Custeio() {
               <div style={{ overflowX: 'auto' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 820 }}>
                   <thead><tr style={{ background: T.panelAlt }}>
-                    {['BR', 'Pedido venda', 'Itens', 'Orçado', 'Solicitado', 'Comprado (NF)', 'A receber (OC)', 'Desvio', '%'].map((h, i) => (
+                    {['BR', 'Pedido venda', 'Itens', 'Orçado', 'Solicitado', 'Comprado (NF)', 'Do estoque', 'A receber (OC)', 'Desvio', '%'].map((h, i) => (
                       <th key={h} style={{ padding: '10px 12px', fontSize: 11, fontWeight: 600, color: T.inkFaint, textAlign: i === 0 ? 'left' : 'right' }}>{h}</th>
                     ))}
                   </tr></thead>
                   <tbody>
                     {listaBr.length === 0 ? (
-                      <tr><td colSpan={9} style={{ padding: 24, textAlign: 'center', color: T.inkFaint }}>Nada nesse filtro.</td></tr>
+                      <tr><td colSpan={10} style={{ padding: 24, textAlign: 'center', color: T.inkFaint }}>Nada nesse filtro.</td></tr>
                     ) : listaBr.slice(0, 150).map(b => (
                       <tr key={b.chave} onClick={() => setBrOrc(b.br)}
                           style={{ borderBottom: `1px solid ${T.lineSoft}`, cursor: 'pointer', background: b.desvio > 0 ? `${T.rustSoft}44` : 'transparent' }}>
@@ -16342,6 +16346,10 @@ function Custeio() {
                         <td style={{ padding: '9px 12px', fontSize: 12.5, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{moeda(b.orc)}</td>
                         <td style={{ padding: '9px 12px', fontSize: 12.5, textAlign: 'right', color: T.inkDim, fontVariantNumeric: 'tabular-nums' }}>{moeda(b.sol)}</td>
                         <td style={{ padding: '9px 12px', fontSize: 12.5, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{moeda(b.com)}</td>
+                        <td style={{ padding: '9px 12px', fontSize: 12.5, textAlign: 'right', color: T.blueText, fontVariantNumeric: 'tabular-nums' }}
+                            title="Material que já tínhamos e foi usado no projeto — deixou de ser comprado">
+                          {b.est ? moeda(b.est) : '—'}
+                        </td>
                         <td style={{ padding: '9px 12px', fontSize: 12, textAlign: 'right', color: T.inkFaint, fontVariantNumeric: 'tabular-nums' }}
                             title="Ordem de compra emitida que ainda não virou nota fiscal — compromisso, ainda não é custo">
                           {b.emp ? moeda(b.emp) : '—'}
@@ -16362,10 +16370,38 @@ function Custeio() {
                 <div style={{ padding: '10px 12px', fontSize: 12, fontWeight: 700, borderBottom: `1px solid ${T.line}` }}>
                   Item a item — {brOrc}
                 </div>
+                {(() => {
+                  const ROT = { materia_prima: 'Matéria-prima', frete: 'Frete', industrializacao: 'Industrialização',
+                                servico: 'Serviço', embalagem: 'Embalagem', uso_consumo: 'Uso e consumo',
+                                imobilizado: 'Imobilizado', outros: 'Outros', sem_classificacao: 'Sem classificação' };
+                  const cats = {};
+                  detalhe.forEach(r => {
+                    const c = r.categoria || 'sem_classificacao';
+                    if (!cats[c]) cats[c] = { comprado: 0, estoque: 0 };
+                    cats[c].comprado += Number(r.valor_comprado) || 0;
+                    cats[c].estoque += Number(r.valor_estoque) || 0;
+                  });
+                  const linhas = Object.entries(cats).filter(([, v]) => v.comprado || v.estoque)
+                    .sort((a, b) => (b[1].comprado + b[1].estoque) - (a[1].comprado + a[1].estoque));
+                  if (!linhas.length) return null;
+                  return (
+                    <div style={{ padding: '10px 12px', borderBottom: `1px solid ${T.line}`, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                      {linhas.map(([c, v]) => (
+                        <div key={c} style={{ background: T.panelAlt, borderRadius: 7, padding: '7px 12px', fontSize: 11.5 }}>
+                          <strong>{ROT[c] || c}</strong>
+                          <div style={{ color: T.inkDim, marginTop: 2 }}>
+                            comprado {moeda(v.comprado)}
+                            {v.estoque ? <span style={{ color: T.blueText }}> · estoque {moeda(v.estoque)}</span> : null}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()}
                 <div style={{ overflowX: 'auto' }}>
                   <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 900 }}>
                     <thead><tr style={{ background: T.panelAlt }}>
-                      {['Orç.', 'Cód', 'Produto', 'Qtd orç.', 'Orçado', 'Solicitado', 'Qtd compr.', 'Comprado', 'Desvio', 'Situação'].map((h, i) => (
+                      {['Orç.', 'Cód', 'Produto', 'Categoria', 'Orçado', 'Solicitado', 'Comprado', 'Do estoque', 'Desvio', 'Situação'].map((h, i) => (
                         <th key={h} style={{ padding: '9px 12px', fontSize: 11, fontWeight: 600, color: T.inkFaint, textAlign: i >= 3 && i <= 8 ? 'right' : 'left' }}>{h}</th>
                       ))}
                     </tr></thead>
@@ -16375,11 +16411,12 @@ function Custeio() {
                           <td style={{ padding: '8px 12px', fontSize: 11, color: T.inkFaint }} title={`Pedido de venda ${r.pedido_venda || '—'}`}>{r.nureg}</td>
                           <td style={{ padding: '8px 12px', fontSize: 12 }}>{r.cod_prod ?? '—'}</td>
                           <td style={{ padding: '8px 12px', fontSize: 11.5, maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.descr_prod}>{r.descr_prod}</td>
-                          <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', color: T.inkDim }}>{r.qtd_orcada ?? '—'}</td>
+                          <td style={{ padding: '8px 12px', fontSize: 11, color: T.inkFaint }}
+                              title={r.operacao_compra || ''}>{({ materia_prima: 'Matéria-prima', frete: 'Frete', industrializacao: 'Industrializ.', servico: 'Serviço', embalagem: 'Embalagem', uso_consumo: 'Uso/consumo', imobilizado: 'Imobilizado', outros: 'Outros' })[r.categoria] || '—'}</td>
                           <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{r.valor_orcado != null ? moeda(r.valor_orcado) : '—'}</td>
                           <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', color: T.inkDim, fontVariantNumeric: 'tabular-nums' }}>{r.valor_solicitado != null ? moeda(r.valor_solicitado) : '—'}</td>
-                          <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', color: T.inkDim }}>{r.qtd_comprada ?? '—'}</td>
                           <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{r.valor_comprado != null ? moeda(r.valor_comprado) : '—'}</td>
+                          <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', color: T.blueText, fontVariantNumeric: 'tabular-nums' }}>{r.valor_estoque != null ? moeda(r.valor_estoque) : '—'}</td>
                           <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', fontWeight: 700, fontVariantNumeric: 'tabular-nums',
                                        color: (Number(r.desvio_valor) || 0) > 0 ? T.rustText : T.oliveText }}>{r.desvio_valor != null ? moeda(r.desvio_valor) : '—'}</td>
                           <td style={{ padding: '8px 12px', fontSize: 11 }}>
@@ -16396,7 +16433,7 @@ function Custeio() {
                 </div>
                 <div style={{ padding: '10px 12px', borderTop: `1px solid ${T.line}`, display: 'flex', justifyContent: 'flex-end' }}>
                   <BotaoExportar small onClick={() => exportCSV(detalhe, `orcado_comprado_${brOrc}.csv`,
-                    ['br','nureg','pedido_venda','cod_prod','descr_prod','qtd_orcada','valor_orcado','valor_solicitado','qtd_comprada','valor_comprado','desvio_valor','desvio_pct','situacao','notas_compra'])} />
+                    ['br','nureg','pedido_venda','cod_prod','descr_prod','qtd_orcada','valor_orcado','valor_solicitado','qtd_comprada','valor_comprado','valor_estoque','categoria','custo_total','desvio_valor','desvio_pct','situacao','notas_compra'])} />
                 </div>
               </div>
             )}
