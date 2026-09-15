@@ -14685,6 +14685,338 @@ function RelatorioEstoqueOCs() {
 // Os setores vêm dos centros de custo produtivos da própria contabilidade,
 // não de uma lista inventada: o que se aponta aqui casa com o que se lança lá.
 // ============================================================================
+// Margem: receita líquida contra custo cheio. O custo é líquido de imposto
+// recuperável, então a receita precisa ser também — comparar custo líquido
+// com preço bruto produz margem otimista e falsa.
+function MargemProduto({ dados, placar, param, onParam }) {
+  const [comp, setComp] = useState('');
+  const [foco, setFoco] = useState('todos');
+  const [busca, setBusca] = useState('');
+  const [editando, setEditando] = useState(false);
+  const [novoPct, setNovoPct] = useState('');
+
+  const comps = useMemo(() => [...new Set(dados.map(d => d.competencia))].sort().reverse(), [dados]);
+  const compAtual = comp || comps[0] || '';
+  const pl = useMemo(() => placar.find(p => p.competencia === compAtual), [placar, compAtual]);
+
+  const linhas = useMemo(() => dados
+    .filter(d => d.competencia === compAtual)
+    .filter(d => foco === 'todos' || (foco === 'lucro' ? d.resultado > 0 : d.resultado <= 0))
+    .filter(d => !busca || `${d.cod_produto} ${d.produto || ''}`.toLowerCase().includes(busca.toLowerCase()))
+    .sort((a, b) => (Number(a.resultado) || 0) - (Number(b.resultado) || 0)),
+  [dados, compAtual, foco, busca]);
+
+  const moeda = (v) => fmtMoedaCompacta(v);
+  const pct = Number(param?.valor ?? 0.0925);
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '14px 18px' }}>
+        <div style={{ fontSize: 12.5, color: T.inkDim, lineHeight: 1.65 }}>
+          Receita líquida contra custo cheio, por produto e competência. Só entram produtos que foram
+          faturados <strong>e</strong> produzidos no mesmo mês — venda de estoque antigo fica de fora,
+          então isto é uma amostra do resultado, não o lucro da empresa.
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10, flexWrap: 'wrap',
+                      fontSize: 12, color: T.amberText, background: T.amberSoft, borderRadius: 6, padding: '8px 12px' }}>
+          <strong>PREMISSA:</strong>
+          <span>PIS + COFINS de</span>
+          {editando ? (
+            <>
+              <input value={novoPct} onChange={e => setNovoPct(e.target.value)} autoFocus
+                placeholder={(pct * 100).toFixed(2)}
+                style={{ width: 64, fontFamily: 'inherit', fontSize: 12, padding: '3px 6px',
+                         border: `1px solid ${T.line}`, borderRadius: 4 }} />
+              <span>%</span>
+              <button onClick={async () => { await onParam(Number(novoPct) / 100); setEditando(false); }}
+                style={{ fontFamily: 'inherit', fontSize: 11.5, cursor: 'pointer', padding: '3px 10px',
+                         border: 'none', borderRadius: 4, background: T.ink, color: T.panel }}>Aplicar</button>
+              <button onClick={() => setEditando(false)}
+                style={{ fontFamily: 'inherit', fontSize: 11.5, cursor: 'pointer', padding: '3px 8px',
+                         border: 'none', background: 'none', color: T.inkFaint }}>cancelar</button>
+            </>
+          ) : (
+            <button onClick={() => { setNovoPct((pct * 100).toFixed(2)); setEditando(true); }}
+              style={{ fontFamily: 'inherit', fontSize: 12, fontWeight: 700, cursor: 'pointer',
+                       border: 'none', background: 'none', color: T.amberText, textDecoration: 'underline' }}>
+              {(pct * 100).toFixed(2)}%
+            </button>
+          )}
+          <span style={{ color: T.inkDim }}>
+            — esses tributos não estão na tabela de itens do Sankhya. ICMS, IPI e ISS são reais.
+          </span>
+        </div>
+      </div>
+
+      {pl && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 12 }}>
+          {[
+            { l: 'No lucro', v: String(pl.no_lucro), c: T.oliveText, sub: `de ${pl.produtos} produtos` },
+            { l: 'No prejuízo', v: String(pl.no_prejuizo), c: T.rustText, sub: `${100 - pl.pct_lucro}% do total` },
+            { l: 'Ganho dos positivos', v: moeda(pl.ganho), c: T.oliveText },
+            { l: 'Perda dos negativos', v: moeda(pl.perda), c: T.rustText },
+            { l: 'Resultado', v: moeda(pl.resultado), c: pl.resultado >= 0 ? T.oliveText : T.rustText,
+              sub: pl.receita_liquida > 0 ? `${(pl.resultado / pl.receita_liquida * 100).toFixed(1)}% da receita` : null },
+          ].map(k => (
+            <div key={k.l} style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '14px 16px', boxShadow: SHADOW_SM }}>
+              <div style={{ fontSize: 11, color: T.inkFaint, fontWeight: 600 }}>{k.l}</div>
+              <div style={{ fontFamily: FONT_DISPLAY, fontSize: 21, fontWeight: 700, color: k.c, marginTop: 6 }}>{k.v}</div>
+              {k.sub && <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 2 }}>{k.sub}</div>}
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+        <select value={compAtual} onChange={e => setComp(e.target.value)}
+          style={{ fontFamily: 'inherit', fontSize: 12.5, padding: '6px 10px', border: `1px solid ${T.line}`,
+                   borderRadius: 6, background: T.panel, color: T.ink }}>
+          {comps.map(c => <option key={c} value={c}>{c}</option>)}
+        </select>
+        {[['todos', 'Todos'], ['prejuizo', 'Só prejuízo'], ['lucro', 'Só lucro']].map(([k, r]) => (
+          <button key={k} onClick={() => setFoco(k)} style={{
+            fontFamily: 'inherit', fontSize: 11.5, cursor: 'pointer', padding: '5px 12px', borderRadius: 5,
+            border: `1px solid ${foco === k ? T.ink : T.line}`,
+            background: foco === k ? T.ink : T.panel, color: foco === k ? T.panel : T.inkDim,
+            fontWeight: foco === k ? 600 : 400,
+          }}>{r}</button>
+        ))}
+        <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Buscar produto…"
+          style={{ fontFamily: 'inherit', fontSize: 12.5, padding: '6px 10px', border: `1px solid ${T.line}`,
+                   borderRadius: 6, background: T.panel, color: T.ink, width: 200 }} />
+      </div>
+
+      <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 1000 }}>
+            <thead>
+              <tr style={{ background: T.panelAlt }}>
+                {['Produto', 'Qtd', 'Receita bruta', 'Impostos', 'Receita líquida',
+                  'Material', 'Mão de obra', 'Indiretos', 'Custo total', 'Resultado', 'Margem'].map((h, i) => (
+                  <th key={h} style={{ padding: '10px 12px', fontSize: 11, fontWeight: 600, color: T.inkFaint,
+                    textAlign: i >= 1 ? 'right' : 'left', borderBottom: `1px solid ${T.line}`, whiteSpace: 'nowrap' }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {linhas.slice(0, 80).map(d => {
+                const neg = Number(d.resultado) < 0;
+                const imp = (Number(d.icms) || 0) + (Number(d.ipi) || 0) + (Number(d.iss) || 0) + (Number(d.pis_cofins) || 0);
+                return (
+                  <tr key={`${d.cod_produto}-${d.competencia}`}
+                      style={{ borderBottom: `1px solid ${T.lineSoft}`, background: neg ? T.rustSoft + '55' : undefined }}>
+                    <td style={{ padding: '10px 12px', fontSize: 12 }}>
+                      <div style={{ fontWeight: 600, color: T.ink }}>{d.cod_produto}</div>
+                      <div style={{ color: T.inkFaint, fontSize: 11, maxWidth: 260, overflow: 'hidden',
+                                    textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={d.produto}>{d.produto}</div>
+                    </td>
+                    <td style={{ padding: '10px 12px', fontSize: 12, textAlign: 'right', color: T.inkDim, fontVariantNumeric: 'tabular-nums' }}>
+                      {Number(d.qtd_faturada).toLocaleString('pt-BR')}</td>
+                    <td style={{ padding: '10px 12px', fontSize: 12, textAlign: 'right', color: T.inkDim, fontVariantNumeric: 'tabular-nums' }}>
+                      {moeda(d.receita_bruta)}</td>
+                    <td style={{ padding: '10px 12px', fontSize: 11.5, textAlign: 'right', color: T.inkFaint, fontVariantNumeric: 'tabular-nums' }}>
+                      ({moeda(imp)})</td>
+                    <td style={{ padding: '10px 12px', fontSize: 12, textAlign: 'right', fontWeight: 600, color: T.ink, fontVariantNumeric: 'tabular-nums' }}>
+                      {moeda(d.receita_liquida)}</td>
+                    <td style={{ padding: '10px 12px', fontSize: 11.5, textAlign: 'right', color: T.oliveText, fontVariantNumeric: 'tabular-nums' }}>
+                      {moeda(d.material)}</td>
+                    <td style={{ padding: '10px 12px', fontSize: 11.5, textAlign: 'right', color: T.terracotta, fontVariantNumeric: 'tabular-nums' }}>
+                      {moeda(d.mao_de_obra)}</td>
+                    <td style={{ padding: '10px 12px', fontSize: 11.5, textAlign: 'right', color: T.amberText, fontVariantNumeric: 'tabular-nums' }}>
+                      {moeda(d.indiretos)}</td>
+                    <td style={{ padding: '10px 12px', fontSize: 12, textAlign: 'right', fontWeight: 600, color: T.ink, fontVariantNumeric: 'tabular-nums' }}>
+                      {moeda(d.custo_total)}</td>
+                    <td style={{ padding: '10px 12px', fontSize: 12.5, textAlign: 'right', fontWeight: 700,
+                                 color: neg ? T.rustText : T.oliveText, fontVariantNumeric: 'tabular-nums' }}>
+                      {moeda(d.resultado)}</td>
+                    <td style={{ padding: '10px 12px', fontSize: 12.5, textAlign: 'right', fontWeight: 700,
+                                 color: neg ? T.rustText : T.oliveText, fontVariantNumeric: 'tabular-nums' }}>
+                      {d.margem_pct != null ? `${Number(d.margem_pct).toFixed(1)}%` : '—'}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        <div style={{ padding: '10px 16px', borderTop: `1px solid ${T.line}`, fontSize: 11, color: T.inkFaint,
+                      display: 'flex', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
+          <span>Ordenado do pior para o melhor resultado · linhas em vermelho dão prejuízo</span>
+          <BotaoExportar small onClick={() => exportCSV(linhas, `margem_${compAtual}.csv`,
+            ['cod_produto','produto','qtd_faturada','receita_bruta','icms','ipi','iss','pis_cofins',
+             'receita_liquida','material','mao_de_obra','indiretos','custo_total','resultado','margem_pct'])} />
+        </div>
+      </div>
+
+      {placar.length > 1 && (
+        <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
+          <div style={{ padding: '12px 16px', borderBottom: `1px solid ${T.line}`, fontSize: 11, color: T.inkFaint, fontWeight: 600 }}>
+            PLACAR MÊS A MÊS
+          </div>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr style={{ background: T.panelAlt }}>
+                {['Competência', 'Produtos', 'No lucro', 'No prejuízo', '% lucro',
+                  'Receita líquida', 'Custo', 'Resultado'].map((h, i) => (
+                  <th key={h} style={{ padding: '9px 12px', fontSize: 11, fontWeight: 600, color: T.inkFaint,
+                    textAlign: i >= 1 ? 'right' : 'left', borderBottom: `1px solid ${T.line}` }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {[...placar].sort((a, b) => a.competencia.localeCompare(b.competencia)).map(p => (
+                <tr key={p.competencia} style={{ borderBottom: `1px solid ${T.lineSoft}`, cursor: 'pointer' }}
+                    onClick={() => setComp(p.competencia)}>
+                  <td style={{ padding: '9px 12px', fontSize: 12, color: T.ink, fontWeight: p.competencia === compAtual ? 700 : 400 }}>
+                    {p.competencia}</td>
+                  <td style={{ padding: '9px 12px', fontSize: 12, textAlign: 'right', color: T.inkDim, fontVariantNumeric: 'tabular-nums' }}>{p.produtos}</td>
+                  <td style={{ padding: '9px 12px', fontSize: 12, textAlign: 'right', color: T.oliveText, fontVariantNumeric: 'tabular-nums' }}>{p.no_lucro}</td>
+                  <td style={{ padding: '9px 12px', fontSize: 12, textAlign: 'right', color: T.rustText, fontVariantNumeric: 'tabular-nums' }}>{p.no_prejuizo}</td>
+                  <td style={{ padding: '9px 12px', fontSize: 12, textAlign: 'right', fontVariantNumeric: 'tabular-nums',
+                               color: p.pct_lucro >= 50 ? T.oliveText : T.rustText }}>{p.pct_lucro}%</td>
+                  <td style={{ padding: '9px 12px', fontSize: 12, textAlign: 'right', color: T.inkDim, fontVariantNumeric: 'tabular-nums' }}>
+                    {moeda(p.receita_liquida)}</td>
+                  <td style={{ padding: '9px 12px', fontSize: 12, textAlign: 'right', color: T.inkDim, fontVariantNumeric: 'tabular-nums' }}>
+                    {moeda(p.custo_total)}</td>
+                  <td style={{ padding: '9px 12px', fontSize: 12.5, textAlign: 'right', fontWeight: 700,
+                               color: p.resultado >= 0 ? T.oliveText : T.rustText, fontVariantNumeric: 'tabular-nums' }}>
+                    {moeda(p.resultado)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Lançamento a lançamento. Folha e comissões não chegam a esta base:
+// são filtradas na sincronização, não na tela.
+function LancamentosDetalhe({ dados }) {
+  const [comp, setComp] = useState('');
+  const [busca, setBusca] = useState('');
+  const [soRateio, setSoRateio] = useState('todos');
+  const moeda = (v) => fmtMoedaCompacta(v);
+
+  const comps = useMemo(() => [...new Set(dados.map(d => d.competencia))].sort().reverse(), [dados]);
+  const compAtual = comp || comps[0] || '';
+  const ehRateio = (h) => /APURACAO CUSTO PCP/i.test(h || '');
+
+  const linhas = useMemo(() => dados
+    .filter(d => d.competencia === compAtual)
+    .filter(d => soRateio === 'todos'
+      || (soRateio === 'rateio' ? ehRateio(d.historico) : !ehRateio(d.historico)))
+    .filter(d => !busca || `${d.conta} ${d.centro} ${d.historico} ${d.documento}`
+      .toLowerCase().includes(busca.toLowerCase()))
+    .sort((a, b) => (Number(b.valor) || 0) - (Number(a.valor) || 0)),
+  [dados, compAtual, soRateio, busca]);
+
+  const tot = useMemo(() => {
+    const doMes = dados.filter(d => d.competencia === compAtual);
+    const rateio = doMes.filter(d => ehRateio(d.historico));
+    return {
+      qtd: doMes.length,
+      total: doMes.reduce((s, d) => s + (Number(d.valor) || 0), 0),
+      rateioQtd: rateio.length,
+      rateioVal: rateio.reduce((s, d) => s + (Number(d.valor) || 0), 0),
+    };
+  }, [dados, compAtual]);
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '14px 18px' }}>
+        <div style={{ fontSize: 12.5, color: T.inkDim, lineHeight: 1.65 }}>
+          Cada gasto que entra no custo, com fornecedor, nota e centro.{' '}
+          <strong style={{ color: T.ink }}>Salários, encargos, benefícios e comissões não aparecem</strong> —
+          são filtrados na sincronização, então esse dado nem chega a este banco.
+        </div>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(160px,1fr))', gap: 12 }}>
+        {[
+          { l: 'Lançamentos no mês', v: String(tot.qtd), c: T.ink },
+          { l: 'Valor total', v: moeda(tot.total), c: T.ink },
+          { l: 'Rateio agregado do PCP', v: moeda(tot.rateioVal), c: T.rustText,
+            sub: `${tot.rateioQtd} lançamento(s) sem setor` },
+          { l: 'Gasto rastreável', v: moeda(tot.total - tot.rateioVal), c: T.oliveText,
+            sub: 'com nota e fornecedor' },
+        ].map(k => (
+          <div key={k.l} style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '14px 16px', boxShadow: SHADOW_SM }}>
+            <div style={{ fontSize: 11, color: T.inkFaint, fontWeight: 600 }}>{k.l}</div>
+            <div style={{ fontFamily: FONT_DISPLAY, fontSize: 20, fontWeight: 700, color: k.c, marginTop: 6 }}>{k.v}</div>
+            {k.sub && <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 2 }}>{k.sub}</div>}
+          </div>
+        ))}
+      </div>
+
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+        <select value={compAtual} onChange={e => setComp(e.target.value)}
+          style={{ fontFamily: 'inherit', fontSize: 12.5, padding: '6px 10px', border: `1px solid ${T.line}`,
+                   borderRadius: 6, background: T.panel, color: T.ink }}>
+          {comps.map(c => <option key={c} value={c}>{c}</option>)}
+        </select>
+        {[['todos', 'Todos'], ['rastreavel', 'Só rastreável'], ['rateio', 'Só rateio do PCP']].map(([k, r]) => (
+          <button key={k} onClick={() => setSoRateio(k)} style={{
+            fontFamily: 'inherit', fontSize: 11.5, cursor: 'pointer', padding: '5px 12px', borderRadius: 5,
+            border: `1px solid ${soRateio === k ? T.ink : T.line}`,
+            background: soRateio === k ? T.ink : T.panel, color: soRateio === k ? T.panel : T.inkDim,
+            fontWeight: soRateio === k ? 600 : 400,
+          }}>{r}</button>
+        ))}
+        <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Fornecedor, conta, centro, nota…"
+          style={{ fontFamily: 'inherit', fontSize: 12.5, padding: '6px 10px', border: `1px solid ${T.line}`,
+                   borderRadius: 6, background: T.panel, color: T.ink, width: 260 }} />
+      </div>
+
+      <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
+        <div style={{ overflowX: 'auto', maxHeight: 620 }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 1020 }}>
+            <thead>
+              <tr style={{ background: T.panelAlt }}>
+                {['Data', 'Conta', 'Centro', 'Valor', 'Histórico / fornecedor', 'Doc'].map((h, i) => (
+                  <th key={h} style={{ padding: '10px 12px', fontSize: 11, fontWeight: 600, color: T.inkFaint,
+                    textAlign: i === 3 ? 'right' : 'left', borderBottom: `1px solid ${T.line}`,
+                    position: 'sticky', top: 0, background: T.panelAlt, zIndex: 1 }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {linhas.slice(0, 300).map(d => {
+                const r = ehRateio(d.historico);
+                return (
+                  <tr key={d.id} style={{ borderBottom: `1px solid ${T.lineSoft}`,
+                                          background: r ? T.amberSoft + '66' : undefined }}>
+                    <td style={{ padding: '8px 12px', fontSize: 11.5, color: T.inkFaint, whiteSpace: 'nowrap' }}>{d.data_mov}</td>
+                    <td style={{ padding: '8px 12px', fontSize: 11.5, color: T.inkDim }}>{d.conta}</td>
+                    <td style={{ padding: '8px 12px', fontSize: 11.5, color: r ? T.rustText : T.inkDim,
+                                 fontWeight: r ? 600 : 400, maxWidth: 200, overflow: 'hidden',
+                                 textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={d.centro}>{d.centro}</td>
+                    <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', fontWeight: 600,
+                                 color: T.ink, fontVariantNumeric: 'tabular-nums' }}>{moeda(d.valor)}</td>
+                    <td style={{ padding: '8px 12px', fontSize: 11, color: T.inkFaint, maxWidth: 380,
+                                 overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                        title={d.historico}>{d.historico}</td>
+                    <td style={{ padding: '8px 12px', fontSize: 11, color: T.inkFaint }}>{d.documento}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        <div style={{ padding: '10px 16px', borderTop: `1px solid ${T.line}`, fontSize: 11, color: T.inkFaint,
+                      display: 'flex', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
+          <span>
+            Linhas em âmbar são o rateio agregado da planilha do PCP, lançado no fim do mês sem indicar o setor
+            {linhas.length > 300 && ` · mostrando 300 de ${linhas.length}`}
+          </span>
+          <BotaoExportar small onClick={() => exportCSV(linhas, `lancamentos_${compAtual}.csv`,
+            ['data_mov','conta','centro','valor','historico','documento'])} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function CusteioPlano() {
   const [aba, setAba] = useState('diagnostico');
   const [cif, setCif] = useState([]);
@@ -14696,6 +15028,10 @@ function CusteioPlano() {
   const [comps, setComps] = useState([]);
   const [cheio, setCheio] = useState([]);
   const [suspeitos, setSuspeitos] = useState([]);
+  const [margem, setMargem] = useState([]);
+  const [placar, setPlacar] = useState([]);
+  const [lancs, setLancs] = useState([]);
+  const [param, setParam] = useState(null);
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState(null);
 
@@ -14716,7 +15052,7 @@ function CusteioPlano() {
   const carregar = useCallback(async () => {
     setLoading(true); setErro(null);
     try {
-      const [l, cc, ct, st, ap, mat, comp, cheio, susp] = await Promise.all([
+      const [l, cc, ct, st, ap, mat, comp, cheio, susp, mg, pl, ld, pr] = await Promise.all([
         lerTudo('cif_lancamento', q => q.gte('competencia', '2026-01')),
         lerTudo('cif_centro_custo'),
         lerTudo('cif_conta'),
@@ -14726,9 +15062,15 @@ function CusteioPlano() {
         lerTudo('cif_competencia'),
         lerTudo('custeio_produto_cheio', q => q.gte('competencia', '2026-01')),
         lerTudo('apontamento_suspeito', q => q.gte('competencia', '2026-01')),
+        lerTudo('margem_produto'),
+        lerTudo('margem_placar'),
+        lerTudo('cif_lancamento_detalhe'),
+        lerTudo('custeio_parametro'),
       ]);
       setCif(l); setCentros(cc); setContas(ct); setSetores(st); setApontamentos(ap);
       setComps(comp); setCheio(cheio); setSuspeitos(susp);
+      setMargem(mg); setPlacar(pl); setLancs(ld);
+      setParam((pr || []).find(x => x.chave === 'pis_cofins_pct') || null);
       setMatTotal(mat.reduce((s, m) => s + (Number(m.custo_material) || 0), 0));
     } catch (e) { setErro(e.message || String(e)); }
     setLoading(false);
@@ -14809,6 +15151,8 @@ function CusteioPlano() {
         {[{ id: 'diagnostico', l: 'Diagnóstico' },
           { id: 'cheio', l: 'Custo cheio por produto' },
           { id: 'qualidade', l: `Qualidade do apontamento${suspeitos.filter(x=>x.custo_nao_lancado>0).length ? ` (${suspeitos.filter(x=>x.custo_nao_lancado>0).length})` : ''}` },
+          { id: 'margem', l: 'Margem por produto' },
+          { id: 'lancamentos', l: 'Lançamentos' },
           { id: 'plano', l: 'O que precisa ser feito' },
           { id: 'apontar', l: `Apontar horas${apontamentos.length ? ` (${apontamentos.length})` : ''}` }].map(x => (
           <button key={x.id} onClick={() => setAba(x.id)} style={{
@@ -14938,6 +15282,18 @@ function CusteioPlano() {
       {aba === 'cheio' && <CustoCheio dados={cheio} />}
 
       {aba === 'qualidade' && <QualidadeApontamento dados={suspeitos} />}
+
+      {aba === 'margem' && (
+        <MargemProduto dados={margem} placar={placar} param={param}
+          onParam={async (v) => {
+            await supabase.from('custeio_parametro')
+              .update({ valor: v, atualizado_em: new Date().toISOString() })
+              .eq('chave', 'pis_cofins_pct');
+            await carregar();
+          }} />
+      )}
+
+      {aba === 'lancamentos' && <LancamentosDetalhe dados={lancs} />}
 
       {aba === 'plano' && <PlanoDeAcao setores={setores} resumo={resumo} matTotal={matTotal} />}
 
