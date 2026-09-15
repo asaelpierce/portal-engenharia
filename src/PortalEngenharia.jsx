@@ -4920,7 +4920,10 @@ function ProspeccaoClientes() {
     try {
       const res = await fetch(`${SUPABASE_URL}/functions/v1/prospectar-novos-clientes`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ qtd: 15 }),
+        // 6 por rodada: cada prospect custa 2 buscas na web em sequencia,
+        // e pedir 15 estourava o tempo limite da funcao (a tela recebia uma
+        // resposta que nao conseguia ler e mostrava "Erro desconhecido").
+        body: JSON.stringify({ qtd: 6 }),
       }).then(r => r.json());
       if (res.ok) {
         setBuscaStatus({ ok: true, message: `${res.inseridos} novo${res.inseridos !== 1 ? 's' : ''} prospect${res.inseridos !== 1 ? 's' : ''} adicionado${res.inseridos !== 1 ? 's' : ''} (${res.filtrados_por_duplicidade} já eram conhecidos e foram ignorados).` });
