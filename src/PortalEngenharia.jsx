@@ -16011,8 +16011,10 @@ function Custeio() {
   const [margens, setMargens] = useState([]);
   const [mesMargem, setMesMargem] = useState('todos');
   const [orcComp, setOrcComp] = useState([]);
+  const [catComp, setCatComp] = useState([]);
   const [brOrc, setBrOrc] = useState('');
   const [fatFiltro, setFatFiltro] = useState('todos'); // todos | faturados | nao_faturados
+  const [verItens, setVerItens] = useState(false);
 
   // O cliente do Supabase corta em 1.000 linhas por padrão. Com o histórico
   // desde 2021 isso truncava a lista silenciosamente: buscar um produto que
@@ -16045,6 +16047,13 @@ function Custeio() {
       setMargens(rm);
       const ro = await lerTudo('v_custeio_orcado_comprado');
       setOrcComp(ro);
+      // Comparacao por CATEGORIA. Orcamento e compra usam codigos de produto
+      // diferentes (o frete orcado e uma linha "TRANSPORTE" sem codigo; a
+      // compra vem em dois CTEs), entao item a item eles nunca se cruzam e o
+      // estouro some. A regua da v_custeio_categoria classifica os dois lados
+      // pelo mesmo criterio: grupo do cadastro e, sem codigo, pelo texto.
+      const rc = await lerTudo('v_custeio_categoria');
+      setCatComp(rc);
       setProdutos(rp); setLotes(rl);
       setBrs(rb.sort((a, b) => (Number(b.custo_material) || 0) - (Number(a.custo_material) || 0)));
     } catch (e) { setErro(e.message || String(e)); }
@@ -16393,7 +16402,127 @@ function Custeio() {
               </div>
             </div>
 
-            {detalhe.length > 0 && (
+            {brOrc && (() => {
+              // BLOCOS POR CATEGORIA -- o coracao da tela.
+              // Orcado e comprado nao se cruzam por codigo de produto, mas se
+              // cruzam por categoria. Cada bloco poe os dois lados um do lado
+              // do outro, separados por tipo de custo, para o estouro aparecer
+              // onde ele acontece em vez de diluido no meio do material.
+              const linhasCat = catComp.filter(r => (r.br || '').toLowerCase().includes(brOrc.toLowerCase()));
+              if (!linhasCat.length) return null;
+
+              const ORDEM = [
+                { id: 'material', rot: 'Material', desc: 'Matéria-prima, insumos e embalagem' },
+                { id: 'servicos', rot: 'Serviços', desc: 'Industrialização, pintura, jateamento, mão de obra' },
+                { id: 'frete', rot: 'Frete', desc: 'Transporte, coleta, entrega e pedágio' },
+                { id: 'outros', rot: 'Outros', desc: 'Almoxarifado, imobilizado e não classificados' },
+              ];
+
+              const porCat = {};
+              linhasCat.forEach(r => {
+                const c = r.categoria || 'outros';
+                if (!porCat[c]) porCat[c] = { orc: 0, com: 0, est: 0, dev: 0, custo: 0, emp: 0, semCod: 0 };
+                porCat[c].orc += Number(r.valor_orcado) || 0;
+                porCat[c].com += Number(r.valor_comprado) || 0;
+                porCat[c].est += Number(r.valor_estoque) || 0;
+                porCat[c].dev += Number(r.valor_devolvido) || 0;
+                porCat[c].emp += Number(r.valor_empenhado) || 0;
+                porCat[c].custo += Number(r.custo_real) || 0;
+                porCat[c].semCod += Number(r.itens_sem_codigo) || 0;
+              });
+
+              const totOrc = ORDEM.reduce((s, c) => s + (porCat[c.id]?.orc || 0), 0);
+              const totCusto = ORDEM.reduce((s, c) => s + (porCat[c.id]?.custo || 0), 0);
+              // Escala comum aos 4 blocos: sem isso, uma barra cheia no frete
+              // (R$ 10 mil) pareceria igual a uma barra cheia no material
+              // (R$ 740 mil) e a leitura visual mentiria.
+              const teto = Math.max(1, ...ORDEM.map(c => Math.max(porCat[c.id]?.orc || 0, porCat[c.id]?.custo || 0)));
+
+              return (
+                <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
+                  <div style={{ padding: '10px 12px', borderBottom: `1px solid ${T.line}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+                    <span style={{ fontSize: 12, fontWeight: 700 }}>Orçado × realizado por categoria — {brOrc}</span>
+                    <span style={{ fontSize: 11.5, color: T.inkDim, fontVariantNumeric: 'tabular-nums' }}>
+                      Total orçado {moeda(totOrc)} · custo real {moeda(totCusto)}
+                      {totOrc > 0 && (
+                        <strong style={{ marginLeft: 8, color: totCusto > totOrc ? T.rustText : T.oliveText }}>
+                          {totCusto > totOrc ? '+' : ''}{((totCusto - totOrc) / totOrc * 100).toFixed(1)}%
+                        </strong>
+                      )}
+                    </span>
+                  </div>
+
+                  <div style={{ padding: 12, display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))' }}>
+                    {ORDEM.map(cat => {
+                      const d = porCat[cat.id] || { orc: 0, com: 0, est: 0, dev: 0, custo: 0, emp: 0, semCod: 0 };
+                      if (!d.orc && !d.custo && !d.emp) return null;
+                      const desvio = d.custo - d.orc;
+                      const pct = d.orc > 0 ? desvio / d.orc * 100 : null;
+                      const estourou = d.orc > 0 && desvio > 0;
+                      const cor = pct == null ? T.inkFaint : estourou ? T.rustText : T.oliveText;
+                      const barra = v => `${Math.min(100, (v / teto) * 100)}%`;
+
+                      return (
+                        <div key={cat.id} style={{
+                          border: `1px solid ${estourou ? T.rustText : T.line}`, borderRadius: 8, padding: 12,
+                          background: estourou ? `${T.rustSoft}33` : T.panelAlt,
+                        }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 2 }}>
+                            <span style={{ fontSize: 13, fontWeight: 700 }}>{cat.rot}</span>
+                            <span style={{ fontSize: 14, fontWeight: 700, color: cor, fontVariantNumeric: 'tabular-nums' }}>
+                              {pct == null ? '—' : `${pct > 0 ? '+' : ''}${pct.toFixed(1)}%`}
+                            </span>
+                          </div>
+                          <div style={{ fontSize: 10.5, color: T.inkFaint, marginBottom: 10 }}>{cat.desc}</div>
+
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+                            <div>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11.5, color: T.inkDim, marginBottom: 3 }}>
+                                <span>Orçado</span>
+                                <span style={{ fontVariantNumeric: 'tabular-nums' }}>{d.orc ? moeda(d.orc) : '—'}</span>
+                              </div>
+                              <div style={{ height: 7, background: T.lineSoft, borderRadius: 4, overflow: 'hidden' }}>
+                                <div style={{ height: '100%', width: barra(d.orc), background: T.inkFaint }} />
+                              </div>
+                            </div>
+                            <div>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11.5, color: T.inkDim, marginBottom: 3 }}>
+                                <span>Custo real</span>
+                                <span style={{ fontVariantNumeric: 'tabular-nums', fontWeight: 600, color: T.ink }}>{d.custo ? moeda(d.custo) : '—'}</span>
+                              </div>
+                              <div style={{ height: 7, background: T.lineSoft, borderRadius: 4, overflow: 'hidden' }}>
+                                <div style={{ height: '100%', width: barra(d.custo), background: estourou ? T.rustText : T.oliveText }} />
+                              </div>
+                            </div>
+                          </div>
+
+                          <div style={{ marginTop: 9, paddingTop: 8, borderTop: `1px solid ${T.lineSoft}`, fontSize: 11, color: T.inkDim, display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+                            {d.com > 0 && <span title="Notas fiscais de compra, valor líquido">🛒 {moeda(d.com)}</span>}
+                            {d.est > 0 && <span style={{ color: T.blueText }} title="Já tinha no estoque — não precisou comprar">📦 {moeda(d.est)}</span>}
+                            {d.dev > 0 && <span style={{ color: T.oliveText }} title="Sobra devolvida ao estoque — abatida do custo">↩ −{moeda(d.dev)}</span>}
+                            {d.emp > 0 && <span style={{ color: T.amberText }} title="Ordem de compra sem nota: compromisso, ainda não é custo">⏳ {moeda(d.emp)}</span>}
+                            {d.semCod > 0 && <span style={{ color: T.inkFaint }} title="Linhas orçadas sem código de produto, classificadas pelo texto">✎ {d.semCod} por texto</span>}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  <div style={{ padding: '9px 12px', borderTop: `1px solid ${T.line}`, fontSize: 11, color: T.inkFaint, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+                    <span>
+                      Custo real = nota fiscal de compra + o que saiu do estoque − sobra devolvida. Ordem de compra sem nota não entra.
+                      Quantidade orçada e produzida podem diferir — desvio alto em Material costuma ser volume, não preço.
+                    </span>
+                    <button onClick={() => setVerItens(v => !v)}
+                      style={{ fontSize: 11.5, fontWeight: 700, padding: '6px 11px', borderRadius: 6, cursor: 'pointer', whiteSpace: 'nowrap', border: `1px solid ${T.line}`, background: 'transparent', color: T.inkDim }}>
+                      {verItens ? 'Ocultar item a item' : 'Ver item a item'}
+                    </button>
+                  </div>
+                </div>
+              );
+            })()}
+
+            {verItens && detalhe.length > 0 && (
               <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
                 <div style={{ padding: '10px 12px', fontSize: 12, fontWeight: 700, borderBottom: `1px solid ${T.line}` }}>
                   Item a item — {brOrc}
