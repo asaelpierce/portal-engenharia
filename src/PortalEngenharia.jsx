@@ -16016,6 +16016,8 @@ function Custeio() {
   const [fatFiltro, setFatFiltro] = useState('todos'); // todos | faturados | nao_faturados
   const [verItens, setVerItens] = useState(false);
   const [caixaAberta, setCaixaAberta] = useState(null); // material | servicos | frete | outros
+  const [verif, setVerif] = useState([]);
+  const [verifRodando, setVerifRodando] = useState(false);
 
   // O cliente do Supabase corta em 1.000 linhas por padrão. Com o histórico
   // desde 2021 isso truncava a lista silenciosamente: buscar um produto que
@@ -16055,12 +16057,31 @@ function Custeio() {
       // pelo mesmo criterio: grupo do cadastro e, sem codigo, pelo texto.
       const rc = await lerTudo('v_custeio_categoria');
       setCatComp(rc);
+      // Historico do verificador. 60 dias bastam para ver tendencia sem
+      // arrastar a tabela inteira, que cresce ~17 linhas por dia.
+      const desdeVerif = new Date(Date.now() - 60 * 864e5).toISOString();
+      const rv = await lerTudo('custeio_verificacao', q => q.gte('executado_em', desdeVerif));
+      setVerif(rv);
       setProdutos(rp); setLotes(rl);
       setBrs(rb.sort((a, b) => (Number(b.custo_material) || 0) - (Number(a.custo_material) || 0)));
     } catch (e) { setErro(e.message || String(e)); }
     setLoading(false);
   }, [compIni, lerTudo]);
   useEffect(() => { carregar(); }, [carregar]);
+
+  // Roda o verificador sob demanda. A funcao no banco e SECURITY DEFINER
+  // porque precisa gravar o resultado em custeio_verificacao, onde o anon so
+  // tem permissao de leitura.
+  const rodarVerificacao = useCallback(async () => {
+    setVerifRodando(true);
+    try {
+      const { error } = await supabase.rpc('fn_custeio_verificar');
+      if (error) throw error;
+      const desdeVerif = new Date(Date.now() - 60 * 864e5).toISOString();
+      setVerif(await lerTudo('custeio_verificacao', q => q.gte('executado_em', desdeVerif)));
+    } catch (e) { setErro(e.message || String(e)); }
+    setVerifRodando(false);
+  }, [lerTudo]);
 
   const abrirProduto = async (cod) => {
     setDetalhe(cod); setItensDetalhe([]);
@@ -16147,7 +16168,11 @@ function Custeio() {
 
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', gap: 2 }}>
-          {[{ id: 'produto', l: 'Por produto' }, { id: 'br', l: 'Por projeto (BR)' }, { id: 'margem', l: 'Margem por venda' }, { id: 'orcado', l: 'Orçado x Comprado' }].map(x => (
+          {[{ id: 'produto', l: 'Por produto' }, { id: 'br', l: 'Por projeto (BR)' }, { id: 'margem', l: 'Margem por venda' }, { id: 'orcado', l: 'Orçado x Comprado' }, { id: 'qualidade', l: (() => {
+            const ult = verif.length ? verif.reduce((m, v) => v.executado_em > m ? v.executado_em : m, '') : null;
+            const falhas = ult ? verif.filter(v => v.executado_em === ult && !v.passou).length : 0;
+            return falhas ? `Qualidade dos dados (${falhas})` : 'Qualidade dos dados';
+          })() }].map(x => (
             <button key={x.id} onClick={() => setAba(x.id)} style={{
               fontFamily: 'inherit', fontSize: 12.5, cursor: 'pointer', padding: '6px 14px',
               border: `1px solid ${aba === x.id ? T.ink : T.line}`, borderRadius: 6,
@@ -16286,6 +16311,138 @@ function Custeio() {
           </div>
         </div>
       )}
+
+      {aba === 'qualidade' && (() => {
+        // O verificador roda as 12h30, quinze minutos depois da carga. Cada
+        // checagem aqui nasceu de uma falha real que NAO dava erro -- so
+        // produzia numero com cara de certo. Esta tela existe para que
+        // alguem veja quando uma delas reprova.
+        const ROTULOS = {
+          receita_liquida_plausivel: ['Receita líquida plausível', 'A líquida tem que ficar entre 40% e 100% da bruta. Pega valor unitário somado como total, que já fez um projeto de R$ 1,1 mi aparecer com R$ 1.869 de receita.'],
+          custo_em_outros: ['Custo sem classificação', 'Quanto do custo caiu na caixa Outros. Sobe quando aparece uma operação nova que a régua não conhece — foi o que aconteceu com os CTEs de frete.'],
+          produtos_fora_do_mapa: ['Produtos fora do mapa', 'Produto novo no Sankhya ainda não espelhado. Sem ele a classificação cai no texto da descrição sem avisar.'],
+          carga_recente: ['Carga recente', 'Horas desde a última sincronização. O agendamento chama a função sem autenticação: se alguém religar a exigência de token num deploy, ela para em silêncio.'],
+          visoes_conciliadas: ['Visões conciliadas', 'A visão por categoria e a item a item têm que somar o mesmo orçado. Se divergirem, uma das duas está filtrando algo.'],
+          receitas_obsoletas: ['Receitas obsoletas', 'Linha que não foi reescrita na última carga. A sincronização só fazia upsert e nunca apagava — eram R$ 1,6 mi de receita fantasma em projetos que deixaram de ter venda.'],
+          itens_obsoletos: ['Itens obsoletos', 'Mesma ideia do anterior, para as linhas de custeio.'],
+        };
+        const rotulo = (c) => ROTULOS[c] ? ROTULOS[c][0]
+          : c.startsWith('volume_') ? `Volume de linhas — ${c.slice(7)}`
+          : c.startsWith('rls_') ? `Leitura liberada — ${c.slice(4)}`
+          : c;
+        const ajuda = (c) => ROTULOS[c] ? ROTULOS[c][1]
+          : c.startsWith('volume_') ? 'Compara o total de linhas com a carga anterior. O Sankhya corta consulta em 5.000 linhas sem avisar, e isso já fez sumir dois terços dos dados uma vez.'
+          : c.startsWith('rls_') ? 'Tabela com controle de acesso ligado e nenhuma regra responde vazia para a tela, sem quebrar nada — só classificando errado.'
+          : '';
+
+        const execs = [...new Set(verif.map(v => v.executado_em))].sort().reverse();
+        const ultima = execs[0];
+        const linhas = verif.filter(v => v.executado_em === ultima)
+          .sort((a, b) => (a.passou === b.passou ? 0 : a.passou ? 1 : -1)
+                       || (a.gravidade === b.gravidade ? 0 : a.gravidade === 'erro' ? -1 : 1)
+                       || rotulo(a.checagem).localeCompare(rotulo(b.checagem)));
+        const erros = linhas.filter(l => !l.passou && l.gravidade === 'erro').length;
+        const alertas = linhas.filter(l => !l.passou && l.gravidade === 'alerta').length;
+
+        const cartoes = [
+          { t: 'Checagens', v: linhas.length, c: T.ink },
+          { t: 'Passaram', v: linhas.filter(l => l.passou).length, c: T.oliveText },
+          { t: 'Erros', v: erros, c: erros ? T.rustText : T.inkFaint },
+          { t: 'Alertas', v: alertas, c: alertas ? T.amberText : T.inkFaint },
+        ];
+
+        return (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <div style={{ fontSize: 11.5, color: T.inkDim, background: T.panelAlt, padding: '9px 12px', borderRadius: 6 }}>
+              Conferência automática que roda todo dia às 12h30, logo depois da sincronização. Cada regra aqui
+              nasceu de uma falha que <strong>não dava erro</strong> — só produzia um número com cara de certo.
+              É regra fixa, não estimativa: roda duas vezes e dá o mesmo resultado.
+            </div>
+
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              {cartoes.map(c => (
+                <div key={c.t} style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 8, padding: '8px 14px', minWidth: 96 }}>
+                  <div style={{ fontSize: 10.5, color: T.inkFaint }}>{c.t}</div>
+                  <div style={{ fontSize: 19, fontWeight: 700, color: c.c, fontVariantNumeric: 'tabular-nums' }}>{c.v}</div>
+                </div>
+              ))}
+              <div style={{ flex: 1 }} />
+              <div style={{ fontSize: 11.5, color: T.inkDim }}>
+                {ultima ? `Última: ${new Date(ultima).toLocaleString('pt-BR')}` : 'Nunca executada'}
+              </div>
+              <button onClick={rodarVerificacao} disabled={verifRodando}
+                style={{ fontFamily: 'inherit', fontSize: 12, fontWeight: 700, padding: '7px 13px', borderRadius: 6,
+                  cursor: verifRodando ? 'default' : 'pointer', border: `1px solid ${T.line}`,
+                  background: verifRodando ? T.panelAlt : T.panel, color: T.inkDim }}>
+                {verifRodando ? 'Verificando…' : 'Verificar agora'}
+              </button>
+            </div>
+
+            {!linhas.length ? (
+              <div style={{ padding: 28, textAlign: 'center', color: T.inkFaint, background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10 }}>
+                Nenhuma execução nos últimos 60 dias. Use “Verificar agora”.
+              </div>
+            ) : (
+              <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 880 }}>
+                    <thead><tr style={{ background: T.panelAlt }}>
+                      {['', 'Checagem', 'Medido', 'Limite', 'Resultado', 'Últimas execuções'].map((h, i) => (
+                        <th key={h + i} style={{ padding: '10px 12px', fontSize: 11, fontWeight: 600, color: T.inkFaint,
+                          textAlign: i === 2 || i === 3 ? 'right' : 'left', whiteSpace: 'nowrap' }}>{h}</th>
+                      ))}
+                    </tr></thead>
+                    <tbody>
+                      {linhas.map(l => {
+                        // Ordem cronologica, mais antiga a esquerda -- ler a
+                        // tendencia da esquerda pra direita e o natural.
+                        const hist = verif.filter(v => v.checagem === l.checagem)
+                          .sort((a, b) => a.executado_em.localeCompare(b.executado_em)).slice(-12);
+                        const cor = l.passou ? T.oliveText : l.gravidade === 'erro' ? T.rustText : T.amberText;
+                        return (
+                          <tr key={l.checagem} style={{ borderBottom: `1px solid ${T.lineSoft}`,
+                              background: l.passou ? 'transparent' : l.gravidade === 'erro' ? `${T.rustSoft}44` : `${T.amberSoft}44` }}>
+                            <td style={{ padding: '9px 12px', fontSize: 14, color: cor }}>{l.passou ? '✓' : l.gravidade === 'erro' ? '✕' : '⚠'}</td>
+                            <td style={{ padding: '9px 12px', fontSize: 12.5 }}>
+                              <div style={{ fontWeight: 600 }}>{rotulo(l.checagem)}</div>
+                              <div style={{ fontSize: 10.5, color: T.inkFaint, maxWidth: 480 }}>{ajuda(l.checagem)}</div>
+                            </td>
+                            <td style={{ padding: '9px 12px', fontSize: 12.5, textAlign: 'right', fontWeight: 600, color: cor, fontVariantNumeric: 'tabular-nums' }}>
+                              {l.valor_medido == null ? '—' : Number(l.valor_medido).toLocaleString('pt-BR')}
+                            </td>
+                            <td style={{ padding: '9px 12px', fontSize: 12, textAlign: 'right', color: T.inkFaint, fontVariantNumeric: 'tabular-nums' }}>
+                              {l.limite == null ? '—' : Number(l.limite).toLocaleString('pt-BR')}
+                            </td>
+                            <td style={{ padding: '9px 12px', fontSize: 11.5, color: T.inkDim, maxWidth: 320 }}>{l.detalhe}</td>
+                            <td style={{ padding: '9px 12px' }}>
+                              <div style={{ display: 'flex', gap: 3 }}>
+                                {hist.map(h => (
+                                  <span key={h.id} title={`${new Date(h.executado_em).toLocaleString('pt-BR')} — ${h.detalhe}`}
+                                    style={{ width: 9, height: 9, borderRadius: 2, display: 'inline-block',
+                                      background: h.passou ? T.oliveText : h.gravidade === 'erro' ? T.rustText : T.amberText }} />
+                                ))}
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                <div style={{ padding: '9px 12px', borderTop: `1px solid ${T.line}`, fontSize: 10.5, color: T.inkFaint, display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+                  <span>
+                    <strong>Erro</strong> é número que não pode estar certo. <strong>Alerta</strong> é número que merece
+                    uma olhada. A régua só cobre o que está escrito nela: quando aparecer um tipo de falha novo, alguém
+                    precisa acrescentar a checagem.
+                  </span>
+                  <BotaoExportar small onClick={() => exportCSV(verif, 'verificacao_custeio.csv',
+                    ['executado_em','checagem','gravidade','passou','valor_medido','limite','detalhe'])} />
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {aba === 'orcado' && (() => {
         // 3 etapas do material, cada uma vinda de uma tela do Sankhya:
