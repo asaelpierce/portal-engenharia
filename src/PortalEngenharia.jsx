@@ -14694,6 +14694,7 @@ function CusteioPlano() {
   const [apontamentos, setApontamentos] = useState([]);
   const [matTotal, setMatTotal] = useState(0);
   const [comps, setComps] = useState([]);
+  const [cheio, setCheio] = useState([]);
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState(null);
 
@@ -14714,7 +14715,7 @@ function CusteioPlano() {
   const carregar = useCallback(async () => {
     setLoading(true); setErro(null);
     try {
-      const [l, cc, ct, st, ap, mat, comp] = await Promise.all([
+      const [l, cc, ct, st, ap, mat, comp, cheio] = await Promise.all([
         lerTudo('cif_lancamento', q => q.gte('competencia', '2026-01')),
         lerTudo('cif_centro_custo'),
         lerTudo('cif_conta'),
@@ -14722,9 +14723,10 @@ function CusteioPlano() {
         lerTudo('apontamento_hora'),
         lerTudo('custeio_produto_material', q => q.gte('competencia', '2026-01')),
         lerTudo('cif_competencia'),
+        lerTudo('custeio_produto_cheio', q => q.gte('competencia', '2026-01')),
       ]);
       setCif(l); setCentros(cc); setContas(ct); setSetores(st); setApontamentos(ap);
-      setComps(comp);
+      setComps(comp); setCheio(cheio);
       setMatTotal(mat.reduce((s, m) => s + (Number(m.custo_material) || 0), 0));
     } catch (e) { setErro(e.message || String(e)); }
     setLoading(false);
@@ -14803,6 +14805,7 @@ function CusteioPlano() {
 
       <div style={{ display: 'flex', gap: 2 }}>
         {[{ id: 'diagnostico', l: 'Diagnóstico' },
+          { id: 'cheio', l: 'Custo cheio por produto' },
           { id: 'plano', l: 'O que precisa ser feito' },
           { id: 'apontar', l: `Apontar horas${apontamentos.length ? ` (${apontamentos.length})` : ''}` }].map(x => (
           <button key={x.id} onClick={() => setAba(x.id)} style={{
@@ -14929,6 +14932,8 @@ function CusteioPlano() {
         </>
       )}
 
+      {aba === 'cheio' && <CustoCheio dados={cheio} />}
+
       {aba === 'plano' && <PlanoDeAcao setores={setores} resumo={resumo} matTotal={matTotal} />}
 
       {aba === 'apontar' && (
@@ -14943,6 +14948,140 @@ function CusteioPlano() {
 // faz o quê.
 // O que o dado não sustenta. Sem isso, quem olha a tela assume que todo
 // número ali é comparável — e não é.
+// Custo cheio: material mais o CIF rateado pela participação da OP no
+// material do mês, que é o método que o PCP já usa. Mostrar as três
+// camadas separadas importa porque a discussão de preço costuma parar no
+// material, e ele é menos da metade da conta.
+function CustoCheio({ dados }) {
+  const [busca, setBusca] = useState('');
+  const [comp, setComp] = useState('');
+  const moeda = (v) => fmtMoedaCompacta(v);
+  const num2 = (v) => v == null ? '—'
+    : Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  const comps = useMemo(
+    () => [...new Set(dados.filter(d => !d.mes_sem_cif).map(d => d.competencia))].sort().reverse(),
+    [dados]);
+  const compAtual = comp || comps[0] || '';
+
+  const linhas = useMemo(() => dados
+    .filter(d => d.competencia === compAtual && !d.mes_sem_cif)
+    .filter(d => !busca || `${d.cod_prod_acabado} ${d.produto || ''}`.toLowerCase().includes(busca.toLowerCase()))
+    .sort((a, b) => (Number(b.custo_total) || 0) - (Number(a.custo_total) || 0)),
+  [dados, compAtual, busca]);
+
+  const tot = useMemo(() => ({
+    material: linhas.reduce((s, d) => s + (Number(d.material) || 0), 0),
+    mo: linhas.reduce((s, d) => s + (Number(d.mao_de_obra) || 0), 0),
+    cif: linhas.reduce((s, d) => s + (Number(d.indiretos) || 0), 0),
+  }), [linhas]);
+  const total = tot.material + tot.mo + tot.cif;
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '14px 18px' }}>
+        <div style={{ fontSize: 12.5, color: T.inkDim, lineHeight: 1.65 }}>
+          Custo com as três camadas: material apontado na OP, mais mão de obra e indiretos rateados
+          pela participação da OP no material do mês — o mesmo critério que a apuração do PCP já
+          usa. <strong style={{ color: T.ink }}>O material é menos da metade do custo real</strong>,
+          e é nele que a conversa de preço costuma parar.
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+        <select value={compAtual} onChange={e => setComp(e.target.value)}
+          style={{ fontFamily: 'inherit', fontSize: 12.5, padding: '6px 10px',
+                   border: `1px solid ${T.line}`, borderRadius: 6, background: T.panel, color: T.ink }}>
+          {comps.map(c => <option key={c} value={c}>{c}</option>)}
+        </select>
+        <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Buscar produto…"
+          style={{ fontFamily: 'inherit', fontSize: 12.5, padding: '6px 10px', border: `1px solid ${T.line}`,
+                   borderRadius: 6, background: T.panel, color: T.ink, width: 220 }} />
+      </div>
+
+      {total > 0 && (
+        <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '14px 18px' }}>
+          <div style={{ display: 'flex', height: 26, borderRadius: 5, overflow: 'hidden', marginBottom: 10 }}>
+            {[['Material', tot.material, T.oliveText], ['Mão de obra', tot.mo, T.terracotta],
+              ['Indiretos', tot.cif, T.amberText]].map(([l, v, c]) => (
+              <div key={l} title={`${l}: ${moeda(v)}`}
+                style={{ width: `${(v / total) * 100}%`, background: c, display: 'flex',
+                         alignItems: 'center', justifyContent: 'center', color: '#fff',
+                         fontSize: 11, fontWeight: 700 }}>
+                {(v / total) * 100 > 8 ? `${Math.round((v / total) * 100)}%` : ''}
+              </div>
+            ))}
+          </div>
+          <div style={{ display: 'flex', gap: 22, flexWrap: 'wrap', fontSize: 12 }}>
+            {[['Material', tot.material, T.oliveText], ['Mão de obra', tot.mo, T.terracotta],
+              ['Indiretos', tot.cif, T.amberText], ['Total', total, T.ink]].map(([l, v, c]) => (
+              <span key={l} style={{ color: T.inkFaint }}>
+                {l}: <strong style={{ color: c }}>{moeda(v)}</strong>
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 920 }}>
+            <thead>
+              <tr style={{ background: T.panelAlt }}>
+                {['Produto', 'Qtd', 'Material', 'Mão de obra', 'Indiretos', 'Custo total',
+                  'Material/un', 'Custo cheio/un', 'CIF s/ material'].map((h, i) => (
+                  <th key={h} style={{ padding: '10px 12px', fontSize: 11, fontWeight: 600, color: T.inkFaint,
+                    textAlign: i >= 1 ? 'right' : 'left', borderBottom: `1px solid ${T.line}`, whiteSpace: 'nowrap' }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {linhas.slice(0, 80).map(d => (
+                <tr key={d.cod_prod_acabado} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                  <td style={{ padding: '10px 12px', fontSize: 12 }}>
+                    <div style={{ fontWeight: 600, color: T.ink }}>{d.cod_prod_acabado}</div>
+                    <div style={{ color: T.inkFaint, fontSize: 11, maxWidth: 280, overflow: 'hidden',
+                                  textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={d.produto}>{d.produto}</div>
+                  </td>
+                  <td style={{ padding: '10px 12px', fontSize: 12, textAlign: 'right', color: T.inkDim, fontVariantNumeric: 'tabular-nums' }}>
+                    {Number(d.qtd).toLocaleString('pt-BR')}</td>
+                  <td style={{ padding: '10px 12px', fontSize: 12, textAlign: 'right', color: T.oliveText, fontVariantNumeric: 'tabular-nums' }}>
+                    {moeda(d.material)}</td>
+                  <td style={{ padding: '10px 12px', fontSize: 12, textAlign: 'right', color: T.terracotta, fontVariantNumeric: 'tabular-nums' }}>
+                    {moeda(d.mao_de_obra)}</td>
+                  <td style={{ padding: '10px 12px', fontSize: 12, textAlign: 'right', color: T.amberText, fontVariantNumeric: 'tabular-nums' }}>
+                    {moeda(d.indiretos)}</td>
+                  <td style={{ padding: '10px 12px', fontSize: 12.5, textAlign: 'right', fontWeight: 600, color: T.ink, fontVariantNumeric: 'tabular-nums' }}>
+                    {moeda(d.custo_total)}</td>
+                  <td style={{ padding: '10px 12px', fontSize: 12, textAlign: 'right', color: T.inkFaint, fontVariantNumeric: 'tabular-nums' }}>
+                    {d.material_unit != null ? `R$ ${num2(d.material_unit)}` : '—'}</td>
+                  <td style={{ padding: '10px 12px', fontSize: 12.5, textAlign: 'right', fontWeight: 700, color: T.terracotta, fontVariantNumeric: 'tabular-nums' }}>
+                    {d.custo_unit_cheio != null ? `R$ ${num2(d.custo_unit_cheio)}` : '—'}</td>
+                  <td style={{ padding: '10px 12px', fontSize: 12, textAlign: 'right', color: T.inkDim, fontVariantNumeric: 'tabular-nums' }}>
+                    {d.cif_sobre_material != null ? `+${Math.round(d.cif_sobre_material)}%` : '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div style={{ padding: '10px 16px', borderTop: `1px solid ${T.line}`, fontSize: 11, color: T.inkFaint, lineHeight: 1.5, display: 'flex', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
+          <span>
+            Rateio por participação no material do mês. Hora apontada corrigiria a distorção de
+            produto trabalhoso e barato, que hoje recebe CIF de menos.
+          </span>
+          <BotaoExportar small onClick={() => exportCSV(linhas.map(d => ({
+            competencia: d.competencia, cod: d.cod_prod_acabado, produto: d.produto,
+            qtd: d.qtd, material: d.material, mao_de_obra: d.mao_de_obra, indiretos: d.indiretos,
+            custo_total: d.custo_total, material_unit: d.material_unit,
+            custo_unit_cheio: d.custo_unit_cheio,
+          })), `custo_cheio_${compAtual}.csv`,
+          ['competencia','cod','produto','qtd','material','mao_de_obra','indiretos','custo_total','material_unit','custo_unit_cheio'])} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function AvisosDoDado({ comps }) {
   const doAno = comps.filter(c => c.competencia >= '2026-01');
   const abertas = doAno.filter(c => !c.fechada);
@@ -14989,61 +15128,75 @@ function PlanoDeAcao({ setores, resumo, matTotal }) {
   const moeda = (v) => fmtMoedaCompacta(v);
   const passos = [
     {
-      n: 1, dono: 'Moacir — Contabilidade', prazo: 'antes do próximo fechamento',
-      titulo: 'Lançar a despesa no centro que a consumiu',
-      texto: `Hoje ${resumo.pctMaior?.toFixed(0)}% do custo indireto cai em ${resumo.maior?.nome}, `
-           + `em lançamentos mensais de fechamento. Os centros produtivos já existem e já recebem `
-           + `essas mesmas contas — o pedido não é criar estrutura, é deixar de agregar. `
-           + `Começar pelas três maiores contas já resolve a maior parte do valor.`,
-      impacto: 'Sem isso, o custo indireto não chega ao produto de forma defensável.',
+      n: 1, dono: 'PCP — planilha de apuração', prazo: 'próximo fechamento',
+      titulo: 'Distribuir o lançamento entre os centros de custo',
+      texto: 'A concentração no MANUFACTORY OVERHEAD - PCP não vem da contabilidade: a aba '
+           + 'Resumo da planilha de apuração gera as 29 linhas do mês com CC 2040102 fixo. '
+           + 'A própria planilha já sabe a que centro cada custo pertence, porque as colunas de '
+           + 'rateio são por conta. Trocar o CC fixo pelo centro correspondente resolve na origem, '
+           + 'e o Moacir passa a lançar já distribuído.',
+      impacto: 'É o que destrava levar o custo indireto ao produto de forma defensável.',
     },
     {
-      n: 2, dono: 'Moacir — Contabilidade', prazo: 'uma conversa',
-      titulo: 'Confirmar o que entra e o que não entra no custo',
-      texto: 'A classificação inicial das 39 contas foi feita por palavra-chave e precisa de '
-           + 'revisão. Dois pontos específicos: comissões está dentro do grupo aplicado ao estoque, '
-           + 'e pelo CPC 16 despesa comercial não compõe custo; e vale-alimentação, assistência '
-           + 'médica e afins foram tratados como mão de obra, o que é defensável mas é decisão da '
-           + 'contabilidade, não minha.',
+      n: 2, dono: 'PCP — planilha de apuração', prazo: 'imediato',
+      titulo: 'Corrigir as colunas Salários, Encargos e Benefícios',
+      texto: 'Na aba Apuração PCP essas três colunas estão com #N/A em todas as linhas — a fórmula '
+           + 'de procura está quebrada. Significa que a maior parcela do custo de conversão, cerca '
+           + 'de R$ 6 milhões no ano, não está sendo distribuída por OP nenhuma. As demais colunas '
+           + 'funcionam normalmente.',
+      impacto: 'Sem isso, o custo por OP sai sem mão de obra.',
+    },
+    {
+      n: 3, dono: 'Moacir — Contabilidade', prazo: 'uma conferência',
+      titulo: 'Confirmar a correspondência entre conta e descrição',
+      texto: 'Na aba Resumo, o crédito 1153106 (Serviços Profissionais Aplicados) aparece descrito '
+           + 'como SALARIO, e 1153110 (Material de Consumo Aplicado) como ALUGUEL DE IMOVEIS. Pode '
+           + 'ser que a descrição se refira à conta de débito, e aí está tudo certo. Se não for, '
+           + 'salário está sendo creditado na conta de serviços — e os R$ 4,45 mi que aparecem como '
+           + 'serviços profissionais são, na verdade, folha.',
+      impacto: 'Muda a leitura de R$ 4,45 milhões e a classificação do custo.',
+    },
+    {
+      n: 4, dono: 'Moacir — Contabilidade', prazo: 'uma conversa',
+      titulo: 'Rever o FGTS e o tratamento das comissões',
+      texto: 'O FGTS aplicado aparece entre 0,3% e 4,6% do salário quando o correto são 8%, e em '
+           + 'junho não há lançamento — o grosso deve estar fora do grupo que alimenta o estoque. '
+           + 'E comissões estão dentro do grupo aplicado: pelo CPC 16, despesa comercial não compõe '
+           + 'custo de estoque. O INSS, para contraste, está correto em 29% a 34%.',
       impacto: 'Define o valor correto a ratear.',
     },
     {
-      n: 3, dono: 'Fábio — Financeiro e Diretoria', prazo: 'decisão',
+      n: 5, dono: 'PCP e chão de fábrica', prazo: 'a partir do próximo mês',
+      titulo: 'Apontar hora trabalhada, não tempo decorrido',
+      texto: 'As abas de horas da planilha medem o intervalo entre abrir e fechar a OP: dá 26,8 '
+           + 'horas por dia, o que é impossível. Uma OP parada 12 dias recebe 339 horas sem que '
+           + 'ninguém a tenha tocado. O apontamento desta tela registra tempo real por setor e por '
+           + 'OP, com os centros produtivos da própria contabilidade.',
+      impacto: 'Hoje o CIF é rateado por custo de material, o que dá pouco custo a produto '
+             + 'trabalhoso e barato. Hora apontada corrige isso.',
+    },
+    {
+      n: 6, dono: 'Fábio — Financeiro e Diretoria', prazo: 'decisão',
       titulo: 'Definir a capacidade normal de produção',
       texto: 'Custeio por absorção exige saber quantas horas por mês a fábrica considera nível '
-           + 'normal. O que exceder é ociosidade, e ociosidade vai para o resultado do período, '
-           + 'não para o estoque. Esse número não sai de nenhum sistema: é definição da diretoria '
+           + 'normal. O que exceder é ociosidade, e ociosidade vai para o resultado do período, não '
+           + 'para o estoque. Esse número não sai de sistema nenhum: é definição da diretoria '
            + 'industrial.',
-      impacto: 'Sem ele, meses de baixa produção inflam artificialmente o custo unitário.',
-    },
-    {
-      n: 4, dono: 'PCP e chão de fábrica', prazo: 'a partir do próximo mês',
-      titulo: 'Apontar horas por OP e setor',
-      texto: `A aba de apontamento já está no ar, com os ${setores.length} centros produtivos `
-           + 'reais da contabilidade. O registro é feito pelo próprio setor, no momento em que a '
-           + 'atividade acontece. Um mês de apontamento já permite calcular o custo-hora e testar '
-           + 'a distribuição.',
-      impacto: 'É o direcionador de rateio. Sem horas, a alternativa é ratear por material '
-             + 'consumido, o que distorce produto trabalhoso e barato.',
-    },
-    {
-      n: 5, dono: 'Automação', prazo: 'depois dos anteriores',
-      titulo: 'Fechar o custo e publicar por competência',
-      texto: 'Com centro correto, classificação revisada, capacidade normal e horas apontadas, o '
-           + 'custo por produto passa a incluir as três camadas. O fechamento grava uma foto '
-           + 'imutável do mês, para que relatório histórico não mude sozinho.',
-      impacto: 'Entrega o custo cheio por produto e por BR.',
+      impacto: 'Sem ele, mês de baixa produção infla artificialmente o custo unitário.',
     },
   ];
+
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '16px 20px' }}>
         <div style={{ fontSize: 13, color: T.inkDim, lineHeight: 1.7 }}>
-          O material direto já está apurado e validado. O que falta são{' '}
-          <strong style={{ color: T.ink }}>{moeda(resumo.total)}</strong> de mão de obra e custos
-          indiretos que a contabilidade já aplica ao estoque, mas que ainda não chegam ao produto.
-          Nada disso depende de sistema novo — depende de três decisões e de um apontamento.
+          A apuração de custo já existe e funciona: a planilha do PCP chega no mesmo número que o
+          portal, centavo a centavo. O que falta não é construir — é corrigir quatro pontos na
+          origem e trocar o direcionador de rateio. Os{' '}
+          <strong style={{ color: T.ink }}>{moeda(resumo.total)}</strong> de mão de obra e
+          indiretos já são aplicados ao estoque; o problema é que chegam ao produto por um caminho
+          que distorce, e uma parte nem chega.
         </div>
       </div>
 
