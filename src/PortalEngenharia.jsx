@@ -16012,6 +16012,7 @@ function Custeio() {
   const [mesMargem, setMesMargem] = useState('todos');
   const [orcComp, setOrcComp] = useState([]);
   const [brOrc, setBrOrc] = useState('');
+  const [fatFiltro, setFatFiltro] = useState('todos'); // todos | faturados | nao_faturados
 
   // O cliente do Supabase corta em 1.000 linhas por padrão. Com o histórico
   // desde 2021 isso truncava a lista silenciosamente: buscar um produto que
@@ -16300,11 +16301,19 @@ function Custeio() {
           porOrc[k].itens += 1;
           if (r.situacao === 'comprado_sem_orcamento') porOrc[k].semOrc += 1;
         });
-        const listaBr = Object.values(porOrc)
+        // Faturado = tem nota de venda emitida (por isso tem receita).
+        const todosOrc = Object.values(porOrc)
           .filter(b => b.orc > 0 || b.com > 0)
+          .map(b => ({ ...b, faturado: !!b.rec, desvio: b.com - b.orc,
+                       pct: b.orc > 0 ? (b.com - b.orc) / b.orc * 100 : null }));
+        const nFat = todosOrc.filter(b => b.faturado).length;
+        const nNaoFat = todosOrc.length - nFat;
+
+        const listaBr = todosOrc
           .filter(b => !brOrc || b.br.toLowerCase().includes(brOrc.toLowerCase()))
-          .map(b => ({ ...b, desvio: b.com - b.orc, pct: b.orc > 0 ? (b.com - b.orc) / b.orc * 100 : null }))
-          .sort((a, b) => b.desvio - a.desvio);
+          .filter(b => fatFiltro === 'todos' || (fatFiltro === 'faturados' ? b.faturado : !b.faturado))
+          // Ordenado por data do pedido de venda, do mais recente pro mais antigo.
+          .sort((a, b) => (b.data || '').localeCompare(a.data || ''));
 
         const detalhe = brOrc ? orcComp.filter(r => (r.br || '').toLowerCase().includes(brOrc.toLowerCase())) : [];
         const rotSit = { comprado_sem_orcamento: '⚠ comprado sem orçamento', orcado_nao_comprado: 'orçado, não comprado', so_solicitado: 'só solicitado', orcado_sem_codigo: 'orçado sem código (texto livre)', aguardando_nota: 'OC emitida, aguardando NF', atendido_do_estoque: '📦 atendido do estoque', ok: 'ok' };
@@ -16317,12 +16326,25 @@ function Custeio() {
               Compara as 3 etapas do material: <strong>orçado</strong> (matéria-prima do orçamento de precificação) → <strong>comprado</strong> (valor da nota fiscal, igual ao Portal de Compras) → <strong>não precisou comprar</strong> (saiu do estoque, sem compra no projeto). Ordem de compra sem nota é compromisso e não entra no custo. Nota de entrada que não é compra nossa (material de terceiro para conserto, retorno, transferência) fica fora. <strong>Receita líq.</strong> é o Net Offer Value da nota de venda — é o único valor líquido que existe no Sankhya; do lado da compra não há campo de líquido, então mostramos o valor da nota.
               </div>
 
-            <input value={brOrc} onChange={e => setBrOrc(e.target.value)} placeholder="Filtrar por BR — ex: BR14332"
-              style={{ ...inputStyle(), width: 260 }} />
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <input value={brOrc} onChange={e => setBrOrc(e.target.value)} placeholder="Filtrar por BR — ex: BR14332"
+                style={{ ...inputStyle(), width: 260 }} />
+              {[{ id: 'todos', l: `Todos (${todosOrc.length})` },
+                { id: 'faturados', l: `✓ Faturados (${nFat})` },
+                { id: 'nao_faturados', l: `⏳ Não faturados (${nNaoFat})` }].map(t => (
+                <button key={t.id} onClick={() => setFatFiltro(t.id)}
+                  style={{ fontSize: 12, fontWeight: 700, padding: '7px 13px', borderRadius: 6, cursor: 'pointer',
+                    border: `1px solid ${fatFiltro === t.id ? T.terracotta : T.line}`,
+                    background: fatFiltro === t.id ? T.terracotta : 'transparent',
+                    color: fatFiltro === t.id ? '#fff' : T.inkDim }}>
+                  {t.l}
+                </button>
+              ))}
+            </div>
 
             <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
               <div style={{ padding: '10px 12px', fontSize: 12, fontWeight: 700, borderBottom: `1px solid ${T.line}` }}>
-                Por projeto — do maior estouro para o menor ({listaBr.length})
+                Por projeto — do pedido mais recente para o mais antigo ({listaBr.length})
               </div>
               <div style={{ overflowX: 'auto' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 820 }}>
@@ -16339,6 +16361,7 @@ function Custeio() {
                           style={{ borderBottom: `1px solid ${T.lineSoft}`, cursor: 'pointer', background: b.desvio > 0 ? `${T.rustSoft}44` : 'transparent' }}>
                         <td style={{ padding: '9px 12px', fontSize: 12.5, fontWeight: 600 }}>
                           {b.br}
+                          {!b.faturado && <span style={{ marginLeft: 6, fontSize: 10, color: T.amberText, background: T.amberSoft, padding: '2px 6px', borderRadius: 4 }}>⏳ não faturado</span>}
                           {b.semOrc > 0 && <span style={{ marginLeft: 6, fontSize: 10, color: T.rustText, background: T.rustSoft, padding: '2px 6px', borderRadius: 4 }}>{b.semOrc} sem orçamento</span>}
                         </td>
                         <td style={{ padding: '9px 12px', fontSize: 11.5, textAlign: 'right', color: T.inkDim, whiteSpace: 'nowrap' }}>
