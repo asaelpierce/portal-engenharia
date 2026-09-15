@@ -567,6 +567,7 @@ function PortalConteudo({ currentUser, session }) {
           {renderTab('carteira_estoque', <TabErrorBoundary tab="Carteira x Estoque"><CarteiraEstoque /></TabErrorBoundary>)}
           {renderTab('preco_compra', <TabErrorBoundary tab="Preço de Compra"><PrecoCompra /></TabErrorBoundary>)}
           {renderTab('custeio', <TabErrorBoundary tab="Custeio"><Custeio /></TabErrorBoundary>)}
+          {renderTab('custeio_plano', <TabErrorBoundary tab="Custeio - Plano"><CusteioPlano /></TabErrorBoundary>)}
           {renderTab('estoque_ocs', <TabErrorBoundary tab="Estoque x OCs"><RelatorioEstoqueOCs /></TabErrorBoundary>)}
           {renderTab('almoxarifado', <TabErrorBoundary tab="Almoxarifado"><Almoxarifado currentUser={currentUser} /></TabErrorBoundary>)}
           {renderTab('equipamentos', <TabErrorBoundary tab="Equipamentos de Terceiros"><EquipamentosTerceiros /></TabErrorBoundary>)}
@@ -631,6 +632,7 @@ function Sidebar({ view, setView, pendCount, papel, telasPermitidas }) {
     { id: 'carteira_estoque', label: 'Carteira x Estoque',  icon: Package },
     { id: 'preco_compra',  label: 'Preço de Compra',        icon: DollarSign },
     { id: 'custeio',       label: 'Custeio',                icon: DollarSign },
+    { id: 'custeio_plano', label: 'Custeio — Plano',      icon: Target },
     { id: 'estoque_ocs',  label: 'Estoque x OCs',        icon: Package },
     { id: 'almoxarifado', label: 'Almoxarifado',           icon: Package },
     { id: 'equipamentos', label: 'Equip. Terceiros',       icon: Webhook },
@@ -14672,6 +14674,552 @@ function RelatorioEstoqueOCs() {
 // Unidade importa: custo unitário só é calculado quando o produto é
 // contável. Em conjunto (CJ) ou metro quadrado, mostra custo por OP.
 // ============================================================================
+// ============================================================================
+// Custeio — Diagnóstico e Apontamento
+//
+// Duas coisas numa aba só, porque uma justifica a outra:
+//  1. Onde está o custo hoje e o que impede de chegar ao produto. É a
+//     apresentação para a contabilidade e o financeiro.
+//  2. O apontamento de horas por OP e setor, que é a peça que falta.
+//
+// Os setores vêm dos centros de custo produtivos da própria contabilidade,
+// não de uma lista inventada: o que se aponta aqui casa com o que se lança lá.
+// ============================================================================
+function CusteioPlano() {
+  const [aba, setAba] = useState('diagnostico');
+  const [cif, setCif] = useState([]);
+  const [centros, setCentros] = useState([]);
+  const [contas, setContas] = useState([]);
+  const [setores, setSetores] = useState([]);
+  const [apontamentos, setApontamentos] = useState([]);
+  const [matTotal, setMatTotal] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [erro, setErro] = useState(null);
+
+  const lerTudo = useCallback(async (tabela, aplicar) => {
+    const PASSO = 1000; let todas = [];
+    for (let de = 0; ; de += PASSO) {
+      let q = supabase.from(tabela).select('*').range(de, de + PASSO - 1);
+      if (aplicar) q = aplicar(q);
+      const { data, error } = await q;
+      if (error) throw error;
+      todas = todas.concat(data || []);
+      if (!data || data.length < PASSO) break;
+      if (todas.length > 40000) break;
+    }
+    return todas;
+  }, []);
+
+  const carregar = useCallback(async () => {
+    setLoading(true); setErro(null);
+    try {
+      const [l, cc, ct, st, ap, mat] = await Promise.all([
+        lerTudo('cif_lancamento', q => q.gte('competencia', '2026-01')),
+        lerTudo('cif_centro_custo'),
+        lerTudo('cif_conta'),
+        lerTudo('setor_apontavel'),
+        lerTudo('apontamento_hora'),
+        lerTudo('custeio_produto_material', q => q.gte('competencia', '2026-01')),
+      ]);
+      setCif(l); setCentros(cc); setContas(ct); setSetores(st); setApontamentos(ap);
+      setMatTotal(mat.reduce((s, m) => s + (Number(m.custo_material) || 0), 0));
+    } catch (e) { setErro(e.message || String(e)); }
+    setLoading(false);
+  }, [lerTudo]);
+  useEffect(() => { carregar(); }, [carregar]);
+
+  const mapaConta = useMemo(() => Object.fromEntries(contas.map(c => [c.cod_conta, c])), [contas]);
+  const mapaCentro = useMemo(() => Object.fromEntries(centros.map(c => [c.cod_centro, c])), [centros]);
+
+  const resumo = useMemo(() => {
+    const noCusto = cif.filter(l => mapaConta[l.cod_conta]?.entra_no_custo);
+    const porNatureza = {};
+    const porCentro = {};
+    noCusto.forEach(l => {
+      const nat = mapaConta[l.cod_conta]?.natureza || 'indefinido';
+      porNatureza[nat] = (porNatureza[nat] || 0) + (Number(l.valor) || 0);
+      const cc = mapaCentro[l.cod_centro];
+      const nome = cc?.descricao || 'Sem centro';
+      if (!porCentro[nome]) porCentro[nome] = { nome, tipo: cc?.tipo, valor: 0, lancs: 0 };
+      porCentro[nome].valor += Number(l.valor) || 0;
+      porCentro[nome].lancs += Number(l.lancamentos) || 0;
+    });
+    const total = Object.values(porNatureza).reduce((s, v) => s + v, 0);
+    const centrosOrd = Object.values(porCentro).sort((a, b) => b.valor - a.valor);
+    const maior = centrosOrd[0];
+    return {
+      total, porNatureza, centros: centrosOrd,
+      maior, pctMaior: maior && total > 0 ? (maior.valor / total) * 100 : 0,
+    };
+  }, [cif, mapaConta, mapaCentro]);
+
+  // o que está represado no maior centro, que é o pedido concreto à contabilidade
+  const dentroDoMaior = useMemo(() => {
+    if (!resumo.maior) return [];
+    const codMaior = centros.find(c => c.descricao === resumo.maior.nome)?.cod_centro;
+    const linhas = cif.filter(l => l.cod_centro === codMaior && mapaConta[l.cod_conta]?.entra_no_custo);
+    const m = new Map();
+    linhas.forEach(l => {
+      const c = mapaConta[l.cod_conta];
+      if (!m.has(l.cod_conta)) m.set(l.cod_conta, {
+        conta: c?.descricao, natureza: c?.natureza, valor: 0, lancs: 0,
+        outros: new Set(),
+      });
+      const x = m.get(l.cod_conta);
+      x.valor += Number(l.valor) || 0;
+      x.lancs += Number(l.lancamentos) || 0;
+    });
+    // em quantos outros centros a mesma conta aparece
+    cif.forEach(l => {
+      if (l.cod_centro !== codMaior && m.has(l.cod_conta)) m.get(l.cod_conta).outros.add(l.cod_centro);
+    });
+    return [...m.values()].sort((a, b) => b.valor - a.valor);
+  }, [cif, centros, mapaConta, resumo.maior]);
+
+  const moeda = (v) => fmtMoedaCompacta(v);
+  const NAT = {
+    mao_de_obra:  { rot: 'Mão de obra', cor: T.terracotta },
+    cif_variavel: { rot: 'CIF variável', cor: T.amberText },
+    material:     { rot: 'Material indireto', cor: T.blueText },
+    cif_fixo:     { rot: 'CIF fixo', cor: T.oliveText },
+    indefinido:   { rot: 'A classificar', cor: T.inkFaint },
+  };
+
+  if (loading) return <div style={{ padding: 40, color: T.inkFaint, fontSize: 13 }}>Levantando a estrutura de custo…</div>;
+  if (erro) return <div style={{ padding: 20, color: T.rustText, fontSize: 13 }}>Erro: {erro}</div>;
+
+  return (
+    <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 1300 }}>
+
+      <div style={{ display: 'flex', gap: 2 }}>
+        {[{ id: 'diagnostico', l: 'Diagnóstico' },
+          { id: 'plano', l: 'O que precisa ser feito' },
+          { id: 'apontar', l: `Apontar horas${apontamentos.length ? ` (${apontamentos.length})` : ''}` }].map(x => (
+          <button key={x.id} onClick={() => setAba(x.id)} style={{
+            fontFamily: 'inherit', fontSize: 12.5, cursor: 'pointer', padding: '7px 16px',
+            border: `1px solid ${aba === x.id ? T.ink : T.line}`, borderRadius: 6,
+            background: aba === x.id ? T.ink : T.panel, color: aba === x.id ? T.panel : T.inkDim,
+            fontWeight: aba === x.id ? 600 : 400,
+          }}>{x.l}</button>
+        ))}
+      </div>
+
+      {aba === 'diagnostico' && (
+        <>
+          <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '16px 20px' }}>
+            <div style={{ fontFamily: FONT_DISPLAY, fontSize: 16, fontWeight: 700, color: T.ink, marginBottom: 8 }}>
+              O custo do produto hoje está incompleto
+            </div>
+            <div style={{ fontSize: 13, color: T.inkDim, lineHeight: 1.7 }}>
+              O portal já apura o <strong>material direto</strong> por produto, a partir do consumo
+              apontado em cada ordem de produção, e essa apuração fecha contra o custo médio do
+              Sankhya em 88% das comparações. Mas material é só parte da conta.
+              A contabilidade aplica ao estoque, além dele, mão de obra e custos indiretos —
+              e esse valor é <strong>maior que o próprio material</strong>. Enquanto ele não chegar
+              ao produto, toda margem calculada está otimista.
+            </div>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(190px,1fr))', gap: 12 }}>
+            {[
+              { l: 'Material direto (já apurado)', v: moeda(matTotal), c: T.oliveText, sub: 'por produto, validado' },
+              { l: 'Mão de obra e CIF (a distribuir)', v: moeda(resumo.total), c: T.rustText, sub: 'ainda não chega ao produto' },
+              { l: 'Custo total de produção', v: moeda(matTotal + resumo.total), c: T.ink, sub: '2026 até aqui' },
+              { l: 'Quanto falta no custo', v: matTotal > 0 ? `+${Math.round((resumo.total / matTotal) * 100)}%` : '—',
+                c: T.rustText, sub: 'sobre o que já medimos' },
+            ].map(k => (
+              <div key={k.l} style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '14px 16px', boxShadow: SHADOW_SM }}>
+                <div style={{ fontSize: 11, color: T.inkFaint, fontWeight: 600 }}>{k.l}</div>
+                <div style={{ fontFamily: FONT_DISPLAY, fontSize: 21, fontWeight: 700, color: k.c, marginTop: 6 }}>{k.v}</div>
+                <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 2 }}>{k.sub}</div>
+              </div>
+            ))}
+          </div>
+
+          <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '16px 20px' }}>
+            <div style={{ fontSize: 10.5, color: T.inkFaint, fontWeight: 600, marginBottom: 10 }}>
+              COMPOSIÇÃO DO QUE FALTA — 2026
+            </div>
+            {Object.entries(resumo.porNatureza).sort((a, b) => b[1] - a[1]).map(([nat, v]) => {
+              const n = NAT[nat] || NAT.indefinido;
+              const pct = resumo.total > 0 ? (v / resumo.total) * 100 : 0;
+              return (
+                <div key={nat} style={{ marginBottom: 9 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12.5, marginBottom: 3 }}>
+                    <span style={{ color: T.inkDim }}>{n.rot}</span>
+                    <span style={{ color: T.ink, fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>
+                      {moeda(v)} <span style={{ color: T.inkFaint, fontWeight: 400 }}>{pct.toFixed(0)}%</span>
+                    </span>
+                  </div>
+                  <div style={{ height: 6, background: T.lineSoft, borderRadius: 3 }}>
+                    <div style={{ width: `${pct}%`, height: '100%', background: n.cor, borderRadius: 3 }} />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {resumo.maior && resumo.pctMaior > 25 && (
+            <div style={{ background: T.rustSoft, border: `1px solid ${T.rustSoft}`, borderRadius: 10, padding: '16px 20px' }}>
+              <div style={{ fontFamily: FONT_DISPLAY, fontSize: 15, fontWeight: 700, color: T.rustText, marginBottom: 8 }}>
+                O obstáculo: {resumo.pctMaior.toFixed(0)}% do custo está num centro só
+              </div>
+              <div style={{ fontSize: 13, color: T.ink, lineHeight: 1.7 }}>
+                <strong>{resumo.maior.nome}</strong> concentra {moeda(resumo.maior.valor)} de{' '}
+                {moeda(resumo.total)}. Esse centro não corta cerâmica, não solda e não vulcaniza —
+                o custo é da fábrica inteira, lançado num lugar só.
+                <div style={{ marginTop: 10 }}>
+                  Enquanto estiver assim, <strong>não há como levar esse valor ao produto</strong>:
+                  qualquer rateio partindo daí teria aparência técnica e nenhum significado.
+                </div>
+              </div>
+            </div>
+          )}
+
+          <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
+            <div style={{ padding: '12px 16px', borderBottom: `1px solid ${T.line}`, fontSize: 12, color: T.inkDim, lineHeight: 1.6 }}>
+              <strong style={{ color: T.ink }}>O que está represado</strong> — contas lançadas em{' '}
+              {resumo.maior?.nome}. A coluna da direita mostra que essas mesmas contas já são
+              lançadas corretamente em outros centros: a estrutura funciona, o que escapa é um
+              lançamento agregado de fechamento.
+            </div>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr style={{ background: T.panelAlt }}>
+                  {['Conta', 'Natureza', 'Valor', 'Lançamentos', 'Também lançada em'].map((h, i) => (
+                    <th key={h} style={{ padding: '9px 12px', fontSize: 11, fontWeight: 600, color: T.inkFaint,
+                      textAlign: i >= 2 ? 'right' : 'left', borderBottom: `1px solid ${T.line}` }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {dentroDoMaior.slice(0, 12).map(x => (
+                  <tr key={x.conta} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                    <td style={{ padding: '9px 12px', fontSize: 12, color: T.ink }}>{x.conta}</td>
+                    <td style={{ padding: '9px 12px', fontSize: 11.5, color: (NAT[x.natureza] || NAT.indefinido).cor }}>
+                      {(NAT[x.natureza] || NAT.indefinido).rot}</td>
+                    <td style={{ padding: '9px 12px', fontSize: 12.5, textAlign: 'right', fontWeight: 600, color: T.ink, fontVariantNumeric: 'tabular-nums' }}>
+                      {moeda(x.valor)}</td>
+                    <td style={{ padding: '9px 12px', fontSize: 12, textAlign: 'right', color: x.lancs <= 12 ? T.rustText : T.inkDim, fontVariantNumeric: 'tabular-nums' }}>
+                      {x.lancs}
+                      {x.lancs <= 12 && <span style={{ fontSize: 10, color: T.rustText }}> · mensal</span>}
+                    </td>
+                    <td style={{ padding: '9px 12px', fontSize: 12, textAlign: 'right', color: T.oliveText, fontVariantNumeric: 'tabular-nums' }}>
+                      {x.outros.size} centros</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+
+      {aba === 'plano' && <PlanoDeAcao setores={setores} resumo={resumo} matTotal={matTotal} />}
+
+      {aba === 'apontar' && (
+        <ApontarHoras setores={setores} apontamentos={apontamentos} onSalvo={carregar} />
+      )}
+    </div>
+  );
+}
+
+// O pedido concreto, separado por quem decide. Uma apresentação que termina
+// em "precisamos melhorar os controles" não gera ação; esta termina em quem
+// faz o quê.
+function PlanoDeAcao({ setores, resumo, matTotal }) {
+  const moeda = (v) => fmtMoedaCompacta(v);
+  const passos = [
+    {
+      n: 1, dono: 'Moacir — Contabilidade', prazo: 'antes do próximo fechamento',
+      titulo: 'Lançar a despesa no centro que a consumiu',
+      texto: `Hoje ${resumo.pctMaior?.toFixed(0)}% do custo indireto cai em ${resumo.maior?.nome}, `
+           + `em lançamentos mensais de fechamento. Os centros produtivos já existem e já recebem `
+           + `essas mesmas contas — o pedido não é criar estrutura, é deixar de agregar. `
+           + `Começar pelas três maiores contas já resolve a maior parte do valor.`,
+      impacto: 'Sem isso, o custo indireto não chega ao produto de forma defensável.',
+    },
+    {
+      n: 2, dono: 'Moacir — Contabilidade', prazo: 'uma conversa',
+      titulo: 'Confirmar o que entra e o que não entra no custo',
+      texto: 'A classificação inicial das 39 contas foi feita por palavra-chave e precisa de '
+           + 'revisão. Dois pontos específicos: comissões está dentro do grupo aplicado ao estoque, '
+           + 'e pelo CPC 16 despesa comercial não compõe custo; e vale-alimentação, assistência '
+           + 'médica e afins foram tratados como mão de obra, o que é defensável mas é decisão da '
+           + 'contabilidade, não minha.',
+      impacto: 'Define o valor correto a ratear.',
+    },
+    {
+      n: 3, dono: 'Fábio — Financeiro e Diretoria', prazo: 'decisão',
+      titulo: 'Definir a capacidade normal de produção',
+      texto: 'Custeio por absorção exige saber quantas horas por mês a fábrica considera nível '
+           + 'normal. O que exceder é ociosidade, e ociosidade vai para o resultado do período, '
+           + 'não para o estoque. Esse número não sai de nenhum sistema: é definição da diretoria '
+           + 'industrial.',
+      impacto: 'Sem ele, meses de baixa produção inflam artificialmente o custo unitário.',
+    },
+    {
+      n: 4, dono: 'PCP e chão de fábrica', prazo: 'a partir do próximo mês',
+      titulo: 'Apontar horas por OP e setor',
+      texto: `A aba de apontamento já está no ar, com os ${setores.length} centros produtivos `
+           + 'reais da contabilidade. O registro é feito pelo próprio setor, no momento em que a '
+           + 'atividade acontece. Um mês de apontamento já permite calcular o custo-hora e testar '
+           + 'a distribuição.',
+      impacto: 'É o direcionador de rateio. Sem horas, a alternativa é ratear por material '
+             + 'consumido, o que distorce produto trabalhoso e barato.',
+    },
+    {
+      n: 5, dono: 'Automação', prazo: 'depois dos anteriores',
+      titulo: 'Fechar o custo e publicar por competência',
+      texto: 'Com centro correto, classificação revisada, capacidade normal e horas apontadas, o '
+           + 'custo por produto passa a incluir as três camadas. O fechamento grava uma foto '
+           + 'imutável do mês, para que relatório histórico não mude sozinho.',
+      impacto: 'Entrega o custo cheio por produto e por BR.',
+    },
+  ];
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '16px 20px' }}>
+        <div style={{ fontSize: 13, color: T.inkDim, lineHeight: 1.7 }}>
+          O material direto já está apurado e validado. O que falta são{' '}
+          <strong style={{ color: T.ink }}>{moeda(resumo.total)}</strong> de mão de obra e custos
+          indiretos que a contabilidade já aplica ao estoque, mas que ainda não chegam ao produto.
+          Nada disso depende de sistema novo — depende de três decisões e de um apontamento.
+        </div>
+      </div>
+
+      {passos.map(p => (
+        <div key={p.n} style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '16px 20px' }}>
+          <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start' }}>
+            <div style={{
+              minWidth: 30, height: 30, borderRadius: 15, background: T.ink, color: T.panel,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              fontFamily: FONT_DISPLAY, fontSize: 14, fontWeight: 700,
+            }}>{p.n}</div>
+            <div style={{ flex: 1 }}>
+              <div style={{ display: 'flex', gap: 10, alignItems: 'baseline', flexWrap: 'wrap', marginBottom: 6 }}>
+                <span style={{ fontFamily: FONT_DISPLAY, fontSize: 15, fontWeight: 700, color: T.ink }}>{p.titulo}</span>
+                <span style={{ fontSize: 11, fontWeight: 700, color: T.terracotta, background: T.rustSoft,
+                               padding: '2px 8px', borderRadius: 5 }}>{p.dono}</span>
+                <span style={{ fontSize: 11, color: T.inkFaint }}>{p.prazo}</span>
+              </div>
+              <div style={{ fontSize: 12.5, color: T.inkDim, lineHeight: 1.65 }}>{p.texto}</div>
+              <div style={{ fontSize: 12, color: T.ink, marginTop: 8, paddingTop: 8,
+                            borderTop: `1px solid ${T.lineSoft}` }}>
+                <strong>Por quê: </strong>{p.impacto}
+              </div>
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// Apontamento por OP e setor. O fim é o que conta hora: sem ele, o registro
+// fica em aberto e aparece na lista para alguém fechar — foi a falta disso
+// que inutilizou o apontamento do Sankhya.
+function ApontarHoras({ setores, apontamentos, onSalvo }) {
+  const [f, setF] = useState({
+    op: '', cod_produto: '', br: '', cod_centro: '', setor: '',
+    executor: '', qtd_pessoas: '1', atividade: '', minutos: '', observacao: '',
+    data_ref: new Date().toISOString().slice(0, 10),
+  });
+  const [salvando, setSalvando] = useState(false);
+  const [msg, setMsg] = useState('');
+  const [buscaOp, setBuscaOp] = useState([]);
+
+  const campo = {
+    width: '100%', fontFamily: 'inherit', fontSize: 12.5, padding: '7px 9px',
+    border: `1px solid ${T.line}`, borderRadius: 6, background: T.panel, color: T.ink,
+  };
+  const rot = { fontSize: 11, color: T.inkFaint, marginBottom: 4, display: 'block', fontWeight: 600 };
+
+  // ao digitar a OP, busca produto e BR para não redigitar
+  const buscarOp = async (op) => {
+    if (!op || op.length < 2) { setBuscaOp([]); return; }
+    const { data } = await supabase.from('custeio_lote')
+      .select('op,cod_prod_acabado,produto,br,cliente')
+      .eq('op', Number(op)).limit(5);
+    setBuscaOp(data || []);
+    if (data?.length === 1) {
+      setF(v => ({ ...v, cod_produto: data[0].cod_prod_acabado, br: data[0].br || '' }));
+    }
+  };
+
+  const salvar = async () => {
+    if (!f.setor || !f.minutos) { setMsg('Informe o setor e o tempo.'); return; }
+    setSalvando(true);
+    try {
+      const { error } = await supabase.from('apontamento_hora').insert({
+        op: f.op ? Number(f.op) : null,
+        cod_produto: f.cod_produto || null,
+        br: f.br || null,
+        cod_centro: f.cod_centro ? Number(f.cod_centro) : null,
+        setor: f.setor,
+        executor: f.executor || null,
+        qtd_pessoas: Number(f.qtd_pessoas) || 1,
+        data_ref: f.data_ref,
+        minutos: Number(f.minutos),
+        atividade: f.atividade || null,
+        observacao: f.observacao || null,
+        criado_por: 'portal',
+      });
+      if (error) throw error;
+      setMsg('Apontamento registrado.');
+      setF(v => ({ ...v, minutos: '', atividade: '', observacao: '' }));
+      await onSalvo();
+    } catch (e) { setMsg(String(e.message ?? e)); }
+    setSalvando(false);
+    setTimeout(() => setMsg(''), 5000);
+  };
+
+  const horas = (m, p = 1) => ((Number(m) || 0) * p / 60).toFixed(2);
+  const porSetor = useMemo(() => {
+    const m = {};
+    apontamentos.forEach(a => {
+      m[a.setor] = (m[a.setor] || 0) + (Number(a.minutos) || 0) * (a.qtd_pessoas || 1);
+    });
+    return Object.entries(m).sort((a, b) => b[1] - a[1]);
+  }, [apontamentos]);
+
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(320px,420px) 1fr', gap: 16, alignItems: 'start' }}>
+      <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '16px 18px' }}>
+        <div style={{ fontFamily: FONT_DISPLAY, fontSize: 15, fontWeight: 700, color: T.ink, marginBottom: 4 }}>
+          Registrar horas
+        </div>
+        <div style={{ fontSize: 11.5, color: T.inkFaint, marginBottom: 14, lineHeight: 1.5 }}>
+          Aponte no momento em que a atividade termina. Apontamento feito de memória no fim do mês
+          vira estimativa, e foi o que inutilizou o registro do Sankhya.
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
+          <div>
+            <label style={rot}>Ordem de produção</label>
+            <input style={campo} value={f.op} placeholder="Ex: 7738"
+              onChange={e => { setF({ ...f, op: e.target.value }); buscarOp(e.target.value); }} />
+          </div>
+          <div>
+            <label style={rot}>Data</label>
+            <input style={campo} type="date" value={f.data_ref}
+              onChange={e => setF({ ...f, data_ref: e.target.value })} />
+          </div>
+        </div>
+
+        {buscaOp.length > 0 && (
+          <div style={{ fontSize: 11.5, color: T.oliveText, background: T.oliveSoft, padding: '7px 10px',
+                        borderRadius: 6, marginBottom: 10, lineHeight: 1.45 }}>
+            {buscaOp[0].cod_prod_acabado} · {String(buscaOp[0].produto || '').slice(0, 42)}
+            {buscaOp[0].br ? <><br />{buscaOp[0].br} · {buscaOp[0].cliente}</> : null}
+          </div>
+        )}
+
+        <label style={rot}>Setor / centro</label>
+        <select style={{ ...campo, marginBottom: 10 }} value={f.cod_centro}
+          onChange={e => {
+            const c = setores.find(s => String(s.cod_centro) === e.target.value);
+            setF({ ...f, cod_centro: e.target.value, setor: c?.setor || '' });
+          }}>
+          <option value="">— escolha —</option>
+          {setores.map(s => (
+            <option key={s.cod_centro} value={s.cod_centro}>{s.descricao}</option>
+          ))}
+        </select>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
+          <div>
+            <label style={rot}>Tempo (minutos)</label>
+            <input style={campo} type="number" value={f.minutos} placeholder="Ex: 90"
+              onChange={e => setF({ ...f, minutos: e.target.value })} />
+          </div>
+          <div>
+            <label style={rot}>Pessoas</label>
+            <input style={campo} type="number" min="1" value={f.qtd_pessoas}
+              onChange={e => setF({ ...f, qtd_pessoas: e.target.value })} />
+          </div>
+        </div>
+
+        {f.minutos && (
+          <div style={{ fontSize: 12, color: T.oliveText, marginBottom: 10 }}>
+            {horas(f.minutos, Number(f.qtd_pessoas) || 1)} hora(s)-homem
+          </div>
+        )}
+
+        <label style={rot}>Atividade</label>
+        <input style={{ ...campo, marginBottom: 10 }} value={f.atividade}
+          placeholder="Ex: colagem das placas" onChange={e => setF({ ...f, atividade: e.target.value })} />
+
+        <label style={rot}>Quem executou</label>
+        <input style={{ ...campo, marginBottom: 14 }} value={f.executor}
+          onChange={e => setF({ ...f, executor: e.target.value })} />
+
+        <button onClick={salvar} disabled={salvando} style={{
+          width: '100%', fontFamily: 'inherit', fontSize: 13, cursor: 'pointer', padding: '9px 0',
+          border: 'none', borderRadius: 6, background: T.ink, color: T.panel, fontWeight: 600,
+          opacity: salvando ? .6 : 1,
+        }}>{salvando ? 'Salvando…' : 'Registrar apontamento'}</button>
+
+        {msg && <div style={{ fontSize: 12, color: T.blueText, marginTop: 9 }}>{msg}</div>}
+      </div>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        {porSetor.length > 0 && (
+          <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '14px 18px' }}>
+            <div style={{ fontSize: 10.5, color: T.inkFaint, fontWeight: 600, marginBottom: 9 }}>
+              HORAS APONTADAS POR SETOR
+            </div>
+            {porSetor.map(([setor, min]) => (
+              <div key={setor} style={{ display: 'flex', justifyContent: 'space-between',
+                                        fontSize: 12.5, padding: '4px 0', borderTop: `1px solid ${T.lineSoft}` }}>
+                <span style={{ color: T.inkDim }}>{setor}</span>
+                <span style={{ color: T.ink, fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>
+                  {(min / 60).toFixed(1)} h
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
+          <div style={{ padding: '12px 16px', borderBottom: `1px solid ${T.line}`, fontSize: 12, color: T.inkDim }}>
+            {apontamentos.length
+              ? `${apontamentos.length} apontamento(s) registrado(s)`
+              : 'Nenhum apontamento ainda. O primeiro mês de registro já permite calcular o custo-hora por setor.'}
+          </div>
+          {apontamentos.length > 0 && (
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr style={{ background: T.panelAlt }}>
+                  {['Data', 'OP', 'Produto', 'Setor', 'Atividade', 'Horas'].map((h, i) => (
+                    <th key={h} style={{ padding: '9px 12px', fontSize: 11, fontWeight: 600, color: T.inkFaint,
+                      textAlign: i === 5 ? 'right' : 'left', borderBottom: `1px solid ${T.line}` }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {[...apontamentos].sort((a, b) => String(b.data_ref).localeCompare(String(a.data_ref)))
+                  .slice(0, 30).map(a => (
+                  <tr key={a.id} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                    <td style={{ padding: '8px 12px', fontSize: 11.5, color: T.inkFaint }}>{a.data_ref}</td>
+                    <td style={{ padding: '8px 12px', fontSize: 12, color: T.ink, fontVariantNumeric: 'tabular-nums' }}>{a.op || '—'}</td>
+                    <td style={{ padding: '8px 12px', fontSize: 11.5, color: T.inkDim }}>{a.cod_produto || '—'}</td>
+                    <td style={{ padding: '8px 12px', fontSize: 11.5, color: T.inkDim }}>{a.setor}</td>
+                    <td style={{ padding: '8px 12px', fontSize: 11.5, color: T.inkDim, maxWidth: 200,
+                                 overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.atividade || '—'}</td>
+                    <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', color: T.ink, fontVariantNumeric: 'tabular-nums' }}>
+                      {horas(a.minutos, a.qtd_pessoas)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function Custeio() {
   const [aba, setAba] = useState('produto');
   const [produtos, setProdutos] = useState([]);
@@ -17965,6 +18513,7 @@ const TELAS_CATALOGO = [
   { id: 'carteira_estoque', label: 'Carteira x Estoque' },
   { id: 'preco_compra', label: 'Preço de Compra' },
   { id: 'custeio', label: 'Custeio' },
+  { id: 'custeio_plano', label: 'Custeio — Plano' },
   { id: 'estoque_ocs', label: 'Estoque x OCs' },
   { id: 'almoxarifado', label: 'Almoxarifado' },
   { id: 'equipamentos', label: 'Equip. Terceiros' },
