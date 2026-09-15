@@ -632,7 +632,7 @@ function Sidebar({ view, setView, pendCount, papel, telasPermitidas }) {
     { id: 'carteira_estoque', label: 'Carteira x Estoque',  icon: Package },
     { id: 'preco_compra',  label: 'Preço de Compra',        icon: DollarSign },
     { id: 'custeio',       label: 'Custeio',                icon: DollarSign },
-    { id: 'custeio_plano', label: 'Custeio — Plano',      icon: Target },
+    { id: 'custeio_plano', label: 'Custeio — Plano',      icon: ClipboardList },
     { id: 'estoque_ocs',  label: 'Estoque x OCs',        icon: Package },
     { id: 'almoxarifado', label: 'Almoxarifado',           icon: Package },
     { id: 'equipamentos', label: 'Equip. Terceiros',       icon: Webhook },
