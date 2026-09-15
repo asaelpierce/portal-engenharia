@@ -16010,6 +16010,8 @@ function Custeio() {
   const [comICMS, setComICMS] = useState(false);
   const [margens, setMargens] = useState([]);
   const [mesMargem, setMesMargem] = useState('todos');
+  const [orcComp, setOrcComp] = useState([]);
+  const [brOrc, setBrOrc] = useState('');
 
   // O cliente do Supabase corta em 1.000 linhas por padrão. Com o histórico
   // desde 2021 isso truncava a lista silenciosamente: buscar um produto que
@@ -16040,6 +16042,8 @@ function Custeio() {
       ]);
       const rm = await lerTudo('v_custeio_margem_br', q => q.eq('situacao', 'completo'));
       setMargens(rm);
+      const ro = await lerTudo('v_custeio_orcado_comprado');
+      setOrcComp(ro);
       setProdutos(rp); setLotes(rl);
       setBrs(rb.sort((a, b) => (Number(b.custo_material) || 0) - (Number(a.custo_material) || 0)));
     } catch (e) { setErro(e.message || String(e)); }
@@ -16132,7 +16136,7 @@ function Custeio() {
 
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', gap: 2 }}>
-          {[{ id: 'produto', l: 'Por produto' }, { id: 'br', l: 'Por projeto (BR)' }, { id: 'margem', l: 'Margem por venda' }].map(x => (
+          {[{ id: 'produto', l: 'Por produto' }, { id: 'br', l: 'Por projeto (BR)' }, { id: 'margem', l: 'Margem por venda' }, { id: 'orcado', l: 'Orçado x Comprado' }].map(x => (
             <button key={x.id} onClick={() => setAba(x.id)} style={{
               fontFamily: 'inherit', fontSize: 12.5, cursor: 'pointer', padding: '6px 14px',
               border: `1px solid ${aba === x.id ? T.ink : T.line}`, borderRadius: 6,
@@ -16271,6 +16275,122 @@ function Custeio() {
           </div>
         </div>
       )}
+
+      {aba === 'orcado' && (() => {
+        // 3 etapas do material, cada uma vinda de uma tela do Sankhya:
+        // orcamento (AD_ORCITEMAT) -> solicitacao de compra (mov. interna)
+        // -> ordem de compra (portal de compras). Tudo amarrado pelo projeto.
+        const porBr = {};
+        orcComp.forEach(r => {
+          const k = r.br || `proj ${r.codproj}`;
+          if (!porBr[k]) porBr[k] = { br: k, orc: 0, sol: 0, com: 0, itens: 0, semOrc: 0 };
+          porBr[k].orc += Number(r.valor_orcado) || 0;
+          porBr[k].sol += Number(r.valor_solicitado) || 0;
+          porBr[k].com += Number(r.valor_comprado) || 0;
+          porBr[k].itens += 1;
+          if (r.situacao === 'comprado_sem_orcamento') porBr[k].semOrc += 1;
+        });
+        const listaBr = Object.values(porBr)
+          .filter(b => b.orc > 0 || b.com > 0)
+          .filter(b => !brOrc || b.br.toLowerCase().includes(brOrc.toLowerCase()))
+          .map(b => ({ ...b, desvio: b.com - b.orc, pct: b.orc > 0 ? (b.com - b.orc) / b.orc * 100 : null }))
+          .sort((a, b) => b.desvio - a.desvio);
+
+        const detalhe = brOrc ? orcComp.filter(r => (r.br || '').toLowerCase().includes(brOrc.toLowerCase())) : [];
+        const rotSit = { comprado_sem_orcamento: '⚠ comprado sem orçamento', orcado_nao_comprado: 'orçado, não comprado', so_solicitado: 'só solicitado', ok: 'ok' };
+
+        return (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <div style={{ fontSize: 11.5, color: T.inkDim, background: T.panelAlt, padding: '9px 12px', borderRadius: 6 }}>
+              Compara as 3 etapas do material: <strong>orçado</strong> (matéria-prima do orçamento de precificação) →
+              <strong> solicitado</strong> (solicitação de compra) → <strong>comprado</strong> (ordem de compra).
+              Positivo no desvio = comprou acima do que foi orçado.
+            </div>
+
+            <input value={brOrc} onChange={e => setBrOrc(e.target.value)} placeholder="Filtrar por BR — ex: BR14332"
+              style={{ ...inputStyle(), width: 260 }} />
+
+            <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
+              <div style={{ padding: '10px 12px', fontSize: 12, fontWeight: 700, borderBottom: `1px solid ${T.line}` }}>
+                Por projeto — do maior estouro para o menor ({listaBr.length})
+              </div>
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 820 }}>
+                  <thead><tr style={{ background: T.panelAlt }}>
+                    {['BR', 'Itens', 'Orçado', 'Solicitado', 'Comprado', 'Desvio', '%'].map((h, i) => (
+                      <th key={h} style={{ padding: '10px 12px', fontSize: 11, fontWeight: 600, color: T.inkFaint, textAlign: i === 0 ? 'left' : 'right' }}>{h}</th>
+                    ))}
+                  </tr></thead>
+                  <tbody>
+                    {listaBr.length === 0 ? (
+                      <tr><td colSpan={7} style={{ padding: 24, textAlign: 'center', color: T.inkFaint }}>Nada nesse filtro.</td></tr>
+                    ) : listaBr.slice(0, 150).map(b => (
+                      <tr key={b.br} onClick={() => setBrOrc(b.br)}
+                          style={{ borderBottom: `1px solid ${T.lineSoft}`, cursor: 'pointer', background: b.desvio > 0 ? `${T.rustSoft}44` : 'transparent' }}>
+                        <td style={{ padding: '9px 12px', fontSize: 12.5, fontWeight: 600 }}>
+                          {b.br}
+                          {b.semOrc > 0 && <span style={{ marginLeft: 6, fontSize: 10, color: T.rustText, background: T.rustSoft, padding: '2px 6px', borderRadius: 4 }}>{b.semOrc} sem orçamento</span>}
+                        </td>
+                        <td style={{ padding: '9px 12px', fontSize: 12, textAlign: 'right', color: T.inkDim }}>{b.itens}</td>
+                        <td style={{ padding: '9px 12px', fontSize: 12.5, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{moeda(b.orc)}</td>
+                        <td style={{ padding: '9px 12px', fontSize: 12.5, textAlign: 'right', color: T.inkDim, fontVariantNumeric: 'tabular-nums' }}>{moeda(b.sol)}</td>
+                        <td style={{ padding: '9px 12px', fontSize: 12.5, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{moeda(b.com)}</td>
+                        <td style={{ padding: '9px 12px', fontSize: 12.5, textAlign: 'right', fontWeight: 700, fontVariantNumeric: 'tabular-nums',
+                                     color: b.desvio > 0 ? T.rustText : T.oliveText }}>{moeda(b.desvio)}</td>
+                        <td style={{ padding: '9px 12px', fontSize: 12.5, textAlign: 'right', fontWeight: 700,
+                                     color: b.desvio > 0 ? T.rustText : T.oliveText }}>{b.pct != null ? `${b.pct.toFixed(0)}%` : '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {detalhe.length > 0 && (
+              <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
+                <div style={{ padding: '10px 12px', fontSize: 12, fontWeight: 700, borderBottom: `1px solid ${T.line}` }}>
+                  Item a item — {brOrc}
+                </div>
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 900 }}>
+                    <thead><tr style={{ background: T.panelAlt }}>
+                      {['Cód', 'Produto', 'Qtd orç.', 'Orçado', 'Solicitado', 'Qtd compr.', 'Comprado', 'Desvio', 'Situação'].map((h, i) => (
+                        <th key={h} style={{ padding: '9px 12px', fontSize: 11, fontWeight: 600, color: T.inkFaint, textAlign: i >= 2 && i <= 7 ? 'right' : 'left' }}>{h}</th>
+                      ))}
+                    </tr></thead>
+                    <tbody>
+                      {detalhe.sort((a, b) => (Number(b.desvio_valor) || 0) - (Number(a.desvio_valor) || 0)).map(r => (
+                        <tr key={`${r.codproj}-${r.cod_prod}`} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                          <td style={{ padding: '8px 12px', fontSize: 12 }}>{r.cod_prod}</td>
+                          <td style={{ padding: '8px 12px', fontSize: 11.5, maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.descr_prod}>{r.descr_prod}</td>
+                          <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', color: T.inkDim }}>{r.qtd_orcada ?? '—'}</td>
+                          <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{r.valor_orcado != null ? moeda(r.valor_orcado) : '—'}</td>
+                          <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', color: T.inkDim, fontVariantNumeric: 'tabular-nums' }}>{r.valor_solicitado != null ? moeda(r.valor_solicitado) : '—'}</td>
+                          <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', color: T.inkDim }}>{r.qtd_comprada ?? '—'}</td>
+                          <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{r.valor_comprado != null ? moeda(r.valor_comprado) : '—'}</td>
+                          <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', fontWeight: 700, fontVariantNumeric: 'tabular-nums',
+                                       color: (Number(r.desvio_valor) || 0) > 0 ? T.rustText : T.oliveText }}>{r.desvio_valor != null ? moeda(r.desvio_valor) : '—'}</td>
+                          <td style={{ padding: '8px 12px', fontSize: 11 }}>
+                            <span style={{ color: r.situacao === 'comprado_sem_orcamento' ? T.rustText : T.inkFaint,
+                                           background: r.situacao === 'comprado_sem_orcamento' ? T.rustSoft : T.panelAlt,
+                                           padding: '2px 7px', borderRadius: 4, whiteSpace: 'nowrap' }}>
+                              {rotSit[r.situacao] || r.situacao}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div style={{ padding: '10px 12px', borderTop: `1px solid ${T.line}`, display: 'flex', justifyContent: 'flex-end' }}>
+                  <BotaoExportar small onClick={() => exportCSV(detalhe, `orcado_comprado_${brOrc}.csv`,
+                    ['br','cod_prod','descr_prod','qtd_orcada','valor_orcado','valor_solicitado','qtd_comprada','valor_comprado','desvio_valor','desvio_pct','situacao','notas_compra'])} />
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {aba === 'margem' && (() => {
         // Custo oficial da margem = custo medio do ERP (ja inclui mao de obra
