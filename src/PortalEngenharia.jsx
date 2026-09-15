@@ -15964,6 +15964,8 @@ function Custeio() {
   const [busca, setBusca] = useState('');
   const [compIni, setCompIni] = useState('2026-01');
   const [comICMS, setComICMS] = useState(false);
+  const [margens, setMargens] = useState([]);
+  const [mesMargem, setMesMargem] = useState('todos');
 
   // O cliente do Supabase corta em 1.000 linhas por padrão. Com o histórico
   // desde 2021 isso truncava a lista silenciosamente: buscar um produto que
@@ -15992,6 +15994,8 @@ function Custeio() {
         lerTudo('custeio_br_material'),
         lerTudo('custeio_lote', q => q.gte('competencia', compIni)),
       ]);
+      const rm = await lerTudo('v_custeio_margem_br', q => q.eq('situacao', 'completo'));
+      setMargens(rm);
       setProdutos(rp); setLotes(rl);
       setBrs(rb.sort((a, b) => (Number(b.custo_material) || 0) - (Number(a.custo_material) || 0)));
     } catch (e) { setErro(e.message || String(e)); }
@@ -16084,7 +16088,7 @@ function Custeio() {
 
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', gap: 2 }}>
-          {[{ id: 'produto', l: 'Por produto' }, { id: 'br', l: 'Por projeto (BR)' }].map(x => (
+          {[{ id: 'produto', l: 'Por produto' }, { id: 'br', l: 'Por projeto (BR)' }, { id: 'margem', l: 'Margem por venda' }].map(x => (
             <button key={x.id} onClick={() => setAba(x.id)} style={{
               fontFamily: 'inherit', fontSize: 12.5, cursor: 'pointer', padding: '6px 14px',
               border: `1px solid ${aba === x.id ? T.ink : T.line}`, borderRadius: 6,
@@ -16224,6 +16228,133 @@ function Custeio() {
         </div>
       )}
 
+      {aba === 'margem' && (() => {
+        const campoMargem = comICMS ? 'margem_valor_com_icms' : 'margem_valor';
+        const campoPct = comICMS ? 'margem_pct_com_icms' : 'margem_pct';
+        const campoC = comICMS ? 'custo_material_com_icms' : 'custo_material';
+
+        const meses = [...new Set(margens.map(m => m.mes_faturamento).filter(Boolean))].sort().reverse();
+        const lista = margens
+          .filter(m => mesMargem === 'todos' || m.mes_faturamento === mesMargem)
+          .filter(m => !busca || `${m.br} ${m.cliente || ''}`.toLowerCase().includes(busca.toLowerCase()))
+          .sort((a, b) => (Number(a[campoPct]) || 0) - (Number(b[campoPct]) || 0));
+
+        const tot = lista.reduce((acc, m) => ({
+          fat: acc.fat + (Number(m.faturamento_liquido) || 0),
+          custo: acc.custo + (Number(m[campoC]) || 0),
+        }), { fat: 0, custo: 0 });
+        const totMargem = tot.fat - tot.custo;
+        const totPct = tot.fat > 0 ? (totMargem / tot.fat * 100) : null;
+        const negativos = lista.filter(m => (Number(m[campoMargem]) || 0) < 0).length;
+
+        // Agrupa por mes do faturamento, pra dar a leitura de "como foi o mes".
+        const porMes = [...meses].map(mes => {
+          const doMes = margens.filter(m => m.mes_faturamento === mes);
+          const f = doMes.reduce((s, m) => s + (Number(m.faturamento_liquido) || 0), 0);
+          const c = doMes.reduce((s, m) => s + (Number(m[campoC]) || 0), 0);
+          return { mes, fat: f, custo: c, margem: f - c, pct: f > 0 ? (f - c) / f * 100 : null, n: doMes.length };
+        });
+
+        return (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <div style={{ fontSize: 11.5, color: T.amberText, background: T.amberSoft, padding: '9px 12px', borderRadius: 6 }}>
+              ⚠ Margem <strong>só sobre material</strong>: não inclui mão de obra nem custos indiretos, então é sempre
+              mais otimista que a margem real. Serve pra comparar projetos entre si e achar os fora da curva.
+              Mostra só os {margens.length} projetos que têm faturamento <em>e</em> custo apontado.
+            </div>
+
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+              <select value={mesMargem} onChange={e => setMesMargem(e.target.value)} style={selectStyleFat(200)}>
+                <option value="todos">Todos os meses</option>
+                {meses.map(m => <option key={m} value={m}>{m}</option>)}
+              </select>
+              <div style={{ background: T.panelAlt, borderRadius: 8, padding: '8px 14px', fontSize: 12.5 }}>
+                Faturado líquido: <strong>{moeda(tot.fat)}</strong>
+              </div>
+              <div style={{ background: T.panelAlt, borderRadius: 8, padding: '8px 14px', fontSize: 12.5 }}>
+                Custo material: <strong>{moeda(tot.custo)}</strong>
+              </div>
+              <div style={{ background: totMargem >= 0 ? T.oliveSoft : T.rustSoft, borderRadius: 8, padding: '8px 14px', fontSize: 12.5,
+                            color: totMargem >= 0 ? T.oliveText : T.rustText }}>
+                Margem: <strong>{moeda(totMargem)}</strong>{totPct != null && ` (${totPct.toFixed(1)}%)`}
+              </div>
+              {negativos > 0 && (
+                <div style={{ background: T.rustSoft, color: T.rustText, borderRadius: 8, padding: '8px 14px', fontSize: 12.5, fontWeight: 700 }}>
+                  ⚠ {negativos} com margem negativa
+                </div>
+              )}
+            </div>
+
+            {mesMargem === 'todos' && porMes.length > 0 && (
+              <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
+                <div style={{ padding: '10px 12px', fontSize: 12, fontWeight: 700, borderBottom: `1px solid ${T.line}` }}>Resumo por mês de faturamento</div>
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead><tr style={{ background: T.panelAlt }}>
+                    {['Mês', 'Projetos', 'Faturado líquido', 'Custo material', 'Margem', '%'].map((h, i) => (
+                      <th key={h} style={{ padding: '8px 12px', fontSize: 11, fontWeight: 600, color: T.inkFaint, textAlign: i === 0 ? 'left' : 'right' }}>{h}</th>
+                    ))}
+                  </tr></thead>
+                  <tbody>
+                    {porMes.map(r => (
+                      <tr key={r.mes} style={{ borderBottom: `1px solid ${T.lineSoft}`, cursor: 'pointer' }} onClick={() => setMesMargem(r.mes)}>
+                        <td style={{ padding: '8px 12px', fontSize: 12.5, fontWeight: 600 }}>{r.mes}</td>
+                        <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', color: T.inkDim }}>{r.n}</td>
+                        <td style={{ padding: '8px 12px', fontSize: 12.5, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{moeda(r.fat)}</td>
+                        <td style={{ padding: '8px 12px', fontSize: 12.5, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{moeda(r.custo)}</td>
+                        <td style={{ padding: '8px 12px', fontSize: 12.5, textAlign: 'right', fontWeight: 700, fontVariantNumeric: 'tabular-nums',
+                                     color: r.margem >= 0 ? T.oliveText : T.rustText }}>{moeda(r.margem)}</td>
+                        <td style={{ padding: '8px 12px', fontSize: 12.5, textAlign: 'right', fontWeight: 700,
+                                     color: r.margem >= 0 ? T.oliveText : T.rustText }}>{r.pct != null ? `${r.pct.toFixed(1)}%` : '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
+              <div style={{ padding: '10px 12px', fontSize: 12, fontWeight: 700, borderBottom: `1px solid ${T.line}` }}>
+                Por projeto — da pior margem para a melhor ({lista.length})
+              </div>
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 860 }}>
+                  <thead><tr style={{ background: T.panelAlt }}>
+                    {['BR', 'Cliente', 'Mês fat.', 'Faturado líquido', 'Custo material', 'Margem', '%'].map((h, i) => (
+                      <th key={h} style={{ padding: '10px 12px', fontSize: 11, fontWeight: 600, color: T.inkFaint, textAlign: i >= 3 ? 'right' : 'left' }}>{h}</th>
+                    ))}
+                  </tr></thead>
+                  <tbody>
+                    {lista.length === 0 ? (
+                      <tr><td colSpan={7} style={{ padding: 24, textAlign: 'center', color: T.inkFaint }}>Nada nesse filtro.</td></tr>
+                    ) : lista.slice(0, 200).map(m => {
+                      const val = Number(m[campoMargem]) || 0;
+                      const pct = m[campoPct];
+                      return (
+                        <tr key={m.br} style={{ borderBottom: `1px solid ${T.lineSoft}`, background: val < 0 ? `${T.rustSoft}55` : 'transparent' }}>
+                          <td style={{ padding: '10px 12px', fontSize: 12.5, fontWeight: 600 }}>{m.br}</td>
+                          <td style={{ padding: '10px 12px', fontSize: 11.5, color: T.inkDim, maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.cliente}</td>
+                          <td style={{ padding: '10px 12px', fontSize: 11.5, color: T.inkFaint }}>{m.mes_faturamento || '—'}</td>
+                          <td style={{ padding: '10px 12px', fontSize: 12.5, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{moeda(m.faturamento_liquido)}</td>
+                          <td style={{ padding: '10px 12px', fontSize: 12.5, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{moeda(m[campoC])}</td>
+                          <td style={{ padding: '10px 12px', fontSize: 12.5, textAlign: 'right', fontWeight: 700, fontVariantNumeric: 'tabular-nums',
+                                       color: val >= 0 ? T.oliveText : T.rustText }}>{moeda(val)}</td>
+                          <td style={{ padding: '10px 12px', fontSize: 12.5, textAlign: 'right', fontWeight: 700,
+                                       color: val >= 0 ? T.oliveText : T.rustText }}>{pct != null ? `${pct}%` : '—'}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <div style={{ padding: '10px 12px', borderTop: `1px solid ${T.line}`, display: 'flex', justifyContent: 'flex-end' }}>
+                <BotaoExportar small onClick={() => exportCSV(lista, `margem_${mesMargem}.csv`,
+                  ['br','cliente','mes_faturamento','faturamento_bruto','faturamento_liquido','custo_material','custo_material_com_icms','margem_valor','margem_pct'])} />
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {aba === 'br' && (
         <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 800 }}>
@@ -16245,7 +16376,10 @@ function Custeio() {
                   <td style={{ padding: '10px 12px', fontSize: 12, textAlign: 'right', color: T.inkDim, fontVariantNumeric: 'tabular-nums' }}>{b.ops}</td>
                   <td style={{ padding: '10px 12px', fontSize: 12, textAlign: 'right', color: T.inkDim, fontVariantNumeric: 'tabular-nums' }}>{b.produtos}</td>
                   <td style={{ padding: '10px 12px', fontSize: 12.5, textAlign: 'right', fontWeight: 600, color: T.ink, fontVariantNumeric: 'tabular-nums' }}>
-                    {moeda(b.custo_material)}
+                    {/* Usa o mesmo campo da aba por produto -- antes era fixo
+                        em custo_material, entao a chave "com ICMS" nao fazia
+                        efeito aqui e as duas abas divergiam. */}
+                    {moeda(comICMS ? b.custo_material_com_icms : b.custo_material)}
                   </td>
                   <td style={{ padding: '10px 12px', fontSize: 11, color: T.inkFaint }}>
                     {b.primeiro_apontamento} → {b.ultimo_apontamento}
