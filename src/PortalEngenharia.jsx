@@ -14986,6 +14986,13 @@ function CustoCheio({ dados }) {
           usa. <strong style={{ color: T.ink }}>O material é menos da metade do custo real</strong>,
           e é nele que a conversa de preço costuma parar.
         </div>
+        <div style={{ fontSize: 12, color: T.amberText, background: T.amberSoft, borderRadius: 6,
+                      padding: '9px 12px', marginTop: 10, lineHeight: 1.6 }}>
+          <strong>Todos os valores são líquidos de impostos recuperáveis.</strong> Não compare com
+          o preço de venda da nota, que é bruto: o preço carrega ICMS, PIS e COFINS que não estão
+          no custo. Para apurar margem é preciso trazer a receita líquida, o que ainda não está
+          nesta base.
+        </div>
       </div>
 
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
