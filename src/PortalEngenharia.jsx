@@ -16015,6 +16015,7 @@ function Custeio() {
   const [brOrc, setBrOrc] = useState('');
   const [fatFiltro, setFatFiltro] = useState('todos'); // todos | faturados | nao_faturados
   const [verItens, setVerItens] = useState(false);
+  const [caixaAberta, setCaixaAberta] = useState(null); // material | servicos | frete | outros
 
   // O cliente do Supabase corta em 1.000 linhas por padrão. Com o histórico
   // desde 2021 isso truncava a lista silenciosamente: buscar um produto que
@@ -16045,7 +16046,7 @@ function Custeio() {
       ]);
       const rm = await lerTudo('v_custeio_margem_br', q => q.eq('situacao', 'completo'));
       setMargens(rm);
-      const ro = await lerTudo('v_custeio_orcado_comprado');
+      const ro = await lerTudo('v_custeio_orcado_comprado_cat');
       setOrcComp(ro);
       // Comparacao por CATEGORIA. Orcamento e compra usam codigos de produto
       // diferentes (o frete orcado e uma linha "TRANSPORTE" sem codigo; a
@@ -16336,7 +16337,7 @@ function Custeio() {
               </div>
 
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-              <input value={brOrc} onChange={e => setBrOrc(e.target.value)} placeholder="Filtrar por BR — ex: BR14332"
+              <input value={brOrc} onChange={e => { setBrOrc(e.target.value); setCaixaAberta(null); }} placeholder="Filtrar por BR — ex: BR14332"
                 style={{ ...inputStyle(), width: 260 }} />
               {[{ id: 'todos', l: `Todos (${todosOrc.length})` },
                 { id: 'faturados', l: `✓ Faturados (${nFat})` },
@@ -16366,7 +16367,7 @@ function Custeio() {
                     {listaBr.length === 0 ? (
                       <tr><td colSpan={9} style={{ padding: 24, textAlign: 'center', color: T.inkFaint }}>Nada nesse filtro.</td></tr>
                     ) : listaBr.slice(0, 150).map(b => (
-                      <tr key={b.chave} onClick={() => setBrOrc(b.br)}
+                      <tr key={b.chave} onClick={() => { setBrOrc(b.br); setCaixaAberta(null); }}
                           style={{ borderBottom: `1px solid ${T.lineSoft}`, cursor: 'pointer', background: b.desvio > 0 ? `${T.rustSoft}44` : 'transparent' }}>
                         <td style={{ padding: '9px 12px', fontSize: 12.5, fontWeight: 600 }}>
                           {b.br}
@@ -16462,9 +16463,16 @@ function Custeio() {
                       const cor = pct == null ? T.inkFaint : estourou ? T.rustText : T.oliveText;
                       const barra = v => `${Math.min(100, (v / teto) * 100)}%`;
 
+                      const aberta = caixaAberta === cat.id;
+
                       return (
-                        <div key={cat.id} style={{
-                          border: `1px solid ${estourou ? T.rustText : T.line}`, borderRadius: 8, padding: 12,
+                        <div key={cat.id}
+                          onClick={() => setCaixaAberta(aberta ? null : cat.id)}
+                          title="Clique para ver os itens desta categoria"
+                          style={{
+                          border: `1px solid ${aberta ? T.terracotta : estourou ? T.rustText : T.line}`,
+                          boxShadow: aberta ? `0 0 0 2px ${T.terracotta}33` : 'none',
+                          borderRadius: 8, padding: 12, cursor: 'pointer',
                           background: estourou ? `${T.rustSoft}33` : T.panelAlt,
                         }}>
                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 2 }}>
@@ -16502,11 +16510,83 @@ function Custeio() {
                             {d.dev > 0 && <span style={{ color: T.oliveText }} title="Sobra devolvida ao estoque — abatida do custo">↩ −{moeda(d.dev)}</span>}
                             {d.emp > 0 && <span style={{ color: T.amberText }} title="Ordem de compra sem nota: compromisso, ainda não é custo">⏳ {moeda(d.emp)}</span>}
                             {d.semCod > 0 && <span style={{ color: T.inkFaint }} title="Linhas orçadas sem código de produto, classificadas pelo texto">✎ {d.semCod} por texto</span>}
+                            <span style={{ marginLeft: 'auto', color: aberta ? T.terracotta : T.inkFaint, fontWeight: 600 }}>
+                              {aberta ? 'fechar ▲' : 'ver itens ▼'}
+                            </span>
                           </div>
                         </div>
                       );
                     })}
                   </div>
+
+                  {caixaAberta && (() => {
+                    // Drill-down da caixa: os itens que formam aquele numero.
+                    // Item orcado e item comprado aparecem em linhas separadas
+                    // quando os codigos nao batem -- que e justamente o motivo
+                    // de a comparacao item a item nao funcionar. Aqui isso fica
+                    // visivel em vez de escondido.
+                    const rot = ORDEM.find(c => c.id === caixaAberta);
+                    const itens = detalhe
+                      .filter(r => r.caixa === caixaAberta)
+                      .map(r => ({
+                        ...r,
+                        _orc: Number(r.valor_orcado) || 0,
+                        _com: Number(r.valor_comprado_liquido ?? r.valor_comprado) || 0,
+                        _est: Number(r.valor_estoque_liquido) || 0,
+                      }))
+                      .map(r => ({ ...r, _custo: r._com + r._est }))
+                      .sort((a, b) => Math.max(b._orc, b._custo) - Math.max(a._orc, a._custo));
+                    if (!itens.length) return null;
+
+                    return (
+                      <div style={{ borderTop: `1px solid ${T.line}`, background: T.panelAlt }}>
+                        <div style={{ padding: '9px 12px', fontSize: 12, fontWeight: 700, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span>{rot?.rot} — {itens.length} {itens.length === 1 ? 'item' : 'itens'}</span>
+                          <button onClick={() => setCaixaAberta(null)}
+                            style={{ fontSize: 11, padding: '4px 9px', borderRadius: 5, cursor: 'pointer', border: `1px solid ${T.line}`, background: 'transparent', color: T.inkDim }}>
+                            fechar
+                          </button>
+                        </div>
+                        <div style={{ overflowX: 'auto' }}>
+                          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 760 }}>
+                            <thead><tr style={{ background: T.panel }}>
+                              {['Item', 'Orçado', 'Comprado (líq.)', 'Do estoque', 'Custo real', 'Desvio', 'Situação'].map((h, i) => (
+                                <th key={h} style={{ padding: '8px 12px', fontSize: 10.5, fontWeight: 600, color: T.inkFaint, textAlign: i === 0 || i === 6 ? 'left' : 'right', whiteSpace: 'nowrap' }}>{h}</th>
+                              ))}
+                            </tr></thead>
+                            <tbody>
+                              {itens.map((r, i) => {
+                                const desvio = r._orc > 0 ? r._custo - r._orc : null;
+                                const cor = desvio == null ? T.inkFaint : desvio > 0 ? T.rustText : T.oliveText;
+                                return (
+                                  <tr key={`${r.chave_item}-${i}`} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                                    <td style={{ padding: '7px 12px', fontSize: 12 }}>
+                                      {r.descr_prod || '—'}
+                                      {r.cod_prod
+                                        ? <span style={{ color: T.inkFaint, fontSize: 10.5 }}> · {r.cod_prod}</span>
+                                        : <span style={{ marginLeft: 6, fontSize: 9.5, color: T.inkFaint, border: `1px solid ${T.lineSoft}`, padding: '1px 5px', borderRadius: 3 }}
+                                            title="Sem código de produto no orçamento: classificado pelo texto da descrição">✎ texto</span>}
+                                    </td>
+                                    <td style={{ padding: '7px 12px', fontSize: 12, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{r._orc ? moeda(r._orc) : '—'}</td>
+                                    <td style={{ padding: '7px 12px', fontSize: 12, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{r._com ? moeda(r._com) : '—'}</td>
+                                    <td style={{ padding: '7px 12px', fontSize: 12, textAlign: 'right', color: T.blueText, fontVariantNumeric: 'tabular-nums' }}>{r._est ? moeda(r._est) : '—'}</td>
+                                    <td style={{ padding: '7px 12px', fontSize: 12, textAlign: 'right', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{r._custo ? moeda(r._custo) : '—'}</td>
+                                    <td style={{ padding: '7px 12px', fontSize: 12, textAlign: 'right', fontWeight: 700, color: cor, fontVariantNumeric: 'tabular-nums' }}>
+                                      {desvio == null ? '—' : `${desvio > 0 ? '+' : ''}${moeda(desvio)}`}
+                                    </td>
+                                    <td style={{ padding: '7px 12px', fontSize: 11, color: T.inkDim, whiteSpace: 'nowrap' }}>{rotSit[r.situacao] || r.situacao || '—'}</td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                        <div style={{ padding: '8px 12px', borderTop: `1px solid ${T.lineSoft}`, fontSize: 10.5, color: T.inkFaint }}>
+                          Linhas com “orçado, não comprado” ao lado de “comprado sem orçamento” na mesma caixa são o mesmo custo com códigos diferentes nos dois lados — é por isso que a soma da caixa vale mais que a comparação item a item.
+                        </div>
+                      </div>
+                    );
+                  })()}
 
                   <div style={{ padding: '9px 12px', borderTop: `1px solid ${T.line}`, fontSize: 11, color: T.inkFaint, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
                     <span>
