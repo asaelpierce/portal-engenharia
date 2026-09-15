@@ -16229,9 +16229,12 @@ function Custeio() {
       )}
 
       {aba === 'margem' && (() => {
-        const campoMargem = comICMS ? 'margem_valor_com_icms' : 'margem_valor';
-        const campoPct = comICMS ? 'margem_pct_com_icms' : 'margem_pct';
-        const campoC = comICMS ? 'custo_material_com_icms' : 'custo_material';
+        // Custo oficial da margem = custo medio do ERP (ja inclui mao de obra
+        // e rateios). A chave "com ICMS" nao se aplica aqui: ela e do custo de
+        // material apontado, que agora aparece so como coluna de comparacao.
+        const campoMargem = 'margem_valor';
+        const campoPct = 'margem_pct';
+        const campoC = 'custo_erp';
 
         const meses = [...new Set(margens.map(m => m.mes_faturamento).filter(Boolean))].sort().reverse();
         const lista = margens
@@ -16258,9 +16261,10 @@ function Custeio() {
         return (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
             <div style={{ fontSize: 11.5, color: T.amberText, background: T.amberSoft, padding: '9px 12px', borderRadius: 6 }}>
-              ⚠ Margem <strong>só sobre material</strong>: não inclui mão de obra nem custos indiretos, então é sempre
-              mais otimista que a margem real. Serve pra comparar projetos entre si e achar os fora da curva.
-              Mostra só os {margens.length} projetos que têm faturamento <em>e</em> custo apontado.
+              Margem = <strong>faturamento líquido − custo médio do ERP</strong> (quantidade × custo unitário do Sankhya,
+              que já inclui mão de obra e rateios). A coluna "só material" fica ao lado para comparação — ela ignora
+              mão de obra, então é sempre bem mais otimista.
+              Mostra os {margens.length} projetos que têm faturamento <em>e</em> custo do ERP.
             </div>
 
             <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -16272,7 +16276,7 @@ function Custeio() {
                 Faturado líquido: <strong>{moeda(tot.fat)}</strong>
               </div>
               <div style={{ background: T.panelAlt, borderRadius: 8, padding: '8px 14px', fontSize: 12.5 }}>
-                Custo material: <strong>{moeda(tot.custo)}</strong>
+                Custo ERP: <strong>{moeda(tot.custo)}</strong>
               </div>
               <div style={{ background: totMargem >= 0 ? T.oliveSoft : T.rustSoft, borderRadius: 8, padding: '8px 14px', fontSize: 12.5,
                             color: totMargem >= 0 ? T.oliveText : T.rustText }}>
@@ -16290,7 +16294,7 @@ function Custeio() {
                 <div style={{ padding: '10px 12px', fontSize: 12, fontWeight: 700, borderBottom: `1px solid ${T.line}` }}>Resumo por mês de faturamento</div>
                 <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                   <thead><tr style={{ background: T.panelAlt }}>
-                    {['Mês', 'Projetos', 'Faturado líquido', 'Custo material', 'Margem', '%'].map((h, i) => (
+                    {['Mês', 'Projetos', 'Faturado líquido', 'Custo ERP', 'Margem', '%'].map((h, i) => (
                       <th key={h} style={{ padding: '8px 12px', fontSize: 11, fontWeight: 600, color: T.inkFaint, textAlign: i === 0 ? 'left' : 'right' }}>{h}</th>
                     ))}
                   </tr></thead>
@@ -16319,13 +16323,13 @@ function Custeio() {
               <div style={{ overflowX: 'auto' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 860 }}>
                   <thead><tr style={{ background: T.panelAlt }}>
-                    {['BR', 'Cliente', 'Mês fat.', 'Faturado líquido', 'Custo material', 'Margem', '%'].map((h, i) => (
+                    {['BR', 'Cliente', 'Mês fat.', 'Faturado líquido', 'Custo ERP', 'Margem', '%', '% só material'].map((h, i) => (
                       <th key={h} style={{ padding: '10px 12px', fontSize: 11, fontWeight: 600, color: T.inkFaint, textAlign: i >= 3 ? 'right' : 'left' }}>{h}</th>
                     ))}
                   </tr></thead>
                   <tbody>
                     {lista.length === 0 ? (
-                      <tr><td colSpan={7} style={{ padding: 24, textAlign: 'center', color: T.inkFaint }}>Nada nesse filtro.</td></tr>
+                      <tr><td colSpan={8} style={{ padding: 24, textAlign: 'center', color: T.inkFaint }}>Nada nesse filtro.</td></tr>
                     ) : lista.slice(0, 200).map(m => {
                       const val = Number(m[campoMargem]) || 0;
                       const pct = m[campoPct];
@@ -16340,6 +16344,10 @@ function Custeio() {
                                        color: val >= 0 ? T.oliveText : T.rustText }}>{moeda(val)}</td>
                           <td style={{ padding: '10px 12px', fontSize: 12.5, textAlign: 'right', fontWeight: 700,
                                        color: val >= 0 ? T.oliveText : T.rustText }}>{pct != null ? `${pct}%` : '—'}</td>
+                          <td style={{ padding: '10px 12px', fontSize: 11.5, textAlign: 'right', color: T.inkFaint }}
+                              title="Margem considerando apenas o material apontado — sem mão de obra">
+                            {m.margem_pct_material != null ? `${m.margem_pct_material}%` : '—'}
+                          </td>
                         </tr>
                       );
                     })}
@@ -16348,7 +16356,7 @@ function Custeio() {
               </div>
               <div style={{ padding: '10px 12px', borderTop: `1px solid ${T.line}`, display: 'flex', justifyContent: 'flex-end' }}>
                 <BotaoExportar small onClick={() => exportCSV(lista, `margem_${mesMargem}.csv`,
-                  ['br','cliente','mes_faturamento','faturamento_bruto','faturamento_liquido','custo_material','custo_material_com_icms','margem_valor','margem_pct'])} />
+                  ['br','cliente','mes_faturamento','faturamento_bruto','faturamento_liquido','custo_erp','margem_valor','margem_pct','custo_material','margem_pct_material'])} />
               </div>
             </div>
           </div>
