@@ -14693,6 +14693,7 @@ function CusteioPlano() {
   const [setores, setSetores] = useState([]);
   const [apontamentos, setApontamentos] = useState([]);
   const [matTotal, setMatTotal] = useState(0);
+  const [comps, setComps] = useState([]);
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState(null);
 
@@ -14713,15 +14714,17 @@ function CusteioPlano() {
   const carregar = useCallback(async () => {
     setLoading(true); setErro(null);
     try {
-      const [l, cc, ct, st, ap, mat] = await Promise.all([
+      const [l, cc, ct, st, ap, mat, comp] = await Promise.all([
         lerTudo('cif_lancamento', q => q.gte('competencia', '2026-01')),
         lerTudo('cif_centro_custo'),
         lerTudo('cif_conta'),
         lerTudo('setor_apontavel'),
         lerTudo('apontamento_hora'),
         lerTudo('custeio_produto_material', q => q.gte('competencia', '2026-01')),
+        lerTudo('cif_competencia'),
       ]);
       setCif(l); setCentros(cc); setContas(ct); setSetores(st); setApontamentos(ap);
+      setComps(comp);
       setMatTotal(mat.reduce((s, m) => s + (Number(m.custo_material) || 0), 0));
     } catch (e) { setErro(e.message || String(e)); }
     setLoading(false);
@@ -14731,8 +14734,14 @@ function CusteioPlano() {
   const mapaConta = useMemo(() => Object.fromEntries(contas.map(c => [c.cod_conta, c])), [contas]);
   const mapaCentro = useMemo(() => Object.fromEntries(centros.map(c => [c.cod_centro, c])), [centros]);
 
+  // Competência aberta fica fora do total: um mês em andamento tem 5 contas
+  // contra 28 dos fechados, e somá-lo faz o custo parecer ter caído.
+  const abertas = useMemo(
+    () => new Set(comps.filter(c => !c.fechada).map(c => c.competencia)), [comps]);
+
   const resumo = useMemo(() => {
-    const noCusto = cif.filter(l => mapaConta[l.cod_conta]?.entra_no_custo);
+    const noCusto = cif.filter(l =>
+      mapaConta[l.cod_conta]?.entra_no_custo && !abertas.has(l.competencia));
     const porNatureza = {};
     const porCentro = {};
     noCusto.forEach(l => {
@@ -14751,13 +14760,14 @@ function CusteioPlano() {
       total, porNatureza, centros: centrosOrd,
       maior, pctMaior: maior && total > 0 ? (maior.valor / total) * 100 : 0,
     };
-  }, [cif, mapaConta, mapaCentro]);
+  }, [cif, mapaConta, mapaCentro, abertas]);
 
   // o que está represado no maior centro, que é o pedido concreto à contabilidade
   const dentroDoMaior = useMemo(() => {
     if (!resumo.maior) return [];
     const codMaior = centros.find(c => c.descricao === resumo.maior.nome)?.cod_centro;
-    const linhas = cif.filter(l => l.cod_centro === codMaior && mapaConta[l.cod_conta]?.entra_no_custo);
+    const linhas = cif.filter(l => l.cod_centro === codMaior
+      && mapaConta[l.cod_conta]?.entra_no_custo && !abertas.has(l.competencia));
     const m = new Map();
     linhas.forEach(l => {
       const c = mapaConta[l.cod_conta];
@@ -14774,7 +14784,7 @@ function CusteioPlano() {
       if (l.cod_centro !== codMaior && m.has(l.cod_conta)) m.get(l.cod_conta).outros.add(l.cod_centro);
     });
     return [...m.values()].sort((a, b) => b.valor - a.valor);
-  }, [cif, centros, mapaConta, resumo.maior]);
+  }, [cif, centros, mapaConta, resumo.maior, abertas]);
 
   const moeda = (v) => fmtMoedaCompacta(v);
   const NAT = {
@@ -14820,11 +14830,16 @@ function CusteioPlano() {
             </div>
           </div>
 
+          <AvisosDoDado comps={comps} />
+
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(190px,1fr))', gap: 12 }}>
             {[
               { l: 'Material direto (já apurado)', v: moeda(matTotal), c: T.oliveText, sub: 'por produto, validado' },
               { l: 'Mão de obra e CIF (a distribuir)', v: moeda(resumo.total), c: T.rustText, sub: 'ainda não chega ao produto' },
-              { l: 'Custo total de produção', v: moeda(matTotal + resumo.total), c: T.ink, sub: '2026 até aqui' },
+              { l: 'Custo total de produção', v: moeda(matTotal + resumo.total), c: T.ink,
+                sub: comps.filter(c => c.fechada && c.competencia >= '2026-01').length
+                  ? `${comps.filter(c => c.fechada && c.competencia >= '2026-01').length} meses fechados de 2026`
+                  : '2026' },
               { l: 'Quanto falta no custo', v: matTotal > 0 ? `+${Math.round((resumo.total / matTotal) * 100)}%` : '—',
                 c: T.rustText, sub: 'sobre o que já medimos' },
             ].map(k => (
@@ -14926,6 +14941,50 @@ function CusteioPlano() {
 // O pedido concreto, separado por quem decide. Uma apresentação que termina
 // em "precisamos melhorar os controles" não gera ação; esta termina em quem
 // faz o quê.
+// O que o dado não sustenta. Sem isso, quem olha a tela assume que todo
+// número ali é comparável — e não é.
+function AvisosDoDado({ comps }) {
+  const doAno = comps.filter(c => c.competencia >= '2026-01');
+  const abertas = doAno.filter(c => !c.fechada);
+  const fgts = doAno.filter(c => c.fechada && c.fgts_incompleto);
+  const inss = doAno.filter(c => c.fechada && c.inss_pct_salario != null);
+  const inssMedio = inss.length
+    ? inss.reduce((s, c) => s + Number(c.inss_pct_salario), 0) / inss.length : null;
+
+  if (!abertas.length && !fgts.length) return null;
+
+  return (
+    <div style={{ background: T.amberSoft, border: `1px solid ${T.amberSoft}`, borderRadius: 10, padding: '14px 18px' }}>
+      <div style={{ fontSize: 11, color: T.amberText, fontWeight: 700, marginBottom: 8 }}>
+        SOBRE OS NÚMEROS DESTA TELA
+      </div>
+      <div style={{ fontSize: 12.5, color: T.ink, lineHeight: 1.7 }}>
+        {abertas.length > 0 && (
+          <div style={{ marginBottom: 7 }}>
+            ‣ <strong>{abertas.map(c => c.competencia).join(', ')}</strong> ainda não fechou
+            ({abertas[0].contas} contas lançadas contra as 28 de um mês fechado) e está
+            <strong> fora dos totais</strong>. Incluí-lo faria o custo parecer menor do que é.
+          </div>
+        )}
+        {fgts.length > 0 && (
+          <div>
+            ‣ <strong>FGTS aparece incompleto</strong> em {fgts.length} dos meses fechados —
+            entre {Math.min(...fgts.map(c => Number(c.fgts_pct_salario))).toFixed(1)}% e{' '}
+            {Math.max(...fgts.map(c => Number(c.fgts_pct_salario))).toFixed(1)}% do salário, quando
+            o correto são 8%. Provavelmente está sendo lançado em outra conta ou centro, fora do
+            grupo aplicado ao estoque. O custo de mão de obra está subestimado nessa parcela.
+            {inssMedio != null && (
+              <span style={{ color: T.inkDim }}>
+                {' '}Para comparação, o INSS vem consistente, em {inssMedio.toFixed(1)}% do salário.
+              </span>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function PlanoDeAcao({ setores, resumo, matTotal }) {
   const moeda = (v) => fmtMoedaCompacta(v);
   const passos = [
