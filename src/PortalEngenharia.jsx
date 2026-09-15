@@ -16286,12 +16286,14 @@ function Custeio() {
         orcComp.forEach(r => {
           const k = `${r.br || 'proj ' + r.codproj}|${r.nureg}`;
           if (!porOrc[k]) porOrc[k] = { chave: k, br: r.br || `proj ${r.codproj}`, nureg: r.nureg,
-            pedido: r.pedido_venda, data: r.data_ref_orcamento, orc: 0, sol: 0, com: 0, emp: 0, est: 0, itens: 0, semOrc: 0, cats: {} };
+            pedido: r.pedido_venda, data: r.data_ref_orcamento, orc: 0, sol: 0, com: 0, comLiq: 0, emp: 0, est: 0, rec: 0, itens: 0, semOrc: 0, cats: {} };
           porOrc[k].orc += Number(r.valor_orcado) || 0;
           porOrc[k].sol += Number(r.valor_solicitado) || 0;
           porOrc[k].com += Number(r.valor_comprado) || 0;
           porOrc[k].emp += Number(r.valor_empenhado) || 0;
           porOrc[k].est += Number(r.valor_estoque) || 0;
+          porOrc[k].comLiq += Number(r.valor_comprado_liquido) || 0;
+          porOrc[k].rec = Number(r.receita_liquida) || porOrc[k].rec;
           const cat = r.categoria || 'sem_classificacao';
           const vc = (Number(r.valor_comprado) || 0) + (Number(r.valor_estoque) || 0);
           if (vc) porOrc[k].cats[cat] = (porOrc[k].cats[cat] || 0) + vc;
@@ -16312,7 +16314,7 @@ function Custeio() {
             <div style={{ fontSize: 11.5, color: T.inkDim, background: T.panelAlt, padding: '9px 12px', borderRadius: 6 }}>
               Compara as 3 etapas do material: <strong>orçado</strong> (matéria-prima do orçamento de precificação) →
               <strong> solicitado</strong> (solicitação de compra) → <strong>comprado</strong> (ordem de compra).
-              Só a <strong>nota fiscal</strong> conta como custo — é ela que traz o valor líquido real. Ordem de compra sem nota aparece em \"A receber (OC)\": é compromisso, ainda não virou custo. Positivo no desvio = comprou acima do orçado.
+              Valores <strong>líquidos</strong>: o custo tira o ICMS (recuperável) e a receita é o Net Offer Value da nota de venda. Só a <strong>nota fiscal</strong> conta como custo — é ela que traz o valor líquido real. Ordem de compra sem nota aparece em \"A receber (OC)\": é compromisso, ainda não virou custo. Positivo no desvio = comprou acima do orçado.
             </div>
 
             <input value={brOrc} onChange={e => setBrOrc(e.target.value)} placeholder="Filtrar por BR — ex: BR14332"
@@ -16325,13 +16327,13 @@ function Custeio() {
               <div style={{ overflowX: 'auto' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 820 }}>
                   <thead><tr style={{ background: T.panelAlt }}>
-                    {['BR', 'Pedido venda', 'Itens', 'Orçado', 'Solicitado', 'Comprado (NF)', 'Do estoque', 'A receber (OC)', 'Desvio', '%'].map((h, i) => (
+                    {['BR', 'Pedido venda', 'Orçado', 'Comprado líq.', 'Do estoque', 'Custo líq.', 'Receita líq.', 'Margem', '%'].map((h, i) => (
                       <th key={h} style={{ padding: '10px 12px', fontSize: 11, fontWeight: 600, color: T.inkFaint, textAlign: i === 0 ? 'left' : 'right' }}>{h}</th>
                     ))}
                   </tr></thead>
                   <tbody>
                     {listaBr.length === 0 ? (
-                      <tr><td colSpan={10} style={{ padding: 24, textAlign: 'center', color: T.inkFaint }}>Nada nesse filtro.</td></tr>
+                      <tr><td colSpan={9} style={{ padding: 24, textAlign: 'center', color: T.inkFaint }}>Nada nesse filtro.</td></tr>
                     ) : listaBr.slice(0, 150).map(b => (
                       <tr key={b.chave} onClick={() => setBrOrc(b.br)}
                           style={{ borderBottom: `1px solid ${T.lineSoft}`, cursor: 'pointer', background: b.desvio > 0 ? `${T.rustSoft}44` : 'transparent' }}>
@@ -16342,22 +16344,24 @@ function Custeio() {
                         <td style={{ padding: '9px 12px', fontSize: 11.5, textAlign: 'right', color: T.inkDim, whiteSpace: 'nowrap' }}>
                           {b.pedido || '—'}{b.data && <span style={{ color: T.inkFaint }}> · {b.data.split('-').reverse().join('/')}</span>}
                         </td>
-                        <td style={{ padding: '9px 12px', fontSize: 12, textAlign: 'right', color: T.inkDim }}>{b.itens}</td>
                         <td style={{ padding: '9px 12px', fontSize: 12.5, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{moeda(b.orc)}</td>
-                        <td style={{ padding: '9px 12px', fontSize: 12.5, textAlign: 'right', color: T.inkDim, fontVariantNumeric: 'tabular-nums' }}>{moeda(b.sol)}</td>
-                        <td style={{ padding: '9px 12px', fontSize: 12.5, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{moeda(b.com)}</td>
+                        <td style={{ padding: '9px 12px', fontSize: 12.5, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}
+                            title={`Bruto ${moeda(b.com)} — líquido tira o ICMS, que é recuperável`}>{moeda(b.comLiq)}</td>
                         <td style={{ padding: '9px 12px', fontSize: 12.5, textAlign: 'right', color: T.blueText, fontVariantNumeric: 'tabular-nums' }}
-                            title="Material que já tínhamos e foi usado no projeto — deixou de ser comprado">
-                          {b.est ? moeda(b.est) : '—'}
-                        </td>
-                        <td style={{ padding: '9px 12px', fontSize: 12, textAlign: 'right', color: T.inkFaint, fontVariantNumeric: 'tabular-nums' }}
-                            title="Ordem de compra emitida que ainda não virou nota fiscal — compromisso, ainda não é custo">
-                          {b.emp ? moeda(b.emp) : '—'}
-                        </td>
-                        <td style={{ padding: '9px 12px', fontSize: 12.5, textAlign: 'right', fontWeight: 700, fontVariantNumeric: 'tabular-nums',
-                                     color: b.desvio > 0 ? T.rustText : T.oliveText }}>{moeda(b.desvio)}</td>
-                        <td style={{ padding: '9px 12px', fontSize: 12.5, textAlign: 'right', fontWeight: 700,
-                                     color: b.desvio > 0 ? T.rustText : T.oliveText }}>{b.pct != null ? `${b.pct.toFixed(0)}%` : '—'}</td>
+                            title="Material que já tínhamos e foi usado — deixou de ser comprado">{b.est ? moeda(b.est) : '—'}</td>
+                        <td style={{ padding: '9px 12px', fontSize: 12.5, textAlign: 'right', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{moeda(b.comLiq + b.est)}</td>
+                        <td style={{ padding: '9px 12px', fontSize: 12.5, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}
+                            title="Net Offer Value da nota de venda">{b.rec ? moeda(b.rec) : '—'}</td>
+                        {(() => {
+                          const custo = b.comLiq + b.est;
+                          const marg = b.rec ? b.rec - custo : null;
+                          const pct = b.rec ? (marg / b.rec * 100) : null;
+                          const cor = marg == null ? T.inkFaint : marg >= 0 ? T.oliveText : T.rustText;
+                          return (<>
+                            <td style={{ padding: '9px 12px', fontSize: 12.5, textAlign: 'right', fontWeight: 700, color: cor, fontVariantNumeric: 'tabular-nums' }}>{marg == null ? '—' : moeda(marg)}</td>
+                            <td style={{ padding: '9px 12px', fontSize: 12.5, textAlign: 'right', fontWeight: 700, color: cor }}>{pct == null ? '—' : `${pct.toFixed(1)}%`}</td>
+                          </>);
+                        })()}
                       </tr>
                     ))}
                   </tbody>
