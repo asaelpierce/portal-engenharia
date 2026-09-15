@@ -16291,8 +16291,8 @@ function Custeio() {
           porOrc[k].sol += Number(r.valor_solicitado) || 0;
           porOrc[k].com += Number(r.valor_comprado) || 0;
           porOrc[k].emp += Number(r.valor_empenhado) || 0;
-          porOrc[k].est += Number(r.valor_estoque_liquido) || 0;
-          porOrc[k].comLiq += Number(r.valor_comprado_liquido) || 0;
+          porOrc[k].est += Number(r.valor_estoque) || 0;
+          porOrc[k].comLiq += Number(r.valor_comprado) || 0;
           porOrc[k].rec = Number(r.receita_liquida) || porOrc[k].rec;
           const cat = r.categoria || 'sem_classificacao';
           const vc = (Number(r.valor_comprado) || 0) + (Number(r.valor_estoque) || 0);
@@ -16314,8 +16314,8 @@ function Custeio() {
             <div style={{ fontSize: 11.5, color: T.inkDim, background: T.panelAlt, padding: '9px 12px', borderRadius: 6 }}>
               Compara as 3 etapas do material: <strong>orçado</strong> (matéria-prima do orçamento de precificação) →
               <strong> solicitado</strong> (solicitação de compra) → <strong>comprado</strong> (ordem de compra).
-              Valores <strong>líquidos</strong>: o custo tira o ICMS (recuperável) e a receita é o Net Offer Value da nota de venda. \"Do estoque\" conta só material sem compra no projeto — o que foi comprado e depois transferido já está em \"Comprado líq.\". Só a <strong>nota fiscal</strong> conta como custo — é ela que traz o valor líquido real. Ordem de compra sem nota aparece em \"A receber (OC)\": é compromisso, ainda não virou custo. Nota de entrada que não é compra nossa (material de terceiro para conserto/industrialização, retorno, transferência) fica <strong>fora do custo</strong>. Positivo no desvio = comprou acima do orçado.
-            </div>
+              Compara as 3 etapas do material: <strong>orçado</strong> (matéria-prima do orçamento de precificação) → <strong>comprado</strong> (valor da nota fiscal, igual ao Portal de Compras) → <strong>não precisou comprar</strong> (saiu do estoque, sem compra no projeto). Ordem de compra sem nota é compromisso e não entra no custo. Nota de entrada que não é compra nossa (material de terceiro para conserto, retorno, transferência) fica fora. <strong>Receita líq.</strong> é o Net Offer Value da nota de venda — é o único valor líquido que existe no Sankhya; do lado da compra não há campo de líquido, então mostramos o valor da nota.
+              </div>
 
             <input value={brOrc} onChange={e => setBrOrc(e.target.value)} placeholder="Filtrar por BR — ex: BR14332"
               style={{ ...inputStyle(), width: 260 }} />
@@ -16327,7 +16327,7 @@ function Custeio() {
               <div style={{ overflowX: 'auto' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 820 }}>
                   <thead><tr style={{ background: T.panelAlt }}>
-                    {['BR', 'Pedido venda', 'Orçado', 'Comprado líq.', 'Do estoque', 'Custo líq.', 'Receita líq.', 'Margem', '%'].map((h, i) => (
+                    {['BR', 'Pedido venda', 'Orçado', 'Comprado (NF)', 'Não precisou comprar', 'Custo total', 'Receita líq.', 'Margem', '%'].map((h, i) => (
                       <th key={h} style={{ padding: '10px 12px', fontSize: 11, fontWeight: 600, color: T.inkFaint, textAlign: i === 0 ? 'left' : 'right' }}>{h}</th>
                     ))}
                   </tr></thead>
@@ -16346,10 +16346,11 @@ function Custeio() {
                         </td>
                         <td style={{ padding: '9px 12px', fontSize: 12.5, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{moeda(b.orc)}</td>
                         <td style={{ padding: '9px 12px', fontSize: 12.5, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}
-                            title={`Bruto ${moeda(b.com)} — líquido tira o ICMS, que é recuperável`}>{moeda(b.comLiq)}</td>
+                            title="Valor da nota fiscal de compra, igual ao Portal de Compras">{moeda(b.comLiq)}</td>
                         <td style={{ padding: '9px 12px', fontSize: 12.5, textAlign: 'right', color: T.blueText, fontVariantNumeric: 'tabular-nums' }}
                             title="Material que a empresa já tinha e usou — só entra aqui se NÃO houve compra dele neste projeto (senão contaria duas vezes)">{b.est ? moeda(b.est) : '—'}</td>
-                        <td style={{ padding: '9px 12px', fontSize: 12.5, textAlign: 'right', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{moeda(b.comLiq + b.est)}</td>
+                        <td style={{ padding: '9px 12px', fontSize: 12.5, textAlign: 'right', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}
+                            title="Comprado (NF) + o que saiu do estoque">{moeda(b.comLiq + b.est)}</td>
                         <td style={{ padding: '9px 12px', fontSize: 12.5, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}
                             title="Net Offer Value da nota de venda">{b.rec ? moeda(b.rec) : '—'}</td>
                         {(() => {
@@ -16383,21 +16384,21 @@ function Custeio() {
                     const o = r.origem;
                     if (!g[o]) return;
                     g[o].n += 1;
-                    g[o].v += Number(o === 'ja_tinha_no_estoque' ? r.valor_estoque_liquido : r.valor_comprado_liquido) || 0;
+                    g[o].v += Number(o === 'ja_tinha_no_estoque' ? r.valor_estoque : r.valor_comprado) || 0;
                   });
                   const compraTot = g.comprado.v + g.comprado_e_transferido.v;
                   const estoqueTot = g.ja_tinha_no_estoque.v;
                   if (!compraTot && !estoqueTot) return null;
                   const cards = [
                     { t: '🛒 Precisou comprar', n: g.comprado.n + g.comprado_e_transferido.n, v: compraTot, c: T.ink, bg: T.panelAlt },
-                    { t: '📦 Já tinha no estoque', n: g.ja_tinha_no_estoque.n, v: estoqueTot, c: T.blueText, bg: T.blueSoft },
+                    { t: '📦 Não precisou comprar', n: g.ja_tinha_no_estoque.n, v: estoqueTot, c: T.blueText, bg: T.blueSoft },
                   ];
                   return (
                     <div style={{ padding: '10px 12px', borderBottom: `1px solid ${T.line}`, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                       {cards.map(k => (
                         <div key={k.t} style={{ background: k.bg, borderRadius: 7, padding: '8px 14px', fontSize: 12 }}>
                           <strong style={{ color: k.c }}>{k.t}</strong>
-                          <div style={{ color: T.inkDim, marginTop: 2 }}>{k.n} itens · <strong>{moeda(k.v)}</strong> líquido</div>
+                          <div style={{ color: T.inkDim, marginTop: 2 }}>{k.n} itens · <strong>{moeda(k.v)}</strong></div>
                         </div>
                       ))}
                       {g.comprado_e_transferido.n > 0 && (
@@ -16440,7 +16441,7 @@ function Custeio() {
                 <div style={{ overflowX: 'auto' }}>
                   <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 900 }}>
                     <thead><tr style={{ background: T.panelAlt }}>
-                      {['Orç.', 'Cód', 'Produto', 'Categoria', 'Origem', 'Orçado', 'Comprado líq.', 'Estoque líq.', 'Desvio', 'Situação'].map((h, i) => (
+                      {['Orç.', 'Cód', 'Produto', 'Categoria', 'Origem', 'Orçado', 'Comprado (NF)', 'Não precisou comprar', 'Desvio', 'Situação'].map((h, i) => (
                         <th key={h} style={{ padding: '9px 12px', fontSize: 11, fontWeight: 600, color: T.inkFaint, textAlign: i >= 3 && i <= 8 ? 'right' : 'left' }}>{h}</th>
                       ))}
                     </tr></thead>
@@ -16456,10 +16457,10 @@ function Custeio() {
                             {({ comprado: '🛒 comprou', comprado_e_transferido: '🛒 comprou (transf.)', ja_tinha_no_estoque: '📦 já tinha', sem_movimento: '—' })[r.origem] || '—'}
                           </td>
                           <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{r.valor_orcado != null ? moeda(r.valor_orcado) : '—'}</td>
-                          <td style={{ padding: '8px 12px', fontSize: 12.5, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{r.valor_comprado_liquido != null ? moeda(r.valor_comprado_liquido) : '—'}</td>
+                          <td style={{ padding: '8px 12px', fontSize: 12.5, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{r.valor_comprado != null ? moeda(r.valor_comprado) : '—'}</td>
                           <td style={{ padding: '8px 12px', fontSize: 12.5, textAlign: 'right', color: T.blueText, fontVariantNumeric: 'tabular-nums' }}
                               title={r.origem === 'comprado_e_transferido' ? `Transferiu ${moeda(r.valor_transferido)} do estoque, mas foi comprado neste projeto — não conta de novo` : ''}>
-                            {r.valor_estoque_liquido != null ? moeda(r.valor_estoque_liquido) : '—'}
+                            {r.valor_estoque != null ? moeda(r.valor_estoque) : '—'}
                           </td>
                           <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', fontWeight: 700, fontVariantNumeric: 'tabular-nums',
                                        color: (Number(r.desvio_valor) || 0) > 0 ? T.rustText : T.oliveText }}>{r.desvio_valor != null ? moeda(r.desvio_valor) : '—'}</td>
