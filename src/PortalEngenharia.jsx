@@ -16297,7 +16297,7 @@ function Custeio() {
         orcComp.forEach(r => {
           const k = `${r.br || 'proj ' + r.codproj}|${r.nureg}`;
           if (!porOrc[k]) porOrc[k] = { chave: k, br: r.br || `proj ${r.codproj}`, nureg: r.nureg,
-            pedido: r.pedido_venda, data: r.data_ref_orcamento, orc: 0, sol: 0, com: 0, comLiq: 0, emp: 0, est: 0, rec: 0, itens: 0, semOrc: 0, cats: {} };
+            pedido: r.pedido_venda, data: r.data_ref_orcamento, orc: 0, sol: 0, com: 0, comLiq: 0, emp: 0, est: 0, rec: 0, recBruta: 0, itens: 0, semOrc: 0, cats: {} };
           porOrc[k].orc += Number(r.valor_orcado) || 0;
           porOrc[k].sol += Number(r.valor_solicitado) || 0;
           porOrc[k].com += Number(r.valor_comprado) || 0;
@@ -16305,6 +16305,7 @@ function Custeio() {
           porOrc[k].est += Number(r.valor_estoque_liquido) || 0;
           porOrc[k].comLiq += Number(r.valor_comprado_liquido) || 0;
           porOrc[k].rec = Number(r.receita_liquida) || porOrc[k].rec;
+          porOrc[k].recBruta = Number(r.receita_bruta) || porOrc[k].recBruta;
           const cat = r.categoria || 'sem_classificacao';
           const vc = (Number(r.valor_comprado) || 0) + (Number(r.valor_estoque) || 0);
           if (vc) porOrc[k].cats[cat] = (porOrc[k].cats[cat] || 0) + vc;
@@ -16312,16 +16313,26 @@ function Custeio() {
           if (r.situacao === 'comprado_sem_orcamento') porOrc[k].semOrc += 1;
         });
         // Faturado = tem nota de venda emitida (por isso tem receita).
+        // "Foi faturado?" e "da pra calcular margem?" sao perguntas
+        // diferentes. Antes as duas saiam de receita_liquida, e como o
+        // AD_NETOFFERVALUE so vem preenchido em parte das notas, 606
+        // orcamentos ja faturados (R$ 35 mi) apareciam como nao faturados.
+        // Faturado = existe nota de venda. Margem = existe valor liquido.
         const todosOrc = Object.values(porOrc)
           .filter(b => b.orc > 0 || b.com > 0)
-          .map(b => ({ ...b, faturado: !!b.rec, desvio: b.com - b.orc,
+          .map(b => ({ ...b, faturado: b.recBruta > 0, semLiquido: b.recBruta > 0 && !b.rec,
+                       desvio: b.com - b.orc,
                        pct: b.orc > 0 ? (b.com - b.orc) / b.orc * 100 : null }));
         const nFat = todosOrc.filter(b => b.faturado).length;
         const nNaoFat = todosOrc.length - nFat;
+        const nSemLiq = todosOrc.filter(b => b.semLiquido).length;
 
         const listaBr = todosOrc
           .filter(b => !brOrc || b.br.toLowerCase().includes(brOrc.toLowerCase()))
-          .filter(b => fatFiltro === 'todos' || (fatFiltro === 'faturados' ? b.faturado : !b.faturado))
+          .filter(b => fatFiltro === 'todos'
+            || (fatFiltro === 'faturados' ? b.faturado
+              : fatFiltro === 'sem_liquido' ? b.semLiquido
+              : !b.faturado))
           // Ordenado por data do pedido de venda, do mais recente pro mais antigo.
           .sort((a, b) => (b.data || '').localeCompare(a.data || ''));
 
@@ -16341,7 +16352,8 @@ function Custeio() {
                 style={{ ...inputStyle(), width: 260 }} />
               {[{ id: 'todos', l: `Todos (${todosOrc.length})` },
                 { id: 'faturados', l: `✓ Faturados (${nFat})` },
-                { id: 'nao_faturados', l: `⏳ Não faturados (${nNaoFat})` }].map(t => (
+                { id: 'nao_faturados', l: `⏳ Não faturados (${nNaoFat})` },
+                { id: 'sem_liquido', l: `⚠ Sem líquido no ERP (${nSemLiq})` }].map(t => (
                 <button key={t.id} onClick={() => setFatFiltro(t.id)}
                   style={{ fontSize: 12, fontWeight: 700, padding: '7px 13px', borderRadius: 6, cursor: 'pointer',
                     border: `1px solid ${fatFiltro === t.id ? T.terracotta : T.line}`,
@@ -16372,6 +16384,8 @@ function Custeio() {
                         <td style={{ padding: '9px 12px', fontSize: 12.5, fontWeight: 600 }}>
                           {b.br}
                           {!b.faturado && <span style={{ marginLeft: 6, fontSize: 10, color: T.amberText, background: T.amberSoft, padding: '2px 6px', borderRadius: 4 }}>⏳ não faturado</span>}
+                          {b.semLiquido && <span style={{ marginLeft: 6, fontSize: 10, color: T.inkDim, background: T.panelAlt, border: `1px solid ${T.line}`, padding: '2px 6px', borderRadius: 4 }}
+                            title={`Faturado: ${moeda(b.recBruta)} bruto. O campo Net Offer Value não foi preenchido nessas notas no Sankhya, então não dá para calcular a margem líquida.`}>líquido não informado</span>}
                           {b.semOrc > 0 && <span style={{ marginLeft: 6, fontSize: 10, color: T.rustText, background: T.rustSoft, padding: '2px 6px', borderRadius: 4 }}>{b.semOrc} sem orçamento</span>}
                         </td>
                         <td style={{ padding: '9px 12px', fontSize: 11.5, textAlign: 'right', color: T.inkDim, whiteSpace: 'nowrap' }}>
@@ -16385,14 +16399,23 @@ function Custeio() {
                         <td style={{ padding: '9px 12px', fontSize: 12.5, textAlign: 'right', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}
                             title="Comprado (NF) + o que saiu do estoque">{moeda(b.comLiq + b.est)}</td>
                         <td style={{ padding: '9px 12px', fontSize: 12.5, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}
-                            title="Net Offer Value da nota de venda">{b.rec ? moeda(b.rec) : '—'}</td>
+                            title={b.rec ? 'Net Offer Value da nota de venda'
+                                         : b.recBruta ? `Líquido não informado no Sankhya. Bruto faturado: ${moeda(b.recBruta)}`
+                                                      : 'Sem nota de venda'}>
+                          {b.rec ? moeda(b.rec)
+                                 : b.recBruta ? <span style={{ color: T.inkFaint }}>{moeda(b.recBruta)} bruto</span>
+                                              : '—'}
+                        </td>
                         {(() => {
                           const custo = b.comLiq + b.est;
                           const marg = b.rec ? b.rec - custo : null;
                           const pct = b.rec ? (marg / b.rec * 100) : null;
                           const cor = marg == null ? T.inkFaint : marg >= 0 ? T.oliveText : T.rustText;
                           return (<>
-                            <td style={{ padding: '9px 12px', fontSize: 12.5, textAlign: 'right', fontWeight: 700, color: cor, fontVariantNumeric: 'tabular-nums' }}>{marg == null ? '—' : moeda(marg)}</td>
+                            <td style={{ padding: '9px 12px', fontSize: 12.5, textAlign: 'right', fontWeight: 700, color: cor, fontVariantNumeric: 'tabular-nums' }}
+                                title={marg != null ? 'Receita líquida − custo real'
+                                       : b.recBruta ? 'Não calculada: o Net Offer Value não foi preenchido nessas notas. Comparar com o bruto daria margem otimista, porque o bruto inclui imposto.'
+                                                    : 'Não calculada: ainda não há nota de venda.'}>{marg == null ? '—' : moeda(marg)}</td>
                             <td style={{ padding: '9px 12px', fontSize: 12.5, textAlign: 'right', fontWeight: 700, color: cor }}>{pct == null ? '—' : `${pct.toFixed(1)}%`}</td>
                           </>);
                         })()}
