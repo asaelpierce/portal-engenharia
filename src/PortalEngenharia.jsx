@@ -16314,7 +16314,7 @@ function Custeio() {
             <div style={{ fontSize: 11.5, color: T.inkDim, background: T.panelAlt, padding: '9px 12px', borderRadius: 6 }}>
               Compara as 3 etapas do material: <strong>orçado</strong> (matéria-prima do orçamento de precificação) →
               <strong> solicitado</strong> (solicitação de compra) → <strong>comprado</strong> (ordem de compra).
-              Valores <strong>líquidos</strong>: o custo tira o ICMS (recuperável) e a receita é o Net Offer Value da nota de venda. \"Do estoque\" conta só material sem compra no projeto — o que foi comprado e depois transferido já está em \"Comprado líq.\". Só a <strong>nota fiscal</strong> conta como custo — é ela que traz o valor líquido real. Ordem de compra sem nota aparece em \"A receber (OC)\": é compromisso, ainda não virou custo. Positivo no desvio = comprou acima do orçado.
+              Valores <strong>líquidos</strong>: o custo tira o ICMS (recuperável) e a receita é o Net Offer Value da nota de venda. \"Do estoque\" conta só material sem compra no projeto — o que foi comprado e depois transferido já está em \"Comprado líq.\". Só a <strong>nota fiscal</strong> conta como custo — é ela que traz o valor líquido real. Ordem de compra sem nota aparece em \"A receber (OC)\": é compromisso, ainda não virou custo. Nota de entrada que não é compra nossa (material de terceiro para conserto/industrialização, retorno, transferência) fica <strong>fora do custo</strong>. Positivo no desvio = comprou acima do orçado.
             </div>
 
             <input value={brOrc} onChange={e => setBrOrc(e.target.value)} placeholder="Filtrar por BR — ex: BR14332"
@@ -16452,14 +16452,14 @@ function Custeio() {
                           <td style={{ padding: '8px 12px', fontSize: 11.5, maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.descr_prod}>{r.descr_prod}</td>
                           <td style={{ padding: '8px 12px', fontSize: 11, color: T.inkFaint }}
                               title={r.operacao_compra || ''}>{({ materia_prima: 'Matéria-prima', frete: 'Frete', industrializacao: 'Industrializ.', servico: 'Serviço', embalagem: 'Embalagem', uso_consumo: 'Uso/consumo', imobilizado: 'Imobilizado', outros: 'Outros' })[r.categoria] || '—'}</td>
+                          <td style={{ padding: '8px 12px', fontSize: 11 }}>
+                            {({ comprado: '🛒 comprou', comprado_e_transferido: '🛒 comprou (transf.)', ja_tinha_no_estoque: '📦 já tinha', sem_movimento: '—' })[r.origem] || '—'}
+                          </td>
                           <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{r.valor_orcado != null ? moeda(r.valor_orcado) : '—'}</td>
                           <td style={{ padding: '8px 12px', fontSize: 12.5, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{r.valor_comprado_liquido != null ? moeda(r.valor_comprado_liquido) : '—'}</td>
                           <td style={{ padding: '8px 12px', fontSize: 12.5, textAlign: 'right', color: T.blueText, fontVariantNumeric: 'tabular-nums' }}
                               title={r.origem === 'comprado_e_transferido' ? `Transferiu ${moeda(r.valor_transferido)} do estoque, mas foi comprado neste projeto — não conta de novo` : ''}>
                             {r.valor_estoque_liquido != null ? moeda(r.valor_estoque_liquido) : '—'}
-                          </td>
-                          <td style={{ padding: '8px 12px', fontSize: 11 }}>
-                            {({ comprado: '🛒 comprou', comprado_e_transferido: '🛒 comprou (transf.)', ja_tinha_no_estoque: '📦 já tinha', sem_movimento: '—' })[r.origem] || '—'}
                           </td>
                           <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', fontWeight: 700, fontVariantNumeric: 'tabular-nums',
                                        color: (Number(r.desvio_valor) || 0) > 0 ? T.rustText : T.oliveText }}>{r.desvio_valor != null ? moeda(r.desvio_valor) : '—'}</td>
