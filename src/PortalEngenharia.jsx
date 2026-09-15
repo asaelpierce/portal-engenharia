@@ -14695,6 +14695,7 @@ function CusteioPlano() {
   const [matTotal, setMatTotal] = useState(0);
   const [comps, setComps] = useState([]);
   const [cheio, setCheio] = useState([]);
+  const [suspeitos, setSuspeitos] = useState([]);
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState(null);
 
@@ -14715,7 +14716,7 @@ function CusteioPlano() {
   const carregar = useCallback(async () => {
     setLoading(true); setErro(null);
     try {
-      const [l, cc, ct, st, ap, mat, comp, cheio] = await Promise.all([
+      const [l, cc, ct, st, ap, mat, comp, cheio, susp] = await Promise.all([
         lerTudo('cif_lancamento', q => q.gte('competencia', '2026-01')),
         lerTudo('cif_centro_custo'),
         lerTudo('cif_conta'),
@@ -14724,9 +14725,10 @@ function CusteioPlano() {
         lerTudo('custeio_produto_material', q => q.gte('competencia', '2026-01')),
         lerTudo('cif_competencia'),
         lerTudo('custeio_produto_cheio', q => q.gte('competencia', '2026-01')),
+        lerTudo('apontamento_suspeito', q => q.gte('competencia', '2026-01')),
       ]);
       setCif(l); setCentros(cc); setContas(ct); setSetores(st); setApontamentos(ap);
-      setComps(comp); setCheio(cheio);
+      setComps(comp); setCheio(cheio); setSuspeitos(susp);
       setMatTotal(mat.reduce((s, m) => s + (Number(m.custo_material) || 0), 0));
     } catch (e) { setErro(e.message || String(e)); }
     setLoading(false);
@@ -14806,6 +14808,7 @@ function CusteioPlano() {
       <div style={{ display: 'flex', gap: 2 }}>
         {[{ id: 'diagnostico', l: 'Diagnóstico' },
           { id: 'cheio', l: 'Custo cheio por produto' },
+          { id: 'qualidade', l: `Qualidade do apontamento${suspeitos.filter(x=>x.custo_nao_lancado>0).length ? ` (${suspeitos.filter(x=>x.custo_nao_lancado>0).length})` : ''}` },
           { id: 'plano', l: 'O que precisa ser feito' },
           { id: 'apontar', l: `Apontar horas${apontamentos.length ? ` (${apontamentos.length})` : ''}` }].map(x => (
           <button key={x.id} onClick={() => setAba(x.id)} style={{
@@ -14934,6 +14937,8 @@ function CusteioPlano() {
 
       {aba === 'cheio' && <CustoCheio dados={cheio} />}
 
+      {aba === 'qualidade' && <QualidadeApontamento dados={suspeitos} />}
+
       {aba === 'plano' && <PlanoDeAcao setores={setores} resumo={resumo} matTotal={matTotal} />}
 
       {aba === 'apontar' && (
@@ -14952,6 +14957,116 @@ function CusteioPlano() {
 // material do mês, que é o método que o PCP já usa. Mostrar as três
 // camadas separadas importa porque a discussão de preço costuma parar no
 // material, e ele é menos da metade da conta.
+// Apontamento incompleto não dá erro: dá custo BAIXO com cara de certo.
+// O teste compara o consumo por peça de cada insumo contra a mediana
+// daquele insumo naquele produto — mediana e não média, porque a própria
+// distorção contaminaria a média.
+function QualidadeApontamento({ dados }) {
+  const [gravidade, setGravidade] = useState('todas');
+  const moeda = (v) => fmtMoedaCompacta(v);
+
+  const comFalta = useMemo(() => dados.filter(d => Number(d.custo_nao_lancado) > 0), [dados]);
+  const tot = useMemo(() => ({
+    ops: comFalta.length,
+    lancado: comFalta.reduce((s, d) => s + (Number(d.custo_lancado) || 0), 0),
+    falta: comFalta.reduce((s, d) => s + (Number(d.custo_nao_lancado) || 0), 0),
+    grave: comFalta.filter(d => d.gravidade === 'grave').length,
+  }), [comFalta]);
+
+  const linhas = useMemo(() => comFalta
+    .filter(d => gravidade === 'todas' || d.gravidade === gravidade)
+    .sort((a, b) => (Number(b.custo_nao_lancado) || 0) - (Number(a.custo_nao_lancado) || 0)),
+  [comFalta, gravidade]);
+
+  const COR = { grave: T.rustText, atencao: T.amberText, leve: T.inkDim };
+  const BG  = { grave: T.rustSoft, atencao: T.amberSoft, leve: T.lineSoft };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '14px 18px' }}>
+        <div style={{ fontSize: 12.5, color: T.inkDim, lineHeight: 1.65 }}>
+          Material que deixou de ser lançado na OP não gera erro em lugar nenhum —{' '}
+          <strong style={{ color: T.ink }}>gera custo baixo com cara de certo</strong>. O teste
+          compara, em cada OP, quanto de cada insumo entrou por peça contra o padrão daquele
+          insumo naquele produto, e estima o valor que falta. É a maior ameaça à confiança do
+          custeio, porque erra sempre para menos.
+        </div>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(170px,1fr))', gap: 12 }}>
+        {[
+          { l: 'OPs com item faltando', v: String(tot.ops), c: tot.ops ? T.amberText : T.oliveText },
+          { l: 'Material não lançado', v: moeda(tot.falta), c: T.rustText },
+          { l: 'Sobre o que foi lançado', v: tot.lancado > 0 ? `${Math.round((tot.falta / tot.lancado) * 100)}%` : '—', c: T.rustText },
+          { l: 'Casos graves', v: String(tot.grave), c: tot.grave ? T.rustText : T.oliveText,
+            sub: 'metade ou mais dos itens' },
+        ].map(k => (
+          <div key={k.l} style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '14px 16px', boxShadow: SHADOW_SM }}>
+            <div style={{ fontSize: 11, color: T.inkFaint, fontWeight: 600 }}>{k.l}</div>
+            <div style={{ fontFamily: FONT_DISPLAY, fontSize: 21, fontWeight: 700, color: k.c, marginTop: 6 }}>{k.v}</div>
+            {k.sub && <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 2 }}>{k.sub}</div>}
+          </div>
+        ))}
+      </div>
+
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+        {['todas', 'grave', 'atencao', 'leve'].map(g => (
+          <button key={g} onClick={() => setGravidade(g)} style={{
+            fontFamily: 'inherit', fontSize: 11.5, cursor: 'pointer', padding: '5px 11px', borderRadius: 5,
+            border: `1px solid ${gravidade === g ? T.ink : T.line}`,
+            background: gravidade === g ? T.ink : T.panel,
+            color: gravidade === g ? T.panel : T.inkDim, fontWeight: gravidade === g ? 600 : 400,
+          }}>{g === 'todas' ? 'Todas' : g === 'atencao' ? 'Atenção' : g === 'grave' ? 'Grave' : 'Leve'}</button>
+        ))}
+      </div>
+
+      <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 880 }}>
+            <thead>
+              <tr style={{ background: T.panelAlt }}>
+                {['OP', 'Produto', 'Competência', 'Qtd', 'Itens', 'Faltando',
+                  'Lançado', 'Falta estimada', 'Situação'].map((h, i) => (
+                  <th key={h} style={{ padding: '10px 12px', fontSize: 11, fontWeight: 600, color: T.inkFaint,
+                    textAlign: i >= 3 && i <= 7 ? 'right' : 'left', borderBottom: `1px solid ${T.line}`, whiteSpace: 'nowrap' }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {linhas.slice(0, 60).map(d => (
+                <tr key={`${d.nuapo}-${d.seq_pa}`} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                  <td style={{ padding: '9px 12px', fontSize: 12, color: T.ink, fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{d.op}</td>
+                  <td style={{ padding: '9px 12px', fontSize: 12, color: T.inkDim }}>{d.cod_prod_acabado}</td>
+                  <td style={{ padding: '9px 12px', fontSize: 11.5, color: T.inkFaint }}>{d.competencia}</td>
+                  <td style={{ padding: '9px 12px', fontSize: 12, textAlign: 'right', color: T.inkDim, fontVariantNumeric: 'tabular-nums' }}>
+                    {Number(d.qtd_pa).toLocaleString('pt-BR')}</td>
+                  <td style={{ padding: '9px 12px', fontSize: 12, textAlign: 'right', color: T.inkFaint, fontVariantNumeric: 'tabular-nums' }}>{d.itens}</td>
+                  <td style={{ padding: '9px 12px', fontSize: 12, textAlign: 'right', fontWeight: 600,
+                               color: COR[d.gravidade] || T.inkDim, fontVariantNumeric: 'tabular-nums' }}>{d.itens_faltando}</td>
+                  <td style={{ padding: '9px 12px', fontSize: 12, textAlign: 'right', color: T.inkDim, fontVariantNumeric: 'tabular-nums' }}>
+                    {moeda(d.custo_lancado)}</td>
+                  <td style={{ padding: '9px 12px', fontSize: 12.5, textAlign: 'right', fontWeight: 700, color: T.rustText, fontVariantNumeric: 'tabular-nums' }}>
+                    {moeda(d.custo_nao_lancado)}</td>
+                  <td style={{ padding: '9px 12px' }}>
+                    <span style={{ fontSize: 10.5, fontWeight: 700, color: COR[d.gravidade],
+                                   background: BG[d.gravidade], padding: '3px 8px', borderRadius: 5 }}>
+                      {d.gravidade === 'atencao' ? 'Atenção' : d.gravidade === 'grave' ? 'Grave' : 'Leve'}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div style={{ padding: '10px 16px', borderTop: `1px solid ${T.line}`, fontSize: 11, color: T.inkFaint, lineHeight: 1.5 }}>
+          A falta estimada usa o consumo mediano do insumo naquele produto e o preço praticado na
+          própria OP. É estimativa para priorizar conferência, não lançamento contábil.
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function CustoCheio({ dados }) {
   const [busca, setBusca] = useState('');
   const [comp, setComp] = useState('');
