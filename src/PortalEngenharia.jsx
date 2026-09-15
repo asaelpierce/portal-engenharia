@@ -303,6 +303,11 @@ export default function PortalEngenharia() {
             ve_produtividade_completa: data.ve_produtividade_completa,
             ve_almoxarifado_completo: data.ve_almoxarifado_completo,
             ve_almoxarifado_apenas_fila: data.ve_almoxarifado_apenas_fila,
+            // Vinculo com o vendedor do Sankhya: quando preenchido e a pessoa
+            // nao tem permissao de ver todos, as telas comerciais mostram so
+            // as vendas dela.
+            vendedorSankhya: data.vendedor_sankhya,
+            veTodosVendedores: data.ve_todos_vendedores,
             sankhyaUsuario: data.sankhya_usuario,
             // Sem linhas em colaborador_telas = sem restrição cadastrada (mantém acesso total, comportamento antigo).
             // Com linhas = restrição ativa, só essas telas aparecem.
@@ -556,7 +561,7 @@ function PortalConteudo({ currentUser, session }) {
           {renderTab('dashboard', <Dashboard stats={stats} propostas={propostasMes} todasPropostas={propostas} mesFiltro={mesFiltro} setMesFiltro={setMesFiltro} onNovaProposta={() => setModal('nova')} onNavigate={setView} />)}
           {renderTab('propostas', <PropostasTable propostas={propostas} titulo="Todas as propostas" onRowClick={p => { setSelected(p); setModal('detalhe'); }} />)}
           {renderTab('pendencias', <PropostasTable propostas={pendencias} titulo="Aguardando sua ação" empty="Nenhuma pendência — tudo em dia." onRowClick={p => { setSelected(p); setModal('detalhe'); }} />)}
-          {renderTab('comercial', <TabErrorBoundary tab="Painel Comercial"><PainelComercial /></TabErrorBoundary>)}
+          {renderTab('comercial', <TabErrorBoundary tab="Painel Comercial"><PainelComercial currentUser={currentUser} /></TabErrorBoundary>)}
           {renderTab('metricas', <Metricas propostas={propostas} />)}
           {renderTab('ciclo_comercial', <TabErrorBoundary tab="Ciclo Comercial"><CicloComercial /></TabErrorBoundary>)}
           {renderTab('produtividade', <Produtividade propostas={propostas} mesFiltro={mesFiltro} currentUser={currentUser} />)}
@@ -580,7 +585,7 @@ function PortalConteudo({ currentUser, session }) {
           {renderTab('conf_apontamento', <TabErrorBoundary tab="Conf. Apontamento"><ConfApontamento /></TabErrorBoundary>)}
           {renderTab('reservas_pendentes', <TabErrorBoundary tab="Reservas Pendentes"><ReservasPendentes /></TabErrorBoundary>)}
           {renderTab('verificacao_projetos', <TabErrorBoundary tab="Verificação de Projetos"><VerificacaoProjetos currentUser={currentUser} /></TabErrorBoundary>)}
-          {renderTab('analise_comercial', <TabErrorBoundary tab="Análise Comercial"><AnaliseComercial /></TabErrorBoundary>)}
+          {renderTab('analise_comercial', <TabErrorBoundary tab="Follow Up Comercial"><AnaliseComercial currentUser={currentUser} /></TabErrorBoundary>)}
           {renderTab('prospeccao_clientes', <TabErrorBoundary tab="Prospecção de Clientes"><ProspeccaoClientes /></TabErrorBoundary>)}
           {renderTab('almoxarifado_fluxo', <TabErrorBoundary tab="Fluxo de Materiais"><AlmoxarifadoFluxo currentUser={currentUser} /></TabErrorBoundary>)}
           {renderTab('pedidosvale', <PedidosVale />)}
@@ -645,7 +650,7 @@ function Sidebar({ view, setView, pendCount, papel, telasPermitidas }) {
     { id: 'conf_apontamento', label: 'Conf. Apontamento', icon: ClipboardCheck },
     { id: 'reservas_pendentes', label: 'Reservas Pendentes', icon: AlertTriangle },
     { id: 'verificacao_projetos', label: 'Verificação de Projetos', icon: ClipboardCheck },
-    { id: 'analise_comercial', label: 'Análise Comercial', icon: TrendingUp },
+    { id: 'analise_comercial', label: 'Follow Up Comercial', icon: TrendingUp },
     { id: 'prospeccao_clientes', label: 'Prospecção de Clientes', icon: UserPlus },
     { id: 'almoxarifado_fluxo', label: 'Fluxo de Materiais', icon: Package },
     { id: 'pedidosvale',  label: 'Pedidos Vale',           icon: FileWarning },
@@ -3215,7 +3220,7 @@ function ModeloPreditivo() {
   );
 }
 
-function PainelComercial() {
+function PainelComercial({ currentUser }) {
   const [subAba, setSubAba] = useState('faturamento');
   const hoje = new Date();
   const mesAtual = `${hoje.getFullYear()}-${String(hoje.getMonth()+1).padStart(2,'0')}`;
@@ -3364,9 +3369,16 @@ function PainelComercial() {
     return ['Todos', ...[...s].sort()];
   }, [registros]);
 
+  // Quando o usuario esta vinculado a um vendedor do Sankhya e nao tem
+  // permissao de ver todos, o painel mostra so as vendas dele -- inclusive o
+  // filtro de vendedor fica travado, pra nao dar a impressao de que existe
+  // um "Todos" que ele poderia escolher.
+  const soMeuVendedor = !!currentUser?.vendedorSankhya && !currentUser?.veTodosVendedores;
+
   const filtrados = useMemo(() => {
     return registros
       .filter(r => {
+        if (soMeuVendedor && (r.vendedor || '').toUpperCase() !== currentUser.vendedorSankhya.toUpperCase()) return false;
         const d = diasAtraso(r);
         const { cat } = statusMeta(d, r.faturado);
         const matchVend   = vendFiltro === 'Todos' || r.vendedor === vendFiltro;
@@ -3576,7 +3588,8 @@ function PainelComercial() {
           </FiltroCampoFat>
           <FiltroCampoFat label="Vendedor">
             <div style={{ position: 'relative' }}>
-              <select value={vendFiltro} onChange={e => setVendFiltro(e.target.value)} style={selectStyleFat(180)}>
+              <select value={soMeuVendedor ? currentUser.vendedorSankhya : vendFiltro} disabled={soMeuVendedor}
+                onChange={e => setVendFiltro(e.target.value)} style={{ ...selectStyleFat(180), opacity: soMeuVendedor ? 0.6 : 1 }}>
                 {vendedores.map(v => <option key={v} value={v}>{v}</option>)}
               </select>
               <ChevronDown size={13} style={chevronStyleFat} />
@@ -3638,7 +3651,32 @@ function PainelComercial() {
                     onMouseLeave={e => e.currentTarget.style.background = rowBg}>
                     <td style={{ padding: '9px 10px', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText, whiteSpace: 'nowrap' }}>{r.br}</td>
                     <td style={{ padding: '9px 10px', fontFamily: FONT_DISPLAY, fontWeight: 700, color: r.faturado ? T.oliveText : T.amberText }}>
-                      {r.faturado ? `NF ${r.nf}` : '⏳ Pendente'}
+                      {r.faturado ? `NF ${r.nf}` : (() => {
+                        // Barra mostrando o quanto do prazo ja passou: do dia
+                        // em que o pedido foi criado ate a data prevista de
+                        // faturamento. Cheia = prazo esgotado.
+                        const ini = r.pedido_criado ? new Date(r.pedido_criado) : null;
+                        const fim = r.fat_previsto ? new Date(r.fat_previsto) : null;
+                        if (!fim) return '⏳ Pendente';
+                        const agora = new Date();
+                        const totalDias = ini ? Math.max(1, Math.round((fim - ini) / 86400000)) : 30;
+                        const passados = ini ? Math.round((agora - ini) / 86400000)
+                                             : totalDias - Math.round((fim - agora) / 86400000);
+                        const pct = Math.max(0, Math.min(100, Math.round(passados / totalDias * 100)));
+                        const faltam = Math.round((fim - agora) / 86400000);
+                        const cor = faltam < 0 ? T.rustText : faltam <= 3 ? T.amberText : T.oliveText;
+                        const fundo = faltam < 0 ? T.rustSoft : faltam <= 3 ? T.amberSoft : T.oliveSoft;
+                        return (
+                          <div style={{ minWidth: 92 }} title={faltam < 0 ? `${Math.abs(faltam)} dias em atraso` : `Faltam ${faltam} dias`}>
+                            <div style={{ fontSize: 10.5, fontWeight: 700, color: cor, marginBottom: 3 }}>
+                              {faltam < 0 ? `⏳ ${Math.abs(faltam)}d atraso` : `⏳ faltam ${faltam}d`}
+                            </div>
+                            <div style={{ height: 5, borderRadius: 3, background: fundo, overflow: 'hidden' }}>
+                              <div style={{ width: `${pct}%`, height: '100%', background: cor, borderRadius: 3 }} />
+                            </div>
+                          </div>
+                        );
+                      })()}
                     </td>
                     <td style={{ padding: '9px 10px', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.cliente}>{r.cliente}</td>
                     <td style={{ padding: '9px 10px', color: T.blueText, fontWeight: 600, fontSize: 11 }}>{r.kaleng}</td>
@@ -5159,7 +5197,7 @@ function ProspeccaoClientes() {
   );
 }
 
-function AnaliseComercial() {
+function AnaliseComercial({ currentUser }) {
   const [notas, setNotas] = useState([]);
   const [propostas, setPropostas] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -5196,9 +5234,15 @@ function AnaliseComercial() {
         return resultado;
       };
 
+      // Quando a pessoa esta vinculada a um vendedor e nao ve todos, o filtro
+      // e aplicado ja na consulta -- assim ela nunca chega a baixar carteira
+      // de colega, em vez de esconder so na tela.
+      const soMeuVendedor = !!currentUser?.vendedorSankhya && !currentUser?.veTodosVendedores;
+      const filtroVend = (q) => soMeuVendedor ? q.ilike('vendedor_nome', currentUser.vendedorSankhya) : q;
+
       const [notasData, propostasData] = await Promise.all([
-        buscarTudoEmLotes('nota_venda_itens', 'nunota,br,cliente_nome,produto_descricao,quantidade,valor_bruto,data_faturamento,data_neg',
-          q => q.gte('data_neg', periodo.dataIni).lte('data_neg', periodo.dataFim)),
+        buscarTudoEmLotes('nota_venda_itens', 'nunota,br,cliente_nome,produto_descricao,quantidade,valor_bruto,data_faturamento,data_neg,vendedor_nome',
+          q => filtroVend(q.gte('data_neg', periodo.dataIni).lte('data_neg', periodo.dataFim))),
         buscarTudoEmLotes('propostas', 'br,cliente,status,valor_liquido,data_abertura',
           q => q.gte('data_abertura', periodo.dataIni).lte('data_abertura', periodo.dataFim)),
       ]);
@@ -5209,7 +5253,7 @@ function AnaliseComercial() {
       setErro(String(e?.message || e));
     }
     setLoading(false);
-  }, [periodo]);
+  }, [periodo, currentUser]);
 
   useEffect(() => { carregar(); }, [carregar]);
 
@@ -19400,7 +19444,7 @@ const TELAS_CATALOGO = [
   { id: 'conf_apontamento', label: 'Conf. Apontamento' },
   { id: 'reservas_pendentes', label: 'Reservas Pendentes' },
   { id: 'verificacao_projetos', label: 'Verificação de Projetos' },
-  { id: 'analise_comercial', label: 'Análise Comercial' },
+  { id: 'analise_comercial', label: 'Follow Up Comercial' },
   { id: 'prospeccao_clientes', label: 'Prospecção de Clientes' },
   { id: 'almoxarifado_fluxo', label: 'Fluxo de Materiais' },
   { id: 'pedidosvale',  label: 'Pedidos Vale' },
@@ -19420,6 +19464,11 @@ function PermissoesManager() {
   const [selecionado, setSelecionado] = useState(null);
   const [salvando, setSalvando] = useState(false);
   const [criandoUsuario, setCriandoUsuario] = useState(false); // controla o modal
+  const [vendedoresSankhya, setVendedoresSankhya] = useState([]);
+  useEffect(() => {
+    supabase.from('faturamento_resumo').select('vendedor_nome').not('vendedor_nome', 'is', null)
+      .then(({ data }) => setVendedoresSankhya([...new Set((data || []).map(v => v.vendedor_nome))].sort()));
+  }, []);
 
   const carregar = useCallback(async () => {
     setLoading(true);
@@ -19569,6 +19618,37 @@ function PermissoesManager() {
                 <input type="checkbox" checked={!!usuario.ve_almoxarifado_apenas_fila} disabled={salvando} onChange={toggleApenasFilaAtendimento} />
                 Em Fluxo de Materiais, vê só a Fila de Atendimento (nada mais) — pros colaboradores que atendem os pedidos
               </label>
+
+              {/* Vinculo com o vendedor do Sankhya. Sem isso, as telas
+                  comerciais continuam mostrando tudo pra pessoa -- o nome do
+                  portal quase nunca bate com o nome do vendedor no ERP. */}
+              <div style={{ borderTop: `1px solid ${T.line}`, paddingTop: 12, marginTop: 4 }}>
+                <label style={{ fontSize: 11.5, fontWeight: 700, color: T.inkFaint, display: 'block', marginBottom: 5 }}>
+                  Vendedor no Sankhya
+                </label>
+                <select value={usuario.vendedor_sankhya || ''} disabled={salvando}
+                  onChange={async e => {
+                    setSalvando(true);
+                    await supabase.from('colaboradores').update({ vendedor_sankhya: e.target.value || null }).eq('id', usuario.id);
+                    await carregar(); setSalvando(false);
+                  }}
+                  style={{ ...inputStyle(), width: 280 }}>
+                  <option value="">— não vinculado (vê todos) —</option>
+                  {vendedoresSankhya.map(v => <option key={v} value={v}>{v}</option>)}
+                </select>
+                <div style={{ fontSize: 11, color: T.inkFaint, marginTop: 4 }}>
+                  Vinculado: no Painel Comercial e no Follow Up, vê só as vendas dele.
+                </div>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, marginTop: 8 }}>
+                  <input type="checkbox" checked={!!usuario.ve_todos_vendedores} disabled={salvando}
+                    onChange={async e => {
+                      setSalvando(true);
+                      await supabase.from('colaboradores').update({ ve_todos_vendedores: e.target.checked }).eq('id', usuario.id);
+                      await carregar(); setSalvando(false);
+                    }} />
+                  Mesmo vinculado, vê as vendas de todos (gerente comercial)
+                </label>
+              </div>
             </div>
           )}
         </div>
