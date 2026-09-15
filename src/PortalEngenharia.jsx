@@ -14713,9 +14713,25 @@ function MargemProduto({ dados, placar, param, onParam }) {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '14px 18px' }}>
         <div style={{ fontSize: 12.5, color: T.inkDim, lineHeight: 1.65 }}>
-          Receita líquida contra custo cheio, por produto e competência. Só entram produtos que foram
-          faturados <strong>e</strong> produzidos no mesmo mês — venda de estoque antigo fica de fora,
-          então isto é uma amostra do resultado, não o lucro da empresa.
+          Receita líquida contra custo cheio, por produto e competência.
+        </div>
+        <div style={{ fontSize: 12.5, color: T.rustText, background: T.rustSoft, borderRadius: 6,
+                      padding: '11px 14px', marginTop: 10, lineHeight: 1.65 }}>
+          <strong>ESTES NÚMEROS AINDA NÃO SERVEM PARA DECISÃO.</strong> Dois problemas conhecidos:
+          <div style={{ marginTop: 6 }}>
+            ‣ A comparação usa o custo do que foi <strong>produzido</strong> contra a receita do que foi{' '}
+            <strong>vendido</strong>, e são cestas diferentes. Um produto com 320 unidades produzidas e 80
+            faturadas aparece com prejuízo que é, na verdade, estoque.
+          </div>
+          <div style={{ marginTop: 6 }}>
+            ‣ O rateio distribui todo o CIF do mês sobre o material apontado naquele mês. Quando o
+            apontamento é fraco, o mesmo CIF cai sobre uma base menor e o custo unitário estoura: em
+            maio o CIF ficou em 388% do material, contra 107% em fevereiro.
+          </div>
+          <div style={{ marginTop: 6, color: T.inkDim }}>
+            No agregado a empresa vai bem: o custo cheio fica entre 71% e 83% do faturamento bruto.
+            A distorção está na comparação produto a produto, não no negócio.
+          </div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10, flexWrap: 'wrap',
                       fontSize: 12, color: T.amberText, background: T.amberSoft, borderRadius: 6, padding: '8px 12px' }}>
