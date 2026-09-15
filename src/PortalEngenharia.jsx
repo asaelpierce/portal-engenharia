@@ -4935,9 +4935,16 @@ function ProspeccaoClientes() {
     }
   };
 
+  // Ao mudar o status o card sai da aba atual e cai na aba correspondente.
+  // Sem aviso isso parece que "sumiu", entao mostra pra onde foi.
+  const [movidoMsg, setMovidoMsg] = useState(null);
   const atualizarStatus = async (id, status) => {
+    const alvo = prospects.find(p => p.id === id);
     await supabase.from('prospeccao_novos_clientes').update({ status, atualizado_em: new Date().toISOString() }).eq('id', id);
     await carregar();
+    const nomeAba = { novo: 'Novos', em_analise: 'Em análise', contatado: 'Contatados', descartado: 'Descartados' }[status] || status;
+    setMovidoMsg(`${alvo?.empresa || 'Prospect'} movido para "${nomeAba}".`);
+    setTimeout(() => setMovidoMsg(null), 5000);
   };
 
   const [pesquisandoId, setPesquisandoId] = useState(null);
@@ -5035,19 +5042,32 @@ function ProspeccaoClientes() {
                 style={{ ...selectStyleFat(260), paddingLeft: 28 }} />
             </div>
           </FiltroCampoFat>
-          <FiltroCampoFat label="Status">
-            <div style={{ position: 'relative' }}>
-              <select value={filtroStatus} onChange={e => setFiltroStatus(e.target.value)} style={selectStyleFat(180)}>
-                <option value="novo">Novo</option>
-                <option value="em_analise">Em análise</option>
-                <option value="contatado">Contatado</option>
-                <option value="descartado">Descartado</option>
-                <option value="todos">Todos</option>
-              </select>
-              <ChevronDown size={13} style={chevronStyleFat} />
-            </div>
-          </FiltroCampoFat>
         </div>
+        {/* Abas por status: conforme o comercial vai trabalhando o prospect,
+            ele sai de uma aba e cai na seguinte -- em vez de sumir de vista
+            num filtro de dropdown que ninguem lembra de trocar. */}
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
+          {[
+            { id: 'novo', label: `Novos (${kpis.novo})` },
+            { id: 'em_analise', label: `Em análise (${kpis.em_analise})` },
+            { id: 'contatado', label: `Contatados (${kpis.contatado})` },
+            { id: 'descartado', label: `Descartados (${kpis.descartado})` },
+            { id: 'todos', label: `Todos (${kpis.total})` },
+          ].map(t => (
+            <button key={t.id} onClick={() => setFiltroStatus(t.id)}
+              style={{ fontSize: 12.5, fontWeight: 700, padding: '7px 14px', borderRadius: 6, cursor: 'pointer',
+                border: `1px solid ${filtroStatus === t.id ? T.terracotta : T.line}`,
+                background: filtroStatus === t.id ? T.terracotta : 'transparent',
+                color: filtroStatus === t.id ? '#fff' : T.inkDim }}>
+              {t.label}
+            </button>
+          ))}
+        </div>
+        {movidoMsg && (
+          <div style={{ marginTop: 10, fontSize: 12.5, color: T.oliveText, background: T.oliveSoft, padding: '7px 12px', borderRadius: 6 }}>
+            ✓ {movidoMsg}
+          </div>
+        )}
       </Panel>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
