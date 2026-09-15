@@ -14715,24 +14715,20 @@ function MargemProduto({ dados, placar, param, onParam }) {
         <div style={{ fontSize: 12.5, color: T.inkDim, lineHeight: 1.65 }}>
           Receita líquida contra custo cheio, por produto e competência.
         </div>
-        <div style={{ fontSize: 12.5, color: T.rustText, background: T.rustSoft, borderRadius: 6,
+        <div style={{ fontSize: 12.5, color: T.inkDim, background: T.panelAlt, borderRadius: 6,
                       padding: '11px 14px', marginTop: 10, lineHeight: 1.65 }}>
-          <strong>ESTES NÚMEROS AINDA NÃO SERVEM PARA DECISÃO.</strong> Dois problemas conhecidos:
-          <div style={{ marginTop: 6 }}>
-            ‣ A comparação usa o custo do que foi <strong>produzido</strong> contra a receita do que foi{' '}
-            <strong>vendido</strong>, e são cestas diferentes. Um produto com 320 unidades produzidas e 80
-            faturadas aparece com prejuízo que é, na verdade, estoque.
-          </div>
-          <div style={{ marginTop: 6 }}>
-            ‣ O rateio distribui todo o CIF do mês sobre o material apontado naquele mês. Quando o
-            apontamento é fraco, o mesmo CIF cai sobre uma base menor e o custo unitário estoura: em
-            maio o CIF ficou em 388% do material, contra 107% em fevereiro.
-          </div>
-          <div style={{ marginTop: 6, color: T.inkDim }}>
-            No agregado a empresa vai bem: o custo cheio fica entre 71% e 83% do faturamento bruto.
-            A distorção está na comparação produto a produto, não no negócio.
+          <strong style={{ color: T.ink }}>Critério em uso:</strong> o custo comparado é o do que foi
+          VENDIDO (custo unitário do mês × quantidade faturada), não o do que foi produzido — o que
+          sobra vai para a coluna de estoque. E o CIF é aplicado pela taxa acumulada do período, não
+          pela taxa do mês, porque a taxa mensal oscilava de 107% a 388% conforme a qualidade do
+          apontamento de produção.
+          <div style={{ marginTop: 6, color: T.amberText }}>
+            Ainda em aberto: produto vendido de estoque de meses anteriores carrega o custo unitário
+            do mês da venda, não o do mês em que foi produzido. Corrigir isso exige a movimentação de
+            estoque com data.
           </div>
         </div>
+
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10, flexWrap: 'wrap',
                       fontSize: 12, color: T.amberText, background: T.amberSoft, borderRadius: 6, padding: '8px 12px' }}>
           <strong>PREMISSA:</strong>
@@ -14771,6 +14767,8 @@ function MargemProduto({ dados, placar, param, onParam }) {
             { l: 'No prejuízo', v: String(pl.no_prejuizo), c: T.rustText, sub: `${100 - pl.pct_lucro}% do total` },
             { l: 'Ganho dos positivos', v: moeda(pl.ganho), c: T.oliveText },
             { l: 'Perda dos negativos', v: moeda(pl.perda), c: T.rustText },
+            { l: 'Custo que foi p/ estoque', v: moeda(pl.custo_em_estoque), c: T.blueText,
+              sub: 'produziu e não vendeu' },
             { l: 'Resultado', v: moeda(pl.resultado), c: pl.resultado >= 0 ? T.oliveText : T.rustText,
               sub: pl.receita_liquida > 0 ? `${(pl.resultado / pl.receita_liquida * 100).toFixed(1)}% da receita` : null },
           ].map(k => (
@@ -14807,8 +14805,8 @@ function MargemProduto({ dados, placar, param, onParam }) {
           <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 1000 }}>
             <thead>
               <tr style={{ background: T.panelAlt }}>
-                {['Produto', 'Qtd', 'Receita bruta', 'Impostos', 'Receita líquida',
-                  'Material', 'Mão de obra', 'Indiretos', 'Custo total', 'Resultado', 'Margem'].map((h, i) => (
+                {['Produto', 'Faturado', 'Produzido', 'Receita bruta', 'Impostos', 'Receita líquida',
+                  'Custo unit.', 'Custo do vendido', 'Em estoque', 'Resultado', 'Margem'].map((h, i) => (
                   <th key={h} style={{ padding: '10px 12px', fontSize: 11, fontWeight: 600, color: T.inkFaint,
                     textAlign: i >= 1 ? 'right' : 'left', borderBottom: `1px solid ${T.line}`, whiteSpace: 'nowrap' }}>{h}</th>
                 ))}
@@ -14828,20 +14826,24 @@ function MargemProduto({ dados, placar, param, onParam }) {
                     </td>
                     <td style={{ padding: '10px 12px', fontSize: 12, textAlign: 'right', color: T.inkDim, fontVariantNumeric: 'tabular-nums' }}>
                       {Number(d.qtd_faturada).toLocaleString('pt-BR')}</td>
+                    <td style={{ padding: '10px 12px', fontSize: 12, textAlign: 'right', fontVariantNumeric: 'tabular-nums',
+                                 color: d.vendeu_mais_que_produziu ? T.amberText : T.inkFaint }}>
+                      {Number(d.qtd_produzida).toLocaleString('pt-BR')}
+                      {d.vendeu_mais_que_produziu && <span title="Vendeu mais do que produziu no mês: parte veio de estoque anterior"> ⚠</span>}
+                    </td>
                     <td style={{ padding: '10px 12px', fontSize: 12, textAlign: 'right', color: T.inkDim, fontVariantNumeric: 'tabular-nums' }}>
                       {moeda(d.receita_bruta)}</td>
                     <td style={{ padding: '10px 12px', fontSize: 11.5, textAlign: 'right', color: T.inkFaint, fontVariantNumeric: 'tabular-nums' }}>
                       ({moeda(imp)})</td>
                     <td style={{ padding: '10px 12px', fontSize: 12, textAlign: 'right', fontWeight: 600, color: T.ink, fontVariantNumeric: 'tabular-nums' }}>
                       {moeda(d.receita_liquida)}</td>
-                    <td style={{ padding: '10px 12px', fontSize: 11.5, textAlign: 'right', color: T.oliveText, fontVariantNumeric: 'tabular-nums' }}>
-                      {moeda(d.material)}</td>
-                    <td style={{ padding: '10px 12px', fontSize: 11.5, textAlign: 'right', color: T.terracotta, fontVariantNumeric: 'tabular-nums' }}>
-                      {moeda(d.mao_de_obra)}</td>
-                    <td style={{ padding: '10px 12px', fontSize: 11.5, textAlign: 'right', color: T.amberText, fontVariantNumeric: 'tabular-nums' }}>
-                      {moeda(d.indiretos)}</td>
+                    <td style={{ padding: '10px 12px', fontSize: 11.5, textAlign: 'right', color: T.inkDim, fontVariantNumeric: 'tabular-nums' }}>
+                      {d.custo_unitario != null ? `R$ ${Number(d.custo_unitario).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2})}` : '—'}</td>
                     <td style={{ padding: '10px 12px', fontSize: 12, textAlign: 'right', fontWeight: 600, color: T.ink, fontVariantNumeric: 'tabular-nums' }}>
-                      {moeda(d.custo_total)}</td>
+                      {moeda(d.custo_do_vendido)}</td>
+                    <td style={{ padding: '10px 12px', fontSize: 11.5, textAlign: 'right', color: T.inkFaint, fontVariantNumeric: 'tabular-nums' }}
+                        title="Custo que ficou em estoque: produziu e não vendeu no mês">
+                      {moeda(d.custo_em_estoque)}</td>
                     <td style={{ padding: '10px 12px', fontSize: 12.5, textAlign: 'right', fontWeight: 700,
                                  color: neg ? T.rustText : T.oliveText, fontVariantNumeric: 'tabular-nums' }}>
                       {moeda(d.resultado)}</td>
@@ -14858,8 +14860,9 @@ function MargemProduto({ dados, placar, param, onParam }) {
                       display: 'flex', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
           <span>Ordenado do pior para o melhor resultado · linhas em vermelho dão prejuízo</span>
           <BotaoExportar small onClick={() => exportCSV(linhas, `margem_${compAtual}.csv`,
-            ['cod_produto','produto','qtd_faturada','receita_bruta','icms','ipi','iss','pis_cofins',
-             'receita_liquida','material','mao_de_obra','indiretos','custo_total','resultado','margem_pct'])} />
+            ['cod_produto','produto','qtd_faturada','qtd_produzida','receita_bruta','icms','ipi','iss',
+             'pis_cofins','receita_liquida','custo_unitario','custo_do_vendido','custo_em_estoque',
+             'resultado','margem_pct'])} />
         </div>
       </div>
 
