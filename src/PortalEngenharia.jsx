@@ -16263,6 +16263,29 @@ function Custeio() {
   // Classificar uma natureza. A escrita vai por RPC, nao direto na tabela:
   // assim so da para mudar o destino de uma natureza, e fica registrado que
   // a decisao veio da tela.
+  // Corrigir vinculo pela tela. Cada acao tambem ENSINA: confirmar grava
+  // exemplo positivo, desfazer grava negativo. O negativo importa tanto quanto
+  // o positivo -- sem ele o modelo repete o mesmo erro para sempre.
+  const [vincBusy, setVincBusy] = useState(null);
+  const acaoVinculo = useCallback(async (acao, r, chaveComprado) => {
+    const chave = `${r.chave_item}-${chaveComprado || ''}`;
+    setVincBusy(chave);
+    try {
+      const fn = acao === 'confirmar' ? 'fn_custeio_confirmar_vinculo'
+               : acao === 'desfazer'  ? 'fn_custeio_desfazer_vinculo'
+               : 'fn_custeio_criar_vinculo';
+      const orcado = r.valor_orcado != null ? r.chave_item : (chaveComprado || r.chave_item);
+      const comprado = r.valor_orcado != null ? (chaveComprado || r.vinculo_contraparte) : r.chave_item;
+      const { error } = await supabase.rpc(fn, {
+        p_codproj: r.codproj, p_nureg: r.nureg,
+        p_chave_orcado: String(orcado), p_chave_comprado: String(comprado),
+      });
+      if (error) throw error;
+      setOrcComp(await lerTudo('v_custeio_orcado_comprado_cat'));
+    } catch (e) { setErro(e.message || String(e)); }
+    setVincBusy(null);
+  }, [lerTudo]);
+
   const classificarNatureza = useCallback(async (codnat, destino) => {
     setSalvandoNat(codnat);
     try {
@@ -17224,7 +17247,7 @@ function Custeio() {
                         <div style={{ overflowX: 'auto' }}>
                           <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 760 }}>
                             <thead><tr style={{ background: T.panel }}>
-                              {['Item', 'Orçado', 'Comprado (líq.)', 'Do estoque', 'Custo real', 'Desvio', 'Situação'].map((h, i) => (
+                              {['Item', 'Orçado', 'Comprado (líq.)', 'Do estoque', 'Custo real', 'Desvio', 'Situação', ''].map((h, i) => (
                                 <th key={h} style={{ padding: '8px 12px', fontSize: 10.5, fontWeight: 600, color: T.inkFaint, textAlign: i === 0 || i === 6 ? 'left' : 'right', whiteSpace: 'nowrap' }}>{h}</th>
                               ))}
                             </tr></thead>
@@ -17249,6 +17272,22 @@ function Custeio() {
                                       {desvio == null ? '—' : `${desvio > 0 ? '+' : ''}${moeda(desvio)}`}
                                     </td>
                                     <td style={{ padding: '7px 12px', fontSize: 11, color: T.inkDim, whiteSpace: 'nowrap' }}>{celulaSit(r)}</td>
+                                    <td style={{ padding: '7px 8px', whiteSpace: 'nowrap' }}>
+                                      {r.vinculo_itens > 0 && r.vinculo_por_ia && (
+                                        <span style={{ display: 'inline-flex', gap: 4 }}>
+                                          <button disabled={vincBusy != null}
+                                            onClick={() => acaoVinculo('confirmar', r, r.vinculo_contraparte)}
+                                            title="Este vínculo está certo. Confirma e ensina a régua."
+                                            style={{ fontFamily: 'inherit', fontSize: 11, cursor: 'pointer', padding: '2px 7px',
+                                              borderRadius: 4, border: `1px solid ${T.line}`, background: 'transparent', color: T.oliveText }}>✓</button>
+                                          <button disabled={vincBusy != null}
+                                            onClick={() => acaoVinculo('desfazer', r, r.vinculo_contraparte)}
+                                            title="Este vínculo está errado. Desfaz e ensina que não corresponde."
+                                            style={{ fontFamily: 'inherit', fontSize: 11, cursor: 'pointer', padding: '2px 7px',
+                                              borderRadius: 4, border: `1px solid ${T.line}`, background: 'transparent', color: T.rustText }}>✕</button>
+                                        </span>
+                                      )}
+                                    </td>
                                   </tr>
                                 );
                               })}
