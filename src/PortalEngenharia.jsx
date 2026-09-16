@@ -16193,6 +16193,7 @@ function Custeio() {
   const [fatFiltro, setFatFiltro] = useState('todos'); // todos | faturados | nao_faturados
   const [verItens, setVerItens] = useState(false);
   const [caixaAberta, setCaixaAberta] = useState(null); // material | servicos | frete | outros
+  const [verSoOrcado, setVerSoOrcado] = useState(false);
   const [verif, setVerif] = useState([]);
   const [cifMes, setCifMes] = useState([]);
   const [cifRateio, setCifRateio] = useState([]);
@@ -16987,7 +16988,17 @@ function Custeio() {
           // Ordenado por data do pedido de venda, do mais recente pro mais antigo.
           .sort((a, b) => (b.data || '').localeCompare(a.data || ''));
 
-        const detalhe = brOrc ? orcComp.filter(r => (r.br || '').toLowerCase().includes(brOrc.toLowerCase())) : [];
+        const todoOrc = brOrc ? orcComp.filter(r => (r.br || '').toLowerCase().includes(brOrc.toLowerCase())) : [];
+        // ESCOPO: o custo do projeto e o que Compras comprou (com codigo) mais
+        // o que foi movimentado do estoque para ele. Item so orcado, sem
+        // nenhum movimento, nao e custo nem economia -- e ruido: sao 24.015
+        // linhas na base inteira. Fica atras de um botao, nao no caminho.
+        const temMovimento = (r) => (Number(r.valor_comprado_liquido ?? r.valor_comprado) || 0) > 0
+                                 || (Number(r.valor_estoque_liquido) || 0) > 0
+                                 || (Number(r.valor_solicitado) || 0) > 0
+                                 || (Number(r.valor_empenhado) || 0) > 0;
+        const semMov = todoOrc.filter(r => !temMovimento(r));
+        const detalhe = verSoOrcado ? todoOrc : todoOrc.filter(temMovimento);
         const rotLote = '🏭 consumo de fábrica';
         // Item comprado em lote nunca casa com compra do projeto -- pallet,
         // cola, thinner, servico interno. Mostrar como "orcado, nao comprado"
@@ -17295,7 +17306,19 @@ function Custeio() {
                           </table>
                         </div>
                         <div style={{ padding: '8px 12px', borderTop: `1px solid ${T.lineSoft}`, fontSize: 10.5, color: T.inkFaint }}>
-                          Linhas com “orçado, não comprado” ao lado de “comprado sem orçamento” na mesma caixa são o mesmo custo com códigos diferentes nos dois lados — é por isso que a soma da caixa vale mais que a comparação item a item.
+                          O custo do projeto é o que Compras comprou mais o que foi movimentado do estoque. Item
+                          comprado e depois transferido conta <strong>uma vez só</strong>, como compra.
+                          {semMov.length > 0 && (
+                            <>
+                              {' '}Existem {semMov.length} {semMov.length === 1 ? 'item orçado' : 'itens orçados'} sem
+                              nenhum movimento neste projeto.{' '}
+                              <button onClick={() => setVerSoOrcado(v => !v)}
+                                style={{ fontFamily: 'inherit', fontSize: 10.5, padding: '2px 7px', borderRadius: 4,
+                                  cursor: 'pointer', border: `1px solid ${T.line}`, background: 'transparent', color: T.inkDim }}>
+                                {verSoOrcado ? 'ocultar' : 'mostrar'}
+                              </button>
+                            </>
+                          )}
                         </div>
                       </div>
                     );
