@@ -16189,6 +16189,7 @@ function Custeio() {
   const [mesMargem, setMesMargem] = useState('todos');
   const [orcComp, setOrcComp] = useState([]);
   const [catComp, setCatComp] = useState([]);
+  const [opExtra, setOpExtra] = useState([]);
   const [brOrc, setBrOrc] = useState('');
   const [fatFiltro, setFatFiltro] = useState('todos'); // todos | faturados | nao_faturados
   const [caixaAberta, setCaixaAberta] = useState(null); // material | servicos | frete | outros
@@ -16238,6 +16239,7 @@ function Custeio() {
       // pelo mesmo criterio: grupo do cadastro e, sem codigo, pelo texto.
       const rc = await lerTudo('v_custeio_categoria');
       setCatComp(rc);
+      setOpExtra(await lerTudo('v_custeio_op_extra'));
       // Historico do verificador. 60 dias bastam para ver tendencia sem
       // arrastar a tabela inteira, que cresce ~17 linhas por dia.
       const desdeVerif = new Date(Date.now() - 60 * 864e5).toISOString();
@@ -16942,8 +16944,8 @@ function Custeio() {
         const porOrc = {};
         orcComp.forEach(r => {
           const k = `${r.br || 'proj ' + r.codproj}|${r.nureg}`;
-          if (!porOrc[k]) porOrc[k] = { chave: k, br: r.br || `proj ${r.codproj}`, nureg: r.nureg,
-            pedido: r.pedido_venda, data: r.data_ref_orcamento, orc: 0, sol: 0, com: 0, comLiq: 0, emp: 0, est: 0, rec: 0, recBruta: 0, fonteRec: null, itens: 0, cats: {} };
+          if (!porOrc[k]) porOrc[k] = { chave: k, codproj: r.codproj, br: r.br || `proj ${r.codproj}`, nureg: r.nureg,
+            pedido: r.pedido_venda, data: r.data_ref_orcamento, orc: 0, sol: 0, com: 0, comLiq: 0, emp: 0, est: 0, op: 0, rec: 0, recBruta: 0, fonteRec: null, itens: 0, cats: {} };
           porOrc[k].orc += Number(r.valor_orcado) || 0;
           porOrc[k].sol += Number(r.valor_solicitado) || 0;
           porOrc[k].com += Number(r.valor_comprado) || 0;
@@ -16966,8 +16968,28 @@ function Custeio() {
         // Hoje todo projeto faturado tem liquido: ou o campo digitado no
         // Sankhya, ou o rateio do liquido da nota na proporcao do VLRTOT --
         // a mesma conta usada do lado do custo. A marca na tela diz qual.
+        // Material vindo de OP de estoque: soma por projeto, ja liquido do
+        // que o projeto comprou do mesmo produto. Nao vem da view de itens,
+        // entao precisa ser agregado a parte.
+        const opPorProj = {};
+        opExtra.forEach(e => {
+          const v = Number(e.custo_a_acrescentar) || 0;
+          if (v > 0) opPorProj[e.codproj] = (opPorProj[e.codproj] || 0) + v;
+        });
+        // Um BR pode ter varios orcamentos. A parcela da OP e do PROJETO, nao
+        // do orcamento: some no orcamento mais antigo, uma vez so, senao
+        // multiplicaria por quantos NUREG o projeto tiver.
+        const jaRecebeuOp = new Set();
+        Object.values(porOrc)
+          .sort((x, y) => (x.nureg || 0) - (y.nureg || 0))
+          .forEach(b2 => {
+            if (jaRecebeuOp.has(b2.codproj)) { b2.op = 0; return; }
+            b2.op = opPorProj[b2.codproj] || 0;
+            if (b2.op > 0) jaRecebeuOp.add(b2.codproj);
+          });
+
         const todosOrc = Object.values(porOrc)
-          .filter(b => b.com > 0 || b.est > 0)
+          .filter(b => b.com > 0 || b.est > 0 || b.op > 0)
           .map(b => ({ ...b, faturado: b.recBruta > 0,
                        calculado: b.recBruta > 0 && b.fonteRec !== 'manual' }));
         const nFat = todosOrc.filter(b => b.faturado).length;
@@ -17003,6 +17025,7 @@ function Custeio() {
         const corConf = { alta: T.oliveText, media: T.amberText, baixa: T.rustText };
         const rotDe = (r) => {
           if (r.compra_em_lote) return rotLote;
+          if (r.situacao === 'de_op_estoque') return '⚙ de OP de estoque';
           if (r.situacao_ajustada === 'vinculado_a_compra') return '≡ vinculado a compra';
           if (r.situacao_ajustada === 'vinculado_a_orcamento') return '≡ vinculado a orçamento';
           return rotSit[r.situacao] || r.situacao || '—';
@@ -17077,7 +17100,7 @@ function Custeio() {
                         <td style={{ padding: '9px 12px', fontSize: 12.5, textAlign: 'right', color: T.blueText, fontVariantNumeric: 'tabular-nums' }}
                             title="Material que a empresa já tinha e usou — só entra aqui se NÃO houve compra dele neste projeto (senão contaria duas vezes)">{b.est ? moeda(b.est) : '—'}</td>
                         <td style={{ padding: '9px 12px', fontSize: 12.5, textAlign: 'right', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}
-                            title="Comprado (NF) + o que saiu do estoque">{moeda(b.comLiq + b.est)}</td>
+                            title="Comprado (NF) + o que saiu do estoque + material de OP de estoque">{moeda(b.comLiq + b.est + (b.op || 0))}</td>
                         <td style={{ padding: '9px 12px', fontSize: 12.5, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}
                             title={!b.rec ? 'Sem nota de venda'
                                    : b.calculado ? `Rateio do líquido da nota. Bruto faturado: ${moeda(b.recBruta)}`
@@ -17085,7 +17108,7 @@ function Custeio() {
                           {b.rec ? moeda(b.rec) : '—'}
                         </td>
                         {(() => {
-                          const custo = b.comLiq + b.est;
+                          const custo = b.comLiq + b.est + (b.op || 0);
                           const marg = b.rec ? b.rec - custo : null;
                           const pct = b.rec ? (marg / b.rec * 100) : null;
                           const cor = marg == null ? T.inkFaint : marg >= 0 ? T.oliveText : T.rustText;
@@ -17230,6 +17253,23 @@ function Custeio() {
                     // de a comparacao item a item nao funcionar. Aqui isso fica
                     // visivel em vez de escondido.
                     const rot = ORDEM.find(c => c.id === caixaAberta);
+                    // Os itens vindos de OP de estoque nao estao na view de
+                    // itens do projeto -- eles vem de outra origem. Entram aqui
+                    // com a mesma forma das demais linhas, e marcados.
+                    const brsDoFiltro = new Set(linhasCat.map(l => l.codproj));
+                    const itensOp = opExtra
+                      .filter(e => brsDoFiltro.has(e.codproj) && Number(e.custo_a_acrescentar) > 0)
+                      .map(e => ({
+                        chave_item: `op-${e.idiproc_origem}-${e.cod_prod}`,
+                        cod_prod: e.cod_prod,
+                        descr_prod: e.descr_prod,
+                        caixa: e.caixa,
+                        situacao: 'de_op_estoque',
+                        de_op: e.idiproc_origem,
+                        ja_em_compras: Number(e.ja_em_compras) || 0,
+                        _orc: 0, _com: 0, _est: 0,
+                        _op: Number(e.custo_a_acrescentar) || 0,
+                      }))
                     const itens = detalhe
                       .filter(r => r.caixa === caixaAberta)
                       .map(r => ({
@@ -17237,8 +17277,10 @@ function Custeio() {
                         _orc: Number(r.valor_orcado) || 0,
                         _com: Number(r.valor_comprado_liquido ?? r.valor_comprado) || 0,
                         _est: Number(r.valor_estoque_liquido) || 0,
+                        _op: 0,
                       }))
-                      .map(r => ({ ...r, _custo: r._com + r._est }))
+                      .concat(itensOp.filter(e => e.caixa === caixaAberta))
+                      .map(r => ({ ...r, _custo: r._com + r._est + (r._op || 0) }))
                       .sort((a, b) => Math.max(b._orc, b._custo) - Math.max(a._orc, a._custo));
                     if (!itens.length) return null;
 
@@ -17270,7 +17312,10 @@ function Custeio() {
                                             title="Sem código de produto no orçamento: classificado pelo texto da descrição">✎ texto</span>}
                                     </td>
                                     <td style={{ padding: '7px 12px', fontSize: 12, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{r._com ? moeda(r._com) : '—'}</td>
-                                    <td style={{ padding: '7px 12px', fontSize: 12, textAlign: 'right', color: T.blueText, fontVariantNumeric: 'tabular-nums' }}>{r._est ? moeda(r._est) : '—'}</td>
+                                    <td style={{ padding: '7px 12px', fontSize: 12, textAlign: 'right', color: r._op ? T.amberText : T.blueText, fontVariantNumeric: 'tabular-nums' }}
+                                        title={r._op ? `Veio da OP ${r.de_op}${r.ja_em_compras ? `, já descontados ${moeda(r.ja_em_compras)} que o projeto comprou` : ''}` : ''}>
+                                      {r._op ? moeda(r._op) : (r._est ? moeda(r._est) : '—')}
+                                    </td>
                                     <td style={{ padding: '7px 12px', fontSize: 12, textAlign: 'right', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{r._custo ? moeda(r._custo) : '—'}</td>
                                     <td style={{ padding: '7px 12px', fontSize: 11, color: T.inkDim, whiteSpace: 'nowrap' }}>{celulaSit(r)}</td>
                                     <td style={{ padding: '7px 8px', whiteSpace: 'nowrap' }}>
