@@ -248,7 +248,7 @@ function exportCSV(rows, filename, colunas) {
   const cols = colunas || Object.keys(rows[0]);
   const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
   const csv = [cols.join(';'), ...rows.map(r => cols.map(c => esc(r[c])).join(';'))].join('\n');
-  const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' }); // BOM para Excel BR
+  const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' }); // BOM para Excel BR
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a'); a.href = url; a.download = filename; a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
@@ -3467,14 +3467,123 @@ function FollowUpComercial({ currentUser }) {
     .sort((a, b) => b.pond - a.pond);
   const maxPond = Math.max(1, ...porVend.map(x => x.pond));
 
+  // ---- Excel para o vendedor preencher -------------------------------------
+  // Uma planilha por vendedor, so com o que ele precisa ver e um campo para
+  // preencher. A coluna Estagio e lista suspensa: digitar livre geraria
+  // "medio", "Médio", "MEDIO" e nada casaria na volta.
+  const ESTAGIO_ROTULOS = estagios.map(e => e.rotulo);
+
+  const montarPlanilha = useCallback(async (vendedor, dados) => {
+    const { default: ExcelJS } = await import('exceljs');
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('Follow Up', { views: [{ state: 'frozen', ySplit: 2 }] });
+
+    ws.mergeCells('A1:E1');
+    const t = ws.getCell('A1');
+    t.value = `Follow Up comercial — ${vendedor} — preencher a coluna Estágio`;
+    t.font = { bold: true, size: 12 };
+    t.alignment = { vertical: 'middle' };
+    ws.getRow(1).height = 24;
+
+    ws.getRow(2).values = ['BR', 'Cliente', 'Valor líquido', 'Estágio', 'Observação'];
+    ws.getRow(2).font = { bold: true };
+    ws.getRow(2).eachCell(c => {
+      c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEDE7DE' } };
+      c.border = { bottom: { style: 'thin' } };
+    });
+    ws.columns = [{ width: 15 }, { width: 38 }, { width: 16 }, { width: 18 }, { width: 44 }];
+
+    dados.forEach(d => {
+      const r = ws.addRow([d.br, d.cliente, Number(d.valor_proposta) || null,
+                           d.estagio_rotulo === 'Sem classificação' ? '' : d.estagio_rotulo,
+                           d.observacao || '']);
+      r.getCell(3).numFmt = 'R$ #,##0.00';
+      // Lista suspensa: evita grafia livre, que nao casaria na volta.
+      r.getCell(4).dataValidation = {
+        type: 'list', allowBlank: true,
+        formulae: [`"${ESTAGIO_ROTULOS.join(',')}"`],
+        showErrorMessage: true, errorTitle: 'Valor inválido',
+        error: `Escolha um dos estágios: ${ESTAGIO_ROTULOS.join(', ')}`,
+      };
+      r.getCell(4).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFF6E0' } };
+    });
+
+    const nota = ws.addRow([]);
+    ws.mergeCells(`A${nota.number + 1}:E${nota.number + 1}`);
+    const n = ws.getCell(`A${nota.number + 1}`);
+    n.value = 'Não altere BR nem Cliente — é por eles que o portal reconhece a linha na volta. Devolva o arquivo na aba Follow Up do portal.';
+    n.font = { italic: true, size: 9, color: { argb: 'FF8A8175' } };
+
+    const buf = await wb.xlsx.writeBuffer();
+    const nomeArq = `follow_up_${vendedor.replace(/[^A-Za-zÀ-ÿ0-9]+/g, '_')}.xlsx`;
+    const url = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+    const a = document.createElement('a');
+    a.href = url; a.download = nomeArq; a.click();
+    URL.revokeObjectURL(url);
+  }, [estagios]);
+
+  const gerarTodos = useCallback(async () => {
+    const abertos = base.filter(l => ['em aberto', 'pedido confirmado'].includes(l.situacao));
+    const vs = [...new Set(abertos.map(l => l.vendedor).filter(Boolean))].sort();
+    for (const v of vs) {
+      await montarPlanilha(v, abertos.filter(l => l.vendedor === v));
+      await new Promise(r => setTimeout(r, 350)); // o navegador bloqueia downloads em rajada
+    }
+  }, [base, montarPlanilha]);
+
+  // ---- Volta dos arquivos preenchidos --------------------------------------
+  const [importando, setImportando] = useState(false);
+  const [resultadoImp, setResultadoImp] = useState(null);
+  const [arrastando, setArrastando] = useState(false);
+
+  const importarArquivos = useCallback(async (files) => {
+    if (!files?.length) return;
+    setImportando(true);
+    const { default: ExcelJS } = await import('exceljs');
+    const porRotulo = Object.fromEntries(estagios.map(e => [e.rotulo.toLowerCase(), e.estagio]));
+    const brsConhecidos = new Set(linhas.map(l => l.br));
+    const aplicar = []; const ignorados = [];
+
+    for (const f of files) {
+      try {
+        const wb = new ExcelJS.Workbook();
+        await wb.xlsx.load(await f.arrayBuffer());
+        const ws = wb.worksheets[0];
+        ws.eachRow((row, i) => {
+          if (i <= 2) return;
+          const br = String(row.getCell(1).value || '').trim();
+          const rot = String(row.getCell(4).value || '').trim();
+          const obs = String(row.getCell(5).value || '').trim();
+          if (!br) return;
+          if (!brsConhecidos.has(br)) { ignorados.push(`${br}: não existe no portal`); return; }
+          const estagio = porRotulo[rot.toLowerCase()];
+          if (rot && !estagio) { ignorados.push(`${br}: estágio "${rot}" não reconhecido`); return; }
+          if (!estagio && !obs) return;
+          aplicar.push({ br, ...(estagio ? { estagio } : {}), ...(obs ? { observacao: obs } : {}) });
+        });
+      } catch (err) { ignorados.push(`${f.name}: não deu para ler (${err.message})`); }
+    }
+
+    let gravados = 0;
+    for (const item of aplicar) {
+      const { error } = await supabase.from('comercial_follow_up')
+        .upsert({ ...item, atualizado_por: currentUser?.nome || 'importação',
+                  atualizado_em: new Date().toISOString() }, { onConflict: 'br' });
+      if (error) ignorados.push(`${item.br}: ${error.message}`); else gravados += 1;
+    }
+    await carregar();
+    setResultadoImp({ gravados, ignorados });
+    setImportando(false);
+  }, [estagios, linhas, carregar, currentUser]);
+
   if (loading) return <div style={{ padding: 40, textAlign: 'center', color: T.inkFaint }}>Carregando…</div>;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14, paddingTop: 14 }}>
       <div style={{ fontSize: 11.5, color: T.inkDim, background: T.panelAlt, padding: '9px 12px', borderRadius: 6 }}>
-        Os BRs entram sozinhos assim que s\u00e3o criados na tela <strong>Criar BR</strong> \u2014 com vendedor, cliente e valor
-        da proposta j\u00e1 preenchidos. Falta s\u00f3 dizer em que p\u00e9 est\u00e1 cada um. Essa classifica\u00e7\u00e3o{' '}
-        <strong>fica no portal e n\u00e3o vai para o Sankhya</strong>.
+        Os BRs entram sozinhos assim que são criados na tela <strong>Criar BR</strong> — com vendedor, cliente e valor
+        da proposta já preenchidos. Falta só dizer em que pé está cada um. Essa classificação{' '}
+        <strong>fica no portal e não vai para o Sankhya</strong>.
       </div>
 
       <div style={{ display: 'grid', gap: 8, gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))' }}>
@@ -3482,9 +3591,9 @@ function FollowUpComercial({ currentUser }) {
           { t: 'Pedido confirmado', v: moeda(soma(confirmados, 'valor_proposta')), c: T.oliveText },
           { t: 'Em aberto', v: String(emAberto.length), c: T.ink },
           { t: 'Valor em aberto', v: moeda(soma(emAberto, 'valor_proposta')), c: T.inkDim },
-          { t: 'Previs\u00e3o ponderada', v: moeda(soma(emAberto, 'valor_ponderado')), c: T.terracotta },
+          { t: 'Previsão ponderada', v: moeda(soma(emAberto, 'valor_ponderado')), c: T.terracotta },
           { t: 'Total esperado', v: moeda(soma(confirmados, 'valor_proposta') + soma(emAberto, 'valor_ponderado')), c: T.ink },
-          { t: 'Sem classifica\u00e7\u00e3o', v: String(semClass), c: semClass ? T.amberText : T.inkFaint },
+          { t: 'Sem classificação', v: String(semClass), c: semClass ? T.amberText : T.inkFaint },
         ].map(k => (
           <div key={k.t} style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 8, padding: '9px 12px' }}>
             <div style={{ fontSize: 10.5, color: T.inkFaint }}>{k.t}</div>
@@ -3495,7 +3604,7 @@ function FollowUpComercial({ currentUser }) {
 
       {porVend.length > 1 && (
         <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: 12 }}>
-          <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 10 }}>Funil por vendedor \u2014 previs\u00e3o ponderada</div>
+          <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 10 }}>Funil por vendedor — previsão ponderada</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
             {porVend.map(x => (
               <div key={x.v} style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}
@@ -3507,13 +3616,71 @@ function FollowUpComercial({ currentUser }) {
                 </div>
                 <span style={{ fontSize: 11.5, fontWeight: 600, width: 78, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{moeda(x.pond)}</span>
                 <span style={{ fontSize: 10.5, color: T.inkFaint, width: 96, textAlign: 'right' }}>
-                  {x.n} {x.n === 1 ? 'BR' : 'BRs'}{x.semClass ? ` \u00b7 ${x.semClass} s/ class.` : ''}
+                  {x.n} {x.n === 1 ? 'BR' : 'BRs'}{x.semClass ? ` · ${x.semClass} s/ class.` : ''}
                 </span>
               </div>
             ))}
           </div>
         </div>
       )}
+
+      <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: 12 }}>
+        <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4 }}>Mandar para os vendedores preencherem</div>
+        <div style={{ fontSize: 10.5, color: T.inkFaint, marginBottom: 10, maxWidth: 720 }}>
+          A planilha vai com BR, cliente e valor líquido já preenchidos. O vendedor só escolhe o estágio numa
+          lista suspensa — não dá para digitar errado — e devolve o arquivo aqui embaixo.
+        </div>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+          {porVend.map(x => (
+            <button key={x.v}
+              onClick={() => montarPlanilha(x.v, base.filter(l => l.vendedor === x.v && ['em aberto','pedido confirmado'].includes(l.situacao)))}
+              style={{ fontFamily: 'inherit', fontSize: 11.5, padding: '5px 11px', borderRadius: 14, cursor: 'pointer',
+                border: `1px solid ${T.line}`, background: 'transparent', color: T.inkDim }}>
+              {x.v} <span style={{ color: T.inkFaint }}>{x.n}</span>
+            </button>
+          ))}
+          <div style={{ width: 1, height: 22, background: T.line, margin: '0 4px' }} />
+          <button onClick={gerarTodos}
+            style={{ fontFamily: 'inherit', fontSize: 11.5, fontWeight: 700, padding: '5px 13px', borderRadius: 14,
+              cursor: 'pointer', border: `1px solid ${T.terracotta}`, background: `${T.rustSoft}66`, color: T.terracotta }}>
+            Gerar de todos ({porVend.length})
+          </button>
+        </div>
+      </div>
+
+      <div
+        onDragOver={e => { e.preventDefault(); setArrastando(true); }}
+        onDragLeave={() => setArrastando(false)}
+        onDrop={e => { e.preventDefault(); setArrastando(false); importarArquivos([...e.dataTransfer.files]); }}
+        style={{ border: `2px dashed ${arrastando ? T.terracotta : T.line}`, borderRadius: 10, padding: 16,
+          background: arrastando ? `${T.rustSoft}44` : T.panel, textAlign: 'center' }}>
+        <div style={{ fontSize: 12.5, fontWeight: 600, color: arrastando ? T.terracotta : T.inkDim }}>
+          {importando ? 'Lendo os arquivos…' : 'Arraste aqui as planilhas preenchidas'}
+        </div>
+        <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 4 }}>
+          Pode soltar vários de uma vez. O portal reconhece a linha pelo BR e atualiza estágio e observação.{' '}
+          <label style={{ color: T.terracotta, cursor: 'pointer', textDecoration: 'underline' }}>
+            ou escolher arquivos
+            <input type="file" multiple accept=".xlsx" style={{ display: 'none' }}
+              onChange={e => importarArquivos([...e.target.files])} />
+          </label>
+        </div>
+        {resultadoImp && (
+          <div style={{ marginTop: 10, fontSize: 11.5, textAlign: 'left', display: 'inline-block' }}>
+            <div style={{ color: resultadoImp.gravados ? T.oliveText : T.inkFaint, fontWeight: 600 }}>
+              {resultadoImp.gravados} {resultadoImp.gravados === 1 ? 'linha atualizada' : 'linhas atualizadas'}
+            </div>
+            {resultadoImp.ignorados.length > 0 && (
+              <div style={{ color: T.rustText, marginTop: 4 }}>
+                {resultadoImp.ignorados.length} não {resultadoImp.ignorados.length === 1 ? 'entrou' : 'entraram'}:
+                <ul style={{ margin: '3px 0 0 16px', padding: 0 }}>
+                  {resultadoImp.ignorados.slice(0, 6).map((m, i) => <li key={i} style={{ fontSize: 11 }}>{m}</li>)}
+                </ul>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
 
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
         <select value={vend} onChange={e => setVend(e.target.value)}
@@ -3531,7 +3698,7 @@ function FollowUpComercial({ currentUser }) {
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 940 }}>
             <thead><tr style={{ background: T.panelAlt }}>
-              {['BR', 'Cliente', 'Vendedor', 'Dias', 'Valor da proposta', 'Est\u00e1gio', 'Ponderado', 'Pr\u00f3ximo contato', ''].map((h, i) => (
+              {['BR', 'Cliente', 'Vendedor', 'Dias', 'Valor da proposta', 'Estágio', 'Ponderado', 'Próximo contato', ''].map((h, i) => (
                 <th key={h + i} style={{ padding: '9px 12px', fontSize: 11, fontWeight: 600, color: T.inkFaint,
                   textAlign: i === 3 || i === 4 || i === 6 ? 'right' : 'left', whiteSpace: 'nowrap' }}>{h}</th>
               ))}
@@ -3567,7 +3734,7 @@ function FollowUpComercial({ currentUser }) {
                           <span style={{ fontSize: 11, color: T.oliveText, background: T.oliveSoft,
                             padding: '3px 8px', borderRadius: 4, whiteSpace: 'nowrap' }}
                             title={l.data_conhecimento_pedido ? `Pedido conhecido em ${new Date(l.data_conhecimento_pedido).toLocaleDateString('pt-BR')}` : 'Pedido confirmado'}>
-                            Pedido confirmado \u00b7 100%
+                            Pedido confirmado · 100%
                           </span>
                         ) : (
                         <select value={l.estagio || ''} disabled={salvando === l.br}
@@ -3575,10 +3742,10 @@ function FollowUpComercial({ currentUser }) {
                           style={{ fontFamily: 'inherit', fontSize: 11.5, padding: '4px 7px', borderRadius: 5,
                             border: `1px solid ${l.estagio ? T.line : T.amberText}`,
                             background: T.panel, color: l.estagio ? T.ink : T.amberText }}>
-                          <option value="">classificar\u2026</option>
+                          <option value="">classificar…</option>
                           {estagios.map(e2 => (
                             <option key={e2.estagio} value={e2.estagio}>
-                              {e2.rotulo} \u2014 {Math.round(Number(e2.peso) * 100)}%
+                              {e2.rotulo} — {Math.round(Number(e2.peso) * 100)}%
                             </option>
                           ))}
                         </select>
@@ -3586,7 +3753,7 @@ function FollowUpComercial({ currentUser }) {
                       </td>
                       <td style={{ padding: '8px 12px', fontSize: 12.5, textAlign: 'right', fontWeight: 600,
                         color: T.terracotta, fontVariantNumeric: 'tabular-nums' }}>
-                        {l.valor_ponderado ? moeda(l.valor_ponderado) : '\u2014'}
+                        {l.valor_ponderado ? moeda(l.valor_ponderado) : '—'}
                       </td>
                       <td style={{ padding: '8px 12px' }}>
                         <input type="date" value={l.proximo_contato || ''}
@@ -3597,22 +3764,22 @@ function FollowUpComercial({ currentUser }) {
                       </td>
                       <td style={{ padding: '8px 12px' }}>
                         <button onClick={() => setObsAberta(obsAberta === l.br ? null : l.br)}
-                          title={l.observacao || 'Sem observa\u00e7\u00e3o'}
+                          title={l.observacao || 'Sem observação'}
                           style={{ fontFamily: 'inherit', fontSize: 11, padding: '3px 8px', borderRadius: 4, cursor: 'pointer',
                             border: `1px solid ${T.line}`, background: 'transparent',
                             color: l.observacao ? T.terracotta : T.inkFaint }}>
-                          {l.observacao ? 'nota \u2713' : 'nota'}
+                          {l.observacao ? 'nota ✓' : 'nota'}
                         </button>
                       </td>
                     </tr>
                     {obsAberta === l.br && (
                       <tr><td colSpan={9} style={{ padding: '8px 12px', background: T.panelAlt, borderBottom: `1px solid ${T.line}` }}>
-                        <textarea defaultValue={l.observacao || ''} rows={2} placeholder="O que foi conversado, o que trava, pr\u00f3ximo passo\u2026"
+                        <textarea defaultValue={l.observacao || ''} rows={2} placeholder="O que foi conversado, o que trava, próximo passo…"
                           onBlur={e => { if (e.target.value !== (l.observacao || '')) salvar(l.br, { observacao: e.target.value || null }); }}
                           style={{ width: '100%', fontFamily: 'inherit', fontSize: 12, padding: 8, borderRadius: 5,
                             border: `1px solid ${T.line}`, background: T.panel, color: T.ink, resize: 'vertical' }} />
                         <div style={{ fontSize: 10, color: T.inkFaint, marginTop: 3 }}>
-                          Salva ao sair do campo.{l.atualizado_em ? ` \u00daltima atualiza\u00e7\u00e3o em ${new Date(l.atualizado_em).toLocaleDateString('pt-BR')}.` : ''}
+                          Salva ao sair do campo.{l.atualizado_em ? ` Última atualização em ${new Date(l.atualizado_em).toLocaleDateString('pt-BR')}.` : ''}
                         </div>
                       </td></tr>
                     )}
@@ -3623,11 +3790,11 @@ function FollowUpComercial({ currentUser }) {
           </table>
         </div>
         <div style={{ padding: '9px 12px', borderTop: `1px solid ${T.line}`, fontSize: 10.5, color: T.inkFaint }}>
-          O ponderado \u00e9 o valor da proposta vezes o peso do est\u00e1gio. Os pesos ficam em tabela: se a empresa
-          decidir que M\u00e9dio vale 40% em vez de 50%, todo o funil se recalcula sem mexer em c\u00f3digo.
-          BR sem proposta cadastrada ainda n\u00e3o soma no ponderado \u2014 falta o valor, n\u00e3o a inten\u00e7\u00e3o.
-          Quem j\u00e1 tem <strong>conhecimento de pedido</strong> entra com 100% do valor l\u00edquido: n\u00e3o se pondera o que o
-          cliente j\u00e1 fechou.
+          O ponderado é o valor da proposta vezes o peso do estágio. Os pesos ficam em tabela: se a empresa
+          decidir que Médio vale 40% em vez de 50%, todo o funil se recalcula sem mexer em código.
+          BR sem proposta cadastrada ainda não soma no ponderado — falta o valor, não a intenção.
+          Quem já tem <strong>conhecimento de pedido</strong> entra com 100% do valor líquido: não se pondera o que o
+          cliente já fechou.
         </div>
       </div>
     </div>
@@ -17346,7 +17513,7 @@ function Custeio() {
                           <td style={{ padding: '8px 12px', fontSize: 12.5, fontWeight: 600 }}>{r.br}</td>
                           <td style={{ padding: '8px 12px', fontSize: 11.5, textAlign: 'right', color: T.inkFaint, whiteSpace: 'nowrap' }}
                               title={r.primeiro_mes === r.ultimo_mes ? `Faturou em ${r.primeiro_mes}` : `Faturou de ${r.primeiro_mes} a ${r.ultimo_mes}`}>
-                            {r.meses_ativos}{r.meses_ativos === 1 ? ' m\u00eas' : ' meses'}
+                            {r.meses_ativos}{r.meses_ativos === 1 ? ' mês' : ' meses'}
                           </td>
                           <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{moeda(r.custo_direto)}</td>
                           <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', color: T.inkDim, fontVariantNumeric: 'tabular-nums' }}
@@ -20221,7 +20388,7 @@ function PedidosVale() {
       l.layout_placa_mm ?? '#N/A', l.mgt, l.autoimpacto,
     ]);
     const csv = [headers, ...linhasCsv].map(row => row.map(v => `"${String(v).replace(/"/g, '""')}"`).join(';')).join('\n');
-    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+    const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url; a.download = `pedidos_vale_${periodo.dataIni}_${periodo.dataFim}.csv`;
