@@ -16969,7 +16969,28 @@ function Custeio() {
         // Item comprado em lote nunca casa com compra do projeto -- pallet,
         // cola, thinner, servico interno. Mostrar como "orcado, nao comprado"
         // sugeria economia de R$ 2,79 milhoes que nao existe.
-        const rotDe = (r) => r.compra_em_lote ? rotLote : (rotSit[r.situacao] || r.situacao || '—');
+        // Vinculo de IA aparece MARCADO. Ele nao muda valor nenhum -- so troca
+        // a situacao do item -- mas quem le a tela precisa saber o que e fato
+        // e o que e inferencia. Confianca baixa fica em cor de alerta.
+        const corConf = { alta: T.oliveText, media: T.amberText, baixa: T.rustText };
+        const rotDe = (r) => {
+          if (r.compra_em_lote) return rotLote;
+          if (r.situacao_ajustada === 'vinculado_a_compra') return '≡ vinculado a compra';
+          if (r.situacao_ajustada === 'vinculado_a_orcamento') return '≡ vinculado a orçamento';
+          return rotSit[r.situacao] || r.situacao || '—';
+        };
+        const celulaSit = (r) => (
+          <span title={r.vinculo_justificativa || ''}>
+            {rotDe(r)}
+            {r.vinculo_itens ? (
+              <span style={{ marginLeft: 5, fontSize: 9.5, padding: '1px 5px', borderRadius: 3,
+                color: corConf[r.vinculo_confianca] || T.inkFaint,
+                border: `1px solid ${corConf[r.vinculo_confianca] || T.line}` }}>
+                {r.vinculo_por_ia ? 'IA' : 'conferido'} · {r.vinculo_confianca}
+              </span>
+            ) : null}
+          </span>
+        );
         const rotSit = { comprado_sem_orcamento: '⚠ comprado sem orçamento', orcado_nao_comprado: 'orçado, não comprado', so_solicitado: 'só solicitado', orcado_sem_codigo: 'orçado sem código (texto livre)', aguardando_nota: 'OC emitida, aguardando NF', atendido_do_estoque: '📦 atendido do estoque', ok: 'ok' };
 
         return (
@@ -17227,7 +17248,7 @@ function Custeio() {
                                     <td style={{ padding: '7px 12px', fontSize: 12, textAlign: 'right', fontWeight: 700, color: cor, fontVariantNumeric: 'tabular-nums' }}>
                                       {desvio == null ? '—' : `${desvio > 0 ? '+' : ''}${moeda(desvio)}`}
                                     </td>
-                                    <td style={{ padding: '7px 12px', fontSize: 11, color: T.inkDim, whiteSpace: 'nowrap' }}>{rotDe(r)}</td>
+                                    <td style={{ padding: '7px 12px', fontSize: 11, color: T.inkDim, whiteSpace: 'nowrap' }}>{celulaSit(r)}</td>
                                   </tr>
                                 );
                               })}
@@ -17277,6 +17298,7 @@ function Custeio() {
                   // Comprado em lote nao e economia: e compra que nao passa
                   // pelo projeto. Fica visivel, mas separado do resto.
                   const lote = detalhe.filter(r => r.compra_em_lote);
+                  const vinc = detalhe.filter(r => r.vinculo_itens > 0);
                   const loteTot = lote.reduce((s2, r) => s2 + (Number(r.valor_orcado) || 0), 0);
                   const cards = [
                     { t: '🛒 Precisou comprar', n: g.comprado.n + g.comprado_e_transferido.n, v: compraTot, c: T.ink, bg: T.panelAlt },
@@ -17291,6 +17313,13 @@ function Custeio() {
                           <div style={{ color: T.inkDim, marginTop: 2 }}>{k.n} itens · <strong>{moeda(k.v)}</strong></div>
                         </div>
                       ))}
+                      {vinc.length > 0 && (
+                        <div style={{ background: T.panelAlt, borderRadius: 7, padding: '8px 14px', fontSize: 11.5, color: T.inkFaint, maxWidth: 330 }}>
+                          {vinc.length} {vinc.length === 1 ? 'item foi vinculado' : 'itens foram vinculados'} entre orçamento e compra por
+                          interpretação de texto, porque os nomes não batem. O vínculo não muda valor — só deixa de
+                          contar como órfão. Passe o mouse na situação para ver o motivo.
+                        </div>
+                      )}
                       {lote.length > 0 && (
                         <div style={{ background: T.panelAlt, borderRadius: 7, padding: '8px 14px', fontSize: 11.5, color: T.inkFaint, maxWidth: 330 }}>
                           {lote.length} {lote.length === 1 ? 'item é comprado' : 'itens são comprados'} em lote para a fábrica, fora do projeto —
@@ -17364,7 +17393,7 @@ function Custeio() {
                             <span style={{ color: r.situacao === 'comprado_sem_orcamento' ? T.rustText : T.inkFaint,
                                            background: r.situacao === 'comprado_sem_orcamento' ? T.rustSoft : T.panelAlt,
                                            padding: '2px 7px', borderRadius: 4, whiteSpace: 'nowrap' }}>
-                              {rotDe(r)}
+                              {celulaSit(r)}
                             </span>
                           </td>
                         </tr>
