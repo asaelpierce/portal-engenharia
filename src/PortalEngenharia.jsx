@@ -3454,7 +3454,7 @@ function FollowUpComercial({ currentUser }) {
   const soma = (arr, c) => arr.reduce((s, r) => s + (Number(r[c]) || 0), 0);
   const emAberto = lista.filter(l => l.situacao === 'em aberto');
   const confirmados = lista.filter(l => l.situacao === 'pedido confirmado');
-  const semClass = emAberto.filter(l => !l.estagio).length;
+  const semClass = emAberto.filter(l => !l.estagio_comercial && !l.estagio_vendedor).length;
 
   // Funil por vendedor: o que interessa e o ponderado, nao o bruto.
   const porVend = [...new Set(base.filter(l => ['em aberto','pedido confirmado'].includes(l.situacao)).map(l => l.vendedor))]
@@ -3463,7 +3463,7 @@ function FollowUpComercial({ currentUser }) {
       return { v, n: d.length, bruto: soma(d, 'valor_proposta'), pond: soma(d, 'valor_ponderado'),
                confirmado: soma(d.filter(x => x.situacao === 'pedido confirmado'), 'valor_ponderado'),
                emAberto: d.filter(x => x.situacao === 'em aberto').length,
-               semClass: d.filter(x => !x.estagio && x.situacao === 'em aberto').length };
+               semClass: d.filter(x => !x.estagio_comercial && !x.estagio_vendedor && x.situacao === 'em aberto').length };
     })
     .sort((a, b) => b.pond - a.pond);
   const maxPond = Math.max(1, ...porVend.map(x => x.pond));
@@ -3499,8 +3499,8 @@ function FollowUpComercial({ currentUser }) {
       const r = ws.addRow([
         d.br, d.cliente, Number(d.valor_proposta) || null,
         fechado ? (d.situacao === 'faturado' ? 'Faturado' : 'Pedido em carteira') : 'Proposta em aberto',
-        fechado ? 'Pedido em carteira' : (d.estagio_rotulo === 'Sem classificação' ? '' : d.estagio_rotulo),
-        d.observacao || '',
+        fechado ? 'Pedido em carteira' : (d.estagio_vendedor_rotulo || ''),
+        d.observacao_vendedor || '',
       ]);
       r.getCell(3).numFmt = 'R$ #,##0.00';
 
@@ -3581,7 +3581,7 @@ function FollowUpComercial({ currentUser }) {
           const estagio = porRotulo[rot.toLowerCase()];
           if (rot && !estagio) { ignorados.push(`${br}: estágio "${rot}" não reconhecido`); return; }
           if (!estagio && !obs) return;
-          aplicar.push({ br, ...(estagio ? { estagio } : {}), ...(obs ? { observacao: obs } : {}) });
+          aplicar.push({ br, ...(estagio ? { estagio_vendedor: estagio, estagio_vendedor_em: new Date().toISOString() } : {}), ...(obs ? { observacao_vendedor: obs } : {}) });
         });
       } catch (err) { ignorados.push(`${f.name}: não deu para ler (${err.message})`); }
     }
@@ -3722,14 +3722,14 @@ function FollowUpComercial({ currentUser }) {
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 940 }}>
             <thead><tr style={{ background: T.panelAlt }}>
-              {['BR', 'Cliente', 'Vendedor', 'Dias', 'Valor da proposta', 'Estágio', 'Ponderado', 'Próximo contato', 'Observação'].map((h, i) => (
+              {['BR', 'Cliente', 'Vendedor', 'Dias', 'Valor da proposta', 'Estágio comercial', 'Estágio vendedor', 'Ponderado', 'Próximo contato', 'Observação'].map((h, i) => (
                 <th key={h + i} style={{ padding: '9px 12px', fontSize: 11, fontWeight: 600, color: T.inkFaint,
                   textAlign: i === 3 || i === 4 || i === 6 ? 'right' : 'left', whiteSpace: 'nowrap' }}>{h}</th>
               ))}
             </tr></thead>
             <tbody>
               {lista.length === 0 ? (
-                <tr><td colSpan={9} style={{ padding: 28, textAlign: 'center', color: T.inkFaint }}>
+                <tr><td colSpan={10} style={{ padding: 28, textAlign: 'center', color: T.inkFaint }}>
                   Nenhum BR aqui ainda. Eles aparecem assim que forem criados na tela Criar BR.
                 </td></tr>
               ) : lista.map(l => {
@@ -3761,11 +3761,11 @@ function FollowUpComercial({ currentUser }) {
                             Pedido em carteira · 100%
                           </span>
                         ) : (
-                        <select value={l.estagio || ''} disabled={salvando === l.br}
-                          onChange={e => salvar(l.br, { estagio: e.target.value || null })}
+                        <select value={l.estagio_comercial || ''} disabled={salvando === l.br}
+                          onChange={e => salvar(l.br, { estagio_comercial: e.target.value || null })}
                           style={{ fontFamily: 'inherit', fontSize: 11.5, padding: '4px 7px', borderRadius: 5,
-                            border: `1px solid ${l.estagio ? T.line : T.amberText}`,
-                            background: T.panel, color: l.estagio ? T.ink : T.amberText }}>
+                            border: `1px solid ${l.estagio_comercial ? T.line : T.amberText}`,
+                            background: T.panel, color: l.estagio_comercial ? T.ink : T.amberText }}>
                           <option value="">classificar…</option>
                           {estagios.map(e2 => (
                             <option key={e2.estagio} value={e2.estagio}>
@@ -3773,6 +3773,19 @@ function FollowUpComercial({ currentUser }) {
                             </option>
                           ))}
                         </select>
+                        )}
+                      </td>
+                      <td style={{ padding: '8px 12px' }}>
+                        {l.estagio_vendedor_rotulo ? (
+                          <span title={`Informado pelo vendedor${l.estagio_vendedor_em ? ` em ${new Date(l.estagio_vendedor_em).toLocaleDateString('pt-BR')}` : ''}${l.observacao_vendedor ? ` — "${l.observacao_vendedor}"` : ''}`}
+                            style={{ fontSize: 11, padding: '3px 8px', borderRadius: 4, whiteSpace: 'nowrap',
+                              border: `1px solid ${l.leituras_divergem ? T.amberText : T.line}`,
+                              background: l.leituras_divergem ? T.amberSoft : T.panelAlt,
+                              color: l.leituras_divergem ? T.amberText : T.inkDim }}>
+                            {l.estagio_vendedor_rotulo}{l.leituras_divergem ? ' ≠' : ''}
+                          </span>
+                        ) : (
+                          <span style={{ fontSize: 11, color: T.inkFaint }}>—</span>
                         )}
                       </td>
                       <td style={{ padding: '8px 12px', fontSize: 12.5, textAlign: 'right', fontWeight: 600,
@@ -3799,7 +3812,7 @@ function FollowUpComercial({ currentUser }) {
                       </td>
                     </tr>
                     {obsAberta === l.br && (
-                      <tr><td colSpan={9} style={{ padding: '8px 12px', background: T.panelAlt, borderBottom: `1px solid ${T.line}` }}>
+                      <tr><td colSpan={10} style={{ padding: '8px 12px', background: T.panelAlt, borderBottom: `1px solid ${T.line}` }}>
                         <textarea defaultValue={l.observacao || ''} rows={2} placeholder="O que foi conversado, o que trava, próximo passo…"
                           onBlur={e => { if (e.target.value !== (l.observacao || '')) salvar(l.br, { observacao: e.target.value || null }); }}
                           style={{ width: '100%', fontFamily: 'inherit', fontSize: 12, padding: 8, borderRadius: 5,
@@ -3819,8 +3832,10 @@ function FollowUpComercial({ currentUser }) {
           O ponderado é o valor da proposta vezes o peso do estágio. Os pesos ficam em tabela: se a empresa
           decidir que Médio vale 40% em vez de 50%, todo o funil se recalcula sem mexer em código.
           BR sem proposta cadastrada ainda não soma no ponderado — falta o valor, não a intenção.
-          Quem já tem <strong>conhecimento de pedido</strong> entra com 100% do valor líquido: não se pondera o que o
-          cliente já fechou.
+          Quem já tem <strong>pedido de venda</strong> entra com 100% do valor líquido: não se pondera o que o
+          cliente já fechou. <strong>Estágio comercial</strong> muda só aqui na tela; <strong>Estágio vendedor</strong>{' '}
+          muda só quando a planilha dele é carregada. Uma não sobrescreve a outra — e quando as duas discordam,
+          aparece um ≠ em âmbar, porque a divergência é o que vale conversar.
         </div>
       </div>
     </div>
