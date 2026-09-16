@@ -16190,6 +16190,9 @@ function Custeio() {
   const [orcComp, setOrcComp] = useState([]);
   const [catComp, setCatComp] = useState([]);
   const [opExtra, setOpExtra] = useState([]);
+  const [analise, setAnalise] = useState([]);
+  const [filtroAn, setFiltroAn] = useState('todos');
+  const [anoAn, setAnoAn] = useState(2026);
   const [brOrc, setBrOrc] = useState('');
   const [fatFiltro, setFatFiltro] = useState('todos'); // todos | faturados | nao_faturados
   const [caixaAberta, setCaixaAberta] = useState(null); // material | servicos | frete | outros
@@ -16240,6 +16243,7 @@ function Custeio() {
       const rc = await lerTudo('v_custeio_categoria');
       setCatComp(rc);
       setOpExtra(await lerTudo('v_custeio_op_extra'));
+      setAnalise(await lerTudo('v_custeio_analise'));
       // Historico do verificador. 60 dias bastam para ver tendencia sem
       // arrastar a tabela inteira, que cresce ~17 linhas por dia.
       const desdeVerif = new Date(Date.now() - 60 * 864e5).toISOString();
@@ -16398,7 +16402,7 @@ function Custeio() {
 
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', gap: 2 }}>
-          {[{ id: 'produto', l: 'Por produto' }, { id: 'br', l: 'Por projeto (BR)' }, { id: 'margem', l: 'Margem por venda' }, { id: 'orcado', l: 'Custo por projeto' }, { id: 'cif', l: 'Despesa fixa (CIF)' }, { id: 'absorcao', l: 'Custo por absorção' }, { id: 'qualidade', l: (() => {
+          {[{ id: 'produto', l: 'Por produto' }, { id: 'br', l: 'Por projeto (BR)' }, { id: 'margem', l: 'Margem por venda' }, { id: 'orcado', l: 'Custo por projeto' }, { id: 'cif', l: 'Despesa fixa (CIF)' }, { id: 'absorcao', l: 'Custo por absorção' }, { id: 'analise', l: 'Análise' }, { id: 'qualidade', l: (() => {
             const ult = verif.length ? verif.reduce((m, v) => v.executado_em > m ? v.executado_em : m, '') : null;
             const falhas = ult ? verif.filter(v => v.executado_em === ult && !v.passou).length : 0;
             return falhas ? `Qualidade dos dados (${falhas})` : 'Qualidade dos dados';
@@ -16541,6 +16545,251 @@ function Custeio() {
           </div>
         </div>
       )}
+
+      {aba === 'analise' && (() => {
+        // ANALISE — o projeto entra no mes em que FATUROU, pela mesma logica da
+        // aba de Faturamento. Projeto faturado em parcelas aparece em cada mes,
+        // com o custo rateado na proporcao da receita daquele mes: sem isso um
+        // projeto entregue em tres meses distorceria o mes em que fechou.
+        const doAno = analise.filter(a => a.ano === anoAn);
+        const anos = [...new Set(analise.map(a => a.ano))].sort().reverse();
+
+        // Filtros rapidos: cada um responde uma pergunta que alguem de fato faz.
+        const FILTROS = [
+          { id: 'todos', l: 'Todos', fn: () => true },
+          { id: 'negativa', l: 'Margem negativa', fn: r => Number(r.margem) < 0 },
+          { id: 'baixa', l: 'Margem abaixo de 30%', fn: r => Number(r.margem_pct) < 30 },
+          { id: 'estoque', l: 'Mais estoque que compra', fn: r => Number(r.do_estoque) > Number(r.comprado) },
+          { id: 'servico', l: 'Serviço pesa mais que material', fn: r => Number(r.custo_servicos) > Number(r.custo_material) },
+          { id: 'op', l: 'Tem material de OP', fn: r => Number(r.de_op) > 0 },
+          { id: 'grandes', l: 'Acima de R$ 100 mil', fn: r => Number(r.receita_liquida) >= 100000 },
+        ];
+        const filtro = FILTROS.find(f => f.id === filtroAn) || FILTROS[0];
+        const lista = doAno.filter(filtro.fn)
+          .filter(r => !busca || `${r.br || ''}`.toLowerCase().includes(busca.toLowerCase()))
+          .sort((a, b) => Number(a.margem_pct ?? 0) - Number(b.margem_pct ?? 0));
+
+        const soma = (arr, campo) => arr.reduce((s2, r) => s2 + (Number(r[campo]) || 0), 0);
+        const rec = soma(lista, 'receita_liquida'), cus = soma(lista, 'custo');
+        const marg = rec - cus;
+        const cifT = soma(lista, 'cif_rateado');
+
+        // Evolucao mensal
+        const meses = [...new Set(doAno.map(r => r.competencia))].sort();
+        const porMes = meses.map(m => {
+          const d = doAno.filter(r => r.competencia === m);
+          const r1 = soma(d, 'receita_liquida'), c1 = soma(d, 'custo');
+          return { m, projetos: d.length, rec: r1, custo: c1, marg: r1 - c1,
+                   pct: r1 > 0 ? (r1 - c1) / r1 * 100 : 0 };
+        });
+        const maxRec = Math.max(1, ...porMes.map(x => x.rec));
+
+        // Composicao do custo
+        const comp = [
+          { l: 'Material', v: soma(lista, 'custo_material'), c: T.ink },
+          { l: 'Serviços', v: soma(lista, 'custo_servicos'), c: T.terracotta },
+          { l: 'Frete', v: soma(lista, 'custo_frete'), c: T.amberText },
+          { l: 'Outros', v: soma(lista, 'custo_outros'), c: T.inkFaint },
+        ].filter(x => x.v > 0);
+        const origem = [
+          { l: 'Comprado', v: soma(lista, 'comprado'), c: T.ink },
+          { l: 'Do estoque', v: soma(lista, 'do_estoque'), c: T.blueText },
+          { l: 'De OP de estoque', v: soma(lista, 'de_op'), c: T.amberText },
+        ].filter(x => x.v > 0);
+
+        // Distribuicao por faixa de margem
+        const faixas = [
+          { l: 'Negativa', teste: p => p < 0, c: T.rustText },
+          { l: '0 a 30%', teste: p => p >= 0 && p < 30, c: T.amberText },
+          { l: '30 a 50%', teste: p => p >= 30 && p < 50, c: T.inkDim },
+          { l: '50 a 70%', teste: p => p >= 50 && p < 70, c: T.oliveText },
+          { l: 'Acima de 70%', teste: p => p >= 70, c: T.oliveText },
+        ].map(f => ({ ...f, n: doAno.filter(r => f.teste(Number(r.margem_pct) || 0)).length }));
+        const maxFaixa = Math.max(1, ...faixas.map(f => f.n));
+
+        const kpis = [
+          { t: 'Receita líquida', v: moeda(rec), c: T.ink },
+          { t: 'Custo de material', v: moeda(cus), c: T.inkDim },
+          { t: 'Margem de contribuição', v: moeda(marg), c: marg >= 0 ? T.oliveText : T.rustText },
+          { t: '% sobre receita', v: rec > 0 ? `${(marg / rec * 100).toFixed(1)}%` : '—', c: T.terracotta },
+          { t: 'Projetos faturados', v: String(lista.length), c: T.inkDim },
+        ];
+
+        return (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <div style={{ fontSize: 11.5, color: T.inkDim, background: `${T.amberSoft}66`, border: `1px solid ${T.amberText}`, padding: '9px 12px', borderRadius: 6 }}>
+              <strong style={{ color: T.ink }}>Leia como margem de contribuição, não como lucro.</strong> O custo aqui é
+              material, serviço de terceiro e frete. <strong>Mão de obra não entra</strong> — está parada no pendente do
+              RH, na aba Despesa fixa. Por isso os percentuais parecem altos para uma fábrica. O CIF rateado aparece em
+              coluna separada e já dá uma ideia do que falta.
+            </div>
+
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              {anos.map(a => (
+                <button key={a} onClick={() => setAnoAn(a)} style={{
+                  fontFamily: 'inherit', fontSize: 12.5, fontWeight: anoAn === a ? 700 : 400, cursor: 'pointer',
+                  padding: '6px 14px', borderRadius: 6, border: `1px solid ${anoAn === a ? T.ink : T.line}`,
+                  background: anoAn === a ? T.ink : T.panel, color: anoAn === a ? T.panel : T.inkDim }}>{a}</button>
+              ))}
+            </div>
+
+            <div style={{ display: 'grid', gap: 8, gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))' }}>
+              {kpis.map(k => (
+                <div key={k.t} style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 8, padding: '9px 12px' }}>
+                  <div style={{ fontSize: 10.5, color: T.inkFaint }}>{k.t}</div>
+                  <div style={{ fontSize: 18, fontWeight: 700, color: k.c, fontVariantNumeric: 'tabular-nums' }}>{k.v}</div>
+                </div>
+              ))}
+            </div>
+
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              {FILTROS.map(f => {
+                const n = doAno.filter(f.fn).length;
+                if (n === 0 && f.id !== 'todos') return null;
+                return (
+                  <button key={f.id} onClick={() => setFiltroAn(f.id)} style={{
+                    fontFamily: 'inherit', fontSize: 11.5, fontWeight: filtroAn === f.id ? 700 : 400, cursor: 'pointer',
+                    padding: '5px 11px', borderRadius: 14, border: `1px solid ${filtroAn === f.id ? T.terracotta : T.line}`,
+                    background: filtroAn === f.id ? `${T.rustSoft}66` : 'transparent',
+                    color: filtroAn === f.id ? T.terracotta : T.inkDim }}>
+                    {f.l} <span style={{ color: T.inkFaint }}>{n}</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(330px, 1fr))' }}>
+              <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: 12 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 10 }}>Mês a mês — {anoAn}</div>
+                <div style={{ display: 'flex', alignItems: 'flex-end', gap: 6, height: 130 }}>
+                  {porMes.map(x => (
+                    <div key={x.m} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}
+                      title={`${x.m}: receita ${moeda(x.rec)}, custo ${moeda(x.custo)}, margem ${x.pct.toFixed(1)}%, ${x.projetos} projetos`}>
+                      <div style={{ fontSize: 9.5, color: T.inkFaint, fontVariantNumeric: 'tabular-nums' }}>{x.pct.toFixed(0)}%</div>
+                      <div style={{ width: '100%', height: `${Math.max((x.rec / maxRec) * 92, 3)}px`, background: T.lineSoft,
+                        borderRadius: '3px 3px 0 0', position: 'relative', overflow: 'hidden' }}>
+                        <div style={{ position: 'absolute', bottom: 0, width: '100%',
+                          height: `${x.rec > 0 ? (x.custo / x.rec) * 100 : 0}%`, background: T.terracotta }} />
+                      </div>
+                      <div style={{ fontSize: 9.5, color: T.inkFaint }}>{x.m.slice(5)}</div>
+                    </div>
+                  ))}
+                </div>
+                <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 8 }}>
+                  Altura é receita, parte escura é custo. O número em cima é a margem do mês.
+                </div>
+              </div>
+
+              <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: 12 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 10 }}>Quantos projetos em cada faixa de margem</div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+                  {faixas.map(f => (
+                    <div key={f.l} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span style={{ fontSize: 11.5, color: T.inkDim, width: 96 }}>{f.l}</span>
+                      <div style={{ flex: 1, height: 14, background: T.lineSoft, borderRadius: 3, overflow: 'hidden' }}>
+                        <div style={{ height: '100%', width: `${(f.n / maxFaixa) * 100}%`, background: f.c }} />
+                      </div>
+                      <span style={{ fontSize: 12, fontWeight: 600, width: 30, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{f.n}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: 12 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 10 }}>Em que o custo foi gasto</div>
+                {[{ t: 'Por categoria', d: comp }, { t: 'Por origem', d: origem }].map(bloco => {
+                  const tot = bloco.d.reduce((s2, x) => s2 + x.v, 0) || 1;
+                  return (
+                    <div key={bloco.t} style={{ marginBottom: 12 }}>
+                      <div style={{ fontSize: 10.5, color: T.inkFaint, marginBottom: 5 }}>{bloco.t}</div>
+                      <div style={{ display: 'flex', height: 16, borderRadius: 3, overflow: 'hidden', marginBottom: 6 }}>
+                        {bloco.d.map(x => (
+                          <div key={x.l} style={{ width: `${(x.v / tot) * 100}%`, background: x.c }}
+                            title={`${x.l}: ${moeda(x.v)} (${(x.v / tot * 100).toFixed(1)}%)`} />
+                        ))}
+                      </div>
+                      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', fontSize: 10.5, color: T.inkDim }}>
+                        {bloco.d.map(x => (
+                          <span key={x.l}>
+                            <span style={{ display: 'inline-block', width: 8, height: 8, background: x.c, borderRadius: 2, marginRight: 4 }} />
+                            {x.l} {(x.v / tot * 100).toFixed(0)}%
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
+              <div style={{ padding: '10px 12px', fontSize: 12, fontWeight: 700, borderBottom: `1px solid ${T.line}`, display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+                <span>{filtro.l} — {lista.length} {lista.length === 1 ? 'projeto' : 'projetos'}, da menor margem para a maior</span>
+                <span style={{ fontWeight: 400, color: T.inkFaint, fontSize: 11 }}>
+                  {cifT > 0 ? `CIF rateado no período: ${moeda(cifT)}` : ''}
+                </span>
+              </div>
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 900 }}>
+                  <thead><tr style={{ background: T.panelAlt }}>
+                    {['BR', 'Mês', 'Receita líq.', 'Custo', 'Margem', '%', 'CIF', 'Margem c/ CIF', 'Composição'].map((h, i) => (
+                      <th key={h} style={{ padding: '9px 12px', fontSize: 11, fontWeight: 600, color: T.inkFaint,
+                        textAlign: i === 0 || i === 1 || i === 8 ? 'left' : 'right', whiteSpace: 'nowrap' }}>{h}</th>
+                    ))}
+                  </tr></thead>
+                  <tbody>
+                    {lista.length === 0 ? (
+                      <tr><td colSpan={9} style={{ padding: 24, textAlign: 'center', color: T.inkFaint }}>Nada nesse filtro.</td></tr>
+                    ) : lista.slice(0, 150).map(r => {
+                      const m = Number(r.margem) || 0;
+                      const ma = Number(r.margem_absorcao);
+                      const tot = Math.max(1, Number(r.custo) || 0);
+                      const partes = [
+                        { v: Number(r.custo_material) || 0, c: T.ink },
+                        { v: Number(r.custo_servicos) || 0, c: T.terracotta },
+                        { v: Number(r.custo_frete) || 0, c: T.amberText },
+                        { v: Number(r.custo_outros) || 0, c: T.inkFaint },
+                      ];
+                      return (
+                        <tr key={`${r.codproj}-${r.competencia}`} style={{ borderBottom: `1px solid ${T.lineSoft}`,
+                          background: m < 0 ? `${T.rustSoft}33` : 'transparent' }}>
+                          <td style={{ padding: '8px 12px', fontSize: 12.5, fontWeight: 600 }}>{r.br}</td>
+                          <td style={{ padding: '8px 12px', fontSize: 11.5, color: T.inkDim }}>{r.competencia}</td>
+                          <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{moeda(r.receita_liquida)}</td>
+                          <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', color: T.inkDim, fontVariantNumeric: 'tabular-nums' }}>{moeda(r.custo)}</td>
+                          <td style={{ padding: '8px 12px', fontSize: 12.5, textAlign: 'right', fontWeight: 700, color: m >= 0 ? T.oliveText : T.rustText, fontVariantNumeric: 'tabular-nums' }}>{moeda(m)}</td>
+                          <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', color: m >= 0 ? T.oliveText : T.rustText, fontVariantNumeric: 'tabular-nums' }}>
+                            {r.margem_pct == null ? '—' : `${Number(r.margem_pct).toFixed(1)}%`}
+                          </td>
+                          <td style={{ padding: '8px 12px', fontSize: 11.5, textAlign: 'right', color: T.blueText, fontVariantNumeric: 'tabular-nums' }}>{r.cif_rateado ? moeda(r.cif_rateado) : '—'}</td>
+                          <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', fontWeight: 600, color: ma >= 0 ? T.oliveText : T.rustText, fontVariantNumeric: 'tabular-nums' }}>
+                            {isNaN(ma) ? '—' : moeda(ma)}
+                          </td>
+                          <td style={{ padding: '8px 12px', minWidth: 110 }}>
+                            <div style={{ display: 'flex', height: 8, borderRadius: 2, overflow: 'hidden', background: T.lineSoft }}>
+                              {partes.map((x, i) => x.v > 0 && (
+                                <div key={i} style={{ width: `${(x.v / tot) * 100}%`, background: x.c }} />
+                              ))}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <div style={{ padding: '9px 12px', borderTop: `1px solid ${T.line}`, fontSize: 10.5, color: T.inkFaint, display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+                <span>
+                  Projeto faturado em parcelas aparece em cada mês que faturou, com o custo rateado na proporção da
+                  receita daquele mês. A barra de composição segue a mesma cor das categorias acima.
+                </span>
+                <BotaoExportar small onClick={() => exportCSV(lista, `analise_${anoAn}_${filtroAn}.csv`,
+                  ['br','competencia','receita_liquida','custo','custo_material','custo_servicos','custo_frete','custo_outros','comprado','do_estoque','de_op','cif_rateado','margem','margem_pct','margem_absorcao'])} />
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {aba === 'cif' && (() => {
         // CIF -- Custo Indireto de Fabricacao. A teoria separa CUSTO (gasto de
@@ -17296,7 +17545,7 @@ function Custeio() {
                         <div style={{ overflowX: 'auto' }}>
                           <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 760 }}>
                             <thead><tr style={{ background: T.panel }}>
-                              {['Item', 'Comprado (líq.)', 'Do estoque', 'Custo real', 'Situação', ''].map((h, i) => (
+                              {['Item', 'Comprado (líq.)', 'Do estoque', 'Custo real', ''].map((h, i) => (
                                 <th key={h} style={{ padding: '8px 12px', fontSize: 10.5, fontWeight: 600, color: T.inkFaint, textAlign: i === 0 || i === 6 ? 'left' : 'right', whiteSpace: 'nowrap' }}>{h}</th>
                               ))}
                             </tr></thead>
@@ -17317,7 +17566,6 @@ function Custeio() {
                                       {r._op ? moeda(r._op) : (r._est ? moeda(r._est) : '—')}
                                     </td>
                                     <td style={{ padding: '7px 12px', fontSize: 12, textAlign: 'right', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{r._custo ? moeda(r._custo) : '—'}</td>
-                                    <td style={{ padding: '7px 12px', fontSize: 11, color: T.inkDim, whiteSpace: 'nowrap' }}>{celulaSit(r)}</td>
                                     <td style={{ padding: '7px 8px', whiteSpace: 'nowrap' }}>
                                       {r.vinculo_itens > 0 && r.vinculo_por_ia && (
                                         <span style={{ display: 'inline-flex', gap: 4 }}>
