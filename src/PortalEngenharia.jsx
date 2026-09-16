@@ -16398,7 +16398,7 @@ function Custeio() {
 
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', gap: 2 }}>
-          {[{ id: 'produto', l: 'Por produto' }, { id: 'br', l: 'Por projeto (BR)' }, { id: 'margem', l: 'Margem por venda' }, { id: 'orcado', l: 'Orçado x Comprado' }, { id: 'cif', l: 'Despesa fixa (CIF)' }, { id: 'absorcao', l: 'Custo por absorção' }, { id: 'qualidade', l: (() => {
+          {[{ id: 'produto', l: 'Por produto' }, { id: 'br', l: 'Por projeto (BR)' }, { id: 'margem', l: 'Margem por venda' }, { id: 'orcado', l: 'Custo por projeto' }, { id: 'cif', l: 'Despesa fixa (CIF)' }, { id: 'absorcao', l: 'Custo por absorção' }, { id: 'qualidade', l: (() => {
             const ult = verif.length ? verif.reduce((m, v) => v.executado_em > m ? v.executado_em : m, '') : null;
             const falhas = ult ? verif.filter(v => v.executado_em === ult && !v.passou).length : 0;
             return falhas ? `Qualidade dos dados (${falhas})` : 'Qualidade dos dados';
@@ -16970,11 +16970,9 @@ function Custeio() {
         // Sankhya, ou o rateio do liquido da nota na proporcao do VLRTOT --
         // a mesma conta usada do lado do custo. A marca na tela diz qual.
         const todosOrc = Object.values(porOrc)
-          .filter(b => b.orc > 0 || b.com > 0)
+          .filter(b => b.com > 0 || b.est > 0)
           .map(b => ({ ...b, faturado: b.recBruta > 0,
-                       calculado: b.recBruta > 0 && b.fonteRec !== 'manual',
-                       desvio: b.com - b.orc,
-                       pct: b.orc > 0 ? (b.com - b.orc) / b.orc * 100 : null }));
+                       calculado: b.recBruta > 0 && b.fonteRec !== 'manual' }));
         const nFat = todosOrc.filter(b => b.faturado).length;
         const nNaoFat = todosOrc.length - nFat;
         const nCalc = todosOrc.filter(b => b.calculado).length;
@@ -17059,16 +17057,16 @@ function Custeio() {
               <div style={{ overflowX: 'auto' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 820 }}>
                   <thead><tr style={{ background: T.panelAlt }}>
-                    {['BR', 'Pedido venda', 'Orçado', 'Comprado (líq.)', 'Não precisou comprar', 'Custo total', 'Receita líq.', 'Margem', '%'].map((h, i) => (
+                    {['BR', 'Pedido venda', 'Comprado (líq.)', 'Do estoque', 'Custo total', 'Receita líq.', 'Margem', '%'].map((h, i) => (
                       <th key={h} style={{ padding: '10px 12px', fontSize: 11, fontWeight: 600, color: T.inkFaint, textAlign: i === 0 ? 'left' : 'right' }}>{h}</th>
                     ))}
                   </tr></thead>
                   <tbody>
                     {listaBr.length === 0 ? (
-                      <tr><td colSpan={9} style={{ padding: 24, textAlign: 'center', color: T.inkFaint }}>Nada nesse filtro.</td></tr>
+                      <tr><td colSpan={8} style={{ padding: 24, textAlign: 'center', color: T.inkFaint }}>Nada nesse filtro.</td></tr>
                     ) : listaBr.slice(0, 150).map(b => (
                       <tr key={b.chave} onClick={() => { setBrOrc(b.br); setCaixaAberta(null); }}
-                          style={{ borderBottom: `1px solid ${T.lineSoft}`, cursor: 'pointer', background: b.desvio > 0 ? `${T.rustSoft}44` : 'transparent' }}>
+                          style={{ borderBottom: `1px solid ${T.lineSoft}`, cursor: 'pointer', background: 'transparent' }}>
                         <td style={{ padding: '9px 12px', fontSize: 12.5, fontWeight: 600 }}>
                           {b.br}
                           {!b.faturado && <span style={{ marginLeft: 6, fontSize: 10, color: T.amberText, background: T.amberSoft, padding: '2px 6px', borderRadius: 4 }}>⏳ não faturado</span>}
@@ -17079,7 +17077,6 @@ function Custeio() {
                         <td style={{ padding: '9px 12px', fontSize: 11.5, textAlign: 'right', color: T.inkDim, whiteSpace: 'nowrap' }}>
                           {b.pedido || '—'}{b.data && <span style={{ color: T.inkFaint }}> · {b.data.split('-').reverse().join('/')}</span>}
                         </td>
-                        <td style={{ padding: '9px 12px', fontSize: 12.5, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{moeda(b.orc)}</td>
                         <td style={{ padding: '9px 12px', fontSize: 12.5, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}
                             title="Net Offer Value / Vlr. Realizado_ do Portal de Compras: valor da nota menos os impostos (fórmula do próprio Sankhya)">{moeda(b.comLiq)}</td>
                         <td style={{ padding: '9px 12px', fontSize: 12.5, textAlign: 'right', color: T.blueText, fontVariantNumeric: 'tabular-nums' }}
@@ -17140,35 +17137,26 @@ function Custeio() {
                 porCat[c].semCod += Number(r.itens_sem_codigo) || 0;
               });
 
-              const totOrc = ORDEM.reduce((s, c) => s + (porCat[c.id]?.orc || 0), 0);
               const totCusto = ORDEM.reduce((s, c) => s + (porCat[c.id]?.custo || 0), 0);
               // Escala comum aos 4 blocos: sem isso, uma barra cheia no frete
               // (R$ 10 mil) pareceria igual a uma barra cheia no material
               // (R$ 740 mil) e a leitura visual mentiria.
-              const teto = Math.max(1, ...ORDEM.map(c => Math.max(porCat[c.id]?.orc || 0, porCat[c.id]?.custo || 0)));
+              const teto = Math.max(1, ...ORDEM.map(c => porCat[c.id]?.custo || 0));
 
               return (
                 <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
                   <div style={{ padding: '10px 12px', borderBottom: `1px solid ${T.line}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
-                    <span style={{ fontSize: 12, fontWeight: 700 }}>Orçado × realizado por categoria — {brOrc}</span>
+                    <span style={{ fontSize: 12, fontWeight: 700 }}>Custo por categoria — {brOrc}</span>
                     <span style={{ fontSize: 11.5, color: T.inkDim, fontVariantNumeric: 'tabular-nums' }}>
-                      Total orçado {moeda(totOrc)} · custo real {moeda(totCusto)}
-                      {totOrc > 0 && (
-                        <strong style={{ marginLeft: 8, color: totCusto > totOrc ? T.rustText : T.oliveText }}>
-                          {totCusto > totOrc ? '+' : ''}{((totCusto - totOrc) / totOrc * 100).toFixed(1)}%
-                        </strong>
-                      )}
+                      Custo total {moeda(totCusto)}
                     </span>
                   </div>
 
                   <div style={{ padding: 12, display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))' }}>
                     {ORDEM.map(cat => {
                       const d = porCat[cat.id] || { orc: 0, com: 0, est: 0, dev: 0, custo: 0, emp: 0, semCod: 0 };
-                      if (!d.orc && !d.custo && !d.emp) return null;
-                      const desvio = d.custo - d.orc;
-                      const pct = d.orc > 0 ? desvio / d.orc * 100 : null;
-                      const estourou = d.orc > 0 && desvio > 0;
-                      const cor = pct == null ? T.inkFaint : estourou ? T.rustText : T.oliveText;
+                      if (!d.custo && !d.emp) return null;
+                      const estourou = false; // sem orçado não existe estouro a marcar
                       const barra = v => `${Math.min(100, (v / teto) * 100)}%`;
 
                       const aberta = caixaAberta === cat.id;
@@ -17185,8 +17173,8 @@ function Custeio() {
                         }}>
                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 2 }}>
                             <span style={{ fontSize: 13, fontWeight: 700 }}>{cat.rot}</span>
-                            <span style={{ fontSize: 14, fontWeight: 700, color: cor, fontVariantNumeric: 'tabular-nums' }}>
-                              {pct == null ? '—' : `${pct > 0 ? '+' : ''}${pct.toFixed(1)}%`}
+                            <span style={{ fontSize: 14, fontWeight: 700, color: T.ink, fontVariantNumeric: 'tabular-nums' }}>
+                              {moeda(d.custo)}
                             </span>
                           </div>
                           <div style={{ fontSize: 10.5, color: T.inkFaint, marginBottom: 10 }}>{cat.desc}</div>
@@ -17194,20 +17182,20 @@ function Custeio() {
                           <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
                             <div>
                               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11.5, color: T.inkDim, marginBottom: 3 }}>
-                                <span>Orçado</span>
-                                <span style={{ fontVariantNumeric: 'tabular-nums' }}>{d.orc ? moeda(d.orc) : '—'}</span>
+                                <span>Comprado</span>
+                                <span style={{ fontVariantNumeric: 'tabular-nums' }}>{d.com ? moeda(d.com) : '—'}</span>
                               </div>
                               <div style={{ height: 7, background: T.lineSoft, borderRadius: 4, overflow: 'hidden' }}>
-                                <div style={{ height: '100%', width: barra(d.orc), background: T.inkFaint }} />
+                                <div style={{ height: '100%', width: barra(d.com), background: T.ink }} />
                               </div>
                             </div>
                             <div>
                               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11.5, color: T.inkDim, marginBottom: 3 }}>
-                                <span>Custo real</span>
-                                <span style={{ fontVariantNumeric: 'tabular-nums', fontWeight: 600, color: T.ink }}>{d.custo ? moeda(d.custo) : '—'}</span>
+                                <span>Do estoque</span>
+                                <span style={{ fontVariantNumeric: 'tabular-nums' }}>{d.est ? moeda(d.est) : '—'}</span>
                               </div>
                               <div style={{ height: 7, background: T.lineSoft, borderRadius: 4, overflow: 'hidden' }}>
-                                <div style={{ height: '100%', width: barra(d.custo), background: estourou ? T.rustText : T.oliveText }} />
+                                <div style={{ height: '100%', width: barra(d.est), background: T.blueText }} />
                               </div>
                             </div>
                           </div>
@@ -17258,14 +17246,12 @@ function Custeio() {
                         <div style={{ overflowX: 'auto' }}>
                           <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 760 }}>
                             <thead><tr style={{ background: T.panel }}>
-                              {['Item', 'Orçado', 'Comprado (líq.)', 'Do estoque', 'Custo real', 'Desvio', 'Situação', ''].map((h, i) => (
+                              {['Item', 'Comprado (líq.)', 'Do estoque', 'Custo real', 'Situação', ''].map((h, i) => (
                                 <th key={h} style={{ padding: '8px 12px', fontSize: 10.5, fontWeight: 600, color: T.inkFaint, textAlign: i === 0 || i === 6 ? 'left' : 'right', whiteSpace: 'nowrap' }}>{h}</th>
                               ))}
                             </tr></thead>
                             <tbody>
                               {itens.map((r, i) => {
-                                const desvio = r._orc > 0 ? r._custo - r._orc : null;
-                                const cor = desvio == null ? T.inkFaint : desvio > 0 ? T.rustText : T.oliveText;
                                 return (
                                   <tr key={`${r.chave_item}-${i}`} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
                                     <td style={{ padding: '7px 12px', fontSize: 12 }}>
@@ -17275,13 +17261,9 @@ function Custeio() {
                                         : <span style={{ marginLeft: 6, fontSize: 9.5, color: T.inkFaint, border: `1px solid ${T.lineSoft}`, padding: '1px 5px', borderRadius: 3 }}
                                             title="Sem código de produto no orçamento: classificado pelo texto da descrição">✎ texto</span>}
                                     </td>
-                                    <td style={{ padding: '7px 12px', fontSize: 12, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{r._orc ? moeda(r._orc) : '—'}</td>
                                     <td style={{ padding: '7px 12px', fontSize: 12, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{r._com ? moeda(r._com) : '—'}</td>
                                     <td style={{ padding: '7px 12px', fontSize: 12, textAlign: 'right', color: T.blueText, fontVariantNumeric: 'tabular-nums' }}>{r._est ? moeda(r._est) : '—'}</td>
                                     <td style={{ padding: '7px 12px', fontSize: 12, textAlign: 'right', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{r._custo ? moeda(r._custo) : '—'}</td>
-                                    <td style={{ padding: '7px 12px', fontSize: 12, textAlign: 'right', fontWeight: 700, color: cor, fontVariantNumeric: 'tabular-nums' }}>
-                                      {desvio == null ? '—' : `${desvio > 0 ? '+' : ''}${moeda(desvio)}`}
-                                    </td>
                                     <td style={{ padding: '7px 12px', fontSize: 11, color: T.inkDim, whiteSpace: 'nowrap' }}>{celulaSit(r)}</td>
                                     <td style={{ padding: '7px 8px', whiteSpace: 'nowrap' }}>
                                       {r.vinculo_itens > 0 && r.vinculo_por_ia && (
@@ -17326,8 +17308,8 @@ function Custeio() {
 
                   <div style={{ padding: '9px 12px', borderTop: `1px solid ${T.line}`, fontSize: 11, color: T.inkFaint, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
                     <span>
-                      Custo real = nota fiscal de compra + o que saiu do estoque − sobra devolvida. Ordem de compra sem nota não entra.
-                      Quantidade orçada e produzida podem diferir — desvio alto em Material costuma ser volume, não preço.
+                      Custo = nota fiscal de compra + o que saiu do estoque − sobra devolvida. Ordem de compra sem nota é
+                      compromisso e não entra. Item comprado e depois transferido conta uma vez só, como compra.
                     </span>
                     <button onClick={() => setVerItens(v => !v)}
                       style={{ fontSize: 11.5, fontWeight: 700, padding: '6px 11px', borderRadius: 6, cursor: 'pointer', whiteSpace: 'nowrap', border: `1px solid ${T.line}`, background: 'transparent', color: T.inkDim }}>
