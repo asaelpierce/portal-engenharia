@@ -3498,8 +3498,8 @@ function FollowUpComercial({ currentUser }) {
       const fechado = d.situacao !== 'em aberto';
       const r = ws.addRow([
         d.br, d.cliente, Number(d.valor_proposta) || null,
-        fechado ? (d.situacao === 'faturado' ? 'Faturado' : 'Pedido confirmado') : 'Proposta em aberto',
-        fechado ? 'Pedido confirmado' : (d.estagio_rotulo === 'Sem classificação' ? '' : d.estagio_rotulo),
+        fechado ? (d.situacao === 'faturado' ? 'Faturado' : 'Pedido em carteira') : 'Proposta em aberto',
+        fechado ? 'Pedido em carteira' : (d.estagio_rotulo === 'Sem classificação' ? '' : d.estagio_rotulo),
         d.observacao || '',
       ]);
       r.getCell(3).numFmt = 'R$ #,##0.00';
@@ -3610,7 +3610,7 @@ function FollowUpComercial({ currentUser }) {
 
       <div style={{ display: 'grid', gap: 8, gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))' }}>
         {[
-          { t: 'Pedido confirmado', v: moeda(soma(confirmados, 'valor_proposta')), c: T.oliveText },
+          { t: 'Pedido em carteira', v: moeda(soma(confirmados, 'valor_proposta')), c: T.oliveText },
           { t: 'Em aberto', v: String(emAberto.length), c: T.ink },
           { t: 'Valor em aberto', v: moeda(soma(emAberto, 'valor_proposta')), c: T.inkDim },
           { t: 'Previsão ponderada', v: moeda(soma(emAberto, 'valor_ponderado')), c: T.terracotta },
@@ -3651,8 +3651,8 @@ function FollowUpComercial({ currentUser }) {
         <div style={{ fontSize: 10.5, color: T.inkFaint, marginBottom: 10, maxWidth: 720 }}>
           A planilha vai com BR, cliente e valor líquido já preenchidos. O vendedor só escolhe o estágio numa
           lista suspensa — não dá para digitar errado — e devolve o arquivo aqui embaixo. Vai a carteira inteira, para servir de
-          follow up — mas as linhas com pedido confirmado vão <strong>travadas</strong>, e ele só consegue
-          preencher as propostas em aberto.
+          follow up — mas as linhas que já viraram <strong>pedido de venda</strong> vão travadas, e ele só
+          consegue preencher as propostas em aberto.
         </div>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
           {porVend.map(x => (
@@ -3754,11 +3754,11 @@ function FollowUpComercial({ currentUser }) {
                         {l.valor_proposta ? moeda(l.valor_proposta) : <span style={{ color: T.inkFaint }}>sem proposta</span>}
                       </td>
                       <td style={{ padding: '8px 12px' }}>
-                        {l.conhecimento_pedido ? (
+                        {l.tem_pedido ? (
                           <span style={{ fontSize: 11, color: T.oliveText, background: T.oliveSoft,
                             padding: '3px 8px', borderRadius: 4, whiteSpace: 'nowrap' }}
-                            title={l.data_conhecimento_pedido ? `Pedido conhecido em ${new Date(l.data_conhecimento_pedido).toLocaleDateString('pt-BR')}` : 'Pedido confirmado'}>
-                            Pedido confirmado · 100%
+                            title={l.primeiro_pedido ? `Pedido de venda em ${new Date(l.primeiro_pedido + 'T00:00:00').toLocaleDateString('pt-BR')}${l.valor_pedido ? ` — ${moeda(l.valor_pedido)}` : ''}` : 'Pedido de venda em carteira'}>
+                            Pedido em carteira · 100%
                           </span>
                         ) : (
                         <select value={l.estagio || ''} disabled={salvando === l.br}
