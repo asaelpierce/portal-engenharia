@@ -3397,6 +3397,230 @@ function ModeloPreditivo() {
   );
 }
 
+// ============================================================================
+// FOLLOW UP COMERCIAL
+//
+// Acompanhamento por vendedor dos BRs em aberto. O ponto de partida e a tela
+// "Criar BR": ali ja existem BR, vendedor e cliente, entao o funil nasce
+// preenchido e ninguem redigita nada.
+//
+// A probabilidade fica SO NO PORTAL -- nao vai para o Sankhya. O padrao la
+// continua o que sempre foi. E leitura comercial, nao dado do ERP.
+// ============================================================================
+function FollowUpComercial({ currentUser }) {
+  const [linhas, setLinhas] = useState([]);
+  const [estagios, setEstagios] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [salvando, setSalvando] = useState(null);
+  const [vend, setVend] = useState('Todos');
+  const [verPerdidos, setVerPerdidos] = useState(false);
+  const [obsAberta, setObsAberta] = useState(null);
+  const moeda = (v) => fmtMoedaCompacta(v);
+
+  const carregar = useCallback(async () => {
+    setLoading(true);
+    const [p, e] = await Promise.all([
+      supabase.from('v_comercial_pipeline').select('*'),
+      supabase.from('comercial_estagio').select('*').order('ordem'),
+    ]);
+    setLinhas(p.data || []);
+    setEstagios(e.data || []);
+    setLoading(false);
+  }, []);
+  useEffect(() => { carregar(); }, [carregar]);
+
+  const salvar = useCallback(async (br, campos) => {
+    setSalvando(br);
+    try {
+      const { error } = await supabase.from('comercial_follow_up')
+        .upsert({ br, ...campos, atualizado_por: currentUser?.nome || null,
+                  atualizado_em: new Date().toISOString() }, { onConflict: 'br' });
+      if (error) throw error;
+      await carregar();
+    } catch (err) { console.error(err); }
+    setSalvando(null);
+  }, [carregar, currentUser]);
+
+  // Vendedor vinculado ve so a carteira dele, igual ao resto do portal.
+  const soMinhas = currentUser?.vendedor_sankhya && !currentUser?.ve_todos_vendedores;
+  const base = linhas.filter(l => !soMinhas || String(l.cod_vendedor) === String(currentUser.vendedor_sankhya));
+  const vendedores = ['Todos', ...[...new Set(base.map(l => l.vendedor).filter(Boolean))].sort()];
+  const lista = base
+    .filter(l => vend === 'Todos' || l.vendedor === vend)
+    .filter(l => verPerdidos || l.situacao !== 'perdido')
+    .sort((a, b) => (Number(b.valor_ponderado) || 0) - (Number(a.valor_ponderado) || 0)
+                 || (Number(b.valor_proposta) || 0) - (Number(a.valor_proposta) || 0));
+
+  const soma = (arr, c) => arr.reduce((s, r) => s + (Number(r[c]) || 0), 0);
+  const emAberto = lista.filter(l => l.situacao === 'em aberto');
+  const semClass = emAberto.filter(l => !l.estagio).length;
+
+  // Funil por vendedor: o que interessa e o ponderado, nao o bruto.
+  const porVend = [...new Set(base.filter(l => l.situacao === 'em aberto').map(l => l.vendedor))]
+    .map(v => {
+      const d = base.filter(l => l.vendedor === v && l.situacao === 'em aberto');
+      return { v, n: d.length, bruto: soma(d, 'valor_proposta'), pond: soma(d, 'valor_ponderado'),
+               semClass: d.filter(x => !x.estagio).length };
+    })
+    .sort((a, b) => b.pond - a.pond);
+  const maxPond = Math.max(1, ...porVend.map(x => x.pond));
+
+  if (loading) return <div style={{ padding: 40, textAlign: 'center', color: T.inkFaint }}>Carregando…</div>;
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14, paddingTop: 14 }}>
+      <div style={{ fontSize: 11.5, color: T.inkDim, background: T.panelAlt, padding: '9px 12px', borderRadius: 6 }}>
+        Os BRs entram sozinhos assim que s\u00e3o criados na tela <strong>Criar BR</strong> \u2014 com vendedor, cliente e valor
+        da proposta j\u00e1 preenchidos. Falta s\u00f3 dizer em que p\u00e9 est\u00e1 cada um. Essa classifica\u00e7\u00e3o{' '}
+        <strong>fica no portal e n\u00e3o vai para o Sankhya</strong>.
+      </div>
+
+      <div style={{ display: 'grid', gap: 8, gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))' }}>
+        {[
+          { t: 'Em aberto', v: String(emAberto.length), c: T.ink },
+          { t: 'Valor das propostas', v: moeda(soma(emAberto, 'valor_proposta')), c: T.inkDim },
+          { t: 'Previs\u00e3o ponderada', v: moeda(soma(emAberto, 'valor_ponderado')), c: T.terracotta },
+          { t: 'Sem classifica\u00e7\u00e3o', v: String(semClass), c: semClass ? T.amberText : T.inkFaint },
+          { t: 'Ganhos', v: String(lista.filter(l => l.situacao === 'ganho').length), c: T.oliveText },
+        ].map(k => (
+          <div key={k.t} style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 8, padding: '9px 12px' }}>
+            <div style={{ fontSize: 10.5, color: T.inkFaint }}>{k.t}</div>
+            <div style={{ fontSize: 18, fontWeight: 700, color: k.c, fontVariantNumeric: 'tabular-nums' }}>{k.v}</div>
+          </div>
+        ))}
+      </div>
+
+      {porVend.length > 1 && (
+        <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: 12 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 10 }}>Funil por vendedor \u2014 previs\u00e3o ponderada</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+            {porVend.map(x => (
+              <div key={x.v} style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}
+                onClick={() => setVend(vend === x.v ? 'Todos' : x.v)}>
+                <span style={{ fontSize: 11.5, color: vend === x.v ? T.terracotta : T.inkDim, width: 150,
+                  fontWeight: vend === x.v ? 700 : 400, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{x.v}</span>
+                <div style={{ flex: 1, height: 15, background: T.lineSoft, borderRadius: 3, overflow: 'hidden' }}>
+                  <div style={{ height: '100%', width: `${(x.pond / maxPond) * 100}%`, background: T.terracotta }} />
+                </div>
+                <span style={{ fontSize: 11.5, fontWeight: 600, width: 78, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{moeda(x.pond)}</span>
+                <span style={{ fontSize: 10.5, color: T.inkFaint, width: 96, textAlign: 'right' }}>
+                  {x.n} {x.n === 1 ? 'BR' : 'BRs'}{x.semClass ? ` \u00b7 ${x.semClass} s/ class.` : ''}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <select value={vend} onChange={e => setVend(e.target.value)}
+          style={{ fontFamily: 'inherit', fontSize: 12.5, padding: '6px 10px', borderRadius: 6,
+            border: `1px solid ${T.line}`, background: T.panel, color: T.ink }}>
+          {vendedores.map(v => <option key={v} value={v}>{v === 'Todos' ? 'Todos os vendedores' : v}</option>)}
+        </select>
+        <label style={{ fontSize: 11.5, color: T.inkDim, display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer' }}>
+          <input type="checkbox" checked={verPerdidos} onChange={e => setVerPerdidos(e.target.checked)} />
+          mostrar perdidos
+        </label>
+      </div>
+
+      <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 940 }}>
+            <thead><tr style={{ background: T.panelAlt }}>
+              {['BR', 'Cliente', 'Vendedor', 'Dias', 'Valor da proposta', 'Est\u00e1gio', 'Ponderado', 'Pr\u00f3ximo contato', ''].map((h, i) => (
+                <th key={h + i} style={{ padding: '9px 12px', fontSize: 11, fontWeight: 600, color: T.inkFaint,
+                  textAlign: i === 3 || i === 4 || i === 6 ? 'right' : 'left', whiteSpace: 'nowrap' }}>{h}</th>
+              ))}
+            </tr></thead>
+            <tbody>
+              {lista.length === 0 ? (
+                <tr><td colSpan={9} style={{ padding: 28, textAlign: 'center', color: T.inkFaint }}>
+                  Nenhum BR aqui ainda. Eles aparecem assim que forem criados na tela Criar BR.
+                </td></tr>
+              ) : lista.map(l => {
+                const atrasado = l.situacao === 'em aberto' && l.proximo_contato && l.proximo_contato < new Date().toISOString().slice(0, 10);
+                return (
+                  <React.Fragment key={l.br}>
+                    <tr style={{ borderBottom: `1px solid ${T.lineSoft}`,
+                      background: l.situacao === 'ganho' ? `${T.oliveSoft}33`
+                               : l.situacao === 'perdido' ? T.panelAlt : 'transparent',
+                      opacity: l.situacao === 'perdido' ? 0.6 : 1 }}>
+                      <td style={{ padding: '8px 12px', fontSize: 12.5, fontWeight: 600 }}>
+                        {l.br}
+                        {l.situacao === 'ganho' && <span style={{ marginLeft: 6, fontSize: 9.5, color: T.oliveText }}>ganho</span>}
+                      </td>
+                      <td style={{ padding: '8px 12px', fontSize: 12, color: T.inkDim, maxWidth: 190,
+                        whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={l.cliente}>{l.cliente}</td>
+                      <td style={{ padding: '8px 12px', fontSize: 11.5, color: T.inkFaint, whiteSpace: 'nowrap' }}>{l.vendedor}</td>
+                      <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right',
+                        color: l.dias_aberto > 30 ? T.amberText : T.inkDim, fontVariantNumeric: 'tabular-nums' }}>{l.dias_aberto}</td>
+                      <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}
+                        title={l.status_proposta ? `Proposta: ${l.status_proposta}` : 'Sem proposta cadastrada ainda'}>
+                        {l.valor_proposta ? moeda(l.valor_proposta) : <span style={{ color: T.inkFaint }}>sem proposta</span>}
+                      </td>
+                      <td style={{ padding: '8px 12px' }}>
+                        <select value={l.estagio || ''} disabled={salvando === l.br}
+                          onChange={e => salvar(l.br, { estagio: e.target.value || null })}
+                          style={{ fontFamily: 'inherit', fontSize: 11.5, padding: '4px 7px', borderRadius: 5,
+                            border: `1px solid ${l.estagio ? T.line : T.amberText}`,
+                            background: T.panel, color: l.estagio ? T.ink : T.amberText }}>
+                          <option value="">classificar\u2026</option>
+                          {estagios.map(e2 => (
+                            <option key={e2.estagio} value={e2.estagio}>
+                              {e2.rotulo} \u2014 {Math.round(Number(e2.peso) * 100)}%
+                            </option>
+                          ))}
+                        </select>
+                      </td>
+                      <td style={{ padding: '8px 12px', fontSize: 12.5, textAlign: 'right', fontWeight: 600,
+                        color: T.terracotta, fontVariantNumeric: 'tabular-nums' }}>
+                        {l.valor_ponderado ? moeda(l.valor_ponderado) : '\u2014'}
+                      </td>
+                      <td style={{ padding: '8px 12px' }}>
+                        <input type="date" value={l.proximo_contato || ''}
+                          onChange={e => salvar(l.br, { proximo_contato: e.target.value || null })}
+                          style={{ fontFamily: 'inherit', fontSize: 11, padding: '3px 6px', borderRadius: 4,
+                            border: `1px solid ${atrasado ? T.rustText : T.line}`,
+                            background: T.panel, color: atrasado ? T.rustText : T.inkDim }} />
+                      </td>
+                      <td style={{ padding: '8px 12px' }}>
+                        <button onClick={() => setObsAberta(obsAberta === l.br ? null : l.br)}
+                          title={l.observacao || 'Sem observa\u00e7\u00e3o'}
+                          style={{ fontFamily: 'inherit', fontSize: 11, padding: '3px 8px', borderRadius: 4, cursor: 'pointer',
+                            border: `1px solid ${T.line}`, background: 'transparent',
+                            color: l.observacao ? T.terracotta : T.inkFaint }}>
+                          {l.observacao ? 'nota \u2713' : 'nota'}
+                        </button>
+                      </td>
+                    </tr>
+                    {obsAberta === l.br && (
+                      <tr><td colSpan={9} style={{ padding: '8px 12px', background: T.panelAlt, borderBottom: `1px solid ${T.line}` }}>
+                        <textarea defaultValue={l.observacao || ''} rows={2} placeholder="O que foi conversado, o que trava, pr\u00f3ximo passo\u2026"
+                          onBlur={e => { if (e.target.value !== (l.observacao || '')) salvar(l.br, { observacao: e.target.value || null }); }}
+                          style={{ width: '100%', fontFamily: 'inherit', fontSize: 12, padding: 8, borderRadius: 5,
+                            border: `1px solid ${T.line}`, background: T.panel, color: T.ink, resize: 'vertical' }} />
+                        <div style={{ fontSize: 10, color: T.inkFaint, marginTop: 3 }}>
+                          Salva ao sair do campo.{l.atualizado_em ? ` \u00daltima atualiza\u00e7\u00e3o em ${new Date(l.atualizado_em).toLocaleDateString('pt-BR')}.` : ''}
+                        </div>
+                      </td></tr>
+                    )}
+                  </React.Fragment>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        <div style={{ padding: '9px 12px', borderTop: `1px solid ${T.line}`, fontSize: 10.5, color: T.inkFaint }}>
+          O ponderado \u00e9 o valor da proposta vezes o peso do est\u00e1gio. Os pesos ficam em tabela: se a empresa
+          decidir que M\u00e9dio vale 40% em vez de 50%, todo o funil se recalcula sem mexer em c\u00f3digo.
+          BR sem proposta cadastrada ainda n\u00e3o soma no ponderado \u2014 falta o valor, n\u00e3o a inten\u00e7\u00e3o.
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function PainelComercial({ currentUser }) {
   const [subAba, setSubAba] = useState('faturamento');
   const hoje = new Date();
@@ -3657,6 +3881,7 @@ function PainelComercial({ currentUser }) {
       {/* Sub-abas do Painel Comercial */}
       <div style={{ display: 'flex', gap: 2, borderBottom: `1px solid ${T.line}` }}>
         {[{ id: 'faturamento', label: 'Faturado x Previsto' },
+          { id: 'followup', label: 'Follow Up' },
           { id: 'modelo', label: 'Modelo Preditivo' }].map(ab => (
           <button key={ab.id} onClick={() => setSubAba(ab.id)} style={{
             background: 'none', border: 'none', cursor: 'pointer', padding: '9px 16px',
@@ -3669,7 +3894,7 @@ function PainelComercial({ currentUser }) {
         ))}
       </div>
 
-      {subAba === 'modelo' ? <ModeloPreditivo /> : <>
+      {subAba === 'modelo' ? <ModeloPreditivo /> : subAba === 'followup' ? <FollowUpComercial currentUser={currentUser} /> : <>
 
       {/* Filtro de período — de/até */}
       <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '14px 18px' }}>
