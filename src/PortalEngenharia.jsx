@@ -2720,6 +2720,26 @@ function ModeloPreditivo() {
       if (!c.segmento || c.segmento === 'Não informado') c.segmento = r.segmento_descricao || c.segmento;
     }
 
+    // Fator de sazonalidade: quanto do ano ja fechou no mesmo dia de corte,
+    // medido em 2023, 2024 e 2025. Sem isso, anualizar 2026 por regra de tres
+    // simples (dias corridos) erraria -- o faturamento nao e uniforme no ano.
+    // Ate 15/set os tres anos fecharam 64,4%, 71,5% e 66,5%: media ~67,5%,
+    // com dispersao pequena, o que sustenta usar a media.
+    const fatores = [];
+    for (const a of ANOS) {
+      let cheio = 0, parcial = 0;
+      for (const r of linhas) {
+        if (Number(String(r.data_faturamento).slice(0, 4)) !== a) continue;
+        const v = Number(r.valor_bruto) || 0;
+        cheio += v;
+        if (String(r.data_faturamento).slice(5, 10) <= corte) parcial += v;
+      }
+      if (cheio > 0) fatores.push(parcial / cheio);
+    }
+    const fatorAno = fatores.length ? fatores.reduce((s, f) => s + f, 0) / fatores.length : 1;
+    const dispersaoFator = fatores.length > 1
+      ? Math.max(...fatores) - Math.min(...fatores) : 0;
+
     let universo = [...porCliente.values()].sort((a, b) => b.total - a.total);
     if (visao === 'vale') {
       universo = universo.filter(c => /^(VALE|CVRD)/i.test(c.cliente));
@@ -2760,9 +2780,34 @@ function ModeloPreditivo() {
       const varYtd = ytd25 > 0 ? (ytd26 - ytd25) / ytd25 : null;
       // quanto da projeção já foi realizado
       const atingido = proj > 0 ? ytd26 / proj : null;
+
+      // PROJEÇÃO 2027 — regressão sobre quatro pontos, com 2026 estimado.
+      // O ano corrente entra anualizado pelo fator de sazonalidade, e não
+      // pela reta: ignorar 2026 jogaria fora o ano mais informativo, e usar
+      // só o acumulado subestimaria o ano inteiro.
+      const est26 = ytd26 > 0 && fatorAno > 0 ? ytd26 / fatorAno : 0;
+      const serie4 = [a23, a24, a25, est26];
+      const n4 = 4, mx4 = 1.5, my4 = serie4.reduce((s, v) => s + v, 0) / n4;
+      let sxy4 = 0, sxx4 = 0;
+      serie4.forEach((y, i) => { sxy4 += (i - mx4) * (y - my4); sxx4 += (i - mx4) ** 2; });
+      const incl4 = sxx4 ? sxy4 / sxx4 : 0;
+      const proj27 = Math.max(0, my4 + incl4 * (4 - mx4));
+      let ssTot4 = 0, ssRes4 = 0;
+      serie4.forEach((y, i) => {
+        const yh = my4 + incl4 * (i - mx4);
+        ssTot4 += (y - my4) ** 2; ssRes4 += (y - yh) ** 2;
+      });
+      const r2_27 = ssTot4 > 0 ? Math.max(0, 1 - ssRes4 / ssTot4) : 0;
+      // A confiança de 2027 nunca sobe acima da de 2026: ela carrega a
+      // incerteza do R² mais a de 2026 ser estimativa, não fato.
+      const confianca27 = est26 === 0 ? 'Sem base'
+        : r2_27 >= 0.8 ? 'Média' : r2_27 >= 0.4 ? 'Baixa' : 'Muito baixa';
+      const var27 = est26 > 0 ? (proj27 - est26) / est26 : null;
+
       return {
         ...c, serie, a23, a24, a25, proj, r2, sinal, confianca, varUlt,
         ytd26, ytd25, varYtd, atingido,
+        est26, serie4, proj27, r2_27, confianca27, var27, fatorAno, dispersaoFator,
         mediaMes: c.total / 36, mesesAtivos,
         tiposOrd: Object.entries(c.tipos).sort((x, y) => y[1] - x[1]),
       };
@@ -2773,6 +2818,11 @@ function ModeloPreditivo() {
     total: dados.reduce((s, c) => s + c.total, 0),
     proj: dados.reduce((s, c) => s + c.proj, 0),
     a25: dados.reduce((s, c) => s + c.a25, 0),
+    est26: dados.reduce((s, c) => s + (c.est26 || 0), 0),
+    ytd26: dados.reduce((s, c) => s + (c.ytd26 || 0), 0),
+    proj27: dados.reduce((s, c) => s + (c.proj27 || 0), 0),
+    fatorAno: dados[0]?.fatorAno ?? 1,
+    dispersaoFator: dados[0]?.dispersaoFator ?? 0,
     risco: dados.filter(c => ['perdido', 'queda'].includes(c.sinal.k)).length,
   }), [dados]);
 
@@ -2826,6 +2876,19 @@ function ModeloPreditivo() {
           {visao === 'vale' ? '' : ' linear.'} Só entram TOPs de venda — devolução, remessa e amostra
           ficam de fora. Serviço aparece como categoria própria porque não tem classificação de material.
         </div>
+        <div style={{ fontSize: 11.5, color: T.inkDim, lineHeight: 1.6, marginTop: 10, paddingTop: 10, borderTop: `1px solid ${T.line}` }}>
+          <strong style={{ color: T.ink }}>Como 2027 é calculado.</strong> 2026 ainda não fechou, então entra
+          anualizado: o acumulado é dividido por <strong style={{ color: T.ink }}>
+          {Math.round((totais.fatorAno || 1) * 100)}%</strong>, que é a fatia do ano já faturada nesta mesma data
+          em 2023, 2024 e 2025 — os três ficaram entre {Math.round(((totais.fatorAno || 1) - (totais.dispersaoFator || 0) / 2) * 100)}%
+          e {Math.round(((totais.fatorAno || 1) + (totais.dispersaoFator || 0) / 2) * 100)}%, dispersão pequena o
+          bastante para usar a média. Sobre os quatro anos roda a mesma regressão linear, e o resultado é 2027.
+          <br />
+          <strong style={{ color: T.amberText }}>Leia com reserva.</strong> A projeção de 2026 parte de três anos
+          fechados; a de 2027 parte de dois anos e meio fechados mais uma estimativa, e por isso a confiança dela
+          nunca é classificada como alta. Cliente que compra por projeto oscila demais para uma reta explicar — é
+          tendência, não previsão. O número serve para ordenar prioridade comercial, não para virar meta.
+        </div>
       </div>
       )}
 
@@ -2834,6 +2897,8 @@ function ModeloPreditivo() {
           { l: 'Faturado 23–25 (top 10)', v: moeda(totais.total), c: T.terracotta, big: true },
           { l: 'Fechado em 2025', v: moeda(totais.a25), c: T.ink },
           { l: 'Projeção 2026', v: moeda(totais.proj), c: T.blueText },
+          { l: '2026 estimado', v: moeda(totais.est26), c: T.inkDim },
+          { l: 'Projeção 2027', v: moeda(totais.proj27), c: T.terracotta },
           { l: 'Clientes em risco', v: String(totais.risco), c: totais.risco > 0 ? T.rustText : T.oliveText },
         ].map(k => (
           <div key={k.l} style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '14px 16px', boxShadow: SHADOW_SM }}>
@@ -3063,7 +3128,7 @@ function ModeloPreditivo() {
           <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 1020 }}>
             <thead>
               <tr style={{ background: T.panelAlt }}>
-                {['Cliente', 'Segmento', 'Tipo de material', '2023', '2024', '2025', 'Tendência', 'Projeção 2026', '2026 até hoje', 'vs 2025 igual', 'Sinal']
+                {['Cliente', 'Segmento', 'Tipo de material', '2023', '2024', '2025', 'Tendência', 'Projeção 2026', '2026 até hoje', 'vs 2025 igual', '2026 estimado', 'Projeção 2027', 'Sinal']
                   .map((h, i) => (
                   <th key={h} style={{
                     padding: '10px 12px', fontSize: 11, fontWeight: 600, color: T.inkFaint,
@@ -3132,6 +3197,25 @@ function ModeloPreditivo() {
                       }}>
                         {c.varYtd == null ? '—' : pct(c.varYtd)}
                       </td>
+                      <td style={{
+                        padding: '11px 12px', fontSize: 12.5, textAlign: 'right',
+                        color: T.inkDim, fontVariantNumeric: 'tabular-nums',
+                      }} title={`Acumulado de ${moeda(c.ytd26)} dividido por ${Math.round((c.fatorAno || 1) * 100)}%, que é a fatia do ano já fechada nesta data em 2023, 2024 e 2025`}>
+                        {c.est26 > 0 ? moeda(c.est26) : '—'}
+                      </td>
+                      <td style={{
+                        padding: '11px 12px', fontSize: 12.5, textAlign: 'right', fontWeight: 600,
+                        color: T.terracotta, fontVariantNumeric: 'tabular-nums',
+                      }}>
+                        {c.est26 > 0 ? moeda(c.proj27) : '—'}
+                        {c.est26 > 0 && (
+                          <div style={{ fontSize: 10, fontWeight: 400,
+                            color: c.var27 == null ? T.inkFaint : c.var27 >= 0 ? T.oliveText : T.rustText }}>
+                            {c.var27 != null ? `${pct(c.var27)} vs 2026` : ''}
+                            <span style={{ color: T.inkFaint }}> · {c.confianca27.toLowerCase()}</span>
+                          </div>
+                        )}
+                      </td>
                       <td style={{ padding: '11px 12px' }}>
                         <span style={{
                           fontSize: 10.5, fontWeight: 700, color: c.sinal.cor, background: c.sinal.bg,
@@ -3141,7 +3225,7 @@ function ModeloPreditivo() {
                     </tr>
                     {aberto && (
                       <tr style={{ background: T.panelAlt }}>
-                        <td colSpan={11} style={{ padding: '14px 16px', borderBottom: `1px solid ${T.line}` }}>
+                        <td colSpan={13} style={{ padding: '14px 16px', borderBottom: `1px solid ${T.line}` }}>
                           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(230px,1fr))', gap: 18 }}>
                             <div>
                               <div style={{ fontSize: 10.5, color: T.inkFaint, fontWeight: 600, marginBottom: 7 }}>
@@ -3207,6 +3291,8 @@ function ModeloPreditivo() {
               tipo_principal: c.tiposOrd[0]?.[0] || '—',
               v2023: Math.round(c.a23), v2024: Math.round(c.a24), v2025: Math.round(c.a25),
               media_mes: Math.round(c.mediaMes), projecao_2026: Math.round(c.proj),
+              estimativa_2026: Math.round(c.est26 || 0), projecao_2027: Math.round(c.proj27 || 0),
+              confianca_2027: c.confianca27,
               realizado_2026_ytd: Math.round(c.ytd26), mesmo_periodo_2025: Math.round(c.ytd25),
               var_ytd_pct: c.varYtd == null ? '' : Math.round(c.varYtd * 100),
               r2: c.r2.toFixed(2), confianca: c.confianca, sinal: c.sinal.rot,
