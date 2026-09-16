@@ -16176,7 +16176,7 @@ function Custeio() {
 
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', gap: 2 }}>
-          {[{ id: 'produto', l: 'Por produto' }, { id: 'br', l: 'Por projeto (BR)' }, { id: 'margem', l: 'Margem por venda' }, { id: 'orcado', l: 'Orçado x Comprado' }, { id: 'cif', l: 'Despesa fixa (CIF)' }, { id: 'qualidade', l: (() => {
+          {[{ id: 'produto', l: 'Por produto' }, { id: 'br', l: 'Por projeto (BR)' }, { id: 'margem', l: 'Margem por venda' }, { id: 'orcado', l: 'Orçado x Comprado' }, { id: 'cif', l: 'Despesa fixa (CIF)' }, { id: 'absorcao', l: 'Custo por absorção' }, { id: 'qualidade', l: (() => {
             const ult = verif.length ? verif.reduce((m, v) => v.executado_em > m ? v.executado_em : m, '') : null;
             const falhas = ult ? verif.filter(v => v.executado_em === ult && !v.passou).length : 0;
             return falhas ? `Qualidade dos dados (${falhas})` : 'Qualidade dos dados';
@@ -16420,6 +16420,43 @@ function Custeio() {
                   </tbody>
                 </table>
               </div>
+            </div>
+
+          </div>
+        );
+      })()}
+
+      {aba === 'absorcao' && (() => {
+        // Custo por absorcao: custo direto + fatia do CIF. Fica em aba
+        // separada de proposito -- a aba Despesa fixa responde "quanto a
+        // estrutura custa", esta responde "quanto disso cai em cada projeto".
+        // Sao perguntas diferentes e misturar as duas confunde.
+        const anos = [...new Set(cifRateio.map(r => r.ano))].sort().reverse();
+        const rateio = cifRateio.filter(r => r.ano === anoCif)
+          .sort((a, b) => Number(b.cif_rateado || 0) - Number(a.cif_rateado || 0));
+        const cifAno = rateio.reduce((acc, r) => acc + Number(r.cif_rateado || 0), 0);
+        const diretoAno = rateio.reduce((acc, r) => acc + Number(r.custo_direto || 0), 0);
+
+        return (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <div style={{ fontSize: 11.5, color: T.inkDim, background: T.panelAlt, padding: '9px 12px', borderRadius: 6 }}>
+              Custo direto mais a fatia do CIF que cabe a cada projeto. O CIF de cada mês vai para quem consumiu
+              material naquele mês, então projeto que rodou em dezembro não carrega overhead de janeiro.
+              A composição do CIF e o que está sem classificar ficam na aba <strong>Despesa fixa</strong>.
+            </div>
+
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              {anos.map(a => (
+                <button key={a} onClick={() => setAnoCif(a)} style={{
+                  fontFamily: 'inherit', fontSize: 12.5, fontWeight: anoCif === a ? 700 : 400, cursor: 'pointer',
+                  padding: '6px 14px', borderRadius: 6,
+                  border: `1px solid ${anoCif === a ? T.ink : T.line}`,
+                  background: anoCif === a ? T.ink : T.panel, color: anoCif === a ? T.panel : T.inkDim }}>{a}</button>
+              ))}
+              <div style={{ flex: 1 }} />
+              <span style={{ fontSize: 11.5, color: T.inkDim, fontVariantNumeric: 'tabular-nums' }}>
+                Custo direto {moeda(diretoAno)} · CIF rateado {moeda(cifAno)}
+              </span>
             </div>
 
             <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
