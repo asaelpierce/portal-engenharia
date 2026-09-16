@@ -17197,10 +17197,13 @@ function Custeio() {
             pedido: r.pedido_venda, data: r.data_ref_orcamento, orc: 0, sol: 0, com: 0, comLiq: 0, emp: 0, est: 0, op: 0, rec: 0, recBruta: 0, fonteRec: null, itens: 0, cats: {} };
           porOrc[k].orc += Number(r.valor_orcado) || 0;
           porOrc[k].sol += Number(r.valor_solicitado) || 0;
-          porOrc[k].com += Number(r.valor_comprado) || 0;
-          porOrc[k].emp += Number(r.valor_empenhado) || 0;
-          porOrc[k].est += Number(r.valor_estoque_liquido) || 0;
-          porOrc[k].comLiq += Number(r.valor_comprado_liquido) || 0;
+          // Consumivel rateado no fechamento nao entra no custo do projeto
+          if (!r.consumivel_rateado) {
+            porOrc[k].com += Number(r.valor_comprado) || 0;
+            porOrc[k].emp += Number(r.valor_empenhado) || 0;
+            porOrc[k].est += Number(r.valor_estoque_liquido) || 0;
+            porOrc[k].comLiq += Number(r.valor_comprado_liquido) || 0;
+          }
           porOrc[k].rec = Number(r.receita_liquida) || porOrc[k].rec;
           porOrc[k].recBruta = Number(r.receita_bruta) || porOrc[k].recBruta;
           porOrc[k].fonteRec = r.fonte_receita_liquida || porOrc[k].fonteRec;
@@ -17274,6 +17277,7 @@ function Custeio() {
         const corConf = { alta: T.oliveText, media: T.amberText, baixa: T.rustText };
         const rotDe = (r) => {
           if (r.compra_em_lote) return rotLote;
+          if (r.consumivel_rateado) return '♻ consumível rateado';
           if (r.situacao === 'de_op_estoque') return '⚙ de OP de estoque';
           if (r.situacao_ajustada === 'vinculado_a_compra') return '≡ vinculado a compra';
           if (r.situacao_ajustada === 'vinculado_a_orcamento') return '≡ vinculado a orçamento';
@@ -17520,7 +17524,7 @@ function Custeio() {
                         _op: Number(e.custo_a_acrescentar) || 0,
                       }))
                     const itens = detalhe
-                      .filter(r => r.caixa === caixaAberta)
+                      .filter(r => r.caixa === caixaAberta && !r.consumivel_rateado)
                       .map(r => ({
                         ...r,
                         _orc: Number(r.valor_orcado) || 0,
