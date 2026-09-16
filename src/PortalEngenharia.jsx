@@ -16191,6 +16191,9 @@ function Custeio() {
   const [catComp, setCatComp] = useState([]);
   const [opExtra, setOpExtra] = useState([]);
   const [analise, setAnalise] = useState([]);
+  const [suspeitos, setSuspeitos] = useState([]);
+  const [opBusy, setOpBusy] = useState(null);
+  const [opInput, setOpInput] = useState({});
   const [filtroAn, setFiltroAn] = useState('todos');
   const [anoAn, setAnoAn] = useState(2026);
   const [brOrc, setBrOrc] = useState('');
@@ -16244,6 +16247,7 @@ function Custeio() {
       setCatComp(rc);
       setOpExtra(await lerTudo('v_custeio_op_extra'));
       setAnalise(await lerTudo('v_custeio_analise'));
+      setSuspeitos(await lerTudo('v_custeio_custo_suspeito'));
       // Historico do verificador. 60 dias bastam para ver tendencia sem
       // arrastar a tabela inteira, que cresce ~17 linhas por dia.
       const desdeVerif = new Date(Date.now() - 60 * 864e5).toISOString();
@@ -16289,6 +16293,26 @@ function Custeio() {
       setOrcComp(await lerTudo('v_custeio_orcado_comprado_cat'));
     } catch (e) { setErro(e.message || String(e)); }
     setVincBusy(null);
+  }, [lerTudo]);
+
+  // Ligar OP de projeto estoque a um BR. Nao ha caminho automatico: no
+  // BR14325/26 a informacao de que usaram o projeto estoque BR13719 veio de
+  // uma pessoa, nao do sistema. A tela mostra o sintoma, alguem informa a OP.
+  const vincularOp = useCallback(async (codproj, idiproc) => {
+    if (!idiproc) return;
+    setOpBusy(codproj);
+    try {
+      const { error } = await supabase.rpc('fn_custeio_vincular_op', {
+        p_codproj: codproj, p_idiproc: Number(idiproc), p_quem: 'portal', p_obs: null });
+      if (error) throw error;
+      const [rc, ra, rs, ro] = await Promise.all([
+        lerTudo('v_custeio_categoria'), lerTudo('v_custeio_analise'),
+        lerTudo('v_custeio_custo_suspeito'), lerTudo('v_custeio_op_extra'),
+      ]);
+      setCatComp(rc); setAnalise(ra); setSuspeitos(rs); setOpExtra(ro);
+      setOpInput(o => ({ ...o, [codproj]: '' }));
+    } catch (e) { setErro(e.message || String(e)); }
+    setOpBusy(null);
   }, [lerTudo]);
 
   const classificarNatureza = useCallback(async (codnat, destino) => {
@@ -16721,6 +16745,73 @@ function Custeio() {
                 })}
               </div>
             </div>
+
+            {suspeitos.filter(x => x.ano === anoAn || !x.ano).length > 0 && (() => {
+              // Projeto faturado cujo custo nao fecha. Quase sempre material que
+              // saiu de OP de projeto estoque e nunca foi amarrado ao BR.
+              const fila = suspeitos
+                .filter(x => String(x.competencia || '').startsWith(String(anoAn)))
+                .sort((a, b) => Number(b.receita_liquida) - Number(a.receita_liquida));
+              if (!fila.length) return null;
+              const perdido = fila.reduce((s2, x) => s2 + (Number(x.receita_liquida) - Number(x.custo)), 0);
+              return (
+                <div style={{ background: T.panel, border: `1px solid ${T.rustText}`, borderRadius: 10, overflow: 'hidden' }}>
+                  <div style={{ padding: '10px 12px', borderBottom: `1px solid ${T.line}` }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: T.rustText }}>
+                      Custo não fecha — {fila.length} {fila.length === 1 ? 'projeto' : 'projetos'}
+                    </div>
+                    <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 3, maxWidth: 780 }}>
+                      Faturaram mas quase não têm custo. Quase sempre é material que saiu de uma OP de projeto
+                      estoque e nunca foi amarrado ao BR. <strong>Não há como descobrir sozinho</strong> — a OP de
+                      origem não está gravada em lugar nenhum. Quem conhece o projeto informa o número da OP e o
+                      custo entra, já descontado o que o projeto comprou por conta própria.
+                    </div>
+                  </div>
+                  <div style={{ overflowX: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 860 }}>
+                      <thead><tr style={{ background: T.panelAlt }}>
+                        {['BR', 'Mês', 'Receita líq.', 'Custo hoje', 'Itens orçados', 'Com custo', 'Sintoma', 'OP de origem'].map((h, i) => (
+                          <th key={h} style={{ padding: '9px 12px', fontSize: 11, fontWeight: 600, color: T.inkFaint,
+                            textAlign: i >= 2 && i <= 5 ? 'right' : 'left', whiteSpace: 'nowrap' }}>{h}</th>
+                        ))}
+                      </tr></thead>
+                      <tbody>
+                        {fila.slice(0, 60).map(x => (
+                          <tr key={`${x.codproj}-${x.competencia}`} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                            <td style={{ padding: '8px 12px', fontSize: 12.5, fontWeight: 600 }}>{x.br}</td>
+                            <td style={{ padding: '8px 12px', fontSize: 11.5, color: T.inkDim }}>{x.competencia}</td>
+                            <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{moeda(x.receita_liquida)}</td>
+                            <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', color: T.rustText, fontVariantNumeric: 'tabular-nums' }}>{moeda(x.custo)}</td>
+                            <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', color: T.inkDim, fontVariantNumeric: 'tabular-nums' }}>{x.itens_orcados}</td>
+                            <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', color: x.itens_com_custo === 0 ? T.rustText : T.inkDim, fontVariantNumeric: 'tabular-nums' }}>{x.itens_com_custo}</td>
+                            <td style={{ padding: '8px 12px', fontSize: 11, color: T.inkDim, whiteSpace: 'nowrap' }}>{x.sintoma}</td>
+                            <td style={{ padding: '8px 12px', whiteSpace: 'nowrap' }}>
+                              <input value={opInput[x.codproj] || ''} placeholder="nº da OP"
+                                onChange={e => setOpInput(o => ({ ...o, [x.codproj]: e.target.value.replace(/\D/g, '') }))}
+                                onKeyDown={e => { if (e.key === 'Enter') vincularOp(x.codproj, opInput[x.codproj]); }}
+                                style={{ fontFamily: 'inherit', fontSize: 11.5, width: 78, padding: '4px 7px',
+                                  borderRadius: 4, border: `1px solid ${T.line}`, background: T.panel, color: T.ink }} />
+                              <button disabled={opBusy != null || !opInput[x.codproj]}
+                                onClick={() => vincularOp(x.codproj, opInput[x.codproj])}
+                                style={{ fontFamily: 'inherit', fontSize: 11.5, marginLeft: 5, padding: '4px 9px',
+                                  borderRadius: 4, cursor: opInput[x.codproj] ? 'pointer' : 'default',
+                                  border: `1px solid ${T.line}`, background: 'transparent',
+                                  color: opInput[x.codproj] ? T.terracotta : T.inkFaint }}>
+                                {opBusy === x.codproj ? '…' : 'ligar'}
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div style={{ padding: '9px 12px', borderTop: `1px solid ${T.line}`, fontSize: 10.5, color: T.inkFaint }}>
+                    {moeda(perdido)} aparecem hoje como margem nesses projetos, e boa parte é custo que ainda não foi
+                    encontrado. Enquanto a fila não esvaziar, a margem geral da aba está superestimada.
+                  </div>
+                </div>
+              );
+            })()}
 
             <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
               <div style={{ padding: '10px 12px', fontSize: 12, fontWeight: 700, borderBottom: `1px solid ${T.line}`, display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
