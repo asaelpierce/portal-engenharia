@@ -16965,6 +16965,11 @@ function Custeio() {
           .sort((a, b) => (b.data || '').localeCompare(a.data || ''));
 
         const detalhe = brOrc ? orcComp.filter(r => (r.br || '').toLowerCase().includes(brOrc.toLowerCase())) : [];
+        const rotLote = '🏭 consumo de fábrica';
+        // Item comprado em lote nunca casa com compra do projeto -- pallet,
+        // cola, thinner, servico interno. Mostrar como "orcado, nao comprado"
+        // sugeria economia de R$ 2,79 milhoes que nao existe.
+        const rotDe = (r) => r.compra_em_lote ? rotLote : (rotSit[r.situacao] || r.situacao || '—');
         const rotSit = { comprado_sem_orcamento: '⚠ comprado sem orçamento', orcado_nao_comprado: 'orçado, não comprado', so_solicitado: 'só solicitado', orcado_sem_codigo: 'orçado sem código (texto livre)', aguardando_nota: 'OC emitida, aguardando NF', atendido_do_estoque: '📦 atendido do estoque', ok: 'ok' };
 
         return (
@@ -17222,7 +17227,7 @@ function Custeio() {
                                     <td style={{ padding: '7px 12px', fontSize: 12, textAlign: 'right', fontWeight: 700, color: cor, fontVariantNumeric: 'tabular-nums' }}>
                                       {desvio == null ? '—' : `${desvio > 0 ? '+' : ''}${moeda(desvio)}`}
                                     </td>
-                                    <td style={{ padding: '7px 12px', fontSize: 11, color: T.inkDim, whiteSpace: 'nowrap' }}>{rotSit[r.situacao] || r.situacao || '—'}</td>
+                                    <td style={{ padding: '7px 12px', fontSize: 11, color: T.inkDim, whiteSpace: 'nowrap' }}>{rotDe(r)}</td>
                                   </tr>
                                 );
                               })}
@@ -17269,9 +17274,14 @@ function Custeio() {
                   const compraTot = g.comprado.v + g.comprado_e_transferido.v;
                   const estoqueTot = g.ja_tinha_no_estoque.v;
                   if (!compraTot && !estoqueTot) return null;
+                  // Comprado em lote nao e economia: e compra que nao passa
+                  // pelo projeto. Fica visivel, mas separado do resto.
+                  const lote = detalhe.filter(r => r.compra_em_lote);
+                  const loteTot = lote.reduce((s2, r) => s2 + (Number(r.valor_orcado) || 0), 0);
                   const cards = [
                     { t: '🛒 Precisou comprar', n: g.comprado.n + g.comprado_e_transferido.n, v: compraTot, c: T.ink, bg: T.panelAlt },
                     { t: '📦 Não precisou comprar', n: g.ja_tinha_no_estoque.n, v: estoqueTot, c: T.blueText, bg: T.blueSoft },
+                    ...(lote.length ? [{ t: '🏭 Consumo de fábrica', n: lote.length, v: loteTot, c: T.inkDim, bg: T.panelAlt }] : []),
                   ];
                   return (
                     <div style={{ padding: '10px 12px', borderBottom: `1px solid ${T.line}`, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -17281,6 +17291,12 @@ function Custeio() {
                           <div style={{ color: T.inkDim, marginTop: 2 }}>{k.n} itens · <strong>{moeda(k.v)}</strong></div>
                         </div>
                       ))}
+                      {lote.length > 0 && (
+                        <div style={{ background: T.panelAlt, borderRadius: 7, padding: '8px 14px', fontSize: 11.5, color: T.inkFaint, maxWidth: 330 }}>
+                          {lote.length} {lote.length === 1 ? 'item é comprado' : 'itens são comprados'} em lote para a fábrica, fora do projeto —
+                          pallet, cola, thinner, serviço interno. Aparece como orçado, mas não conta como economia.
+                        </div>
+                      )}
                       {g.comprado_e_transferido.n > 0 && (
                         <div style={{ background: T.panelAlt, borderRadius: 7, padding: '8px 14px', fontSize: 11.5, color: T.inkFaint, maxWidth: 300 }}>
                           {g.comprado_e_transferido.n} itens foram comprados e depois transferidos do estoque —
@@ -17348,7 +17364,7 @@ function Custeio() {
                             <span style={{ color: r.situacao === 'comprado_sem_orcamento' ? T.rustText : T.inkFaint,
                                            background: r.situacao === 'comprado_sem_orcamento' ? T.rustSoft : T.panelAlt,
                                            padding: '2px 7px', borderRadius: 4, whiteSpace: 'nowrap' }}>
-                              {rotSit[r.situacao] || r.situacao}
+                              {rotDe(r)}
                             </span>
                           </td>
                         </tr>
