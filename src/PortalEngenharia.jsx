@@ -16191,9 +16191,7 @@ function Custeio() {
   const [catComp, setCatComp] = useState([]);
   const [brOrc, setBrOrc] = useState('');
   const [fatFiltro, setFatFiltro] = useState('todos'); // todos | faturados | nao_faturados
-  const [verItens, setVerItens] = useState(false);
   const [caixaAberta, setCaixaAberta] = useState(null); // material | servicos | frete | outros
-  const [verSoOrcado, setVerSoOrcado] = useState(false);
   const [verif, setVerif] = useState([]);
   const [cifMes, setCifMes] = useState([]);
   const [cifRateio, setCifRateio] = useState([]);
@@ -16945,7 +16943,7 @@ function Custeio() {
         orcComp.forEach(r => {
           const k = `${r.br || 'proj ' + r.codproj}|${r.nureg}`;
           if (!porOrc[k]) porOrc[k] = { chave: k, br: r.br || `proj ${r.codproj}`, nureg: r.nureg,
-            pedido: r.pedido_venda, data: r.data_ref_orcamento, orc: 0, sol: 0, com: 0, comLiq: 0, emp: 0, est: 0, rec: 0, recBruta: 0, fonteRec: null, itens: 0, semOrc: 0, cats: {} };
+            pedido: r.pedido_venda, data: r.data_ref_orcamento, orc: 0, sol: 0, com: 0, comLiq: 0, emp: 0, est: 0, rec: 0, recBruta: 0, fonteRec: null, itens: 0, cats: {} };
           porOrc[k].orc += Number(r.valor_orcado) || 0;
           porOrc[k].sol += Number(r.valor_solicitado) || 0;
           porOrc[k].com += Number(r.valor_comprado) || 0;
@@ -16959,7 +16957,6 @@ function Custeio() {
           const vc = (Number(r.valor_comprado) || 0) + (Number(r.valor_estoque) || 0);
           if (vc) porOrc[k].cats[cat] = (porOrc[k].cats[cat] || 0) + vc;
           porOrc[k].itens += 1;
-          if (r.situacao === 'comprado_sem_orcamento') porOrc[k].semOrc += 1;
         });
         // Faturado = tem nota de venda emitida (por isso tem receita).
         // "Foi faturado?" e "de onde veio o liquido?" sao perguntas
@@ -16995,8 +16992,7 @@ function Custeio() {
                                  || (Number(r.valor_estoque_liquido) || 0) > 0
                                  || (Number(r.valor_solicitado) || 0) > 0
                                  || (Number(r.valor_empenhado) || 0) > 0;
-        const semMov = todoOrc.filter(r => !temMovimento(r));
-        const detalhe = verSoOrcado ? todoOrc : todoOrc.filter(temMovimento);
+        const detalhe = todoOrc.filter(temMovimento);
         const rotLote = '🏭 consumo de fábrica';
         // Item comprado em lote nunca casa com compra do projeto -- pallet,
         // cola, thinner, servico interno. Mostrar como "orcado, nao comprado"
@@ -17072,7 +17068,6 @@ function Custeio() {
                           {!b.faturado && <span style={{ marginLeft: 6, fontSize: 10, color: T.amberText, background: T.amberSoft, padding: '2px 6px', borderRadius: 4 }}>⏳ não faturado</span>}
                           {b.calculado && <span style={{ marginLeft: 6, fontSize: 10, color: T.inkDim, background: T.panelAlt, border: `1px solid ${T.line}`, padding: '2px 6px', borderRadius: 4 }}
                             title="O campo Net Offer Value não foi digitado nessas notas. O líquido veio do rateio do valor líquido da nota na proporção do VLRTOT — a mesma conta usada do lado do custo.">∑ líquido calculado</span>}
-                          {b.semOrc > 0 && <span style={{ marginLeft: 6, fontSize: 10, color: T.rustText, background: T.rustSoft, padding: '2px 6px', borderRadius: 4 }}>{b.semOrc} sem orçamento</span>}
                         </td>
                         <td style={{ padding: '9px 12px', fontSize: 11.5, textAlign: 'right', color: T.inkDim, whiteSpace: 'nowrap' }}>
                           {b.pedido || '—'}{b.data && <span style={{ color: T.inkFaint }}> · {b.data.split('-').reverse().join('/')}</span>}
@@ -17290,17 +17285,6 @@ function Custeio() {
                         <div style={{ padding: '8px 12px', borderTop: `1px solid ${T.lineSoft}`, fontSize: 10.5, color: T.inkFaint }}>
                           O custo do projeto é o que Compras comprou mais o que foi movimentado do estoque. Item
                           comprado e depois transferido conta <strong>uma vez só</strong>, como compra.
-                          {semMov.length > 0 && (
-                            <>
-                              {' '}Existem {semMov.length} {semMov.length === 1 ? 'item orçado' : 'itens orçados'} sem
-                              nenhum movimento neste projeto.{' '}
-                              <button onClick={() => setVerSoOrcado(v => !v)}
-                                style={{ fontFamily: 'inherit', fontSize: 10.5, padding: '2px 7px', borderRadius: 4,
-                                  cursor: 'pointer', border: `1px solid ${T.line}`, background: 'transparent', color: T.inkDim }}>
-                                {verSoOrcado ? 'ocultar' : 'mostrar'}
-                              </button>
-                            </>
-                          )}
                         </div>
                       </div>
                     );
@@ -17311,146 +17295,11 @@ function Custeio() {
                       Custo = nota fiscal de compra + o que saiu do estoque − sobra devolvida. Ordem de compra sem nota é
                       compromisso e não entra. Item comprado e depois transferido conta uma vez só, como compra.
                     </span>
-                    <button onClick={() => setVerItens(v => !v)}
-                      style={{ fontSize: 11.5, fontWeight: 700, padding: '6px 11px', borderRadius: 6, cursor: 'pointer', whiteSpace: 'nowrap', border: `1px solid ${T.line}`, background: 'transparent', color: T.inkDim }}>
-                      {verItens ? 'Ocultar item a item' : 'Ver item a item'}
-                    </button>
                   </div>
                 </div>
               );
             })()}
 
-            {verItens && detalhe.length > 0 && (
-              <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
-                <div style={{ padding: '10px 12px', fontSize: 12, fontWeight: 700, borderBottom: `1px solid ${T.line}` }}>
-                  Item a item — {brOrc}
-                </div>
-                {(() => {
-                  // Separa o que a empresa JA TINHA do que precisou comprar.
-                  // O item comprado e depois transferido conta so como compra
-                  // -- a transferencia dele e movimentacao interna, nao custo novo.
-                  const g = { comprado: { n: 0, v: 0 }, comprado_e_transferido: { n: 0, v: 0 }, ja_tinha_no_estoque: { n: 0, v: 0 } };
-                  detalhe.forEach(r => {
-                    const o = r.origem;
-                    if (!g[o]) return;
-                    g[o].n += 1;
-                    g[o].v += Number(o === 'ja_tinha_no_estoque' ? r.valor_estoque_liquido : r.valor_comprado_liquido) || 0;
-                  });
-                  const compraTot = g.comprado.v + g.comprado_e_transferido.v;
-                  const estoqueTot = g.ja_tinha_no_estoque.v;
-                  if (!compraTot && !estoqueTot) return null;
-                  // Comprado em lote nao e economia: e compra que nao passa
-                  // pelo projeto. Fica visivel, mas separado do resto.
-                  const lote = detalhe.filter(r => r.compra_em_lote);
-                  const vinc = detalhe.filter(r => r.vinculo_itens > 0);
-                  const loteTot = lote.reduce((s2, r) => s2 + (Number(r.valor_orcado) || 0), 0);
-                  const cards = [
-                    { t: '🛒 Precisou comprar', n: g.comprado.n + g.comprado_e_transferido.n, v: compraTot, c: T.ink, bg: T.panelAlt },
-                    { t: '📦 Não precisou comprar', n: g.ja_tinha_no_estoque.n, v: estoqueTot, c: T.blueText, bg: T.blueSoft },
-                    ...(lote.length ? [{ t: '🏭 Consumo de fábrica', n: lote.length, v: loteTot, c: T.inkDim, bg: T.panelAlt }] : []),
-                  ];
-                  return (
-                    <div style={{ padding: '10px 12px', borderBottom: `1px solid ${T.line}`, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                      {cards.map(k => (
-                        <div key={k.t} style={{ background: k.bg, borderRadius: 7, padding: '8px 14px', fontSize: 12 }}>
-                          <strong style={{ color: k.c }}>{k.t}</strong>
-                          <div style={{ color: T.inkDim, marginTop: 2 }}>{k.n} itens · <strong>{moeda(k.v)}</strong></div>
-                        </div>
-                      ))}
-                      {vinc.length > 0 && (
-                        <div style={{ background: T.panelAlt, borderRadius: 7, padding: '8px 14px', fontSize: 11.5, color: T.inkFaint, maxWidth: 330 }}>
-                          {vinc.length} {vinc.length === 1 ? 'item foi vinculado' : 'itens foram vinculados'} entre orçamento e compra por
-                          interpretação de texto, porque os nomes não batem. O vínculo não muda valor — só deixa de
-                          contar como órfão. Passe o mouse na situação para ver o motivo.
-                        </div>
-                      )}
-                      {lote.length > 0 && (
-                        <div style={{ background: T.panelAlt, borderRadius: 7, padding: '8px 14px', fontSize: 11.5, color: T.inkFaint, maxWidth: 330 }}>
-                          {lote.length} {lote.length === 1 ? 'item é comprado' : 'itens são comprados'} em lote para a fábrica, fora do projeto —
-                          pallet, cola, thinner, serviço interno. Aparece como orçado, mas não conta como economia.
-                        </div>
-                      )}
-                      {g.comprado_e_transferido.n > 0 && (
-                        <div style={{ background: T.panelAlt, borderRadius: 7, padding: '8px 14px', fontSize: 11.5, color: T.inkFaint, maxWidth: 300 }}>
-                          {g.comprado_e_transferido.n} itens foram comprados e depois transferidos do estoque —
-                          contam uma vez só, como compra.
-                        </div>
-                      )}
-                    </div>
-                  );
-                })()}
-                {(() => {
-                  const ROT = { materia_prima: 'Matéria-prima', frete: 'Frete', industrializacao: 'Industrialização',
-                                servico: 'Serviço', embalagem: 'Embalagem', uso_consumo: 'Uso e consumo',
-                                imobilizado: 'Imobilizado', outros: 'Outros', sem_classificacao: 'Sem classificação' };
-                  const cats = {};
-                  detalhe.forEach(r => {
-                    const c = r.categoria || 'sem_classificacao';
-                    if (!cats[c]) cats[c] = { comprado: 0, estoque: 0 };
-                    cats[c].comprado += Number(r.valor_comprado) || 0;
-                    cats[c].estoque += Number(r.valor_estoque) || 0;
-                  });
-                  const linhas = Object.entries(cats).filter(([, v]) => v.comprado || v.estoque)
-                    .sort((a, b) => (b[1].comprado + b[1].estoque) - (a[1].comprado + a[1].estoque));
-                  if (!linhas.length) return null;
-                  return (
-                    <div style={{ padding: '10px 12px', borderBottom: `1px solid ${T.line}`, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                      {linhas.map(([c, v]) => (
-                        <div key={c} style={{ background: T.panelAlt, borderRadius: 7, padding: '7px 12px', fontSize: 11.5 }}>
-                          <strong>{ROT[c] || c}</strong>
-                          <div style={{ color: T.inkDim, marginTop: 2 }}>
-                            comprado {moeda(v.comprado)}
-                            {v.estoque ? <span style={{ color: T.blueText }}> · estoque {moeda(v.estoque)}</span> : null}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  );
-                })()}
-                <div style={{ overflowX: 'auto' }}>
-                  <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 900 }}>
-                    <thead><tr style={{ background: T.panelAlt }}>
-                      {['Orç.', 'Cód', 'Produto', 'Categoria', 'Origem', 'Orçado', 'Comprado (líq.)', 'Não precisou comprar', 'Desvio', 'Situação'].map((h, i) => (
-                        <th key={h} style={{ padding: '9px 12px', fontSize: 11, fontWeight: 600, color: T.inkFaint, textAlign: i >= 3 && i <= 8 ? 'right' : 'left' }}>{h}</th>
-                      ))}
-                    </tr></thead>
-                    <tbody>
-                      {detalhe.sort((a, b) => (Number(b.desvio_valor) || 0) - (Number(a.desvio_valor) || 0)).map(r => (
-                        <tr key={`${r.codproj}-${r.nureg}-${r.chave_item}`} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
-                          <td style={{ padding: '8px 12px', fontSize: 11, color: T.inkFaint }} title={`Pedido de venda ${r.pedido_venda || '—'}`}>{r.nureg}</td>
-                          <td style={{ padding: '8px 12px', fontSize: 12 }}>{r.cod_prod ?? '—'}</td>
-                          <td style={{ padding: '8px 12px', fontSize: 11.5, maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.descr_prod}>{r.descr_prod}</td>
-                          <td style={{ padding: '8px 12px', fontSize: 11, color: T.inkFaint }}
-                              title={r.operacao_compra || ''}>{({ materia_prima: 'Matéria-prima', frete: 'Frete', industrializacao: 'Industrializ.', servico: 'Serviço', embalagem: 'Embalagem', uso_consumo: 'Uso/consumo', imobilizado: 'Imobilizado', outros: 'Outros' })[r.categoria] || '—'}</td>
-                          <td style={{ padding: '8px 12px', fontSize: 11 }}>
-                            {({ comprado: '🛒 comprou', comprado_e_transferido: '🛒 comprou (transf.)', ja_tinha_no_estoque: '📦 já tinha', sem_movimento: '—' })[r.origem] || '—'}
-                          </td>
-                          <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{r.valor_orcado != null ? moeda(r.valor_orcado) : '—'}</td>
-                          <td style={{ padding: '8px 12px', fontSize: 12.5, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{r.valor_comprado_liquido != null ? moeda(r.valor_comprado_liquido) : '—'}</td>
-                          <td style={{ padding: '8px 12px', fontSize: 12.5, textAlign: 'right', color: T.blueText, fontVariantNumeric: 'tabular-nums' }}
-                              title={r.origem === 'comprado_e_transferido' ? `Transferiu ${moeda(r.valor_transferido)} do estoque, mas foi comprado neste projeto — não conta de novo` : ''}>
-                            {r.valor_estoque_liquido != null ? moeda(r.valor_estoque_liquido) : '—'}
-                          </td>
-                          <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', fontWeight: 700, fontVariantNumeric: 'tabular-nums',
-                                       color: (Number(r.desvio_valor) || 0) > 0 ? T.rustText : T.oliveText }}>{r.desvio_valor != null ? moeda(r.desvio_valor) : '—'}</td>
-                          <td style={{ padding: '8px 12px', fontSize: 11 }}>
-                            <span style={{ color: r.situacao === 'comprado_sem_orcamento' ? T.rustText : T.inkFaint,
-                                           background: r.situacao === 'comprado_sem_orcamento' ? T.rustSoft : T.panelAlt,
-                                           padding: '2px 7px', borderRadius: 4, whiteSpace: 'nowrap' }}>
-                              {celulaSit(r)}
-                            </span>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-                <div style={{ padding: '10px 12px', borderTop: `1px solid ${T.line}`, display: 'flex', justifyContent: 'flex-end' }}>
-                  <BotaoExportar small onClick={() => exportCSV(detalhe, `orcado_comprado_${brOrc}.csv`,
-                    ['br','nureg','pedido_venda','cod_prod','descr_prod','qtd_orcada','valor_orcado','valor_solicitado','qtd_comprada','valor_comprado','valor_comprado_liquido','valor_estoque','valor_estoque_liquido','valor_transferido','origem','categoria','custo_total','custo_total_liquido','desvio_valor','desvio_pct','situacao','notas_compra'])} />
-                </div>
-              </div>
-            )}
           </div>
         );
       })()}
