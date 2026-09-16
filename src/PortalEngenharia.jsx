@@ -3486,34 +3486,55 @@ function FollowUpComercial({ currentUser }) {
     t.alignment = { vertical: 'middle' };
     ws.getRow(1).height = 24;
 
-    ws.getRow(2).values = ['BR', 'Cliente', 'Valor líquido', 'Estágio', 'Observação'];
+    ws.getRow(2).values = ['BR', 'Cliente', 'Valor líquido', 'Situação', 'Estágio', 'Observação'];
     ws.getRow(2).font = { bold: true };
     ws.getRow(2).eachCell(c => {
       c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEDE7DE' } };
       c.border = { bottom: { style: 'thin' } };
     });
-    ws.columns = [{ width: 15 }, { width: 38 }, { width: 16 }, { width: 18 }, { width: 44 }];
+    ws.columns = [{ width: 15 }, { width: 36 }, { width: 16 }, { width: 19 }, { width: 18 }, { width: 44 }];
 
     dados.forEach(d => {
-      const r = ws.addRow([d.br, d.cliente, Number(d.valor_proposta) || null,
-                           d.estagio_rotulo === 'Sem classificação' ? '' : d.estagio_rotulo,
-                           d.observacao || '']);
+      const fechado = d.situacao !== 'em aberto';
+      const r = ws.addRow([
+        d.br, d.cliente, Number(d.valor_proposta) || null,
+        fechado ? (d.situacao === 'faturado' ? 'Faturado' : 'Pedido confirmado') : 'Proposta em aberto',
+        fechado ? 'Pedido confirmado' : (d.estagio_rotulo === 'Sem classificação' ? '' : d.estagio_rotulo),
+        d.observacao || '',
+      ]);
       r.getCell(3).numFmt = 'R$ #,##0.00';
-      // Lista suspensa: evita grafia livre, que nao casaria na volta.
-      r.getCell(4).dataValidation = {
-        type: 'list', allowBlank: true,
-        formulae: [`"${ESTAGIO_ROTULOS.join(',')}"`],
-        showErrorMessage: true, errorTitle: 'Valor inválido',
-        error: `Escolha um dos estágios: ${ESTAGIO_ROTULOS.join(', ')}`,
-      };
-      r.getCell(4).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFF6E0' } };
+
+      if (fechado) {
+        // Linha travada: o cliente ja decidiu, nao ha o que classificar.
+        r.eachCell(c => {
+          c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE2F0E4' } };
+          c.protection = { locked: true };
+          c.font = { color: { argb: 'FF5A6B5D' } };
+        });
+      } else {
+        // So Estagio e Observacao ficam liberados para digitar.
+        r.getCell(5).protection = { locked: false };
+        r.getCell(6).protection = { locked: false };
+        r.getCell(5).dataValidation = {
+          type: 'list', allowBlank: true,
+          formulae: [`"${ESTAGIO_ROTULOS.join(',')}"`],
+          showErrorMessage: true, errorTitle: 'Valor inválido',
+          error: `Escolha um dos estágios: ${ESTAGIO_ROTULOS.join(', ')}`,
+        };
+        r.getCell(5).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFF6E0' } };
+        r.getCell(6).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFFDF7' } };
+      }
     });
 
     const nota = ws.addRow([]);
-    ws.mergeCells(`A${nota.number + 1}:E${nota.number + 1}`);
+    ws.mergeCells(`A${nota.number + 1}:F${nota.number + 1}`);
     const n = ws.getCell(`A${nota.number + 1}`);
-    n.value = 'Não altere BR nem Cliente — é por eles que o portal reconhece a linha na volta. Devolva o arquivo na aba Follow Up do portal.';
+    n.value = 'As linhas em verde já têm pedido e estão travadas. Preencha só as de fundo amarelo. Não altere BR nem Cliente — é por eles que o portal reconhece a linha na volta.';
     n.font = { italic: true, size: 9, color: { argb: 'FF8A8175' } };
+
+    // Protege a planilha sem senha: evita edicao acidental do que esta fechado,
+    // e quem realmente precisar consegue desproteger.
+    await ws.protect('', { selectLockedCells: true, selectUnlockedCells: true, formatCells: false });
 
     const buf = await wb.xlsx.writeBuffer();
     const nomeArq = `follow_up_${vendedor.replace(/[^A-Za-zÀ-ÿ0-9]+/g, '_')}.xlsx`;
@@ -3553,8 +3574,8 @@ function FollowUpComercial({ currentUser }) {
         ws.eachRow((row, i) => {
           if (i <= 2) return;
           const br = String(row.getCell(1).value || '').trim();
-          const rot = String(row.getCell(4).value || '').trim();
-          const obs = String(row.getCell(5).value || '').trim();
+          const rot = String(row.getCell(5).value || '').trim();
+          const obs = String(row.getCell(6).value || '').trim();
           if (!br) return;
           if (!brsConhecidos.has(br)) { ignorados.push(`${br}: não existe no portal`); return; }
           const estagio = porRotulo[rot.toLowerCase()];
@@ -3629,11 +3650,12 @@ function FollowUpComercial({ currentUser }) {
         <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4 }}>Mandar para os vendedores preencherem</div>
         <div style={{ fontSize: 10.5, color: T.inkFaint, marginBottom: 10, maxWidth: 720 }}>
           A planilha vai com BR, cliente e valor líquido já preenchidos. O vendedor só escolhe o estágio numa
-          lista suspensa — não dá para digitar errado — e devolve o arquivo aqui embaixo. Vão <strong>só as
-          propostas em aberto</strong>: quem já tem pedido ou faturamento não precisa de classificação.
+          lista suspensa — não dá para digitar errado — e devolve o arquivo aqui embaixo. Vai a carteira inteira, para servir de
+          follow up — mas as linhas com pedido confirmado vão <strong>travadas</strong>, e ele só consegue
+          preencher as propostas em aberto.
         </div>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-          {porVend.filter(x => x.emAberto > 0).map(x => (
+          {porVend.map(x => (
             <button key={x.v}
               onClick={() => montarPlanilha(x.v, base.filter(l => l.vendedor === x.v && ['em aberto','pedido confirmado'].includes(l.situacao)))}
               style={{ fontFamily: 'inherit', fontSize: 11.5, padding: '5px 11px', borderRadius: 14, cursor: 'pointer',
@@ -3645,7 +3667,7 @@ function FollowUpComercial({ currentUser }) {
           <button onClick={gerarTodos}
             style={{ fontFamily: 'inherit', fontSize: 11.5, fontWeight: 700, padding: '5px 13px', borderRadius: 14,
               cursor: 'pointer', border: `1px solid ${T.terracotta}`, background: `${T.rustSoft}66`, color: T.terracotta }}>
-            Gerar de todos ({porVend.filter(x => x.emAberto > 0).length})
+            Gerar de todos ({porVend.length})
           </button>
         </div>
       </div>
