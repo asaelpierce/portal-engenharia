@@ -17042,6 +17042,7 @@ function Custeio() {
           { id: 'servico', l: 'Serviço pesa mais que material', fn: r => Number(r.custo_servicos) > Number(r.custo_material) },
           { id: 'op', l: 'Tem material de OP', fn: r => Number(r.de_op) > 0 },
           { id: 'grandes', l: 'Acima de R$ 100 mil', fn: r => Number(r.receita_liquida) >= 100000 },
+          { id: 'abaixo_orcado', l: 'Margem abaixo da orçada', fn: r => r.desvio_margem != null && Number(r.desvio_margem) < -5 },
         ];
         const filtro = FILTROS.find(f => f.id === filtroAn) || FILTROS[0];
         const lista = doAno.filter(filtro.fn)
@@ -17278,14 +17279,14 @@ function Custeio() {
               <div style={{ overflowX: 'auto' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 900 }}>
                   <thead><tr style={{ background: T.panelAlt }}>
-                    {['BR', 'Mês', 'Receita líq.', 'Custo', 'Margem', '%', 'CIF', 'Margem c/ CIF', 'Composição'].map((h, i) => (
+                    {['BR', 'Mês', 'Receita líq.', 'Custo', 'Margem', '%', 'Margin orçada', 'Desvio', 'CIF', 'Margem c/ CIF', 'Composição'].map((h, i) => (
                       <th key={h} style={{ padding: '9px 12px', fontSize: 11, fontWeight: 600, color: T.inkFaint,
-                        textAlign: i === 0 || i === 1 || i === 8 ? 'left' : 'right', whiteSpace: 'nowrap' }}>{h}</th>
+                        textAlign: i === 0 || i === 1 || i === 10 ? 'left' : 'right', whiteSpace: 'nowrap' }}>{h}</th>
                     ))}
                   </tr></thead>
                   <tbody>
                     {lista.length === 0 ? (
-                      <tr><td colSpan={9} style={{ padding: 24, textAlign: 'center', color: T.inkFaint }}>Nada nesse filtro.</td></tr>
+                      <tr><td colSpan={11} style={{ padding: 24, textAlign: 'center', color: T.inkFaint }}>Nada nesse filtro.</td></tr>
                     ) : lista.slice(0, 150).map(r => {
                       const m = Number(r.margem) || 0;
                       const ma = Number(r.margem_absorcao);
@@ -17306,6 +17307,18 @@ function Custeio() {
                           <td style={{ padding: '8px 12px', fontSize: 12.5, textAlign: 'right', fontWeight: 700, color: m >= 0 ? T.oliveText : T.rustText, fontVariantNumeric: 'tabular-nums' }}>{moeda(m)}</td>
                           <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', color: m >= 0 ? T.oliveText : T.rustText, fontVariantNumeric: 'tabular-nums' }}>
                             {r.margem_pct == null ? '—' : `${Number(r.margem_pct).toFixed(1)}%`}
+                          </td>
+                          <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', color: T.inkDim, fontVariantNumeric: 'tabular-nums' }}
+                              title="Margem prevista no orçamento (Margin do Sankhya)">
+                            {r.margin_orcada == null ? '—' : `${Number(r.margin_orcada).toFixed(1)}%`}
+                          </td>
+                          <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', fontWeight: 600,
+                            color: r.desvio_margem == null ? T.inkFaint
+                                 : Number(r.desvio_margem) < -10 ? T.rustText
+                                 : Number(r.desvio_margem) < 0 ? T.amberText : T.oliveText,
+                            fontVariantNumeric: 'tabular-nums' }}
+                              title="Realizada menos prevista. Negativo é margem que se perdeu entre orçar e entregar.">
+                            {r.desvio_margem == null ? '—' : `${Number(r.desvio_margem) > 0 ? '+' : ''}${Number(r.desvio_margem).toFixed(1)}`}
                           </td>
                           <td style={{ padding: '8px 12px', fontSize: 11.5, textAlign: 'right', color: T.blueText, fontVariantNumeric: 'tabular-nums' }}>{r.cif_rateado ? moeda(r.cif_rateado) : '—'}</td>
                           <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', fontWeight: 600, color: ma >= 0 ? T.oliveText : T.rustText, fontVariantNumeric: 'tabular-nums' }}>
@@ -17330,7 +17343,7 @@ function Custeio() {
                   receita daquele mês. A barra de composição segue a mesma cor das categorias acima.
                 </span>
                 <BotaoExportar small onClick={() => exportCSV(lista, `analise_${anoAn}_${filtroAn}.csv`,
-                  ['br','competencia','receita_liquida','custo','custo_material','custo_servicos','custo_frete','custo_outros','comprado','do_estoque','de_op','cif_rateado','margem','margem_pct','margem_absorcao'])} />
+                  ['br','competencia','receita_liquida','custo','custo_material','custo_servicos','custo_frete','custo_outros','comprado','do_estoque','de_op','cif_rateado','margem','margem_pct','margin_orcada','desvio_margem','margem_absorcao'])} />
               </div>
             </div>
           </div>
