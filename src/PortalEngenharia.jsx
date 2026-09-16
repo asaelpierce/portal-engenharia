@@ -17122,12 +17122,13 @@ function Custeio() {
               const porCat = {};
               linhasCat.forEach(r => {
                 const c = r.categoria || 'outros';
-                if (!porCat[c]) porCat[c] = { orc: 0, com: 0, est: 0, dev: 0, custo: 0, emp: 0, semCod: 0 };
+                if (!porCat[c]) porCat[c] = { orc: 0, com: 0, est: 0, dev: 0, custo: 0, emp: 0, op: 0, semCod: 0 };
                 porCat[c].orc += Number(r.valor_orcado) || 0;
                 porCat[c].com += Number(r.valor_comprado) || 0;
                 porCat[c].est += Number(r.valor_estoque) || 0;
                 porCat[c].dev += Number(r.valor_devolvido) || 0;
                 porCat[c].emp += Number(r.valor_empenhado) || 0;
+                porCat[c].op += Number(r.valor_op_estoque) || 0;
                 porCat[c].custo += Number(r.custo_real) || 0;
                 porCat[c].semCod += Number(r.itens_sem_codigo) || 0;
               });
@@ -17149,7 +17150,7 @@ function Custeio() {
 
                   <div style={{ padding: 12, display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))' }}>
                     {ORDEM.map(cat => {
-                      const d = porCat[cat.id] || { orc: 0, com: 0, est: 0, dev: 0, custo: 0, emp: 0, semCod: 0 };
+                      const d = porCat[cat.id] || { orc: 0, com: 0, est: 0, dev: 0, custo: 0, emp: 0, op: 0, semCod: 0 };
                       if (!d.custo && !d.emp) return null;
                       const estourou = false; // sem orçado não existe estouro a marcar
                       const barra = v => `${Math.min(100, (v / teto) * 100)}%`;
@@ -17193,6 +17194,17 @@ function Custeio() {
                                 <div style={{ height: '100%', width: barra(d.est), background: T.blueText }} />
                               </div>
                             </div>
+                            {d.op > 0 && (
+                              <div>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11.5, color: T.inkDim, marginBottom: 3 }}>
+                                  <span title="Material consumido por uma OP de estoque que atendeu este projeto, já descontado o que o projeto comprou do mesmo produto">De OP de estoque</span>
+                                  <span style={{ fontVariantNumeric: 'tabular-nums' }}>{moeda(d.op)}</span>
+                                </div>
+                                <div style={{ height: 7, background: T.lineSoft, borderRadius: 4, overflow: 'hidden' }}>
+                                  <div style={{ height: '100%', width: barra(d.op), background: T.amberText }} />
+                                </div>
+                              </div>
+                            )}
                           </div>
 
                           <div style={{ marginTop: 9, paddingTop: 8, borderTop: `1px solid ${T.lineSoft}`, fontSize: 11, color: T.inkDim, display: 'flex', flexWrap: 'wrap', gap: 10 }}>
@@ -17200,6 +17212,7 @@ function Custeio() {
                             {d.est > 0 && <span style={{ color: T.blueText }} title="Já tinha no estoque — não precisou comprar">📦 {moeda(d.est)}</span>}
                             {d.dev > 0 && <span style={{ color: T.oliveText }} title="Sobra devolvida ao estoque — abatida do custo">↩ −{moeda(d.dev)}</span>}
                             {d.emp > 0 && <span style={{ color: T.amberText }} title="Ordem de compra sem nota: compromisso, ainda não é custo">⏳ {moeda(d.emp)}</span>}
+                            {d.op > 0 && <span style={{ color: T.amberText }} title="Veio de OP de estoque confirmada, já sem o que foi comprado">⚙ {moeda(d.op)}</span>}
                             {d.semCod > 0 && <span style={{ color: T.inkFaint }} title="Linhas orçadas sem código de produto, classificadas pelo texto">✎ {d.semCod} por texto</span>}
                             <span style={{ marginLeft: 'auto', color: aberta ? T.terracotta : T.inkFaint, fontWeight: 600 }}>
                               {aberta ? 'fechar ▲' : 'ver itens ▼'}
