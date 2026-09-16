@@ -3462,6 +3462,7 @@ function FollowUpComercial({ currentUser }) {
       const d = base.filter(l => l.vendedor === v && ['em aberto','pedido confirmado'].includes(l.situacao));
       return { v, n: d.length, bruto: soma(d, 'valor_proposta'), pond: soma(d, 'valor_ponderado'),
                confirmado: soma(d.filter(x => x.situacao === 'pedido confirmado'), 'valor_ponderado'),
+               emAberto: d.filter(x => x.situacao === 'em aberto').length,
                semClass: d.filter(x => !x.estagio && x.situacao === 'em aberto').length };
     })
     .sort((a, b) => b.pond - a.pond);
@@ -3628,10 +3629,11 @@ function FollowUpComercial({ currentUser }) {
         <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4 }}>Mandar para os vendedores preencherem</div>
         <div style={{ fontSize: 10.5, color: T.inkFaint, marginBottom: 10, maxWidth: 720 }}>
           A planilha vai com BR, cliente e valor líquido já preenchidos. O vendedor só escolhe o estágio numa
-          lista suspensa — não dá para digitar errado — e devolve o arquivo aqui embaixo.
+          lista suspensa — não dá para digitar errado — e devolve o arquivo aqui embaixo. Vão <strong>só as
+          propostas em aberto</strong>: quem já tem pedido ou faturamento não precisa de classificação.
         </div>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-          {porVend.map(x => (
+          {porVend.filter(x => x.emAberto > 0).map(x => (
             <button key={x.v}
               onClick={() => montarPlanilha(x.v, base.filter(l => l.vendedor === x.v && ['em aberto','pedido confirmado'].includes(l.situacao)))}
               style={{ fontFamily: 'inherit', fontSize: 11.5, padding: '5px 11px', borderRadius: 14, cursor: 'pointer',
@@ -3643,7 +3645,7 @@ function FollowUpComercial({ currentUser }) {
           <button onClick={gerarTodos}
             style={{ fontFamily: 'inherit', fontSize: 11.5, fontWeight: 700, padding: '5px 13px', borderRadius: 14,
               cursor: 'pointer', border: `1px solid ${T.terracotta}`, background: `${T.rustSoft}66`, color: T.terracotta }}>
-            Gerar de todos ({porVend.length})
+            Gerar de todos ({porVend.filter(x => x.emAberto > 0).length})
           </button>
         </div>
       </div>
