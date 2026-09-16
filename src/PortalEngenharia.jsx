@@ -16017,6 +16017,9 @@ function Custeio() {
   const [verItens, setVerItens] = useState(false);
   const [caixaAberta, setCaixaAberta] = useState(null); // material | servicos | frete | outros
   const [verif, setVerif] = useState([]);
+  const [cifMes, setCifMes] = useState([]);
+  const [cifRateio, setCifRateio] = useState([]);
+  const [anoCif, setAnoCif] = useState(2026);
   const [verifRodando, setVerifRodando] = useState(false);
 
   // O cliente do Supabase corta em 1.000 linhas por padrão. Com o histórico
@@ -16062,6 +16065,11 @@ function Custeio() {
       const desdeVerif = new Date(Date.now() - 60 * 864e5).toISOString();
       const rv = await lerTudo('custeio_verificacao', q => q.gte('executado_em', desdeVerif));
       setVerif(rv);
+      const [rcm, rcr] = await Promise.all([
+        lerTudo('v_custeio_cif_mensal'),
+        lerTudo('v_custeio_cif_rateio'),
+      ]);
+      setCifMes(rcm); setCifRateio(rcr);
       setProdutos(rp); setLotes(rl);
       setBrs(rb.sort((a, b) => (Number(b.custo_material) || 0) - (Number(a.custo_material) || 0)));
     } catch (e) { setErro(e.message || String(e)); }
@@ -16168,7 +16176,7 @@ function Custeio() {
 
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', gap: 2 }}>
-          {[{ id: 'produto', l: 'Por produto' }, { id: 'br', l: 'Por projeto (BR)' }, { id: 'margem', l: 'Margem por venda' }, { id: 'orcado', l: 'Orçado x Comprado' }, { id: 'qualidade', l: (() => {
+          {[{ id: 'produto', l: 'Por produto' }, { id: 'br', l: 'Por projeto (BR)' }, { id: 'margem', l: 'Margem por venda' }, { id: 'orcado', l: 'Orçado x Comprado' }, { id: 'cif', l: 'Despesa fixa (CIF)' }, { id: 'qualidade', l: (() => {
             const ult = verif.length ? verif.reduce((m, v) => v.executado_em > m ? v.executado_em : m, '') : null;
             const falhas = ult ? verif.filter(v => v.executado_em === ult && !v.passou).length : 0;
             return falhas ? `Qualidade dos dados (${falhas})` : 'Qualidade dos dados';
@@ -16311,6 +16319,160 @@ function Custeio() {
           </div>
         </div>
       )}
+
+      {aba === 'cif' && (() => {
+        // CIF -- Custo Indireto de Fabricacao. A teoria separa CUSTO (gasto de
+        // fazer o produto, absorvido pelos projetos) de DESPESA (gasto de
+        // vender e administrar, fica no resultado do periodo). So o CIF rateia.
+        // A classificacao mora em custeio_despesa_regra, editavel sem deploy.
+        const anos = [...new Set(cifMes.map(m => m.ano))].sort().reverse();
+        const doAno = cifMes.filter(m => m.ano === anoCif);
+        const somaDe = (d) => doAno.filter(m => m.destino === d).reduce((s, m) => s + Number(m.valor || 0), 0);
+
+        const cif = somaDe('cif');
+        const naoClass = somaDe('nao_classificado');
+        const cartoes = [
+          { t: 'CIF — rateia', v: cif, c: T.ink, ajuda: 'Overhead de fábrica: aluguel dos galpões, energia, manutenção, EPI, limpeza.' },
+          { t: 'Despesa do período', v: somaDe('despesa'), c: T.inkDim, ajuda: 'Administrativo e comercial. Não entra no custo do produto — ratear isso infla o custo e some com a responsabilidade de quem gastou.' },
+          { t: 'Pendente do RH', v: somaDe('pendente_rh'), c: T.amberText, ajuda: 'Folha e benefícios. Só duas naturezas dizem se são de produção ou administração; até o RH separar, ficam fora do rateio.' },
+          { t: 'Não classificado', v: naoClass, c: naoClass > 0 ? T.rustText : T.inkFaint, ajuda: 'Ainda sem regra. Não entra no custo por omissão — precisa ser classificado de propósito.' },
+          { t: 'Já é custo direto', v: somaDe('ja_e_direto'), c: T.inkFaint, ajuda: 'Matéria-prima, serviço tomado, frete de compra. A aba Orçado x Comprado já conta — entraria duas vezes.' },
+        ];
+
+        // Pool do CIF por rotulo, mes a mes.
+        const rotulos = [...new Set(doAno.filter(m => m.destino === 'cif').map(m => m.rotulo))];
+        const meses = [...new Set(doAno.map(m => m.competencia))].sort();
+        const celula = (rot, mes) => doAno
+          .filter(m => m.destino === 'cif' && m.rotulo === rot && m.competencia === mes)
+          .reduce((s, m) => s + Number(m.valor || 0), 0);
+
+        const rateio = cifRateio.filter(r => r.ano === anoCif)
+          .sort((a, b) => Number(b.cif_rateado || 0) - Number(a.cif_rateado || 0));
+
+        return (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <div style={{ fontSize: 11.5, color: T.inkDim, background: T.panelAlt, padding: '9px 12px', borderRadius: 6 }}>
+              <strong>CIF</strong> é o custo indireto de fabricação — o gasto de fábrica que não dá para apontar
+              direto num projeto e por isso é rateado. Aluguel do galpão de produção é custo e entra;
+              aluguel do escritório é despesa e fica fora. A base do rateio é o <strong>material direto</strong> de
+              cada projeto, sem serviço terceirizado: projeto industrializado fora quase não ocupa galpão,
+              energia nem manutenção.
+            </div>
+
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              {anos.map(a => (
+                <button key={a} onClick={() => setAnoCif(a)} style={{
+                  fontFamily: 'inherit', fontSize: 12.5, fontWeight: anoCif === a ? 700 : 400, cursor: 'pointer',
+                  padding: '6px 14px', borderRadius: 6,
+                  border: `1px solid ${anoCif === a ? T.ink : T.line}`,
+                  background: anoCif === a ? T.ink : T.panel, color: anoCif === a ? T.panel : T.inkDim }}>{a}</button>
+              ))}
+            </div>
+
+            <div style={{ display: 'grid', gap: 8, gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))' }}>
+              {cartoes.map(c => (
+                <div key={c.t} title={c.ajuda}
+                  style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 8, padding: '9px 12px' }}>
+                  <div style={{ fontSize: 10.5, color: T.inkFaint }}>{c.t}</div>
+                  <div style={{ fontSize: 17, fontWeight: 700, color: c.c, fontVariantNumeric: 'tabular-nums' }}>{moeda(c.v)}</div>
+                </div>
+              ))}
+            </div>
+
+            {naoClass > 0 && (
+              <div style={{ fontSize: 11.5, color: T.rustText, background: `${T.rustSoft}44`, border: `1px solid ${T.rustText}`, padding: '9px 12px', borderRadius: 6 }}>
+                {moeda(naoClass)} ainda sem regra de classificação. Esse valor <strong>não</strong> está sendo rateado.
+                Enquanto não for classificado, o custo por absorção está subestimado.
+              </div>
+            )}
+
+            <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
+              <div style={{ padding: '10px 12px', fontSize: 12, fontWeight: 700, borderBottom: `1px solid ${T.line}` }}>
+                Composição do CIF — {anoCif}
+              </div>
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 760 }}>
+                  <thead><tr style={{ background: T.panelAlt }}>
+                    <th style={{ padding: '9px 12px', fontSize: 11, fontWeight: 600, color: T.inkFaint, textAlign: 'left' }}>Item</th>
+                    {meses.map(m => (
+                      <th key={m} style={{ padding: '9px 8px', fontSize: 10.5, fontWeight: 600, color: T.inkFaint, textAlign: 'right' }}>
+                        {m.slice(5)}
+                      </th>
+                    ))}
+                    <th style={{ padding: '9px 12px', fontSize: 11, fontWeight: 600, color: T.inkFaint, textAlign: 'right' }}>Total</th>
+                  </tr></thead>
+                  <tbody>
+                    {rotulos.map(rot => {
+                      const tot = meses.reduce((s, m) => s + celula(rot, m), 0);
+                      return (
+                        <tr key={rot} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                          <td style={{ padding: '8px 12px', fontSize: 12.5 }}>{rot}</td>
+                          {meses.map(m => {
+                            const v = celula(rot, m);
+                            return <td key={m} style={{ padding: '8px 8px', fontSize: 11.5, textAlign: 'right', color: v ? T.ink : T.inkFaint, fontVariantNumeric: 'tabular-nums' }}>
+                              {v ? Math.round(v).toLocaleString('pt-BR') : '—'}
+                            </td>;
+                          })}
+                          <td style={{ padding: '8px 12px', fontSize: 12.5, textAlign: 'right', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{moeda(tot)}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
+              <div style={{ padding: '10px 12px', fontSize: 12, fontWeight: 700, borderBottom: `1px solid ${T.line}`, display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+                <span>Rateio nos projetos — {anoCif} ({rateio.length})</span>
+                <span style={{ fontWeight: 400, color: T.inkFaint, fontSize: 11 }}>rateio anual · base: material direto</span>
+              </div>
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 880 }}>
+                  <thead><tr style={{ background: T.panelAlt }}>
+                    {['BR', 'Custo direto', 'Base do rateio', '% do CIF', 'CIF rateado', 'Custo por absorção', 'Receita líq.', 'Margem'].map((h, i) => (
+                      <th key={h} style={{ padding: '9px 12px', fontSize: 11, fontWeight: 600, color: T.inkFaint, textAlign: i === 0 ? 'left' : 'right', whiteSpace: 'nowrap' }}>{h}</th>
+                    ))}
+                  </tr></thead>
+                  <tbody>
+                    {rateio.length === 0 ? (
+                      <tr><td colSpan={8} style={{ padding: 24, textAlign: 'center', color: T.inkFaint }}>Nada nesse ano.</td></tr>
+                    ) : rateio.slice(0, 120).map(r => {
+                      const m = r.margem_absorcao == null ? null : Number(r.margem_absorcao);
+                      const cor = m == null ? T.inkFaint : m >= 0 ? T.oliveText : T.rustText;
+                      return (
+                        <tr key={r.codproj} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                          <td style={{ padding: '8px 12px', fontSize: 12.5, fontWeight: 600 }}>{r.br}</td>
+                          <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{moeda(r.custo_direto)}</td>
+                          <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', color: T.inkDim, fontVariantNumeric: 'tabular-nums' }}
+                              title="Material direto, sem serviço terceirizado">{moeda(r.base_rateio)}</td>
+                          <td style={{ padding: '8px 12px', fontSize: 11.5, textAlign: 'right', color: T.inkFaint, fontVariantNumeric: 'tabular-nums' }}>
+                            {r.participacao_pct == null ? '—' : `${Number(r.participacao_pct).toFixed(2)}%`}
+                          </td>
+                          <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', color: T.blueText, fontVariantNumeric: 'tabular-nums' }}>{moeda(r.cif_rateado)}</td>
+                          <td style={{ padding: '8px 12px', fontSize: 12.5, textAlign: 'right', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}
+                              title="Custo direto + CIF rateado">{moeda(r.custo_absorcao)}</td>
+                          <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{r.receita_liquida ? moeda(r.receita_liquida) : '—'}</td>
+                          <td style={{ padding: '8px 12px', fontSize: 12.5, textAlign: 'right', fontWeight: 700, color: cor, fontVariantNumeric: 'tabular-nums' }}>{m == null ? '—' : moeda(m)}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <div style={{ padding: '9px 12px', borderTop: `1px solid ${T.line}`, fontSize: 10.5, color: T.inkFaint, display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+                <span>
+                  O CIF rateado é <strong>estimativa</strong>; o custo direto é fato. Por isso aparecem em colunas
+                  separadas e nunca somados num número só. O rateio é anual porque as linhas de custo guardam a data
+                  do orçamento, não a do documento.
+                </span>
+                <BotaoExportar small onClick={() => exportCSV(rateio, `cif_rateio_${anoCif}.csv`,
+                  ['br','ano','custo_direto','base_rateio','participacao_pct','cif_rateado','custo_absorcao','receita_liquida','margem_absorcao'])} />
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {aba === 'qualidade' && (() => {
         // O verificador roda as 12h30, quinze minutos depois da carga. Cada
