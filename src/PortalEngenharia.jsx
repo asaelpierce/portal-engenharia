@@ -3479,14 +3479,14 @@ function FollowUpComercial({ currentUser }) {
     const wb = new ExcelJS.Workbook();
     const ws = wb.addWorksheet('Follow Up', { views: [{ state: 'frozen', ySplit: 2 }] });
 
-    ws.mergeCells('A1:E1');
+    ws.mergeCells('A1:G1');
     const t = ws.getCell('A1');
     t.value = `Follow Up comercial — ${vendedor} — preencher a coluna Estágio`;
     t.font = { bold: true, size: 12 };
     t.alignment = { vertical: 'middle' };
     ws.getRow(1).height = 24;
 
-    ws.getRow(2).values = ['BR', 'Cliente', 'Valor líquido', 'Situação', 'Estágio', 'Observação'];
+    ws.getRow(2).values = ['BR', 'Cliente', 'Valor líquido', 'Margin', 'Situação', 'Estágio', 'Observação'];
     ws.getRow(2).font = { bold: true };
     ws.getRow(2).eachCell(c => {
       c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEDE7DE' } };
@@ -3498,11 +3498,13 @@ function FollowUpComercial({ currentUser }) {
       const fechado = d.situacao !== 'em aberto';
       const r = ws.addRow([
         d.br, d.cliente, Number(d.valor_proposta) || null,
+        d.margin == null ? null : Number(d.margin) / 100,
         fechado ? (d.situacao === 'faturado' ? 'Faturado' : 'Pedido em carteira') : 'Proposta em aberto',
         fechado ? 'Pedido em carteira' : (d.estagio_vendedor_rotulo || ''),
         d.observacao_vendedor || '',
       ]);
       r.getCell(3).numFmt = 'R$ #,##0.00';
+      r.getCell(4).numFmt = '0.0%';
 
       if (fechado) {
         // Linha travada: o cliente ja decidiu, nao ha o que classificar.
@@ -3513,21 +3515,21 @@ function FollowUpComercial({ currentUser }) {
         });
       } else {
         // So Estagio e Observacao ficam liberados para digitar.
-        r.getCell(5).protection = { locked: false };
         r.getCell(6).protection = { locked: false };
-        r.getCell(5).dataValidation = {
+        r.getCell(7).protection = { locked: false };
+        r.getCell(6).dataValidation = {
           type: 'list', allowBlank: true,
           formulae: [`"${ESTAGIO_ROTULOS.join(',')}"`],
           showErrorMessage: true, errorTitle: 'Valor inválido',
           error: `Escolha um dos estágios: ${ESTAGIO_ROTULOS.join(', ')}`,
         };
-        r.getCell(5).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFF6E0' } };
-        r.getCell(6).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFFDF7' } };
+        r.getCell(6).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFF6E0' } };
+        r.getCell(7).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFFDF7' } };
       }
     });
 
     const nota = ws.addRow([]);
-    ws.mergeCells(`A${nota.number + 1}:F${nota.number + 1}`);
+    ws.mergeCells(`A${nota.number + 1}:G${nota.number + 1}`);
     const n = ws.getCell(`A${nota.number + 1}`);
     n.value = 'As linhas em verde já têm pedido e estão travadas. Preencha só as de fundo amarelo. Não altere BR nem Cliente — é por eles que o portal reconhece a linha na volta.';
     n.font = { italic: true, size: 9, color: { argb: 'FF8A8175' } };
@@ -3574,8 +3576,8 @@ function FollowUpComercial({ currentUser }) {
         ws.eachRow((row, i) => {
           if (i <= 2) return;
           const br = String(row.getCell(1).value || '').trim();
-          const rot = String(row.getCell(5).value || '').trim();
-          const obs = String(row.getCell(6).value || '').trim();
+          const rot = String(row.getCell(6).value || '').trim();
+          const obs = String(row.getCell(7).value || '').trim();
           if (!br) return;
           if (!brsConhecidos.has(br)) { ignorados.push(`${br}: não existe no portal`); return; }
           const estagio = porRotulo[rot.toLowerCase()];
@@ -3722,14 +3724,14 @@ function FollowUpComercial({ currentUser }) {
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 940 }}>
             <thead><tr style={{ background: T.panelAlt }}>
-              {['BR', 'Cliente', 'Vendedor', 'Dias', 'Valor da proposta', 'Estágio comercial', 'Estágio vendedor', 'Ponderado', 'Próximo contato', 'Observação'].map((h, i) => (
+              {['BR', 'Cliente', 'Vendedor', 'Dias', 'Valor da proposta', 'Margin', 'Estágio comercial', 'Estágio vendedor', 'Ponderado', 'Próximo contato', 'Observação'].map((h, i) => (
                 <th key={h + i} style={{ padding: '9px 12px', fontSize: 11, fontWeight: 600, color: T.inkFaint,
-                  textAlign: i === 3 || i === 4 || i === 6 ? 'right' : 'left', whiteSpace: 'nowrap' }}>{h}</th>
+                  textAlign: [3,4,5,8].includes(i) ? 'right' : 'left', whiteSpace: 'nowrap' }}>{h}</th>
               ))}
             </tr></thead>
             <tbody>
               {lista.length === 0 ? (
-                <tr><td colSpan={10} style={{ padding: 28, textAlign: 'center', color: T.inkFaint }}>
+                <tr><td colSpan={11} style={{ padding: 28, textAlign: 'center', color: T.inkFaint }}>
                   Nenhum BR aqui ainda. Eles aparecem assim que forem criados na tela Criar BR.
                 </td></tr>
               ) : lista.map(l => {
@@ -3752,6 +3754,13 @@ function FollowUpComercial({ currentUser }) {
                       <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}
                         title={l.status_proposta ? `Proposta: ${l.status_proposta}` : 'Sem proposta cadastrada ainda'}>
                         {l.valor_proposta ? moeda(l.valor_proposta) : <span style={{ color: T.inkFaint }}>sem proposta</span>}
+                      </td>
+                      <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', fontVariantNumeric: 'tabular-nums',
+                        color: l.margin == null ? T.inkFaint
+                             : Number(l.margin) < 20 ? T.rustText
+                             : Number(l.margin) < 30 ? T.amberText : T.oliveText }}
+                        title="Margin do orçamento no Sankhya — margem PREVISTA na precificação, não a realizada">
+                        {l.margin == null ? '—' : `${Number(l.margin).toFixed(1)}%`}
                       </td>
                       <td style={{ padding: '8px 12px' }}>
                         {l.tem_pedido ? (
@@ -3812,7 +3821,7 @@ function FollowUpComercial({ currentUser }) {
                       </td>
                     </tr>
                     {obsAberta === l.br && (
-                      <tr><td colSpan={10} style={{ padding: '8px 12px', background: T.panelAlt, borderBottom: `1px solid ${T.line}` }}>
+                      <tr><td colSpan={11} style={{ padding: '8px 12px', background: T.panelAlt, borderBottom: `1px solid ${T.line}` }}>
                         <textarea defaultValue={l.observacao || ''} rows={2} placeholder="O que foi conversado, o que trava, próximo passo…"
                           onBlur={e => { if (e.target.value !== (l.observacao || '')) salvar(l.br, { observacao: e.target.value || null }); }}
                           style={{ width: '100%', fontFamily: 'inherit', fontSize: 12, padding: 8, borderRadius: 5,
