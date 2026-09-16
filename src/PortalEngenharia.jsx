@@ -2826,6 +2826,50 @@ function ModeloPreditivo() {
     risco: dados.filter(c => ['perdido', 'queda'].includes(c.sinal.k)).length,
   }), [dados]);
 
+
+  // Justificativa da projecao de 2027, calculada e nao escrita a mao: um
+  // numero de tendencia sem a leitura do que o sustenta vira meta por
+  // acidente. O que interessa e de onde vem o crescimento e o que acontece
+  // se a maior aposta nao se repetir.
+  const justif = useMemo(() => {
+    if (!dados.length || !totais.est26) return null;
+    const reta4 = (s) => {
+      const my = s.reduce((a, v) => a + v, 0) / 4;
+      let sxy = 0, sxx = 0;
+      s.forEach((y, i) => { sxy += (i - 1.5) * (y - my); sxx += (i - 1.5) ** 2; });
+      return Math.max(0, my + (sxx ? sxy / sxx : 0) * 2.5);
+    };
+    const agreg = [
+      dados.reduce((s, c) => s + c.a23, 0), dados.reduce((s, c) => s + c.a24, 0),
+      dados.reduce((s, c) => s + c.a25, 0), totais.est26,
+    ];
+    const contrib = dados
+      .map(c => ({ cliente: c.cliente, delta: (c.est26 || 0) - c.a25, est26: c.est26 || 0 }))
+      .sort((a, b) => b.delta - a.delta);
+    const sobem = contrib.filter(c => c.delta > 0);
+    const caem = contrib.filter(c => c.delta < 0);
+    const top3 = sobem.slice(0, 3);
+    const somaTop3 = top3.reduce((s, c) => s + c.delta, 0);
+    const deltaLiq = contrib.reduce((s, c) => s + c.delta, 0);
+
+    const maior = [...dados].sort((a, b) => (b.est26 || 0) - (a.est26 || 0))[0];
+    const pctMaior = totais.est26 > 0 ? (maior.est26 || 0) / totais.est26 : 0;
+    const vale = dados.filter(c => /^(VALE|CVRD)/i.test(c.cliente));
+    const pctVale = totais.est26 > 0 ? vale.reduce((s, c) => s + (c.est26 || 0), 0) / totais.est26 : 0;
+
+    // E se o maior puxador nao repetir? Volta ele ao patamar de 2025 e
+    // refaz a conta inteira.
+    const puxador = top3[0];
+    const alvo = puxador ? dados.find(c => c.cliente === puxador.cliente) : null;
+    let proj27Sem = null, est26Sem = null;
+    if (alvo) {
+      est26Sem = totais.est26 - (alvo.est26 || 0) + alvo.a25;
+      proj27Sem = reta4([agreg[0], agreg[1], agreg[2], est26Sem]);
+    }
+    return { agreg, top3, somaTop3, deltaLiq, sobem: sobem.length, caem: caem.length,
+             maior, pctMaior, pctVale, puxador, proj27Sem, est26Sem };
+  }, [dados, totais]);
+
   const moeda = (v) => fmtMoedaCompacta(v);
   const pct = (v) => `${v >= 0 ? '+' : ''}${Math.round(v * 100)}%`;
 
@@ -2889,6 +2933,53 @@ function ModeloPreditivo() {
           nunca é classificada como alta. Cliente que compra por projeto oscila demais para uma reta explicar — é
           tendência, não previsão. O número serve para ordenar prioridade comercial, não para virar meta.
         </div>
+        {justif && (
+          <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${T.line}` }}>
+            <div style={{ fontSize: 10.5, color: T.inkFaint, fontWeight: 600, marginBottom: 8 }}>
+              O QUE SUSTENTA A PROJEÇÃO DE 2027
+            </div>
+            <div style={{ fontSize: 12.5, color: T.inkDim, lineHeight: 1.65 }}>
+              A reta sobe porque 2026 está{' '}
+              <strong style={{ color: totais.est26 >= totais.a25 ? T.oliveText : T.rustText }}>
+                {pct((totais.est26 - totais.a25) / (totais.a25 || 1))}
+              </strong>{' '}
+              acima de 2025. Mas esse ganho <strong style={{ color: T.ink }}>não é difundido</strong>:
+              dos {dados.length} clientes, {justif.sobem} sobem e {justif.caem} caem, e{' '}
+              <strong style={{ color: T.ink }}>{moeda(justif.somaTop3)}</strong> do avanço vem de apenas três —{' '}
+              {justif.top3.map((t, i) => (
+                <span key={t.cliente}>
+                  {i > 0 ? ', ' : ''}<strong style={{ color: T.ink }}>{t.cliente}</strong> ({moeda(t.delta)})
+                </span>
+              ))}. O crescimento líquido de {moeda(justif.deltaLiq)} é o que sobra depois das quedas dos outros.
+              <br /><br />
+              A concentração é o risco principal:{' '}
+              <strong style={{ color: T.ink }}>{justif.maior.cliente}</strong> sozinho responde por{' '}
+              <strong style={{ color: T.ink }}>{Math.round(justif.pctMaior * 100)}%</strong> do faturamento
+              estimado de 2026{justif.pctVale > 0.2 ? (
+                <>, e o Grupo Vale por <strong style={{ color: T.ink }}>{Math.round(justif.pctVale * 100)}%</strong></>
+              ) : null}. Uma reta ajustada sobre uma base assim projeta a continuidade de poucas decisões de
+              compra, não uma tendência de mercado.
+              {justif.proj27Sem != null && justif.puxador && (
+                <>
+                  <br /><br />
+                  <strong style={{ color: T.amberText }}>Teste:</strong> se{' '}
+                  <strong style={{ color: T.ink }}>{justif.puxador.cliente}</strong> voltar ao patamar de 2025 em vez
+                  de repetir 2026, 2027 cai de <strong style={{ color: T.terracotta }}>{moeda(totais.proj27)}</strong>{' '}
+                  para <strong style={{ color: T.rustText }}>{moeda(justif.proj27Sem)}</strong> —{' '}
+                  <strong style={{ color: T.rustText }}>
+                    {pct((justif.proj27Sem - totais.proj27) / (totais.proj27 || 1))}
+                  </strong>. É a medida de quanto a projeção depende de um cliente só.
+                </>
+              )}
+              <br /><br />
+              <strong style={{ color: T.ink }}>Minha leitura:</strong> {moeda(totais.proj27)} é um teto plausível,
+              não um cenário provável. Ele assume que os três puxadores mantêm o ritmo e que ninguém mais cai —
+              e o próprio histórico mostra clientes indo de milhões a zero em um ano. Para virar número de
+              planejamento, este precisa ser confrontado com a carteira de propostas em aberto, que é compromisso
+              de futuro e não extrapolação de passado.
+            </div>
+          </div>
+        )}
       </div>
       )}
 
