@@ -16020,6 +16020,8 @@ function Custeio() {
   const [cifMes, setCifMes] = useState([]);
   const [cifRateio, setCifRateio] = useState([]);
   const [anoCif, setAnoCif] = useState(2026);
+  const [pendClass, setPendClass] = useState([]);
+  const [salvandoNat, setSalvandoNat] = useState(null);
   const [verifRodando, setVerifRodando] = useState(false);
 
   // O cliente do Supabase corta em 1.000 linhas por padrão. Com o histórico
@@ -16070,6 +16072,7 @@ function Custeio() {
         lerTudo('v_custeio_cif_rateio'),
       ]);
       setCifMes(rcm); setCifRateio(rcr);
+      setPendClass(await lerTudo('v_custeio_despesa_pendente'));
       setProdutos(rp); setLotes(rl);
       setBrs(rb.sort((a, b) => (Number(b.custo_material) || 0) - (Number(a.custo_material) || 0)));
     } catch (e) { setErro(e.message || String(e)); }
@@ -16080,6 +16083,24 @@ function Custeio() {
   // Roda o verificador sob demanda. A funcao no banco e SECURITY DEFINER
   // porque precisa gravar o resultado em custeio_verificacao, onde o anon so
   // tem permissao de leitura.
+  // Classificar uma natureza. A escrita vai por RPC, nao direto na tabela:
+  // assim so da para mudar o destino de uma natureza, e fica registrado que
+  // a decisao veio da tela.
+  const classificarNatureza = useCallback(async (codnat, destino) => {
+    setSalvandoNat(codnat);
+    try {
+      const { error } = await supabase.rpc('fn_classificar_natureza', { p_codnat: codnat, p_destino: destino });
+      if (error) throw error;
+      const [rcm, rcr, rp] = await Promise.all([
+        lerTudo('v_custeio_cif_mensal'),
+        lerTudo('v_custeio_cif_rateio'),
+        lerTudo('v_custeio_despesa_pendente'),
+      ]);
+      setCifMes(rcm); setCifRateio(rcr); setPendClass(rp);
+    } catch (e) { setErro(e.message || String(e)); }
+    setSalvandoNat(null);
+  }, [lerTudo]);
+
   const rodarVerificacao = useCallback(async () => {
     setVerifRodando(true);
     try {
@@ -16383,6 +16404,69 @@ function Custeio() {
               <div style={{ fontSize: 11.5, color: T.rustText, background: `${T.rustSoft}44`, border: `1px solid ${T.rustText}`, padding: '9px 12px', borderRadius: 6 }}>
                 {moeda(naoClass)} ainda sem regra de classificação. Esse valor <strong>não</strong> está sendo rateado.
                 Enquanto não for classificado, o custo por absorção está subestimado.
+              </div>
+            )}
+
+            {pendClass.length > 0 && (
+              <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
+                <div style={{ padding: '10px 12px', borderBottom: `1px solid ${T.line}` }}>
+                  <div style={{ fontSize: 12, fontWeight: 700 }}>Classificação pendente ({pendClass.length})</div>
+                  <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 2 }}>
+                    Cada linha é uma natureza financeira esperando decisão. <strong>Fábrica</strong> entra no custo
+                    dos projetos; <strong>Administrativo</strong> fica no resultado do período;
+                    <strong> Já é direto</strong> é o que a aba Orçado x Comprado já conta;
+                    <strong> Fora</strong> é imposto, financeira e imobilizado. A decisão vale para todos os
+                    lançamentos daquela natureza, inclusive os antigos, e os números recalculam na hora.
+                  </div>
+                </div>
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 900 }}>
+                    <thead><tr style={{ background: T.panelAlt }}>
+                      {['Natureza', 'Principais fornecedores', 'Títulos', 'No ano', 'Situação', 'Classificar como'].map((h, i) => (
+                        <th key={h} style={{ padding: '9px 12px', fontSize: 11, fontWeight: 600, color: T.inkFaint,
+                          textAlign: i === 2 || i === 3 ? 'right' : 'left', whiteSpace: 'nowrap' }}>{h}</th>
+                      ))}
+                    </tr></thead>
+                    <tbody>
+                      {[...pendClass].sort((a, b) => Number(b.valor_ano || 0) - Number(a.valor_ano || 0)).map(p => (
+                        <tr key={`${p.codnat}-${p.destino_atual}`} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                          <td style={{ padding: '8px 12px', fontSize: 12.5 }}>
+                            {p.descrnat}
+                            <span style={{ color: T.inkFaint, fontSize: 10.5 }}> · {p.codnat}</span>
+                          </td>
+                          <td style={{ padding: '8px 12px', fontSize: 11, color: T.inkDim, maxWidth: 280 }}>{p.principais || '—'}</td>
+                          <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', color: T.inkDim, fontVariantNumeric: 'tabular-nums' }}>{p.titulos}</td>
+                          <td style={{ padding: '8px 12px', fontSize: 12.5, textAlign: 'right', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{moeda(p.valor_ano || 0)}</td>
+                          <td style={{ padding: '8px 12px', fontSize: 11 }}>
+                            <span style={{ color: p.destino_atual === 'pendente_rh' ? T.amberText : T.rustText,
+                              background: p.destino_atual === 'pendente_rh' ? T.amberSoft : T.rustSoft,
+                              padding: '2px 7px', borderRadius: 4, whiteSpace: 'nowrap' }}>
+                              {p.destino_atual === 'pendente_rh' ? 'aguarda RH' : 'sem regra'}
+                            </span>
+                          </td>
+                          <td style={{ padding: '8px 12px' }}>
+                            <select defaultValue="" disabled={salvandoNat === p.codnat}
+                              onChange={e => { if (e.target.value) classificarNatureza(p.codnat, e.target.value); }}
+                              style={{ fontFamily: 'inherit', fontSize: 11.5, padding: '5px 8px', borderRadius: 5,
+                                border: `1px solid ${T.line}`, background: T.panel, color: T.ink }}>
+                              <option value="">{salvandoNat === p.codnat ? 'salvando…' : 'escolher…'}</option>
+                              <option value="cif">Fábrica — entra no custo</option>
+                              <option value="despesa">Administrativo — fica no resultado</option>
+                              <option value="ja_e_direto">Já é custo direto</option>
+                              <option value="fora">Fora do custo</option>
+                            </select>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div style={{ padding: '9px 12px', borderTop: `1px solid ${T.line}`, fontSize: 10.5, color: T.inkFaint }}>
+                  Para a folha, a pergunta é se aquela verba é de pessoal de <strong>fábrica</strong> ou de
+                  <strong> escritório</strong>. Hoje só INSS FOLHA (ADM) e FGTS FOLHA (PROD) dizem isso no nome — as
+                  demais precisam de alguém que saiba. Verba misturada, com gente dos dois lados, é melhor deixar
+                  como administrativo do que jogar salário de escritório no custo do produto.
+                </div>
               </div>
             )}
 
