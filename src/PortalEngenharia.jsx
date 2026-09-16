@@ -3698,7 +3698,7 @@ function FollowUpComercial({ currentUser }) {
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 940 }}>
             <thead><tr style={{ background: T.panelAlt }}>
-              {['BR', 'Cliente', 'Vendedor', 'Dias', 'Valor da proposta', 'Estágio', 'Ponderado', 'Próximo contato', ''].map((h, i) => (
+              {['BR', 'Cliente', 'Vendedor', 'Dias', 'Valor da proposta', 'Estágio', 'Ponderado', 'Próximo contato', 'Observação'].map((h, i) => (
                 <th key={h + i} style={{ padding: '9px 12px', fontSize: 11, fontWeight: 600, color: T.inkFaint,
                   textAlign: i === 3 || i === 4 || i === 6 ? 'right' : 'left', whiteSpace: 'nowrap' }}>{h}</th>
               ))}
@@ -3762,14 +3762,16 @@ function FollowUpComercial({ currentUser }) {
                             border: `1px solid ${atrasado ? T.rustText : T.line}`,
                             background: T.panel, color: atrasado ? T.rustText : T.inkDim }} />
                       </td>
-                      <td style={{ padding: '8px 12px' }}>
-                        <button onClick={() => setObsAberta(obsAberta === l.br ? null : l.br)}
-                          title={l.observacao || 'Sem observação'}
-                          style={{ fontFamily: 'inherit', fontSize: 11, padding: '3px 8px', borderRadius: 4, cursor: 'pointer',
-                            border: `1px solid ${T.line}`, background: 'transparent',
-                            color: l.observacao ? T.terracotta : T.inkFaint }}>
-                          {l.observacao ? 'nota ✓' : 'nota'}
-                        </button>
+                      <td style={{ padding: '8px 12px', maxWidth: 260 }}>
+                        <div onClick={() => setObsAberta(obsAberta === l.br ? null : l.br)}
+                          title={l.observacao || 'Clique para escrever'}
+                          style={{ fontSize: 11.5, cursor: 'pointer', padding: '4px 8px', borderRadius: 4,
+                            border: `1px solid ${l.observacao ? T.line : 'transparent'}`,
+                            background: l.observacao ? T.panelAlt : 'transparent',
+                            color: l.observacao ? T.inkDim : T.inkFaint,
+                            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          {l.observacao || '+ escrever'}
+                        </div>
                       </td>
                     </tr>
                     {obsAberta === l.br && (
