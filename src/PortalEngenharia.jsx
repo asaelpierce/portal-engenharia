@@ -3453,14 +3453,16 @@ function FollowUpComercial({ currentUser }) {
 
   const soma = (arr, c) => arr.reduce((s, r) => s + (Number(r[c]) || 0), 0);
   const emAberto = lista.filter(l => l.situacao === 'em aberto');
+  const confirmados = lista.filter(l => l.situacao === 'pedido confirmado');
   const semClass = emAberto.filter(l => !l.estagio).length;
 
   // Funil por vendedor: o que interessa e o ponderado, nao o bruto.
-  const porVend = [...new Set(base.filter(l => l.situacao === 'em aberto').map(l => l.vendedor))]
+  const porVend = [...new Set(base.filter(l => ['em aberto','pedido confirmado'].includes(l.situacao)).map(l => l.vendedor))]
     .map(v => {
-      const d = base.filter(l => l.vendedor === v && l.situacao === 'em aberto');
+      const d = base.filter(l => l.vendedor === v && ['em aberto','pedido confirmado'].includes(l.situacao));
       return { v, n: d.length, bruto: soma(d, 'valor_proposta'), pond: soma(d, 'valor_ponderado'),
-               semClass: d.filter(x => !x.estagio).length };
+               confirmado: soma(d.filter(x => x.situacao === 'pedido confirmado'), 'valor_ponderado'),
+               semClass: d.filter(x => !x.estagio && x.situacao === 'em aberto').length };
     })
     .sort((a, b) => b.pond - a.pond);
   const maxPond = Math.max(1, ...porVend.map(x => x.pond));
@@ -3477,11 +3479,12 @@ function FollowUpComercial({ currentUser }) {
 
       <div style={{ display: 'grid', gap: 8, gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))' }}>
         {[
+          { t: 'Pedido confirmado', v: moeda(soma(confirmados, 'valor_proposta')), c: T.oliveText },
           { t: 'Em aberto', v: String(emAberto.length), c: T.ink },
-          { t: 'Valor das propostas', v: moeda(soma(emAberto, 'valor_proposta')), c: T.inkDim },
+          { t: 'Valor em aberto', v: moeda(soma(emAberto, 'valor_proposta')), c: T.inkDim },
           { t: 'Previs\u00e3o ponderada', v: moeda(soma(emAberto, 'valor_ponderado')), c: T.terracotta },
+          { t: 'Total esperado', v: moeda(soma(confirmados, 'valor_proposta') + soma(emAberto, 'valor_ponderado')), c: T.ink },
           { t: 'Sem classifica\u00e7\u00e3o', v: String(semClass), c: semClass ? T.amberText : T.inkFaint },
-          { t: 'Ganhos', v: String(lista.filter(l => l.situacao === 'ganho').length), c: T.oliveText },
         ].map(k => (
           <div key={k.t} style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 8, padding: '9px 12px' }}>
             <div style={{ fontSize: 10.5, color: T.inkFaint }}>{k.t}</div>
@@ -3543,12 +3546,12 @@ function FollowUpComercial({ currentUser }) {
                 return (
                   <React.Fragment key={l.br}>
                     <tr style={{ borderBottom: `1px solid ${T.lineSoft}`,
-                      background: l.situacao === 'ganho' ? `${T.oliveSoft}33`
+                      background: ['faturado','pedido confirmado'].includes(l.situacao) ? `${T.oliveSoft}44`
                                : l.situacao === 'perdido' ? T.panelAlt : 'transparent',
                       opacity: l.situacao === 'perdido' ? 0.6 : 1 }}>
                       <td style={{ padding: '8px 12px', fontSize: 12.5, fontWeight: 600 }}>
                         {l.br}
-                        {l.situacao === 'ganho' && <span style={{ marginLeft: 6, fontSize: 9.5, color: T.oliveText }}>ganho</span>}
+                        {l.situacao === 'faturado' && <span style={{ marginLeft: 6, fontSize: 9.5, color: T.oliveText }}>faturado</span>}
                       </td>
                       <td style={{ padding: '8px 12px', fontSize: 12, color: T.inkDim, maxWidth: 190,
                         whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={l.cliente}>{l.cliente}</td>
@@ -3560,6 +3563,13 @@ function FollowUpComercial({ currentUser }) {
                         {l.valor_proposta ? moeda(l.valor_proposta) : <span style={{ color: T.inkFaint }}>sem proposta</span>}
                       </td>
                       <td style={{ padding: '8px 12px' }}>
+                        {l.conhecimento_pedido ? (
+                          <span style={{ fontSize: 11, color: T.oliveText, background: T.oliveSoft,
+                            padding: '3px 8px', borderRadius: 4, whiteSpace: 'nowrap' }}
+                            title={l.data_conhecimento_pedido ? `Pedido conhecido em ${new Date(l.data_conhecimento_pedido).toLocaleDateString('pt-BR')}` : 'Pedido confirmado'}>
+                            Pedido confirmado \u00b7 100%
+                          </span>
+                        ) : (
                         <select value={l.estagio || ''} disabled={salvando === l.br}
                           onChange={e => salvar(l.br, { estagio: e.target.value || null })}
                           style={{ fontFamily: 'inherit', fontSize: 11.5, padding: '4px 7px', borderRadius: 5,
@@ -3572,6 +3582,7 @@ function FollowUpComercial({ currentUser }) {
                             </option>
                           ))}
                         </select>
+                        )}
                       </td>
                       <td style={{ padding: '8px 12px', fontSize: 12.5, textAlign: 'right', fontWeight: 600,
                         color: T.terracotta, fontVariantNumeric: 'tabular-nums' }}>
@@ -3615,6 +3626,8 @@ function FollowUpComercial({ currentUser }) {
           O ponderado \u00e9 o valor da proposta vezes o peso do est\u00e1gio. Os pesos ficam em tabela: se a empresa
           decidir que M\u00e9dio vale 40% em vez de 50%, todo o funil se recalcula sem mexer em c\u00f3digo.
           BR sem proposta cadastrada ainda n\u00e3o soma no ponderado \u2014 falta o valor, n\u00e3o a inten\u00e7\u00e3o.
+          Quem j\u00e1 tem <strong>conhecimento de pedido</strong> entra com 100% do valor l\u00edquido: n\u00e3o se pondera o que o
+          cliente j\u00e1 fechou.
         </div>
       </div>
     </div>
