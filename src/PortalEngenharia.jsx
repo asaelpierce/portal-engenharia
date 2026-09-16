@@ -16430,19 +16430,23 @@ function Custeio() {
               <div style={{ overflowX: 'auto' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 880 }}>
                   <thead><tr style={{ background: T.panelAlt }}>
-                    {['BR', 'Custo direto', 'Base do rateio', '% do CIF', 'CIF rateado', 'Custo por absorção', 'Receita líq.', 'Margem'].map((h, i) => (
+                    {['BR', 'Meses', 'Custo direto', 'Base do rateio', '% do CIF', 'CIF rateado', 'Custo por absorção', 'Receita líq.', 'Margem'].map((h, i) => (
                       <th key={h} style={{ padding: '9px 12px', fontSize: 11, fontWeight: 600, color: T.inkFaint, textAlign: i === 0 ? 'left' : 'right', whiteSpace: 'nowrap' }}>{h}</th>
                     ))}
                   </tr></thead>
                   <tbody>
                     {rateio.length === 0 ? (
-                      <tr><td colSpan={8} style={{ padding: 24, textAlign: 'center', color: T.inkFaint }}>Nada nesse ano.</td></tr>
+                      <tr><td colSpan={9} style={{ padding: 24, textAlign: 'center', color: T.inkFaint }}>Nada nesse ano.</td></tr>
                     ) : rateio.slice(0, 120).map(r => {
                       const m = r.margem_absorcao == null ? null : Number(r.margem_absorcao);
                       const cor = m == null ? T.inkFaint : m >= 0 ? T.oliveText : T.rustText;
                       return (
                         <tr key={r.codproj} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
                           <td style={{ padding: '8px 12px', fontSize: 12.5, fontWeight: 600 }}>{r.br}</td>
+                          <td style={{ padding: '8px 12px', fontSize: 11.5, textAlign: 'right', color: T.inkFaint, whiteSpace: 'nowrap' }}
+                              title={r.primeiro_mes === r.ultimo_mes ? `Consumiu material em ${r.primeiro_mes}` : `Consumiu material de ${r.primeiro_mes} a ${r.ultimo_mes}`}>
+                            {r.meses_ativos}{r.meses_ativos === 1 ? ' m\u00eas' : ' meses'}
+                          </td>
                           <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{moeda(r.custo_direto)}</td>
                           <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', color: T.inkDim, fontVariantNumeric: 'tabular-nums' }}
                               title="Material direto, sem serviço terceirizado">{moeda(r.base_rateio)}</td>
@@ -16463,11 +16467,13 @@ function Custeio() {
               <div style={{ padding: '9px 12px', borderTop: `1px solid ${T.line}`, fontSize: 10.5, color: T.inkFaint, display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
                 <span>
                   O CIF rateado é <strong>estimativa</strong>; o custo direto é fato. Por isso aparecem em colunas
-                  separadas e nunca somados num número só. O rateio é anual porque as linhas de custo guardam a data
-                  do orçamento, não a do documento.
+                  separadas e nunca somados num número só. O rateio é <strong>mensal</strong>: o CIF de cada mês vai
+                  para os projetos que consumiram material naquele mês, então projeto que rodou em dezembro não
+                  carrega overhead de janeiro. Mês sem produção fica sem rateio — é o caso dos meses futuros, que
+                  já têm título lançado mas ainda não têm projeto.
                 </span>
                 <BotaoExportar small onClick={() => exportCSV(rateio, `cif_rateio_${anoCif}.csv`,
-                  ['br','ano','custo_direto','base_rateio','participacao_pct','cif_rateado','custo_absorcao','receita_liquida','margem_absorcao'])} />
+                  ['br','ano','meses_ativos','primeiro_mes','ultimo_mes','custo_direto','base_rateio','participacao_pct','cif_rateado','custo_absorcao','receita_liquida','margem_absorcao'])} />
               </div>
             </div>
           </div>
