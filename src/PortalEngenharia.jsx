@@ -16885,6 +16885,7 @@ function Custeio() {
   const [maoObra, setMaoObra] = useState([]);
   const [custoHora, setCustoHora] = useState([]);
   const [setorAberto, setSetorAberto] = useState(null);
+  const [mesHoras, setMesHoras] = useState('todos');
   const [rateioAberto, setRateioAberto] = useState(null);
   const [excBusy, setExcBusy] = useState(null);
   const [analise, setAnalise] = useState([]);
@@ -18192,8 +18193,13 @@ function Custeio() {
         // linhas transformaria uma pessoa em sete.
         const anosH = [...new Set(maoObra.map(m => String(m.competencia).slice(0, 4)))].sort().reverse();
         const anoH = anosH.includes(String(anoCif)) ? String(anoCif) : anosH[0];
-        const doAnoH = maoObra.filter(m => String(m.competencia).slice(0, 4) === anoH);
-        if (!doAnoH.length) return <div style={{ padding: 30, color: T.inkFaint }}>Sem apontamento em {anoH}.</div>;
+        const doAnoTodo = maoObra.filter(m => String(m.competencia).slice(0, 4) === anoH);
+        if (!doAnoTodo.length) return <div style={{ padding: 30, color: T.inkFaint }}>Sem apontamento em {anoH}.</div>;
+        // O mes filtra TUDO: setor, projeto e cartoes. Sem isso a leitura mistura
+        // um mes cheio com um vazio e a hora por projeto perde o sentido.
+        const mesesDisp = [...new Set(doAnoTodo.map(m => m.competencia))].sort();
+        const mesAtivo = mesesDisp.includes(mesHoras) ? mesHoras : 'todos';
+        const doAnoH = mesAtivo === 'todos' ? doAnoTodo : doAnoTodo.filter(m => m.competencia === mesAtivo);
 
         const horasTot = doAnoH.reduce((s2, m) => s2 + Number(m.horas || 0), 0);
         const custoTot = doAnoH.reduce((s2, m) => s2 + Number(m.custo_mao_obra || 0), 0);
@@ -18213,10 +18219,9 @@ function Custeio() {
         const maxSetor = Math.max(1, ...setores.map(([, v]) => v.horas));
 
         // por mês
-        const mesesH = [...new Set(doAnoH.map(m => m.competencia))].sort();
-        const porMesH = mesesH.map(mm => ({
+        const porMesH = mesesDisp.map(mm => ({
           m: mm,
-          h: doAnoH.filter(x => x.competencia === mm).reduce((s2, x) => s2 + Number(x.horas || 0), 0),
+          h: doAnoTodo.filter(x => x.competencia === mm).reduce((s2, x) => s2 + Number(x.horas || 0), 0),
         }));
         const maxMesH = Math.max(1, ...porMesH.map(x => x.h));
 
@@ -18242,6 +18247,16 @@ function Custeio() {
                   fontFamily: 'inherit', fontSize: 12.5, fontWeight: anoH === a2 ? 700 : 400, cursor: 'pointer',
                   padding: '6px 14px', borderRadius: 6, border: `1px solid ${anoH === a2 ? T.ink : T.line}`,
                   background: anoH === a2 ? T.ink : T.panel, color: anoH === a2 ? T.panel : T.inkDim }}>{a2}</button>
+              ))}
+              <div style={{ width: 1, height: 22, background: T.line, margin: '0 4px' }} />
+              {['todos', ...mesesDisp].map(mm => (
+                <button key={mm} onClick={() => setMesHoras(mm)} style={{
+                  fontFamily: 'inherit', fontSize: 11.5, fontWeight: mesAtivo === mm ? 700 : 400, cursor: 'pointer',
+                  padding: '5px 11px', borderRadius: 14, border: `1px solid ${mesAtivo === mm ? T.terracotta : T.line}`,
+                  background: mesAtivo === mm ? `${T.rustSoft}66` : 'transparent',
+                  color: mesAtivo === mm ? T.terracotta : T.inkDim }}>
+                  {mm === 'todos' ? 'Ano inteiro' : mm.slice(5)}
+                </button>
               ))}
             </div>
 
@@ -18270,7 +18285,9 @@ function Custeio() {
 
             <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))' }}>
               <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: 12 }}>
-                <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 10 }}>Horas por setor</div>
+                <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 10 }}>
+                  Horas por setor{mesAtivo !== 'todos' ? ` — ${mesAtivo}` : ''}
+                </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                   {setores.map(([nome, v]) => (
                     <div key={nome} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -18289,15 +18306,20 @@ function Custeio() {
               </div>
 
               <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: 12 }}>
-                <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 10 }}>Horas mês a mês</div>
+                <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 10 }}>
+                  Horas mês a mês <span style={{ fontWeight: 400, color: T.inkFaint, fontSize: 10.5 }}>· clique para filtrar</span>
+                </div>
                 <div style={{ display: 'flex', alignItems: 'flex-end', gap: 6, height: 128 }}>
                   {porMesH.map(x => (
-                    <div key={x.m} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}
-                      title={`${x.m}: ${Math.round(x.h).toLocaleString('pt-BR')} horas`}>
+                    <div key={x.m} onClick={() => setMesHoras(mesAtivo === x.m ? 'todos' : x.m)}
+                      style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3, cursor: 'pointer' }}
+                      title={`${x.m}: ${Math.round(x.h).toLocaleString('pt-BR')} horas — clique para filtrar`}>
                       <div style={{ fontSize: 9.5, color: T.inkFaint, fontVariantNumeric: 'tabular-nums' }}>{Math.round(x.h / 100) / 10}k</div>
                       <div style={{ width: '100%', height: `${Math.max((x.h / maxMesH) * 92, 3)}px`,
-                        background: T.terracotta, borderRadius: '3px 3px 0 0' }} />
-                      <div style={{ fontSize: 9.5, color: T.inkFaint }}>{x.m.slice(5)}</div>
+                        background: mesAtivo === 'todos' || mesAtivo === x.m ? T.terracotta : T.lineSoft,
+                        borderRadius: '3px 3px 0 0' }} />
+                      <div style={{ fontSize: 9.5, color: mesAtivo === x.m ? T.terracotta : T.inkFaint,
+                        fontWeight: mesAtivo === x.m ? 700 : 400 }}>{x.m.slice(5)}</div>
                     </div>
                   ))}
                 </div>
@@ -18306,7 +18328,10 @@ function Custeio() {
 
             <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
               <div style={{ padding: '10px 12px', borderBottom: `1px solid ${T.line}` }}>
-                <div style={{ fontSize: 12, fontWeight: 700 }}>Horas por projeto — {projetos.length} projetos</div>
+                <div style={{ fontSize: 12, fontWeight: 700 }}>
+                  Horas por projeto — {projetos.length} projetos
+                  {mesAtivo !== 'todos' && <span style={{ color: T.terracotta }}> em {mesAtivo}</span>}
+                </div>
                 <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 2 }}>
                   A barra mostra a divisão entre setores. Clique no projeto para ver os números.
                 </div>
