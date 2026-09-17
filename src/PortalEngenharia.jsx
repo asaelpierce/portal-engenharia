@@ -2608,7 +2608,7 @@ function ModeloPreditivo() {
         // portal.
         const { data, error } = await supabase
           .from('pedidos_itens')
-          .select('cliente_nome,segmento_descricao,produto_kaleng,codtipoper,valor_liquido,data_neg')
+          .select('cliente_nome,segmento_descricao,produto_kaleng,codtipoper,valor_liquido_real,data_neg')
           .gte('data_neg', '2023-01-01')
           .lte('data_neg', '2026-12-31')
           .range(de, de + passo - 1);
@@ -2620,7 +2620,10 @@ function ModeloPreditivo() {
       // renomeia para os campos que o resto do componente ja espera
       setLinhas(todos
         .filter(r => validos.has(String(r.codtipoper)))
-        .map(r => ({ ...r, valor_bruto: r.valor_liquido, data_faturamento: r.data_neg })));
+                // valor_liquido_real = VLRTOT menos a fatia dos impostos da nota. A
+        // coluna 'valor_liquido' da tabela guarda o VLRTOT, que e BRUTO --
+        // nome errado de origem, e estava inflando o modelo em cerca de 25%.
+        .map(r => ({ ...r, valor_bruto: r.valor_liquido_real, data_faturamento: r.data_neg })));
 
       const { data: ctx } = await supabase.from('modelo_contexto_cliente').select('*');
       setContexto(Object.fromEntries((ctx || []).map(c => [c.cliente, c])));
