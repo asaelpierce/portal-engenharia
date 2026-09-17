@@ -2889,7 +2889,7 @@ function ModeloPreditivo() {
   const moeda = (v) => fmtMoedaCompacta(v);
   const pct = (v) => `${v >= 0 ? '+' : ''}${Math.round(v * 100)}%`;
 
-  if (loading) return <div style={{ padding: 40, color: T.inkFaint, fontSize: 13 }}>Carregando 3 anos de faturamento…</div>;
+  if (loading) return <div style={{ padding: 40, color: T.inkFaint, fontSize: 13 }}>Carregando 3 anos de pedidos…</div>;
   if (erro) return <div style={{ padding: 20, color: T.rustText, fontSize: 13 }}>Erro: {erro}</div>;
 
   const maxSerie = Math.max(1, ...dados.flatMap(c => c.serie));
@@ -2931,15 +2931,17 @@ function ModeloPreditivo() {
       <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '14px 18px' }}>
         <div style={{ fontSize: 12.5, color: T.inkDim, lineHeight: 1.6 }}>
           {visao === 'vale'
-            ? 'Todas as unidades do Grupo Vale, incluindo CVRD. O grupo responde por cerca de 30% do faturamento.'
-            : 'Os 15 maiores clientes por faturamento de 2023 a 2025, com a projeção de 2026 por tendência'}
-          {visao === 'vale' ? '' : ' linear.'} Só entram TOPs de venda — devolução, remessa e amostra
-          ficam de fora. Serviço aparece como categoria própria porque não tem classificação de material.
+            ? 'Todas as unidades do Grupo Vale, incluindo CVRD. O grupo responde por cerca de 30% dos pedidos.'
+            : 'Os 15 maiores clientes por valor de pedido de 2023 a 2025, com a projeção de 2026 por tendência'}
+          {visao === 'vale' ? '' : ' linear.'} A base é o <strong>pedido de venda</strong>, pela data em que foi
+          fechado, e o valor é <strong>líquido de impostos</strong> — mesma fórmula da aba de Faturamento.
+          Só entram TOPs de pedido que contam como demanda: retrabalho e brinde ficam de fora.
+          Serviço aparece como categoria própria porque não tem classificação de material.
         </div>
         <div style={{ fontSize: 11.5, color: T.inkDim, lineHeight: 1.6, marginTop: 10, paddingTop: 10, borderTop: `1px solid ${T.line}` }}>
           <strong style={{ color: T.ink }}>Como 2027 é calculado.</strong> 2026 ainda não fechou, então entra
           anualizado: o acumulado é dividido por <strong style={{ color: T.ink }}>
-          {Math.round((totais.fatorAno || 1) * 100)}%</strong>, que é a fatia do ano já faturada nesta mesma data
+          {Math.round((totais.fatorAno || 1) * 100)}%</strong>, que é a fatia do ano já pedida nesta mesma data
           em 2023, 2024 e 2025 — os três ficaram entre {Math.round(((totais.fatorAno || 1) - (totais.dispersaoFator || 0) / 2) * 100)}%
           e {Math.round(((totais.fatorAno || 1) + (totais.dispersaoFator || 0) / 2) * 100)}%, dispersão pequena o
           bastante para usar a média. Sobre os quatro anos roda a mesma regressão linear, e o resultado é 2027.
@@ -2970,7 +2972,7 @@ function ModeloPreditivo() {
               <br /><br />
               A concentração é o risco principal:{' '}
               <strong style={{ color: T.ink }}>{justif.maior.cliente}</strong> sozinho responde por{' '}
-              <strong style={{ color: T.ink }}>{Math.round(justif.pctMaior * 100)}%</strong> do faturamento
+              <strong style={{ color: T.ink }}>{Math.round(justif.pctMaior * 100)}%</strong> dos pedidos
               estimado de 2026{justif.pctVale > 0.2 ? (
                 <>, e o Grupo Vale por <strong style={{ color: T.ink }}>{Math.round(justif.pctVale * 100)}%</strong></>
               ) : null}. Uma reta ajustada sobre uma base assim projeta a continuidade de poucas decisões de
@@ -3001,7 +3003,7 @@ function ModeloPreditivo() {
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 12 }}>
         {[
-          { l: 'Faturado 23–25 (top 10)', v: moeda(totais.total), c: T.terracotta, big: true },
+          { l: 'Pedidos 23–25, líq. (top 10)', v: moeda(totais.total), c: T.terracotta, big: true },
           { l: 'Fechado em 2025', v: moeda(totais.a25), c: T.ink },
           { l: 'Projeção 2026', v: moeda(totais.proj), c: T.blueText },
           { l: '2026 estimado', v: moeda(totais.est26), c: T.inkDim },
