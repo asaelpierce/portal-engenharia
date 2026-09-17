@@ -16888,6 +16888,10 @@ function Custeio() {
   const [mesHoras, setMesHoras] = useState('todos');
   const [visaoHoras, setVisaoHoras] = useState('projeto');
   const [itemHoras, setItemHoras] = useState([]);
+  const [consProj, setConsProj] = useState([]);
+  const [consItem, setConsItem] = useState([]);
+  const [consOp, setConsOp] = useState([]);
+  const [visaoCons, setVisaoCons] = useState('projeto');
   const [rateioAberto, setRateioAberto] = useState(null);
   const [excBusy, setExcBusy] = useState(null);
   const [analise, setAnalise] = useState([]);
@@ -16956,6 +16960,9 @@ function Custeio() {
       setMaoObra(await lerTudo('v_custeio_mao_de_obra'));
       setCustoHora(await lerTudo('v_custeio_hora_custo_medio'));
       setItemHoras(await lerTudo('v_custeio_mao_de_obra_item'));
+      setConsProj(await lerTudo('v_custeio_consolidado_projeto'));
+      setConsItem(await lerTudo('v_custeio_consolidado_item'));
+      setConsOp(await lerTudo('v_custeio_consolidado_op'));
       setAnalise(await lerTudo('v_custeio_analise'));
       setSuspeitos(await lerTudo('v_custeio_custo_suspeito'));
       // Historico do verificador. 60 dias bastam para ver tendencia sem
@@ -17157,7 +17164,7 @@ function Custeio() {
 
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', gap: 2 }}>
-          {[{ id: 'produto', l: 'Por produto' }, { id: 'br', l: 'Por projeto (BR)' }, { id: 'margem', l: 'Margem por venda' }, { id: 'orcado', l: 'Custo por projeto' }, { id: 'cif', l: 'Despesa fixa (CIF)' }, { id: 'insumo', l: 'Insumos' }, { id: 'rateado', l: 'Rateado' }, { id: 'folha', l: 'Folha da produção' }, { id: 'horas', l: 'Horas apontadas' }, { id: 'absorcao', l: 'Custo por absorção' }, { id: 'analise', l: 'Análise' }, { id: 'qualidade', l: (() => {
+          {[{ id: 'produto', l: 'Por produto' }, { id: 'br', l: 'Por projeto (BR)' }, { id: 'margem', l: 'Margem por venda' }, { id: 'orcado', l: 'Custo por projeto' }, { id: 'cif', l: 'Despesa fixa (CIF)' }, { id: 'insumo', l: 'Insumos' }, { id: 'rateado', l: 'Rateado' }, { id: 'folha', l: 'Folha da produção' }, { id: 'horas', l: 'Horas apontadas' }, { id: 'consolidado', l: 'Consolidação' }, { id: 'absorcao', l: 'Custo por absorção' }, { id: 'analise', l: 'Análise' }, { id: 'qualidade', l: (() => {
             const ult = verif.length ? verif.reduce((m, v) => v.executado_em > m ? v.executado_em : m, '') : null;
             const falhas = ult ? verif.filter(v => v.executado_em === ult && !v.passou).length : 0;
             return falhas ? `Qualidade dos dados (${falhas})` : 'Qualidade dos dados';
@@ -18512,6 +18519,232 @@ function Custeio() {
                 </div>
               )}
             </div>
+            )}
+          </div>
+        );
+      })()}
+
+      {aba === 'consolidado' && (() => {
+        // CONSOLIDACAO -- custeio por absorcao completo.
+        //   material    compra + estoque + OP de estoque + [PI] apontado
+        //   mao de obra hora apontada x custo/hora medio da fabrica
+        //   overhead    CIF + insumos + rateado do Sankhya
+        //
+        // A FOLHA NAO ENTRA NO OVERHEAD: ela ja e distribuida inteira pela hora
+        // apontada. Conferido -- a soma da mao de obra fecha 100% com a folha
+        // do mes. Somar nos dois lugares dobraria R$ 227 mil por mes.
+        const mesesC = [...new Set(consProj.map(c => c.competencia))].sort();
+        if (!mesesC.length) return <div style={{ padding: 30, color: T.inkFaint }}>Sem dado consolidado.</div>;
+
+        const porMesC = mesesC.map(mm => {
+          const d = consProj.filter(c => c.competencia === mm);
+          return {
+            m: mm,
+            mo: d.reduce((s2, c) => s2 + Number(c.mao_obra || 0), 0),
+            oh: d.reduce((s2, c) => s2 + Number(c.overhead || 0), 0),
+            h: d.reduce((s2, c) => s2 + Number(c.horas || 0), 0),
+          };
+        });
+        const totMO = porMesC.reduce((s2, x) => s2 + x.mo, 0);
+        const totOH = porMesC.reduce((s2, x) => s2 + x.oh, 0);
+        const totH = porMesC.reduce((s2, x) => s2 + x.h, 0);
+        const maxC = Math.max(1, ...porMesC.map(x => x.mo + x.oh));
+
+        // por projeto: material é do projeto inteiro, mão de obra e overhead somam os meses
+        const porProjC = {};
+        consProj.forEach(c => {
+          if (!c.br) return;
+          if (!porProjC[c.br]) porProjC[c.br] = { mo: 0, oh: 0, h: 0, mat: Number(c.material_projeto || 0), rec: Number(c.receita_projeto || 0) };
+          porProjC[c.br].mo += Number(c.mao_obra || 0);
+          porProjC[c.br].oh += Number(c.overhead || 0);
+          porProjC[c.br].h += Number(c.horas || 0);
+        });
+        const projsC = Object.entries(porProjC)
+          .map(([br, v]) => ({ br, ...v, total: v.mat + v.mo + v.oh,
+            margem: v.rec > 0 ? v.rec - (v.mat + v.mo + v.oh) : null }))
+          .sort((a2, b2) => b2.total - a2.total);
+
+        const barra = (mat, mo, oh) => {
+          const t = mat + mo + oh || 1;
+          return (
+            <div style={{ display: 'flex', height: 9, borderRadius: 2, overflow: 'hidden', background: T.lineSoft }}>
+              <div style={{ width: `${(mat / t) * 100}%`, background: T.terracotta }} title={`Material ${moeda(mat)}`} />
+              <div style={{ width: `${(mo / t) * 100}%`, background: T.blueText }} title={`Mão de obra ${moeda(mo)}`} />
+              <div style={{ width: `${(oh / t) * 100}%`, background: T.amberText }} title={`Overhead ${moeda(oh)}`} />
+            </div>
+          );
+        };
+
+        return (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <div style={{ fontSize: 11.5, color: T.inkDim, background: T.panelAlt, padding: '10px 12px', borderRadius: 6, maxWidth: 940, lineHeight: 1.6 }}>
+              <strong>Custeio por absorção.</strong> Três componentes:{' '}
+              <span style={{ color: T.terracotta, fontWeight: 600 }}>material</span> (compra, estoque, OP de estoque e
+              item [PI] apontado), <span style={{ color: T.blueText, fontWeight: 600 }}>mão de obra</span> (hora
+              apontada × custo/hora da fábrica) e <span style={{ color: T.amberText, fontWeight: 600 }}>overhead</span>{' '}
+              (CIF, insumos e rateio do Sankhya), distribuído pela hora apontada.
+              <br />
+              A folha <strong>não</strong> entra no overhead — ela já é distribuída inteira pela hora, e somar nos dois
+              lugares dobraria o custo.
+            </div>
+
+            <div style={{ display: 'grid', gap: 8, gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))' }}>
+              {[
+                { t: 'Mão de obra', v: moeda(totMO), c: T.blueText },
+                { t: 'Overhead rateado', v: moeda(totOH), c: T.amberText },
+                { t: 'Horas apontadas', v: `${Math.round(totH).toLocaleString('pt-BR')} h`, c: T.ink },
+                { t: 'Custo de conversão', v: moeda(totMO + totOH), c: T.terracotta },
+                { t: 'Conversão por hora', v: moeda((totMO + totOH) / (totH || 1)), c: T.inkDim },
+              ].map(k => (
+                <div key={k.t} style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 8, padding: '9px 12px' }}>
+                  <div style={{ fontSize: 10.5, color: T.inkFaint, minHeight: 26 }}>{k.t}</div>
+                  <div style={{ fontSize: 16.5, fontWeight: 700, color: k.c, fontVariantNumeric: 'tabular-nums' }}>{k.v}</div>
+                </div>
+              ))}
+            </div>
+
+            <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: 12 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 10 }}>Custo de conversão mês a mês</div>
+              <div style={{ display: 'flex', alignItems: 'flex-end', gap: 6, height: 120 }}>
+                {porMesC.map(x => (
+                  <div key={x.m} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}
+                    title={`${x.m}: mão de obra ${moeda(x.mo)} + overhead ${moeda(x.oh)}`}>
+                    <div style={{ fontSize: 9.5, color: T.inkFaint, fontVariantNumeric: 'tabular-nums' }}>{Math.round((x.mo + x.oh) / 1000)}k</div>
+                    <div style={{ width: '100%', display: 'flex', flexDirection: 'column-reverse',
+                      height: `${Math.max(((x.mo + x.oh) / maxC) * 84, 3)}px` }}>
+                      <div style={{ height: `${(x.mo / (x.mo + x.oh)) * 100}%`, background: T.blueText }} />
+                      <div style={{ height: `${(x.oh / (x.mo + x.oh)) * 100}%`, background: T.amberText, borderRadius: '3px 3px 0 0' }} />
+                    </div>
+                    <div style={{ fontSize: 9.5, color: T.inkFaint }}>{x.m.slice(5)}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: 4 }}>
+              {[{ id: 'projeto', l: 'Por projeto' }, { id: 'op', l: 'Por OP' }, { id: 'item', l: 'Por item' }].map(v => (
+                <button key={v.id} onClick={() => setVisaoCons(v.id)} style={{
+                  fontFamily: 'inherit', fontSize: 12, fontWeight: visaoCons === v.id ? 700 : 400, cursor: 'pointer',
+                  padding: '6px 14px', borderRadius: 6, border: `1px solid ${visaoCons === v.id ? T.ink : T.line}`,
+                  background: visaoCons === v.id ? T.ink : T.panel,
+                  color: visaoCons === v.id ? T.panel : T.inkDim }}>{v.l}</button>
+              ))}
+            </div>
+
+            {visaoCons !== 'projeto' && (
+              <div style={{ fontSize: 11, color: T.amberText, background: T.amberSoft, border: `1px solid ${T.amberText}`,
+                borderRadius: 6, padding: '8px 11px', maxWidth: 940 }}>
+                <strong>O material por {visaoCons === 'op' ? 'OP' : 'item'} é estimativa.</strong> Não existe material
+                apontado por OP no Sankhya — a compra é do projeto. Aqui ele é dividido entre as OPs pela hora, que é o
+                único elo disponível, mas hora não representa consumo: uma chapa de 0,07 hora pode levar R$ 1.700 de
+                cerâmica. Mão de obra e overhead são exatos; o material serve para ordem de grandeza.
+              </div>
+            )}
+
+            {visaoCons === 'projeto' && (
+              <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
+                <div style={{ padding: '10px 12px', borderBottom: `1px solid ${T.line}`, fontSize: 12, fontWeight: 700 }}>
+                  Consolidado por projeto — {projsC.length}
+                </div>
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 940 }}>
+                    <thead style={{ position: 'sticky', top: 0, zIndex: 1 }}><tr style={{ background: T.panelAlt }}>
+                      {['BR', 'Horas', 'Material', 'Mão de obra', 'Overhead', 'Custo total', 'Receita', 'Margem', 'Composição'].map((h, i) => (
+                        <th key={h} style={{ padding: '9px 12px', fontSize: 11, fontWeight: 600, color: T.inkFaint,
+                          textAlign: i >= 1 && i <= 7 ? 'right' : 'left', whiteSpace: 'nowrap' }}>{h}</th>
+                      ))}
+                    </tr></thead>
+                    <tbody>
+                      {projsC.slice(0, 100).map(p => (
+                        <tr key={p.br} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                          <td style={{ padding: '7px 12px', fontSize: 12.5, fontWeight: 600 }}>{p.br}</td>
+                          <td style={{ padding: '7px 12px', fontSize: 11.5, textAlign: 'right', color: T.inkFaint, fontVariantNumeric: 'tabular-nums' }}>{Math.round(p.h)}</td>
+                          <td style={{ padding: '7px 12px', fontSize: 12, textAlign: 'right', color: T.terracotta, fontVariantNumeric: 'tabular-nums' }}>{moeda(p.mat)}</td>
+                          <td style={{ padding: '7px 12px', fontSize: 12, textAlign: 'right', color: T.blueText, fontVariantNumeric: 'tabular-nums' }}>{moeda(p.mo)}</td>
+                          <td style={{ padding: '7px 12px', fontSize: 12, textAlign: 'right', color: T.amberText, fontVariantNumeric: 'tabular-nums' }}>{moeda(p.oh)}</td>
+                          <td style={{ padding: '7px 12px', fontSize: 12.5, textAlign: 'right', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{moeda(p.total)}</td>
+                          <td style={{ padding: '7px 12px', fontSize: 12, textAlign: 'right', color: T.inkDim, fontVariantNumeric: 'tabular-nums' }}>{p.rec > 0 ? moeda(p.rec) : '—'}</td>
+                          <td style={{ padding: '7px 12px', fontSize: 12, textAlign: 'right', fontWeight: 600, fontVariantNumeric: 'tabular-nums',
+                            color: p.margem == null ? T.inkFaint : p.margem < 0 ? T.rustText : T.oliveText }}>
+                            {p.margem == null ? '—' : moeda(p.margem)}
+                          </td>
+                          <td style={{ padding: '7px 12px', minWidth: 150 }}>{barra(p.mat, p.mo, p.oh)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {visaoCons === 'item' && (
+              <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
+                <div style={{ padding: '10px 12px', borderBottom: `1px solid ${T.line}`, fontSize: 12, fontWeight: 700 }}>
+                  Consolidado por item — {consItem.length} produtos
+                </div>
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 1000 }}>
+                    <thead style={{ position: 'sticky', top: 0, zIndex: 1 }}><tr style={{ background: T.panelAlt }}>
+                      {['Cód', 'Produto', 'Peças', 'h/peça', 'Material/peça', 'M. obra/peça', 'Overhead/peça', 'Custo/peça', 'Composição'].map((h, i) => (
+                        <th key={h} style={{ padding: '9px 12px', fontSize: 11, fontWeight: 600, color: T.inkFaint,
+                          textAlign: i >= 2 && i <= 7 ? 'right' : 'left', whiteSpace: 'nowrap' }}>{h}</th>
+                      ))}
+                    </tr></thead>
+                    <tbody>
+                      {[...consItem].sort((a2, b2) => Number(b2.custo_total) - Number(a2.custo_total)).slice(0, 100).map(it => (
+                        <tr key={it.cod_prod} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                          <td style={{ padding: '7px 12px', fontSize: 11.5, color: T.inkFaint }}>{it.cod_prod}</td>
+                          <td style={{ padding: '7px 12px', fontSize: 12, maxWidth: 250, whiteSpace: 'nowrap',
+                            overflow: 'hidden', textOverflow: 'ellipsis' }} title={it.descr_prod}>{it.descr_prod}</td>
+                          <td style={{ padding: '7px 12px', fontSize: 11.5, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{Number(it.pecas).toLocaleString('pt-BR')}</td>
+                          <td style={{ padding: '7px 12px', fontSize: 11.5, textAlign: 'right', color: T.inkFaint, fontVariantNumeric: 'tabular-nums' }}>{Number(it.horas_por_peca).toFixed(2)}</td>
+                          <td style={{ padding: '7px 12px', fontSize: 12, textAlign: 'right', color: T.terracotta, fontVariantNumeric: 'tabular-nums' }}>{moeda(it.material_por_peca)}</td>
+                          <td style={{ padding: '7px 12px', fontSize: 12, textAlign: 'right', color: T.blueText, fontVariantNumeric: 'tabular-nums' }}>{moeda(it.mao_obra_por_peca)}</td>
+                          <td style={{ padding: '7px 12px', fontSize: 12, textAlign: 'right', color: T.amberText, fontVariantNumeric: 'tabular-nums' }}>{moeda(it.overhead_por_peca)}</td>
+                          <td style={{ padding: '7px 12px', fontSize: 12.5, textAlign: 'right', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{moeda(it.custo_por_peca)}</td>
+                          <td style={{ padding: '7px 12px', minWidth: 140 }}>
+                            {barra(Number(it.material), Number(it.mao_obra), Number(it.overhead))}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {visaoCons === 'op' && (
+              <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
+                <div style={{ padding: '10px 12px', borderBottom: `1px solid ${T.line}`, fontSize: 12, fontWeight: 700 }}>
+                  Consolidado por OP — {consOp.length} ordens
+                </div>
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 1000 }}>
+                    <thead style={{ position: 'sticky', top: 0, zIndex: 1 }}><tr style={{ background: T.panelAlt }}>
+                      {['OP', 'BR', 'Produto', 'Qtd', 'Horas', 'Material', 'Mão de obra', 'Overhead', 'Custo/peça'].map((h, i) => (
+                        <th key={h} style={{ padding: '9px 12px', fontSize: 11, fontWeight: 600, color: T.inkFaint,
+                          textAlign: i >= 3 ? 'right' : 'left', whiteSpace: 'nowrap' }}>{h}</th>
+                      ))}
+                    </tr></thead>
+                    <tbody>
+                      {[...consOp].sort((a2, b2) => Number(b2.custo_total) - Number(a2.custo_total)).slice(0, 100).map(o => (
+                        <tr key={`${o.competencia}-${o.idiproc}`} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                          <td style={{ padding: '7px 12px', fontSize: 12, fontWeight: 600 }}>{o.idiproc}</td>
+                          <td style={{ padding: '7px 12px', fontSize: 11.5, color: T.inkDim }}>{o.br || '—'}</td>
+                          <td style={{ padding: '7px 12px', fontSize: 11.5, color: T.inkDim, maxWidth: 220,
+                            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={o.descr_prod || ''}>{o.descr_prod || '—'}</td>
+                          <td style={{ padding: '7px 12px', fontSize: 11.5, textAlign: 'right', color: T.inkFaint }}>{o.qtd ? Number(o.qtd).toLocaleString('pt-BR') : '—'}</td>
+                          <td style={{ padding: '7px 12px', fontSize: 11.5, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{Math.round(o.horas)}</td>
+                          <td style={{ padding: '7px 12px', fontSize: 12, textAlign: 'right', color: T.terracotta, fontVariantNumeric: 'tabular-nums' }}>{moeda(o.material)}</td>
+                          <td style={{ padding: '7px 12px', fontSize: 12, textAlign: 'right', color: T.blueText, fontVariantNumeric: 'tabular-nums' }}>{moeda(o.mao_obra)}</td>
+                          <td style={{ padding: '7px 12px', fontSize: 12, textAlign: 'right', color: T.amberText, fontVariantNumeric: 'tabular-nums' }}>{moeda(o.overhead)}</td>
+                          <td style={{ padding: '7px 12px', fontSize: 12.5, textAlign: 'right', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{o.custo_por_peca ? moeda(o.custo_por_peca) : '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
             )}
           </div>
         );
