@@ -17471,6 +17471,48 @@ function Custeio() {
               ))}
             </div>
 
+            {(() => {
+              // CIF MES A MES. O total do ano esconde o que interessa: um mes
+              // de R$ 120 mil e outro de R$ 73 mil rateiam de forma bem
+              // diferente sobre os projetos que faturaram em cada um.
+              const porMes = meses.map(m => ({
+                m,
+                v: doAno.filter(x => x.destino === 'cif' && x.competencia === m)
+                        .reduce((s2, x) => s2 + Number(x.valor || 0), 0),
+              })).filter(x => x.v > 0);
+              if (porMes.length < 2) return null;
+              const maxV = Math.max(...porMes.map(x => x.v));
+              const media = porMes.reduce((s2, x) => s2 + x.v, 0) / porMes.length;
+              return (
+                <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: 12 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8, marginBottom: 10 }}>
+                    <span style={{ fontSize: 12, fontWeight: 700 }}>CIF mês a mês — {anoCif}</span>
+                    <span style={{ fontSize: 11, color: T.inkFaint }}>
+                      média {moeda(media)} · menor {moeda(Math.min(...porMes.map(x => x.v)))} · maior {moeda(maxV)}
+                    </span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'flex-end', gap: 6, height: 120 }}>
+                    {porMes.map(x => (
+                      <div key={x.m} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}
+                        title={`${x.m}: ${moeda(x.v)}${x.v > media ? ` — ${((x.v / media - 1) * 100).toFixed(0)}% acima da média` : ''}`}>
+                        <div style={{ fontSize: 9.5, color: T.inkFaint, fontVariantNumeric: 'tabular-nums' }}>
+                          {(x.v / 1000).toFixed(0)}k
+                        </div>
+                        <div style={{ width: '100%', height: `${Math.max((x.v / maxV) * 88, 3)}px`,
+                          background: x.v > media * 1.15 ? T.amberText : T.terracotta,
+                          borderRadius: '3px 3px 0 0' }} />
+                        <div style={{ fontSize: 9.5, color: T.inkFaint }}>{x.m.slice(5)}</div>
+                      </div>
+                    ))}
+                  </div>
+                  <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 8 }}>
+                    Em âmbar os meses 15% acima da média. O rateio é mensal: o CIF de cada mês vai para os
+                    projetos que faturaram naquele mês, então um mês caro pesa só em quem entregou nele.
+                  </div>
+                </div>
+              );
+            })()}
+
             {naoClass > 0 && (
               <div style={{ fontSize: 11.5, color: T.rustText, background: `${T.rustSoft}44`, border: `1px solid ${T.rustText}`, padding: '9px 12px', borderRadius: 6 }}>
                 {moeda(naoClass)} ainda sem regra de classificação. Esse valor <strong>não</strong> está sendo rateado.
@@ -17478,7 +17520,10 @@ function Custeio() {
               </div>
             )}
 
-            {pendClass.length > 0 && (
+            {/* Fila de classificacao pendente: escondida a pedido do Asael ate o
+                CIF dos itens ja classificados estar fechado. O codigo fica aqui
+                porque a fila volta -- R$ 1,20 mi continuam sem regra. */}
+            {false && pendClass.length > 0 && (
               <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
                 <div style={{ padding: '10px 12px', borderBottom: `1px solid ${T.line}` }}>
                   <div style={{ fontSize: 12, fontWeight: 700 }}>Classificação pendente ({pendClass.length})</div>
