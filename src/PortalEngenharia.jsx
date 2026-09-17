@@ -2927,19 +2927,20 @@ function ModeloPreditivo() {
     // Aqui a largura acompanha a tela, com um teto alto para nao esticar
     // demais em monitor ultrawide.
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16, width: '100%', maxWidth: 2000, marginLeft: -40, marginRight: -40 }}>
-      <div style={{ display: 'flex', gap: 3 }}>
+      <div style={{ display: 'flex', gap: 3, flexWrap: 'wrap' }}>
         {[{ id: 'top', l: 'Top 15 clientes' },
           { id: 'vale', l: 'Grupo Vale' },
           { id: 'alerta', l: `Quedas${alertas.length ? ` (${alertas.length})` : ''}` },
-          { id: 'pipeline', l: 'Propostas em aberto' },
+          { id: 'pipeline', l: `Propostas em aberto${pipeline.filter(x => Number(x.valor_aberto) > 0).length ? ` (${pipeline.filter(x => Number(x.valor_aberto) > 0).length})` : ''}` },
           { id: 'potencial', l: 'Potencial' },
           { id: 'concorrencia', l: 'Concorrência' }].map(v => (
           <button key={v.id} onClick={() => setVisao(v.id)} style={{
-            fontFamily: 'inherit', fontSize: 12.5, cursor: 'pointer', padding: '6px 14px',
+            fontFamily: 'inherit', fontSize: 12.5, cursor: 'pointer', padding: '7px 15px',
             border: `1px solid ${visao === v.id ? T.ink : T.line}`,
             background: visao === v.id ? T.ink : T.panel,
             color: visao === v.id ? T.panel : T.inkDim, borderRadius: 6,
             fontWeight: visao === v.id ? 600 : 400,
+            whiteSpace: 'nowrap', transition: 'background .15s, color .15s',
           }}>{v.l}</button>
         ))}
       </div>
@@ -3039,21 +3040,28 @@ function ModeloPreditivo() {
       </div>
       )}
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 12 }}>
+      {['top','vale'].includes(visao) && (
+      // Os cartoes somam a lista de clientes da tela. Nas abas Quedas,
+      // Propostas, Potencial e Concorrencia a lista e outra, e eles ficavam
+      // mostrando numero do top 15 acima de uma tabela que nao era aquela.
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(178px,1fr))', gap: 12 }}>
         {[
-          { l: 'Pedidos 23–25, líq. (top 10)', v: moeda(totais.total), c: T.terracotta, big: true },
-          { l: 'Fechado em 2025', v: moeda(totais.a25), c: T.ink },
-          { l: 'Projeção 2026', v: moeda(totais.proj), c: T.blueText },
-          { l: '2026 estimado', v: moeda(totais.est26), c: T.inkDim },
-          { l: 'Projeção 2027', v: moeda(totais.proj27), c: T.terracotta },
+          { l: `Vendido 23–25 · ${escopoCard}`, v: moeda(totais.total), c: T.terracotta, big: true },
+          { l: `Vendido em 2025 · ${escopoCard}`, v: moeda(totais.a25), c: T.ink },
+          { l: `2026 até hoje · ${escopoCard}`, v: moeda(totais.ytd26), c: T.ink },
+          { l: `Projeção 2026 · ${escopoCard}`, v: moeda(totais.proj), c: T.blueText },
+          { l: `2026 estimado · ${escopoCard}`, v: moeda(totais.est26), c: T.inkDim },
+          { l: `Projeção 2027 · ${escopoCard}`, v: moeda(totais.proj27), c: T.terracotta },
           { l: 'Clientes em risco', v: String(totais.risco), c: totais.risco > 0 ? T.rustText : T.oliveText },
         ].map(k => (
           <div key={k.l} style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '14px 16px', boxShadow: SHADOW_SM }}>
-            <div style={{ fontSize: 11, color: T.inkFaint, fontWeight: 600 }}>{k.l}</div>
-            <div style={{ fontFamily: FONT_DISPLAY, fontSize: k.big ? 24 : 22, fontWeight: 700, color: k.c, marginTop: 6 }}>{k.v}</div>
+            <div style={{ fontSize: 10.5, color: T.inkFaint, fontWeight: 600, lineHeight: 1.35, minHeight: 28 }}>{k.l}</div>
+            <div style={{ fontFamily: FONT_DISPLAY, fontSize: k.big ? 21 : 19, fontWeight: 700, color: k.c,
+              marginTop: 6, fontVariantNumeric: 'tabular-nums', letterSpacing: '-0.01em' }}>{k.v}</div>
           </div>
         ))}
       </div>
+      )}
 
       {visao === 'alerta' && (
         <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
@@ -3064,7 +3072,7 @@ function ModeloPreditivo() {
           </div>
           <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 860 }}>
-              <thead>
+              <thead style={{ position: 'sticky', top: 0, zIndex: 1 }}>
                 <tr style={{ background: T.panelAlt }}>
                   {['Cliente','Situação','2025 no período','2026 até hoje','Variação','Perda','Sem comprar']
                     .map((h,i) => (
@@ -3247,7 +3255,7 @@ function ModeloPreditivo() {
                   </div>
                   <div style={{ overflowX: 'auto' }}>
                     <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 820 }}>
-                      <thead><tr style={{ background: T.panelAlt }}>
+                      <thead style={{ position: 'sticky', top: 0, zIndex: 1 }}><tr style={{ background: T.panelAlt }}>
                         {['Cliente', 'Vendeu 2026', 'Vendeu 2025', 'Variação', 'Propostas', 'Valor em aberto', 'Parado 180d+'].map((h, i) => (
                           <th key={h} style={{ padding: '8px 12px', fontSize: 11, fontWeight: 600, color: T.inkFaint,
                             textAlign: i === 0 ? 'left' : 'right', whiteSpace: 'nowrap' }}>{h}</th>
@@ -3368,7 +3376,7 @@ function ModeloPreditivo() {
       <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 1020 }}>
-            <thead>
+            <thead style={{ position: 'sticky', top: 0, zIndex: 1 }}>
               <tr style={{ background: T.panelAlt }}>
                 {['Cliente', 'Segmento', 'Tipo de material', '2023', '2024', '2025', 'Tendência', 'Projeção 2026', '2026 até hoje', 'vs 2025 igual', '2026 estimado', 'Projeção 2027', 'Sinal']
                   .map((h, i) => (
@@ -3875,7 +3883,7 @@ function FollowUpComercial({ currentUser }) {
       <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 940 }}>
-            <thead><tr style={{ background: T.panelAlt }}>
+            <thead style={{ position: 'sticky', top: 0, zIndex: 1 }}><tr style={{ background: T.panelAlt }}>
               {['BR', 'Cliente', 'Vendedor', 'Dias', 'Valor da proposta', 'Margin', 'Estágio comercial', 'Estágio vendedor', 'Ponderado', 'Próximo contato', 'Observação'].map((h, i) => (
                 <th key={h + i} style={{ padding: '9px 12px', fontSize: 11, fontWeight: 600, color: T.inkFaint,
                   textAlign: [3,4,5,8].includes(i) ? 'right' : 'left', whiteSpace: 'nowrap' }}>{h}</th>
