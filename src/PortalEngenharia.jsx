@@ -10538,6 +10538,14 @@ function MonitoramentoOP({ currentUser }) {
                         <td style={{ padding: '9px 12px', color: T.inkFaint, whiteSpace: 'nowrap' }}>{fmtData(it.data_pedido)}</td>
                         <td style={{ padding: '9px 12px', textAlign: 'center', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText }}>
                           {it.nro_ordem_producao || '—'}
+                          {it.nro_ordem_producao && it.op_por_produto === false && !it.vinculo_manual && (
+                            <div>
+                              <span title="Esta OP veio do pedido, não do produto — o Sankhya não tem OP específica deste item. Confira antes de usar."
+                                style={{ fontSize: 9.5, fontWeight: 700, color: T.amberText }}>
+                                ⚠ do pedido
+                              </span>
+                            </div>
+                          )}
                           {it.vinculo_manual && (
                             <div>
                               <span title="Vinculado manualmente (não veio do Sankhya)" style={{ fontFamily: 'inherit', fontSize: 9.5, fontWeight: 700, color: T.amberText }}>
