@@ -17751,6 +17751,15 @@ function Custeio() {
         // -> ordem de compra (portal de compras). Tudo amarrado pelo projeto.
         // Um BR pode ter varios orcamentos (revisao, escopo adicional), cada
         // um com seu pedido de venda -- por isso a linha e por ORCAMENTO.
+        // [PI] e comprado em lote e dividido: a nota cai num projeto so. Para
+        // esses, o custo vem do APONTAMENTO, entao a compra e o estoque deles
+        // saem da soma e entra o valor apontado.
+        const piPorProj = {}; const piChave = new Set();
+        piApont.forEach(x => {
+          piPorProj[x.codproj] = (piPorProj[x.codproj] || 0) + (Number(x.custo_apontado) || 0);
+          piChave.add(`${x.codproj}|${x.cod_prod}`);
+        });
+
         const porOrc = {};
         orcComp.forEach(r => {
           // AGRUPA POR PROJETO, nao por orcamento. Um BR pode ter varios
@@ -17812,15 +17821,6 @@ function Custeio() {
         // A view ja descontava e a tela nao, entao a linha do projeto mostrava
         // a mais -- R$ 195 mil no BR12491/25, em 135 projetos no total. Ela nao
         // esta na view de itens, so na de categoria, por isso vem de catComp.
-        // [PI] e comprado em lote e dividido: a nota cai num projeto so. Para
-        // esses, o custo vem do APONTAMENTO, entao a compra e o estoque deles
-        // saem da soma e entra o valor apontado.
-        const piPorProj = {}; const piChave = new Set();
-        piApont.forEach(x => {
-          piPorProj[x.codproj] = (piPorProj[x.codproj] || 0) + (Number(x.custo_apontado) || 0);
-          piChave.add(`${x.codproj}|${x.cod_prod}`);
-        });
-
         const devPorProj = {};
         catComp.forEach(c2 => {
           const v = Number(c2.valor_devolvido) || 0;
