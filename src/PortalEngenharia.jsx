@@ -16882,6 +16882,9 @@ function Custeio() {
   const [rateioDet, setRateioDet] = useState([]);
   const [folhaCentro, setFolhaCentro] = useState([]);
   const [encargos, setEncargos] = useState([]);
+  const [maoObra, setMaoObra] = useState([]);
+  const [custoHora, setCustoHora] = useState([]);
+  const [setorAberto, setSetorAberto] = useState(null);
   const [rateioAberto, setRateioAberto] = useState(null);
   const [excBusy, setExcBusy] = useState(null);
   const [analise, setAnalise] = useState([]);
@@ -16947,6 +16950,8 @@ function Custeio() {
       setRateioDet(await lerTudo('v_custeio_rateio_detalhe'));
       setFolhaCentro(await lerTudo('v_custeio_folha_cif'));
       setEncargos(await lerTudo('custeio_encargo_folha'));
+      setMaoObra(await lerTudo('v_custeio_mao_de_obra'));
+      setCustoHora(await lerTudo('v_custeio_hora_custo_medio'));
       setAnalise(await lerTudo('v_custeio_analise'));
       setSuspeitos(await lerTudo('v_custeio_custo_suspeito'));
       // Historico do verificador. 60 dias bastam para ver tendencia sem
@@ -17148,7 +17153,7 @@ function Custeio() {
 
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', gap: 2 }}>
-          {[{ id: 'produto', l: 'Por produto' }, { id: 'br', l: 'Por projeto (BR)' }, { id: 'margem', l: 'Margem por venda' }, { id: 'orcado', l: 'Custo por projeto' }, { id: 'cif', l: 'Despesa fixa (CIF)' }, { id: 'insumo', l: 'Insumos' }, { id: 'rateado', l: 'Rateado' }, { id: 'folha', l: 'Folha da produção' }, { id: 'absorcao', l: 'Custo por absorção' }, { id: 'analise', l: 'Análise' }, { id: 'qualidade', l: (() => {
+          {[{ id: 'produto', l: 'Por produto' }, { id: 'br', l: 'Por projeto (BR)' }, { id: 'margem', l: 'Margem por venda' }, { id: 'orcado', l: 'Custo por projeto' }, { id: 'cif', l: 'Despesa fixa (CIF)' }, { id: 'insumo', l: 'Insumos' }, { id: 'rateado', l: 'Rateado' }, { id: 'folha', l: 'Folha da produção' }, { id: 'horas', l: 'Horas apontadas' }, { id: 'absorcao', l: 'Custo por absorção' }, { id: 'analise', l: 'Análise' }, { id: 'qualidade', l: (() => {
             const ult = verif.length ? verif.reduce((m, v) => v.executado_em > m ? v.executado_em : m, '') : null;
             const falhas = ult ? verif.filter(v => v.executado_em === ult && !v.passou).length : 0;
             return falhas ? `Qualidade dos dados (${falhas})` : 'Qualidade dos dados';
@@ -18176,6 +18181,194 @@ function Custeio() {
                 );
               })()}
 
+          </div>
+        );
+      })()}
+
+      {aba === 'horas' && (() => {
+        // HORAS APONTADAS. A hora vem de DHFINAL - DHINICIAL (o campo HRSTRAB
+        // esta nulo em quase tudo) e e RATEADA entre as OPs simultaneas: a
+        // equipe trabalha em varios projetos ao mesmo tempo, entao somar as
+        // linhas transformaria uma pessoa em sete.
+        const anosH = [...new Set(maoObra.map(m => String(m.competencia).slice(0, 4)))].sort().reverse();
+        const anoH = anosH.includes(String(anoCif)) ? String(anoCif) : anosH[0];
+        const doAnoH = maoObra.filter(m => String(m.competencia).slice(0, 4) === anoH);
+        if (!doAnoH.length) return <div style={{ padding: 30, color: T.inkFaint }}>Sem apontamento em {anoH}.</div>;
+
+        const horasTot = doAnoH.reduce((s2, m) => s2 + Number(m.horas || 0), 0);
+        const custoTot = doAnoH.reduce((s2, m) => s2 + Number(m.custo_mao_obra || 0), 0);
+        const chMedio = custoHora.filter(c => String(c.competencia).slice(0, 4) === anoH);
+        const chAtual = chMedio.length ? chMedio[chMedio.length - 1].custo_hora : null;
+
+        // por setor
+        const porSetor = {};
+        doAnoH.forEach(m => {
+          const k = m.setor_nome || 'Sem setor';
+          if (!porSetor[k]) porSetor[k] = { horas: 0, custo: 0, projetos: new Set() };
+          porSetor[k].horas += Number(m.horas || 0);
+          porSetor[k].custo += Number(m.custo_mao_obra || 0);
+          porSetor[k].projetos.add(m.br);
+        });
+        const setores = Object.entries(porSetor).sort((a2, b2) => b2[1].horas - a2[1].horas);
+        const maxSetor = Math.max(1, ...setores.map(([, v]) => v.horas));
+
+        // por mês
+        const mesesH = [...new Set(doAnoH.map(m => m.competencia))].sort();
+        const porMesH = mesesH.map(mm => ({
+          m: mm,
+          h: doAnoH.filter(x => x.competencia === mm).reduce((s2, x) => s2 + Number(x.horas || 0), 0),
+        }));
+        const maxMesH = Math.max(1, ...porMesH.map(x => x.h));
+
+        // por projeto
+        const porProj = {};
+        doAnoH.forEach(m => {
+          if (!m.br) return;
+          if (!porProj[m.br]) porProj[m.br] = { horas: 0, custo: 0, setores: {} };
+          porProj[m.br].horas += Number(m.horas || 0);
+          porProj[m.br].custo += Number(m.custo_mao_obra || 0);
+          const sk = m.setor_nome || 'Sem setor';
+          porProj[m.br].setores[sk] = (porProj[m.br].setores[sk] || 0) + Number(m.horas || 0);
+        });
+        const projetos = Object.entries(porProj).sort((a2, b2) => b2[1].horas - a2[1].horas);
+        const CORES = { 'VULCANIZAÇÃO': T.terracotta, 'CALDEIRARIA': T.ink, 'PINTURA': T.amberText,
+                        'REVESTIMENTO': T.blueText, 'CORTE CERÂMICA': T.oliveText, 'Sem setor': T.inkFaint };
+
+        return (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              {anosH.map(a2 => (
+                <button key={a2} onClick={() => setAnoCif(Number(a2))} style={{
+                  fontFamily: 'inherit', fontSize: 12.5, fontWeight: anoH === a2 ? 700 : 400, cursor: 'pointer',
+                  padding: '6px 14px', borderRadius: 6, border: `1px solid ${anoH === a2 ? T.ink : T.line}`,
+                  background: anoH === a2 ? T.ink : T.panel, color: anoH === a2 ? T.panel : T.inkDim }}>{a2}</button>
+              ))}
+            </div>
+
+            <div style={{ fontSize: 11.5, color: T.inkDim, background: T.panelAlt, padding: '9px 12px', borderRadius: 6, maxWidth: 900 }}>
+              A hora sai da diferença entre início e fim do apontamento, e é <strong>rateada entre as OPs que a
+              pessoa tocou no dia</strong> — a equipe trabalha em vários projetos ao mesmo tempo, e somar as linhas
+              faria uma pessoa virar sete. O custo usa a hora média da fábrica
+              {chAtual ? <> (<strong>{moeda(chAtual)}/hora</strong>)</> : ''}, não o custo de cada setor: gente de um
+              setor trabalha em outro, e dividir a folha do setor pelas horas dele distorceria os dois lados.
+            </div>
+
+            <div style={{ display: 'grid', gap: 8, gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))' }}>
+              {[
+                { t: 'Horas apontadas', v: `${Math.round(horasTot).toLocaleString('pt-BR')} h`, c: T.ink },
+                { t: 'Custo de mão de obra', v: moeda(custoTot), c: T.terracotta },
+                { t: 'Custo por hora', v: chAtual ? moeda(chAtual) : '—', c: T.inkDim },
+                { t: 'Projetos com apontamento', v: String(projetos.length), c: T.inkDim },
+                { t: 'Setores', v: String(setores.length), c: T.inkDim },
+              ].map(k => (
+                <div key={k.t} style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 8, padding: '9px 12px' }}>
+                  <div style={{ fontSize: 10.5, color: T.inkFaint, minHeight: 26 }}>{k.t}</div>
+                  <div style={{ fontSize: 17, fontWeight: 700, color: k.c, fontVariantNumeric: 'tabular-nums' }}>{k.v}</div>
+                </div>
+              ))}
+            </div>
+
+            <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))' }}>
+              <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: 12 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 10 }}>Horas por setor</div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {setores.map(([nome, v]) => (
+                    <div key={nome} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span style={{ fontSize: 11.5, color: T.inkDim, width: 118 }}>{nome}</span>
+                      <div style={{ flex: 1, height: 13, background: T.lineSoft, borderRadius: 3, overflow: 'hidden' }}>
+                        <div style={{ height: '100%', width: `${(v.horas / maxSetor) * 100}%`, background: CORES[nome] || T.inkFaint }} />
+                      </div>
+                      <span style={{ fontSize: 11.5, fontWeight: 600, width: 68, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                        {Math.round(v.horas).toLocaleString('pt-BR')} h
+                      </span>
+                      <span style={{ fontSize: 11, color: T.inkFaint, width: 82, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{moeda(v.custo)}</span>
+                      <span style={{ fontSize: 10.5, color: T.inkFaint, width: 62, textAlign: 'right' }}>{v.projetos.size} proj.</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: 12 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 10 }}>Horas mês a mês</div>
+                <div style={{ display: 'flex', alignItems: 'flex-end', gap: 6, height: 128 }}>
+                  {porMesH.map(x => (
+                    <div key={x.m} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}
+                      title={`${x.m}: ${Math.round(x.h).toLocaleString('pt-BR')} horas`}>
+                      <div style={{ fontSize: 9.5, color: T.inkFaint, fontVariantNumeric: 'tabular-nums' }}>{Math.round(x.h / 100) / 10}k</div>
+                      <div style={{ width: '100%', height: `${Math.max((x.h / maxMesH) * 92, 3)}px`,
+                        background: T.terracotta, borderRadius: '3px 3px 0 0' }} />
+                      <div style={{ fontSize: 9.5, color: T.inkFaint }}>{x.m.slice(5)}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
+              <div style={{ padding: '10px 12px', borderBottom: `1px solid ${T.line}` }}>
+                <div style={{ fontSize: 12, fontWeight: 700 }}>Horas por projeto — {projetos.length} projetos</div>
+                <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 2 }}>
+                  A barra mostra a divisão entre setores. Clique no projeto para ver os números.
+                </div>
+              </div>
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 820 }}>
+                  <thead style={{ position: 'sticky', top: 0, zIndex: 1 }}><tr style={{ background: T.panelAlt }}>
+                    {['BR', 'Horas', 'Custo de mão de obra', 'Setores', 'Divisão entre setores'].map((h, i) => (
+                      <th key={h} style={{ padding: '9px 12px', fontSize: 11, fontWeight: 600, color: T.inkFaint,
+                        textAlign: i === 1 || i === 2 ? 'right' : 'left', whiteSpace: 'nowrap' }}>{h}</th>
+                    ))}
+                  </tr></thead>
+                  <tbody>
+                    {projetos.slice(0, 80).map(([br, v]) => {
+                      const partes = Object.entries(v.setores).sort((a2, b2) => b2[1] - a2[1]);
+                      const aberto = setorAberto === br;
+                      return (
+                        <React.Fragment key={br}>
+                          <tr onClick={() => setSetorAberto(aberto ? null : br)}
+                            style={{ borderBottom: `1px solid ${T.lineSoft}`, cursor: 'pointer' }}>
+                            <td style={{ padding: '7px 12px', fontSize: 12.5, fontWeight: 600 }}>{aberto ? '▾ ' : '▸ '}{br}</td>
+                            <td style={{ padding: '7px 12px', fontSize: 12, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                              {Math.round(v.horas).toLocaleString('pt-BR')} h
+                            </td>
+                            <td style={{ padding: '7px 12px', fontSize: 12.5, textAlign: 'right', fontWeight: 600, color: T.terracotta, fontVariantNumeric: 'tabular-nums' }}>{moeda(v.custo)}</td>
+                            <td style={{ padding: '7px 12px', fontSize: 11, color: T.inkFaint }}>{partes.length}</td>
+                            <td style={{ padding: '7px 12px', minWidth: 190 }}>
+                              <div style={{ display: 'flex', height: 9, borderRadius: 2, overflow: 'hidden', background: T.lineSoft }}>
+                                {partes.map(([sn, sh]) => (
+                                  <div key={sn} style={{ width: `${(sh / v.horas) * 100}%`, background: CORES[sn] || T.inkFaint }}
+                                    title={`${sn}: ${Math.round(sh)} h`} />
+                                ))}
+                              </div>
+                            </td>
+                          </tr>
+                          {aberto && (
+                            <tr><td colSpan={5} style={{ padding: '6px 12px 10px 30px', background: T.panelAlt }}>
+                              {partes.map(([sn, sh]) => (
+                                <div key={sn} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '2px 0' }}>
+                                  <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 2, background: CORES[sn] || T.inkFaint }} />
+                                  <span style={{ fontSize: 11.5, color: T.inkDim, width: 130 }}>{sn}</span>
+                                  <span style={{ fontSize: 11.5, width: 68, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{Math.round(sh)} h</span>
+                                  <span style={{ fontSize: 11, color: T.inkFaint, width: 76, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                                    {chAtual ? moeda(sh * Number(chAtual)) : '—'}
+                                  </span>
+                                  <span style={{ fontSize: 10.5, color: T.inkFaint }}>{Math.round(sh / v.horas * 100)}%</span>
+                                </div>
+                              ))}
+                            </td></tr>
+                          )}
+                        </React.Fragment>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              {projetos.length > 80 && (
+                <div style={{ padding: '8px 12px', fontSize: 10.5, color: T.inkFaint, borderTop: `1px solid ${T.line}` }}>
+                  mostrando os 80 maiores de {projetos.length}
+                </div>
+              )}
+            </div>
           </div>
         );
       })()}
