@@ -9120,28 +9120,21 @@ function MonitoramentoOP({ currentUser }) {
     setMarcandoCard(null);
   };
 
-  // Dispensar solicitacao: a SC pode ter sido cancelada na pratica sem que o
-  // Sankhya registre -- a 6319 continua 'L' e pendente la, mesmo o Alexandre
-  // tendo cancelado. Sem isso a linha fica pedindo card para sempre.
-  const dispensarSolicitacao = async (id, motivo) => {
+  // Marcar SC como cancelada. "Cancelada" aqui e o que a equipe quer dizer: eles
+  // pediram para Compras excluir a solicitacao. Isso NAO existe no Sankhya -- a
+  // 6319 continua 'L' e pendente la. Entao a marca e sinalizacao entre eles, nao
+  // reflexo do ERP, e por isso da para desmarcar.
+  const alternarCancelada = async (id, cancelada) => {
     if (marcandoCard === id) return;
     setMarcandoCard(id);
-    await supabase.from('solicitacoes_compra_planner').update({
-      card_planner_cancelado: true,
-      card_planner_cancelado_em: new Date().toISOString(),
-      card_planner_cancelado_por: currentUser?.nome || null,
-      motivo_cancelamento: motivo || null,
-    }).eq('id', id);
-    await carregarSolicitacoes();
-    setMarcandoCard(null);
-  };
-
-  const reativarSolicitacao = async (id) => {
-    setMarcandoCard(id);
-    await supabase.from('solicitacoes_compra_planner').update({
-      card_planner_cancelado: false, card_planner_cancelado_em: null,
-      card_planner_cancelado_por: null, motivo_cancelamento: null,
-    }).eq('id', id);
+    await supabase.from('solicitacoes_compra_planner').update(
+      cancelada
+        ? { card_planner_cancelado: true,
+            card_planner_cancelado_em: new Date().toISOString(),
+            card_planner_cancelado_por: currentUser?.nome || null }
+        : { card_planner_cancelado: false, card_planner_cancelado_em: null,
+            card_planner_cancelado_por: null }
+    ).eq('id', id);
     await carregarSolicitacoes();
     setMarcandoCard(null);
   };
@@ -9652,13 +9645,13 @@ function MonitoramentoOP({ currentUser }) {
                         <span style={{ fontSize: 10.5, fontWeight: 700, color: T.amberText, background: T.amberSoft, padding: '3px 8px', borderRadius: 4 }}>Aguardando Power Automate</span>
                       ) : s.card_planner_cancelado ? (
                         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                          <span title={`Dispensada${s.card_planner_cancelado_por ? ` por ${s.card_planner_cancelado_por}` : ''}${s.motivo_cancelamento ? ` — ${s.motivo_cancelamento}` : ''}`}
-                            style={{ fontSize: 10.5, fontWeight: 700, color: T.inkFaint, background: T.panelAlt, padding: '3px 8px', borderRadius: 4 }}>
-                            ✕ dispensada
+                          <span title={`Marcada como cancelada${s.card_planner_cancelado_por ? ` por ${s.card_planner_cancelado_por}` : ''}${s.card_planner_cancelado_em ? ` em ${fmtData(s.card_planner_cancelado_em)}` : ''}. Sinalização da equipe — no Sankhya a SC pode continuar aberta.`}
+                            style={{ fontSize: 10.5, fontWeight: 700, color: T.rustText, background: T.rustSoft, padding: '3px 8px', borderRadius: 4 }}>
+                            ✕ cancelada
                           </span>
-                          <button onClick={() => reativarSolicitacao(s.id)} disabled={marcandoCard === s.id}
+                          <button onClick={() => alternarCancelada(s.id, false)} disabled={marcandoCard === s.id}
                             style={{ fontSize: 10, color: T.blueText, background: 'transparent', border: 'none', cursor: 'pointer', textDecoration: 'underline', padding: 0 }}>
-                            reativar
+                            desmarcar
                           </button>
                         </span>
                       ) : (
@@ -9667,11 +9660,10 @@ function MonitoramentoOP({ currentUser }) {
                             style={{ fontSize: 11, fontWeight: 700, color: '#fff', background: T.terracotta, border: 'none', borderRadius: 5, padding: '5px 12px', cursor: marcandoCard === s.id ? 'default' : 'pointer', opacity: marcandoCard === s.id ? 0.6 : 1 }}>
                             {marcandoCard === s.id ? 'Marcando…' : 'Marcar pra criar Card'}
                           </button>
-                          <button onClick={() => { const m = window.prompt('Por que esta solicitação não precisa de card?'); if (m !== null) dispensarSolicitacao(s.id, m); }}
-                            disabled={marcandoCard === s.id}
-                            title="A SC foi cancelada ou não precisa de card. Ela sai da fila mas continua visível."
+                          <button onClick={() => alternarCancelada(s.id, true)} disabled={marcandoCard === s.id}
+                            title="Pediram para Compras excluir esta SC. Marca para a equipe se orientar — não altera nada no Sankhya."
                             style={{ fontSize: 10.5, color: T.inkFaint, background: 'transparent', border: `1px solid ${T.line}`, borderRadius: 5, padding: '4px 8px', cursor: 'pointer' }}>
-                            dispensar
+                            marcar cancelada
                           </button>
                         </span>
                       )}
