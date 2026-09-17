@@ -17148,7 +17148,7 @@ function Custeio() {
 
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', gap: 2 }}>
-          {[{ id: 'produto', l: 'Por produto' }, { id: 'br', l: 'Por projeto (BR)' }, { id: 'margem', l: 'Margem por venda' }, { id: 'orcado', l: 'Custo por projeto' }, { id: 'cif', l: 'Despesa fixa (CIF)' }, { id: 'absorcao', l: 'Custo por absorção' }, { id: 'analise', l: 'Análise' }, { id: 'qualidade', l: (() => {
+          {[{ id: 'produto', l: 'Por produto' }, { id: 'br', l: 'Por projeto (BR)' }, { id: 'margem', l: 'Margem por venda' }, { id: 'orcado', l: 'Custo por projeto' }, { id: 'cif', l: 'Despesa fixa (CIF)' }, { id: 'insumo', l: 'Insumos' }, { id: 'rateado', l: 'Rateado' }, { id: 'folha', l: 'Folha da produção' }, { id: 'absorcao', l: 'Custo por absorção' }, { id: 'analise', l: 'Análise' }, { id: 'qualidade', l: (() => {
             const ult = verif.length ? verif.reduce((m, v) => v.executado_em > m ? v.executado_em : m, '') : null;
             const falhas = ult ? verif.filter(v => v.executado_em === ult && !v.passou).length : 0;
             return falhas ? `Qualidade dos dados (${falhas})` : 'Qualidade dos dados';
@@ -17718,301 +17718,6 @@ function Custeio() {
               );
             })()}
 
-            {folhaCentro.length > 0 && (() => {
-              // FOLHA DE PRODUCAO. Vem da planilha do RH, nao do Sankhya: 95%
-              // dos titulos de folha estao em <SEM CENTRO DE RESULTADO>, entao
-              // o financeiro nao distribui por setor. A planilha e a unica
-              // fonte da distribuicao.
-              const salario = folhaCentro.reduce((s2, f) => s2 + Number(f.salario_base || 0), 0);
-              const encargo = folhaCentro.reduce((s2, f) => s2 + Number(f.encargo || 0), 0);
-              const provisao = folhaCentro.reduce((s2, f) => s2 + Number(f.provisao || 0), 0);
-              const encProv = folhaCentro.reduce((s2, f) => s2 + Number(f.encargo_da_provisao || 0), 0);
-              const custoMes = folhaCentro.reduce((s2, f) => s2 + Number(f.custo_mes || 0), 0);
-              const pessoas = folhaCentro.reduce((s2, f) => s2 + Number(f.pessoas || 0), 0);
-              const ordenados = [...folhaCentro].sort((a2, b2) => Number(b2.custo_mes) - Number(a2.custo_mes));
-              const maxC = Math.max(1, ...ordenados.map(f => Number(f.custo_mes)));
-              const porConfirmar = encargos.filter(e => e.ativo && !e.confirmado);
-              return (
-                <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: 12 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
-                    <span style={{ fontSize: 12, fontWeight: 700 }}>
-                      Folha de produção — {pessoas} pessoas em {folhaCentro.length} centros
-                    </span>
-                    <span style={{ fontSize: 13, fontWeight: 700, color: T.terracotta, fontVariantNumeric: 'tabular-nums' }}>
-                      {moeda(custoMes)}<span style={{ fontSize: 10.5, fontWeight: 400, color: T.inkFaint }}> / mês</span>
-                    </span>
-                  </div>
-                  <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 3, marginBottom: 10, maxWidth: 800 }}>
-                    O salário base vem da planilha do RH, não do Sankhya: 95% dos títulos de folha estão sem centro
-                    de resultado, então o financeiro não distribui por setor. Só entram os centros de produção —
-                    engenharia comercial e administrativo ficam de fora.
-                  </div>
-
-                  <div style={{ display: 'grid', gap: 8, gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', marginBottom: 12 }}>
-                    {[
-                      { t: 'Salário base', v: salario, c: T.ink },
-                      { t: 'Encargo sobre salário', v: encargo, c: T.inkDim },
-                      { t: 'Provisão 13º e férias', v: provisao, c: T.inkDim },
-                      { t: 'Encargo da provisão', v: encProv, c: T.inkDim },
-                      { t: 'Custo total', v: custoMes, c: T.terracotta },
-                    ].map(k => (
-                      <div key={k.t} style={{ background: T.panelAlt, borderRadius: 7, padding: '8px 11px' }}>
-                        <div style={{ fontSize: 10, color: T.inkFaint, minHeight: 24 }}>{k.t}</div>
-                        <div style={{ fontSize: 14.5, fontWeight: 700, color: k.c, fontVariantNumeric: 'tabular-nums' }}>{moeda(k.v)}</div>
-                      </div>
-                    ))}
-                  </div>
-
-                  {porConfirmar.length > 0 && (
-                    <div style={{ fontSize: 11, color: T.amberText, background: T.amberSoft, border: `1px solid ${T.amberText}`,
-                      borderRadius: 6, padding: '8px 11px', marginBottom: 12 }}>
-                      <strong>{porConfirmar.map(e => e.componente).join(' e ')}</strong>{' '}
-                      {porConfirmar.length === 1 ? 'ainda não foi confirmado' : 'ainda não foram confirmados'} —
-                      somam {porConfirmar.reduce((s2, e) => s2 + Number(e.aliquota), 0).toFixed(1)} dos{' '}
-                      {encargos.filter(e => e.ativo).reduce((s2, e) => s2 + Number(e.aliquota), 0).toFixed(1)} pontos de encargo.
-                      O RAT depende do CNAE e o FAP do histórico de acidentes; estão na GFIP.
-                    </div>
-                  )}
-
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 5, marginBottom: 12 }}>
-                    {ordenados.map(f => (
-                      <div key={f.centro_custo} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <span style={{ fontSize: 11.5, color: T.inkDim, width: 250, whiteSpace: 'nowrap',
-                          overflow: 'hidden', textOverflow: 'ellipsis' }} title={f.centro_custo}>{f.centro_custo}</span>
-                        <span style={{ fontSize: 10.5, color: T.inkFaint, width: 58, textAlign: 'right' }}>
-                          {f.pessoas} {f.pessoas === 1 ? 'pessoa' : 'pessoas'}
-                        </span>
-                        <div style={{ flex: 1, height: 12, background: T.lineSoft, borderRadius: 3, overflow: 'hidden' }}>
-                          <div style={{ height: '100%', width: `${(Number(f.custo_mes) / maxC) * 100}%`, background: T.terracotta }} />
-                        </div>
-                        <span style={{ fontSize: 11, color: T.inkFaint, width: 82, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}
-                          title="Salário base, sem encargo">{moeda(f.salario_base)}</span>
-                        <span style={{ fontSize: 11.5, fontWeight: 600, width: 88, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}
-                          title="Com encargo e provisão">{moeda(f.custo_mes)}</span>
-                      </div>
-                    ))}
-                  </div>
-
-                  <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', fontSize: 10.5, color: T.inkFaint,
-                    paddingTop: 8, borderTop: `1px solid ${T.lineSoft}` }}>
-                    {encargos.filter(e => e.ativo).sort((a2, b2) => Number(b2.aliquota) - Number(a2.aliquota)).map(e => (
-                      <span key={e.componente} title={e.observacao || ''}
-                        style={{ color: e.confirmado ? T.inkFaint : T.amberText }}>
-                        {e.confirmado ? '' : '⚠ '}{e.componente} {Number(e.aliquota).toFixed(2).replace('.', ',')}%
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              );
-            })()}
-
-            {(() => {
-              // RATEIO DO SANKHYA: o financeiro reparte a nota por centro de
-              // custo na propria tela de compras. E a fonte certa da fatia de
-              // producao -- nao precisa estimar percentual nenhum.
-              const doAnoR = rateioNat.filter(r => String(r.competencia).slice(0, 4) === String(anoCif));
-              if (!doAnoR.length) return null;
-              const porNat = {};
-              doAnoR.forEach(r => {
-                const k = r.descrnat || '(sem natureza)';
-                if (!porNat[k]) porNat[k] = { total: 0, prod: 0, notas: 0, jaNoCif: false };
-                porNat[k].total += Number(r.total) || 0;
-                porNat[k].prod += Number(r.producao) || 0;
-                porNat[k].notas += Number(r.notas) || 0;
-                porNat[k].jaNoCif = porNat[k].jaNoCif || r.ja_no_cif;
-              });
-              // FORA o que ja entra no CIF pela regra de natureza -- aluguel de
-              // galpao e energia. Somar os dois contaria duas vezes.
-              const nats = Object.entries(porNat)
-                .filter(([, v]) => v.prod > 0 && !v.jaNoCif)
-                .sort((a2, b2) => b2[1].prod - a2[1].prod);
-              if (!nats.length) return null;
-              const totalProd = nats.reduce((s2, [, v]) => s2 + v.prod, 0);
-              const duplicado = Object.entries(porNat).filter(([, v]) => v.jaNoCif && v.prod > 0);
-              const maxProd = nats[0][1].prod;
-
-              // mes a mes, so o que nao duplica
-              const natsFora = new Set(nats.map(([k]) => k));
-              const mesesR = [...new Set(doAnoR.map(r => r.competencia))].sort();
-              const porMesR = mesesR.map(m => ({
-                m, v: doAnoR.filter(r => r.competencia === m && natsFora.has(r.descrnat || '(sem natureza)'))
-                            .reduce((s2, r) => s2 + (Number(r.producao) || 0), 0),
-              })).filter(x => x.v > 0);
-              const maxMesR = Math.max(1, ...porMesR.map(x => x.v));
-              const mediaR = porMesR.length ? porMesR.reduce((s2, x) => s2 + x.v, 0) / porMesR.length : 0;
-              return (
-                <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: 12 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
-                    <span style={{ fontSize: 12, fontWeight: 700 }}>Rateio do Sankhya por centro de custo — {anoCif}</span>
-                    <span style={{ fontSize: 13, fontWeight: 700, color: T.terracotta, fontVariantNumeric: 'tabular-nums' }}>{moeda(totalProd)}</span>
-                  </div>
-                  <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 3, marginBottom: 10, maxWidth: 800 }}>
-                    O financeiro já reparte estas notas por centro de custo na tela de compras. A fatia de produção
-                    usa <strong>esse</strong> percentual, não uma estimativa.
-                    {duplicado.length > 0 && (
-                      <> Fora da lista: {duplicado.map(([k]) => k).join(', ')} — já entram no CIF pela regra de
-                      natureza, e apareceriam duas vezes.</>
-                    )}
-                  </div>
-
-                  {porMesR.length > 1 && (
-                    <div style={{ display: 'flex', alignItems: 'flex-end', gap: 6, height: 104, marginBottom: 14 }}>
-                      {porMesR.map(x => (
-                        <div key={x.m} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}
-                          title={`${x.m}: ${moeda(x.v)}`}>
-                          <div style={{ fontSize: 9.5, color: T.inkFaint, fontVariantNumeric: 'tabular-nums' }}>{(x.v / 1000).toFixed(0)}k</div>
-                          <div style={{ width: '100%', height: `${Math.max((x.v / maxMesR) * 72, 3)}px`,
-                            background: x.v > mediaR * 1.15 ? T.amberText : T.oliveText, borderRadius: '3px 3px 0 0' }} />
-                          <div style={{ fontSize: 9.5, color: T.inkFaint }}>{x.m.slice(5)}</div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-                    {nats.slice(0, 16).map(([nome, v]) => {
-                      const notas = rateioDet.filter(d => (d.descrnat || '(sem natureza)') === nome
-                        && String(d.competencia).slice(0, 4) === String(anoCif));
-                      const excluida = notas.length > 0 && notas.every(d => d.excluido);
-                      const aberto = rateioAberto === nome;
-                      return (
-                        <div key={nome}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 8,
-                            opacity: excluida ? 0.45 : 1 }}>
-                            <span onClick={() => setRateioAberto(aberto ? null : nome)}
-                              style={{ fontSize: 11.5, color: T.inkDim, width: 220, cursor: 'pointer',
-                                whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-                                textDecoration: excluida ? 'line-through' : 'none' }}
-                              title={`${nome} — clique para ver as ${notas.length} notas`}>
-                              {aberto ? '▾ ' : '▸ '}{nome}
-                            </span>
-                            <div style={{ flex: 1, height: 12, background: T.lineSoft, borderRadius: 3, overflow: 'hidden' }}>
-                              <div style={{ height: '100%', width: `${(v.prod / maxProd) * 100}%`,
-                                background: excluida ? T.inkFaint : T.oliveText }} />
-                            </div>
-                            <span style={{ fontSize: 11.5, fontWeight: 600, width: 88, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{moeda(v.prod)}</span>
-                            <span style={{ fontSize: 10.5, color: T.inkFaint, width: 74, textAlign: 'right' }}
-                              title="Fatia da nota que o financeiro atribuiu a centros de produção">
-                              {Math.round(v.prod / v.total * 100)}% de {moeda(v.total)}
-                            </span>
-                            <button onClick={() => alternarExclusao(nome, null)} disabled={excBusy != null}
-                              title={excluida ? 'Voltar para o rateio' : 'Tirar do rateio — não é custo de fábrica'}
-                              style={{ fontFamily: 'inherit', fontSize: 10.5, padding: '3px 9px', borderRadius: 4,
-                                cursor: 'pointer', border: `1px solid ${T.line}`, background: 'transparent',
-                                color: excluida ? T.blueText : T.inkFaint, width: 74 }}>
-                              {excBusy === nome ? '…' : excluida ? 'voltar' : 'excluir'}
-                            </button>
-                          </div>
-                          {aberto && (
-                            <div style={{ margin: '4px 0 8px 18px', borderLeft: `2px solid ${T.lineSoft}`, paddingLeft: 10 }}>
-                              {notas.sort((x, y) => Number(y.valor_producao) - Number(x.valor_producao)).slice(0, 12).map(d => (
-                                <div key={`${d.origem}-${d.documento}`} style={{ display: 'flex', alignItems: 'center',
-                                  gap: 8, padding: '3px 0', opacity: d.excluido ? 0.45 : 1 }}>
-                                  <span style={{ fontSize: 10.5, color: T.inkFaint, width: 58 }}>{d.competencia?.slice(5)}/{d.competencia?.slice(2, 4)}</span>
-                                  <span style={{ fontSize: 10.5, color: T.inkFaint, width: 56 }}>{d.origem === 'E' ? 'nota' : 'título'} {d.documento}</span>
-                                  <span style={{ fontSize: 11, color: T.inkDim, flex: 1, whiteSpace: 'nowrap',
-                                    overflow: 'hidden', textOverflow: 'ellipsis',
-                                    textDecoration: d.excluido ? 'line-through' : 'none' }}
-                                    title={d.centros_producao || ''}>{d.nomeparc || '—'}</span>
-                                  <span style={{ fontSize: 10.5, color: T.inkFaint, width: 62, textAlign: 'right' }}>{d.centros} centros</span>
-                                  <span style={{ fontSize: 11, fontWeight: 600, width: 84, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{moeda(d.valor_producao)}</span>
-                                  <button onClick={() => alternarExclusao(null, d.documento)} disabled={excBusy != null}
-                                    style={{ fontFamily: 'inherit', fontSize: 10, padding: '2px 7px', borderRadius: 4,
-                                      cursor: 'pointer', border: `1px solid ${T.line}`, background: 'transparent',
-                                      color: d.excluido ? T.blueText : T.inkFaint, width: 60 }}>
-                                    {d.excluido ? 'voltar' : 'excluir'}
-                                  </button>
-                                </div>
-                              ))}
-                              {notas.length > 12 && (
-                                <div style={{ fontSize: 10, color: T.inkFaint, marginTop: 4 }}>
-                                  mostrando as 12 maiores de {notas.length}
-                                </div>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                  <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 10, paddingTop: 8, borderTop: `1px solid ${T.lineSoft}` }}>
-                    São <strong style={{ color: T.ink }}>{moeda(mediaR)}</strong> por mês de despesa de produção com
-                    rateio pronto, sem contar o que já está no CIF. Ainda não entra no rateio dos projetos:
-                    falta decidir com você.
-                  </div>
-                </div>
-              );
-            })()}
-
-            {(() => {
-              // INSUMOS DE FABRICA: materia-prima comprada em lote, sem projeto.
-              // Massa de borracha, Chemitac, thinner, pallet, arame. A producao
-              // consome em todos os projetos, entao nao e custo direto de
-              // nenhum -- vira pool e rateia junto com o CIF, pela mesma base.
-              const doAnoIns = insumoMes.filter(i => String(i.competencia).slice(0, 4) === String(anoCif));
-              if (!doAnoIns.length) return null;
-              const totalIns = doAnoIns.reduce((s2, i) => s2 + (Number(i.valor) || 0), 0);
-              const porItem = {};
-              doAnoIns.forEach(i => {
-                const k = i.descr_prod || `cod ${i.cod_prod}`;
-                porItem[k] = (porItem[k] || 0) + (Number(i.valor) || 0);
-              });
-              // Com o almoxarifado inteiro no pool sao mais de mil itens: mostra
-              // os 12 maiores e agrupa o resto, senao a lista vira um extrato.
-              const todosItens = Object.entries(porItem).sort((a2, b2) => b2[1] - a2[1]);
-              const TOPO = 12;
-              const resto = todosItens.slice(TOPO).reduce((s2, x) => s2 + x[1], 0);
-              const itens = resto > 0
-                ? [...todosItens.slice(0, TOPO), [`outros ${todosItens.length - TOPO} itens`, resto]]
-                : todosItens;
-              const mesesIns = [...new Set(doAnoIns.map(i => i.competencia))].sort();
-              const porMesIns = mesesIns.map(m => ({
-                m, v: doAnoIns.filter(i => i.competencia === m).reduce((s2, i) => s2 + (Number(i.valor) || 0), 0),
-              }));
-              const maxIns = Math.max(1, ...porMesIns.map(x => x.v));
-              const mediaIns = totalIns / (porMesIns.length || 1);
-              return (
-                <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: 12 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
-                    <span style={{ fontSize: 12, fontWeight: 700 }}>Matéria-prima de insumo — {anoCif}</span>
-                    <span style={{ fontSize: 13, fontWeight: 700, color: T.terracotta, fontVariantNumeric: 'tabular-nums' }}>{moeda(totalIns)}</span>
-                  </div>
-                  <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 3, marginBottom: 10, maxWidth: 760 }}>
-                    Comprada em lote, sem projeto, e consumida em todos. Não é custo direto de nenhum: entra como
-                    pool e rateia pela mesma base do CIF — o custo direto da parcela entregue em cada mês.
-                    Entram os itens da lista de consumíveis e os produtos cujo <strong>&ldquo;Usado como&rdquo;</strong> no
-                    cadastro é <strong>Consumo</strong> ou <strong>Outros insumos</strong>.
-                    {todosItens.length > TOPO ? ` São ${todosItens.length} itens; a lista mostra os ${TOPO} maiores.` : ''}
-                  </div>
-
-                  <div style={{ display: 'flex', alignItems: 'flex-end', gap: 6, height: 100, marginBottom: 12 }}>
-                    {porMesIns.map(x => (
-                      <div key={x.m} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}
-                        title={`${x.m}: ${moeda(x.v)}`}>
-                        <div style={{ fontSize: 9.5, color: T.inkFaint, fontVariantNumeric: 'tabular-nums' }}>{(x.v / 1000).toFixed(0)}k</div>
-                        <div style={{ width: '100%', height: `${Math.max((x.v / maxIns) * 70, 3)}px`,
-                          background: x.v > mediaIns * 1.15 ? T.amberText : T.blueText, borderRadius: '3px 3px 0 0' }} />
-                        <div style={{ fontSize: 9.5, color: T.inkFaint }}>{x.m.slice(5)}</div>
-                      </div>
-                    ))}
-                  </div>
-
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-                    {itens.map(([nome, v]) => (
-                      <div key={nome} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <span style={{ fontSize: 11.5, color: T.inkDim, width: 250, whiteSpace: 'nowrap',
-                          overflow: 'hidden', textOverflow: 'ellipsis' }} title={nome}>{nome}</span>
-                        <div style={{ flex: 1, height: 12, background: T.lineSoft, borderRadius: 3, overflow: 'hidden' }}>
-                          <div style={{ height: '100%', width: `${(v / (itens[0]?.[1] || 1)) * 100}%`, background: T.blueText }} />
-                        </div>
-                        <span style={{ fontSize: 11.5, fontWeight: 600, width: 84, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{moeda(v)}</span>
-                        <span style={{ fontSize: 10.5, color: T.inkFaint, width: 40, textAlign: 'right' }}>{(v / totalIns * 100).toFixed(0)}%</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              );
-            })()}
-
             {naoClass > 0 && (
               <div style={{ fontSize: 11.5, color: T.rustText, background: `${T.rustSoft}44`, border: `1px solid ${T.rustText}`, padding: '9px 12px', borderRadius: 6 }}>
                 {moeda(naoClass)} ainda sem regra de classificação. Esse valor <strong>não</strong> está sendo rateado.
@@ -18121,6 +17826,355 @@ function Custeio() {
                 </table>
               </div>
             </div>
+
+          </div>
+        );
+      })()}
+
+      {aba === 'insumo' && (() => {
+        const anos = [...new Set(cifMes.map(m => m.ano))].sort().reverse();
+        const doAno = cifMes.filter(m => m.ano === anoCif);
+        const meses = [...new Set(doAno.map(m => m.competencia))].sort();
+        return (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              {anos.map(a2 => (
+                <button key={a2} onClick={() => setAnoCif(a2)} style={{
+                  fontFamily: 'inherit', fontSize: 12.5, fontWeight: anoCif === a2 ? 700 : 400, cursor: 'pointer',
+                  padding: '6px 14px', borderRadius: 6, border: `1px solid ${anoCif === a2 ? T.ink : T.line}`,
+                  background: anoCif === a2 ? T.ink : T.panel, color: anoCif === a2 ? T.panel : T.inkDim }}>{a2}</button>
+              ))}
+            </div>
+              {(() => {
+                // INSUMOS DE FABRICA: materia-prima comprada em lote, sem projeto.
+                // Massa de borracha, Chemitac, thinner, pallet, arame. A producao
+                // consome em todos os projetos, entao nao e custo direto de
+                // nenhum -- vira pool e rateia junto com o CIF, pela mesma base.
+                const doAnoIns = insumoMes.filter(i => String(i.competencia).slice(0, 4) === String(anoCif));
+                if (!doAnoIns.length) return null;
+                const totalIns = doAnoIns.reduce((s2, i) => s2 + (Number(i.valor) || 0), 0);
+                const porItem = {};
+                doAnoIns.forEach(i => {
+                  const k = i.descr_prod || `cod ${i.cod_prod}`;
+                  porItem[k] = (porItem[k] || 0) + (Number(i.valor) || 0);
+                });
+                // Com o almoxarifado inteiro no pool sao mais de mil itens: mostra
+                // os 12 maiores e agrupa o resto, senao a lista vira um extrato.
+                const todosItens = Object.entries(porItem).sort((a2, b2) => b2[1] - a2[1]);
+                const TOPO = 12;
+                const resto = todosItens.slice(TOPO).reduce((s2, x) => s2 + x[1], 0);
+                const itens = resto > 0
+                  ? [...todosItens.slice(0, TOPO), [`outros ${todosItens.length - TOPO} itens`, resto]]
+                  : todosItens;
+                const mesesIns = [...new Set(doAnoIns.map(i => i.competencia))].sort();
+                const porMesIns = mesesIns.map(m => ({
+                  m, v: doAnoIns.filter(i => i.competencia === m).reduce((s2, i) => s2 + (Number(i.valor) || 0), 0),
+                }));
+                const maxIns = Math.max(1, ...porMesIns.map(x => x.v));
+                const mediaIns = totalIns / (porMesIns.length || 1);
+                return (
+                  <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: 12 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+                      <span style={{ fontSize: 12, fontWeight: 700 }}>Matéria-prima de insumo — {anoCif}</span>
+                      <span style={{ fontSize: 13, fontWeight: 700, color: T.terracotta, fontVariantNumeric: 'tabular-nums' }}>{moeda(totalIns)}</span>
+                    </div>
+                    <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 3, marginBottom: 10, maxWidth: 760 }}>
+                      Comprada em lote, sem projeto, e consumida em todos. Não é custo direto de nenhum: entra como
+                      pool e rateia pela mesma base do CIF — o custo direto da parcela entregue em cada mês.
+                      Entram os itens da lista de consumíveis e os produtos cujo <strong>&ldquo;Usado como&rdquo;</strong> no
+                      cadastro é <strong>Consumo</strong> ou <strong>Outros insumos</strong>.
+                      {todosItens.length > TOPO ? ` São ${todosItens.length} itens; a lista mostra os ${TOPO} maiores.` : ''}
+                    </div>
+
+                    <div style={{ display: 'flex', alignItems: 'flex-end', gap: 6, height: 100, marginBottom: 12 }}>
+                      {porMesIns.map(x => (
+                        <div key={x.m} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}
+                          title={`${x.m}: ${moeda(x.v)}`}>
+                          <div style={{ fontSize: 9.5, color: T.inkFaint, fontVariantNumeric: 'tabular-nums' }}>{(x.v / 1000).toFixed(0)}k</div>
+                          <div style={{ width: '100%', height: `${Math.max((x.v / maxIns) * 70, 3)}px`,
+                            background: x.v > mediaIns * 1.15 ? T.amberText : T.blueText, borderRadius: '3px 3px 0 0' }} />
+                          <div style={{ fontSize: 9.5, color: T.inkFaint }}>{x.m.slice(5)}</div>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                      {itens.map(([nome, v]) => (
+                        <div key={nome} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <span style={{ fontSize: 11.5, color: T.inkDim, width: 250, whiteSpace: 'nowrap',
+                            overflow: 'hidden', textOverflow: 'ellipsis' }} title={nome}>{nome}</span>
+                          <div style={{ flex: 1, height: 12, background: T.lineSoft, borderRadius: 3, overflow: 'hidden' }}>
+                            <div style={{ height: '100%', width: `${(v / (itens[0]?.[1] || 1)) * 100}%`, background: T.blueText }} />
+                          </div>
+                          <span style={{ fontSize: 11.5, fontWeight: 600, width: 84, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{moeda(v)}</span>
+                          <span style={{ fontSize: 10.5, color: T.inkFaint, width: 40, textAlign: 'right' }}>{(v / totalIns * 100).toFixed(0)}%</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
+
+          </div>
+        );
+      })()}
+
+      {aba === 'rateado' && (() => {
+        const anos = [...new Set(cifMes.map(m => m.ano))].sort().reverse();
+        const doAno = cifMes.filter(m => m.ano === anoCif);
+        const meses = [...new Set(doAno.map(m => m.competencia))].sort();
+        return (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              {anos.map(a2 => (
+                <button key={a2} onClick={() => setAnoCif(a2)} style={{
+                  fontFamily: 'inherit', fontSize: 12.5, fontWeight: anoCif === a2 ? 700 : 400, cursor: 'pointer',
+                  padding: '6px 14px', borderRadius: 6, border: `1px solid ${anoCif === a2 ? T.ink : T.line}`,
+                  background: anoCif === a2 ? T.ink : T.panel, color: anoCif === a2 ? T.panel : T.inkDim }}>{a2}</button>
+              ))}
+            </div>
+              {(() => {
+                // RATEIO DO SANKHYA: o financeiro reparte a nota por centro de
+                // custo na propria tela de compras. E a fonte certa da fatia de
+                // producao -- nao precisa estimar percentual nenhum.
+                const doAnoR = rateioNat.filter(r => String(r.competencia).slice(0, 4) === String(anoCif));
+                if (!doAnoR.length) return null;
+                const porNat = {};
+                doAnoR.forEach(r => {
+                  const k = r.descrnat || '(sem natureza)';
+                  if (!porNat[k]) porNat[k] = { total: 0, prod: 0, notas: 0, jaNoCif: false };
+                  porNat[k].total += Number(r.total) || 0;
+                  porNat[k].prod += Number(r.producao) || 0;
+                  porNat[k].notas += Number(r.notas) || 0;
+                  porNat[k].jaNoCif = porNat[k].jaNoCif || r.ja_no_cif;
+                });
+                // FORA o que ja entra no CIF pela regra de natureza -- aluguel de
+                // galpao e energia. Somar os dois contaria duas vezes.
+                const nats = Object.entries(porNat)
+                  .filter(([, v]) => v.prod > 0 && !v.jaNoCif)
+                  .sort((a2, b2) => b2[1].prod - a2[1].prod);
+                if (!nats.length) return null;
+                const totalProd = nats.reduce((s2, [, v]) => s2 + v.prod, 0);
+                const duplicado = Object.entries(porNat).filter(([, v]) => v.jaNoCif && v.prod > 0);
+                const maxProd = nats[0][1].prod;
+
+                // mes a mes, so o que nao duplica
+                const natsFora = new Set(nats.map(([k]) => k));
+                const mesesR = [...new Set(doAnoR.map(r => r.competencia))].sort();
+                const porMesR = mesesR.map(m => ({
+                  m, v: doAnoR.filter(r => r.competencia === m && natsFora.has(r.descrnat || '(sem natureza)'))
+                              .reduce((s2, r) => s2 + (Number(r.producao) || 0), 0),
+                })).filter(x => x.v > 0);
+                const maxMesR = Math.max(1, ...porMesR.map(x => x.v));
+                const mediaR = porMesR.length ? porMesR.reduce((s2, x) => s2 + x.v, 0) / porMesR.length : 0;
+                return (
+                  <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: 12 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+                      <span style={{ fontSize: 12, fontWeight: 700 }}>Rateio do Sankhya por centro de custo — {anoCif}</span>
+                      <span style={{ fontSize: 13, fontWeight: 700, color: T.terracotta, fontVariantNumeric: 'tabular-nums' }}>{moeda(totalProd)}</span>
+                    </div>
+                    <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 3, marginBottom: 10, maxWidth: 800 }}>
+                      O financeiro já reparte estas notas por centro de custo na tela de compras. A fatia de produção
+                      usa <strong>esse</strong> percentual, não uma estimativa.
+                      {duplicado.length > 0 && (
+                        <> Fora da lista: {duplicado.map(([k]) => k).join(', ')} — já entram no CIF pela regra de
+                        natureza, e apareceriam duas vezes.</>
+                      )}
+                    </div>
+
+                    {porMesR.length > 1 && (
+                      <div style={{ display: 'flex', alignItems: 'flex-end', gap: 6, height: 104, marginBottom: 14 }}>
+                        {porMesR.map(x => (
+                          <div key={x.m} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}
+                            title={`${x.m}: ${moeda(x.v)}`}>
+                            <div style={{ fontSize: 9.5, color: T.inkFaint, fontVariantNumeric: 'tabular-nums' }}>{(x.v / 1000).toFixed(0)}k</div>
+                            <div style={{ width: '100%', height: `${Math.max((x.v / maxMesR) * 72, 3)}px`,
+                              background: x.v > mediaR * 1.15 ? T.amberText : T.oliveText, borderRadius: '3px 3px 0 0' }} />
+                            <div style={{ fontSize: 9.5, color: T.inkFaint }}>{x.m.slice(5)}</div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                      {nats.slice(0, 16).map(([nome, v]) => {
+                        const notas = rateioDet.filter(d => (d.descrnat || '(sem natureza)') === nome
+                          && String(d.competencia).slice(0, 4) === String(anoCif));
+                        const excluida = notas.length > 0 && notas.every(d => d.excluido);
+                        const aberto = rateioAberto === nome;
+                        return (
+                          <div key={nome}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8,
+                              opacity: excluida ? 0.45 : 1 }}>
+                              <span onClick={() => setRateioAberto(aberto ? null : nome)}
+                                style={{ fontSize: 11.5, color: T.inkDim, width: 220, cursor: 'pointer',
+                                  whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                                  textDecoration: excluida ? 'line-through' : 'none' }}
+                                title={`${nome} — clique para ver as ${notas.length} notas`}>
+                                {aberto ? '▾ ' : '▸ '}{nome}
+                              </span>
+                              <div style={{ flex: 1, height: 12, background: T.lineSoft, borderRadius: 3, overflow: 'hidden' }}>
+                                <div style={{ height: '100%', width: `${(v.prod / maxProd) * 100}%`,
+                                  background: excluida ? T.inkFaint : T.oliveText }} />
+                              </div>
+                              <span style={{ fontSize: 11.5, fontWeight: 600, width: 88, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{moeda(v.prod)}</span>
+                              <span style={{ fontSize: 10.5, color: T.inkFaint, width: 74, textAlign: 'right' }}
+                                title="Fatia da nota que o financeiro atribuiu a centros de produção">
+                                {Math.round(v.prod / v.total * 100)}% de {moeda(v.total)}
+                              </span>
+                              <button onClick={() => alternarExclusao(nome, null)} disabled={excBusy != null}
+                                title={excluida ? 'Voltar para o rateio' : 'Tirar do rateio — não é custo de fábrica'}
+                                style={{ fontFamily: 'inherit', fontSize: 10.5, padding: '3px 9px', borderRadius: 4,
+                                  cursor: 'pointer', border: `1px solid ${T.line}`, background: 'transparent',
+                                  color: excluida ? T.blueText : T.inkFaint, width: 74 }}>
+                                {excBusy === nome ? '…' : excluida ? 'voltar' : 'excluir'}
+                              </button>
+                            </div>
+                            {aberto && (
+                              <div style={{ margin: '4px 0 8px 18px', borderLeft: `2px solid ${T.lineSoft}`, paddingLeft: 10 }}>
+                                {notas.sort((x, y) => Number(y.valor_producao) - Number(x.valor_producao)).slice(0, 12).map(d => (
+                                  <div key={`${d.origem}-${d.documento}`} style={{ display: 'flex', alignItems: 'center',
+                                    gap: 8, padding: '3px 0', opacity: d.excluido ? 0.45 : 1 }}>
+                                    <span style={{ fontSize: 10.5, color: T.inkFaint, width: 58 }}>{d.competencia?.slice(5)}/{d.competencia?.slice(2, 4)}</span>
+                                    <span style={{ fontSize: 10.5, color: T.inkFaint, width: 56 }}>{d.origem === 'E' ? 'nota' : 'título'} {d.documento}</span>
+                                    <span style={{ fontSize: 11, color: T.inkDim, flex: 1, whiteSpace: 'nowrap',
+                                      overflow: 'hidden', textOverflow: 'ellipsis',
+                                      textDecoration: d.excluido ? 'line-through' : 'none' }}
+                                      title={d.centros_producao || ''}>{d.nomeparc || '—'}</span>
+                                    <span style={{ fontSize: 10.5, color: T.inkFaint, width: 62, textAlign: 'right' }}>{d.centros} centros</span>
+                                    <span style={{ fontSize: 11, fontWeight: 600, width: 84, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{moeda(d.valor_producao)}</span>
+                                    <button onClick={() => alternarExclusao(null, d.documento)} disabled={excBusy != null}
+                                      style={{ fontFamily: 'inherit', fontSize: 10, padding: '2px 7px', borderRadius: 4,
+                                        cursor: 'pointer', border: `1px solid ${T.line}`, background: 'transparent',
+                                        color: d.excluido ? T.blueText : T.inkFaint, width: 60 }}>
+                                      {d.excluido ? 'voltar' : 'excluir'}
+                                    </button>
+                                  </div>
+                                ))}
+                                {notas.length > 12 && (
+                                  <div style={{ fontSize: 10, color: T.inkFaint, marginTop: 4 }}>
+                                    mostrando as 12 maiores de {notas.length}
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 10, paddingTop: 8, borderTop: `1px solid ${T.lineSoft}` }}>
+                      São <strong style={{ color: T.ink }}>{moeda(mediaR)}</strong> por mês de despesa de produção com
+                      rateio pronto, sem contar o que já está no CIF. Ainda não entra no rateio dos projetos:
+                      falta decidir com você.
+                    </div>
+                  </div>
+                );
+              })()}
+
+          </div>
+        );
+      })()}
+
+      {aba === 'folha' && (() => {
+        const anos = [...new Set(cifMes.map(m => m.ano))].sort().reverse();
+        const doAno = cifMes.filter(m => m.ano === anoCif);
+        const meses = [...new Set(doAno.map(m => m.competencia))].sort();
+        return (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              {anos.map(a2 => (
+                <button key={a2} onClick={() => setAnoCif(a2)} style={{
+                  fontFamily: 'inherit', fontSize: 12.5, fontWeight: anoCif === a2 ? 700 : 400, cursor: 'pointer',
+                  padding: '6px 14px', borderRadius: 6, border: `1px solid ${anoCif === a2 ? T.ink : T.line}`,
+                  background: anoCif === a2 ? T.ink : T.panel, color: anoCif === a2 ? T.panel : T.inkDim }}>{a2}</button>
+              ))}
+            </div>
+              {folhaCentro.length > 0 && (() => {
+                // FOLHA DE PRODUCAO. Vem da planilha do RH, nao do Sankhya: 95%
+                // dos titulos de folha estao em <SEM CENTRO DE RESULTADO>, entao
+                // o financeiro nao distribui por setor. A planilha e a unica
+                // fonte da distribuicao.
+                const salario = folhaCentro.reduce((s2, f) => s2 + Number(f.salario_base || 0), 0);
+                const encargo = folhaCentro.reduce((s2, f) => s2 + Number(f.encargo || 0), 0);
+                const provisao = folhaCentro.reduce((s2, f) => s2 + Number(f.provisao || 0), 0);
+                const encProv = folhaCentro.reduce((s2, f) => s2 + Number(f.encargo_da_provisao || 0), 0);
+                const custoMes = folhaCentro.reduce((s2, f) => s2 + Number(f.custo_mes || 0), 0);
+                const pessoas = folhaCentro.reduce((s2, f) => s2 + Number(f.pessoas || 0), 0);
+                const ordenados = [...folhaCentro].sort((a2, b2) => Number(b2.custo_mes) - Number(a2.custo_mes));
+                const maxC = Math.max(1, ...ordenados.map(f => Number(f.custo_mes)));
+                const porConfirmar = encargos.filter(e => e.ativo && !e.confirmado);
+                return (
+                  <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: 12 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+                      <span style={{ fontSize: 12, fontWeight: 700 }}>
+                        Folha de produção — {pessoas} pessoas em {folhaCentro.length} centros
+                      </span>
+                      <span style={{ fontSize: 13, fontWeight: 700, color: T.terracotta, fontVariantNumeric: 'tabular-nums' }}>
+                        {moeda(custoMes)}<span style={{ fontSize: 10.5, fontWeight: 400, color: T.inkFaint }}> / mês</span>
+                      </span>
+                    </div>
+                    <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 3, marginBottom: 10, maxWidth: 800 }}>
+                      O salário base vem da planilha do RH, não do Sankhya: 95% dos títulos de folha estão sem centro
+                      de resultado, então o financeiro não distribui por setor. Só entram os centros de produção —
+                      engenharia comercial e administrativo ficam de fora.
+                    </div>
+
+                    <div style={{ display: 'grid', gap: 8, gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', marginBottom: 12 }}>
+                      {[
+                        { t: 'Salário base', v: salario, c: T.ink },
+                        { t: 'Encargo sobre salário', v: encargo, c: T.inkDim },
+                        { t: 'Provisão 13º e férias', v: provisao, c: T.inkDim },
+                        { t: 'Encargo da provisão', v: encProv, c: T.inkDim },
+                        { t: 'Custo total', v: custoMes, c: T.terracotta },
+                      ].map(k => (
+                        <div key={k.t} style={{ background: T.panelAlt, borderRadius: 7, padding: '8px 11px' }}>
+                          <div style={{ fontSize: 10, color: T.inkFaint, minHeight: 24 }}>{k.t}</div>
+                          <div style={{ fontSize: 14.5, fontWeight: 700, color: k.c, fontVariantNumeric: 'tabular-nums' }}>{moeda(k.v)}</div>
+                        </div>
+                      ))}
+                    </div>
+
+                    {porConfirmar.length > 0 && (
+                      <div style={{ fontSize: 11, color: T.amberText, background: T.amberSoft, border: `1px solid ${T.amberText}`,
+                        borderRadius: 6, padding: '8px 11px', marginBottom: 12 }}>
+                        <strong>{porConfirmar.map(e => e.componente).join(' e ')}</strong>{' '}
+                        {porConfirmar.length === 1 ? 'ainda não foi confirmado' : 'ainda não foram confirmados'} —
+                        somam {porConfirmar.reduce((s2, e) => s2 + Number(e.aliquota), 0).toFixed(1)} dos{' '}
+                        {encargos.filter(e => e.ativo).reduce((s2, e) => s2 + Number(e.aliquota), 0).toFixed(1)} pontos de encargo.
+                        O RAT depende do CNAE e o FAP do histórico de acidentes; estão na GFIP.
+                      </div>
+                    )}
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 5, marginBottom: 12 }}>
+                      {ordenados.map(f => (
+                        <div key={f.centro_custo} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <span style={{ fontSize: 11.5, color: T.inkDim, width: 250, whiteSpace: 'nowrap',
+                            overflow: 'hidden', textOverflow: 'ellipsis' }} title={f.centro_custo}>{f.centro_custo}</span>
+                          <span style={{ fontSize: 10.5, color: T.inkFaint, width: 58, textAlign: 'right' }}>
+                            {f.pessoas} {f.pessoas === 1 ? 'pessoa' : 'pessoas'}
+                          </span>
+                          <div style={{ flex: 1, height: 12, background: T.lineSoft, borderRadius: 3, overflow: 'hidden' }}>
+                            <div style={{ height: '100%', width: `${(Number(f.custo_mes) / maxC) * 100}%`, background: T.terracotta }} />
+                          </div>
+                          <span style={{ fontSize: 11, color: T.inkFaint, width: 82, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}
+                            title="Salário base, sem encargo">{moeda(f.salario_base)}</span>
+                          <span style={{ fontSize: 11.5, fontWeight: 600, width: 88, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}
+                            title="Com encargo e provisão">{moeda(f.custo_mes)}</span>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', fontSize: 10.5, color: T.inkFaint,
+                      paddingTop: 8, borderTop: `1px solid ${T.lineSoft}` }}>
+                      {encargos.filter(e => e.ativo).sort((a2, b2) => Number(b2.aliquota) - Number(a2.aliquota)).map(e => (
+                        <span key={e.componente} title={e.observacao || ''}
+                          style={{ color: e.confirmado ? T.inkFaint : T.amberText }}>
+                          {e.confirmado ? '' : '⚠ '}{e.componente} {Number(e.aliquota).toFixed(2).replace('.', ',')}%
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
 
           </div>
         );
