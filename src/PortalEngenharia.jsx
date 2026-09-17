@@ -9120,6 +9120,32 @@ function MonitoramentoOP({ currentUser }) {
     setMarcandoCard(null);
   };
 
+  // Dispensar solicitacao: a SC pode ter sido cancelada na pratica sem que o
+  // Sankhya registre -- a 6319 continua 'L' e pendente la, mesmo o Alexandre
+  // tendo cancelado. Sem isso a linha fica pedindo card para sempre.
+  const dispensarSolicitacao = async (id, motivo) => {
+    if (marcandoCard === id) return;
+    setMarcandoCard(id);
+    await supabase.from('solicitacoes_compra_planner').update({
+      card_planner_cancelado: true,
+      card_planner_cancelado_em: new Date().toISOString(),
+      card_planner_cancelado_por: currentUser?.nome || null,
+      motivo_cancelamento: motivo || null,
+    }).eq('id', id);
+    await carregarSolicitacoes();
+    setMarcandoCard(null);
+  };
+
+  const reativarSolicitacao = async (id) => {
+    setMarcandoCard(id);
+    await supabase.from('solicitacoes_compra_planner').update({
+      card_planner_cancelado: false, card_planner_cancelado_em: null,
+      card_planner_cancelado_por: null, motivo_cancelamento: null,
+    }).eq('id', id);
+    await carregarSolicitacoes();
+    setMarcandoCard(null);
+  };
+
   const [linhas, setLinhas] = useState([]);
   const [diasCongelados, setDiasCongelados] = useState({}); // br -> dias_congelados
   const carregarDiasCongelados = useCallback(async () => {
@@ -9624,11 +9650,30 @@ function MonitoramentoOP({ currentUser }) {
                         </span>
                       ) : s.card_planner_solicitado ? (
                         <span style={{ fontSize: 10.5, fontWeight: 700, color: T.amberText, background: T.amberSoft, padding: '3px 8px', borderRadius: 4 }}>Aguardando Power Automate</span>
+                      ) : s.card_planner_cancelado ? (
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                          <span title={`Dispensada${s.card_planner_cancelado_por ? ` por ${s.card_planner_cancelado_por}` : ''}${s.motivo_cancelamento ? ` — ${s.motivo_cancelamento}` : ''}`}
+                            style={{ fontSize: 10.5, fontWeight: 700, color: T.inkFaint, background: T.panelAlt, padding: '3px 8px', borderRadius: 4 }}>
+                            ✕ dispensada
+                          </span>
+                          <button onClick={() => reativarSolicitacao(s.id)} disabled={marcandoCard === s.id}
+                            style={{ fontSize: 10, color: T.blueText, background: 'transparent', border: 'none', cursor: 'pointer', textDecoration: 'underline', padding: 0 }}>
+                            reativar
+                          </button>
+                        </span>
                       ) : (
-                        <button onClick={() => marcarCardSolicitado(s.id)} disabled={marcandoCard === s.id}
-                          style={{ fontSize: 11, fontWeight: 700, color: '#fff', background: T.terracotta, border: 'none', borderRadius: 5, padding: '5px 12px', cursor: marcandoCard === s.id ? 'default' : 'pointer', opacity: marcandoCard === s.id ? 0.6 : 1 }}>
-                          {marcandoCard === s.id ? 'Marcando…' : 'Marcar pra criar Card'}
-                        </button>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                          <button onClick={() => marcarCardSolicitado(s.id)} disabled={marcandoCard === s.id}
+                            style={{ fontSize: 11, fontWeight: 700, color: '#fff', background: T.terracotta, border: 'none', borderRadius: 5, padding: '5px 12px', cursor: marcandoCard === s.id ? 'default' : 'pointer', opacity: marcandoCard === s.id ? 0.6 : 1 }}>
+                            {marcandoCard === s.id ? 'Marcando…' : 'Marcar pra criar Card'}
+                          </button>
+                          <button onClick={() => { const m = window.prompt('Por que esta solicitação não precisa de card?'); if (m !== null) dispensarSolicitacao(s.id, m); }}
+                            disabled={marcandoCard === s.id}
+                            title="A SC foi cancelada ou não precisa de card. Ela sai da fila mas continua visível."
+                            style={{ fontSize: 10.5, color: T.inkFaint, background: 'transparent', border: `1px solid ${T.line}`, borderRadius: 5, padding: '4px 8px', cursor: 'pointer' }}>
+                            dispensar
+                          </button>
+                        </span>
                       )}
                     </td>
                   </tr>
