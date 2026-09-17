@@ -2940,7 +2940,7 @@ function ModeloPreditivo() {
       <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '14px 18px' }}>
         <div style={{ fontSize: 12.5, color: T.inkDim, lineHeight: 1.6 }}>
           {visao === 'vale'
-            ? 'Todas as unidades do Grupo Vale, incluindo CVRD. O grupo responde por cerca de 30% dos pedidos.'
+            ? `Todas as unidades do Grupo Vale, incluindo CVRD. O grupo responde por ${justif.pctVale ? Math.round(justif.pctVale * 100) : 30}% dos pedidos de 2026.`
             : 'Os 15 maiores clientes por valor de pedido de 2023 a 2025, com a projeção de 2026 por tendência'}
           {visao === 'vale' ? '' : ' linear.'} A base é o <strong>pedido de venda</strong>, pela data em que foi
           fechado, e o valor é <strong>líquido de impostos</strong> — mesma fórmula da aba de Faturamento.
@@ -2950,7 +2950,7 @@ function ModeloPreditivo() {
         <div style={{ fontSize: 11.5, color: T.inkDim, lineHeight: 1.6, marginTop: 10, paddingTop: 10, borderTop: `1px solid ${T.line}` }}>
           <strong style={{ color: T.ink }}>Como 2027 é calculado.</strong> 2026 ainda não fechou, então entra
           anualizado: o acumulado é dividido por <strong style={{ color: T.ink }}>
-          {Math.round((totais.fatorAno || 1) * 100)}%</strong>, que é a fatia do ano já pedida nesta mesma data
+          {Math.round((totais.fatorAno || 1) * 100)}%</strong>, que é a fatia do ano já vendida nesta mesma data
           em 2023, 2024 e 2025 — os três ficaram entre {Math.round(((totais.fatorAno || 1) - (totais.dispersaoFator || 0) / 2) * 100)}%
           e {Math.round(((totais.fatorAno || 1) + (totais.dispersaoFator || 0) / 2) * 100)}%, dispersão pequena o
           bastante para usar a média. Sobre os quatro anos roda a mesma regressão linear, e o resultado é 2027.
@@ -2958,7 +2958,7 @@ function ModeloPreditivo() {
           <strong style={{ color: T.amberText }}>Leia com reserva.</strong> A projeção de 2026 parte de três anos
           fechados; a de 2027 parte de dois anos e meio fechados mais uma estimativa, e por isso a confiança dela
           nunca é classificada como alta. Cliente que compra por projeto oscila demais para uma reta explicar — é
-          tendência, não previsão. O número serve para ordenar prioridade comercial, não para virar meta.
+          tendência, não previsão. O número serve para ordenar prioridade comercial, não para virar meta. E ele mede PEDIDO fechado: o que já foi cotado e ainda não virou pedido está na aba Propostas em aberto, fora de qualquer projeção.
         </div>
         {justif && (
           <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${T.line}` }}>
@@ -2966,13 +2966,16 @@ function ModeloPreditivo() {
               O QUE SUSTENTA A PROJEÇÃO DE 2027
             </div>
             <div style={{ fontSize: 12.5, color: T.inkDim, lineHeight: 1.65 }}>
-              A reta sobe porque 2026 está{' '}
+              {totais.est26 >= totais.a25 ? 'A reta sobe porque 2026 está' : 'A reta cai porque 2026 está'}{' '}
               <strong style={{ color: totais.est26 >= totais.a25 ? T.oliveText : T.rustText }}>
                 {pct((totais.est26 - totais.a25) / (totais.a25 || 1))}
               </strong>{' '}
-              acima de 2025. Mas esse ganho <strong style={{ color: T.ink }}>não é difundido</strong>:
+              {totais.est26 >= totais.a25 ? 'acima' : 'abaixo'} de 2025.{' '}
+              {totais.est26 >= totais.a25
+                ? <>Mas esse ganho <strong style={{ color: T.ink }}>não é difundido</strong>: </>
+                : <>E a queda <strong style={{ color: T.ink }}>não é geral</strong>: </>}
               dos {dados.length} clientes, {justif.sobem} sobem e {justif.caem} caem, e{' '}
-              <strong style={{ color: T.ink }}>{moeda(justif.somaTop3)}</strong> do avanço vem de apenas três —{' '}
+              <strong style={{ color: T.ink }}>{moeda(justif.somaTop3)}</strong> da diferença vem de apenas três —{' '}
               {justif.top3.map((t, i) => (
                 <span key={t.cliente}>
                   {i > 0 ? ', ' : ''}<strong style={{ color: T.ink }}>{t.cliente}</strong> ({moeda(t.delta)})
