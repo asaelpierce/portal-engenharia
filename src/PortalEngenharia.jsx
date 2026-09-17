@@ -2886,7 +2886,10 @@ function ModeloPreditivo() {
              maior, pctMaior, pctVale, puxador, proj27Sem, est26Sem };
   }, [dados, totais]);
 
-  const moeda = (v) => fmtMoedaCompacta(v);
+  // Valor CHEIO, sem abreviar. '22,6 mi' esconde a diferenca entre 22,6 e
+  // 22,65 milhoes, e o comercial compara esses numeros com o Sankhya.
+  const moeda = (v) => (v == null ? '—' : new Intl.NumberFormat('pt-BR', {
+    style: 'currency', currency: 'BRL', minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(v));
   const pct = (v) => `${v >= 0 ? '+' : ''}${Math.round(v * 100)}%`;
 
   if (loading) return <div style={{ padding: 40, color: T.inkFaint, fontSize: 13 }}>Carregando 3 anos de pedidos…</div>;
