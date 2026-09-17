@@ -2718,7 +2718,10 @@ function ModeloPreditivo() {
       const md = String(r.data_faturamento).slice(5, 10);
       const mes = String(r.data_faturamento).slice(0, 7);
       const v = Number(r.valor_bruto) || 0;
-      const tipo = [3219, 3220].includes(r.codtipoper) ? 'Serviço'
+      // TOP 3103 = PEDIDO DE VENDA DE SERVICOS. Os codigos 3219/3220 eram os de
+      // NOTA FISCAL de servico e ficaram para tras na troca de fonte: como
+      // pedido usa a faixa 3100+, servico caia em 'Sem classificacao'.
+      const tipo = String(r.codtipoper) === '3103' ? 'Serviço'
         : (r.produto_kaleng && r.produto_kaleng.trim()) ? r.produto_kaleng.trim()
         : 'Sem classificação';
 
@@ -2945,7 +2948,8 @@ function ModeloPreditivo() {
           {visao === 'vale' ? '' : ' linear.'} A base é o <strong>pedido de venda</strong>, pela data em que foi
           fechado, e o valor é <strong>líquido de impostos</strong> — mesma fórmula da aba de Faturamento.
           Só entram TOPs de pedido que contam como demanda: retrabalho e brinde ficam de fora.
-          Serviço aparece como categoria própria porque não tem classificação de material.
+          Serviço entra no valor normalmente e aparece como categoria própria — são R$ 3,4 milhões em quatro
+          anos, que não têm classificação de material para cair em PG1 ou PG2.
         </div>
         <div style={{ fontSize: 11.5, color: T.inkDim, lineHeight: 1.6, marginTop: 10, paddingTop: 10, borderTop: `1px solid ${T.line}` }}>
           <strong style={{ color: T.ink }}>Como 2027 é calculado.</strong> 2026 ainda não fechou, então entra
