@@ -2788,10 +2788,18 @@ function ModeloPreditivo() {
 
       const [a23, a24, a25] = serie;
       const varUlt = a24 > 0 ? (a25 - a24) / a24 : (a25 > 0 ? 1 : 0);
+      // O sinal olha 2026 PRIMEIRO. Antes comparava so 2024 com 2025 e o ano
+      // corrente nao entrava: a Vale Porto - Tubarao aparecia 'Em crescimento'
+      // com -99% no ano, porque 2025 tinha sido maior que 2024.
+      const vYtd = c.ytd25 > 0 ? (c.ytd26 - c.ytd25) / c.ytd25 : null;
       let sinal;
-      if (a25 === 0) sinal = { k: 'perdido', rot: 'Sem compra em 2025', cor: T.rustText, bg: T.rustSoft };
+      if (a25 === 0 && (c.ytd26 || 0) === 0) sinal = { k: 'perdido', rot: 'Sem compra desde 2024', cor: T.rustText, bg: T.rustSoft };
+      else if (vYtd != null && vYtd <= -0.9) sinal = { k: 'perdido', rot: 'Parou em 2026', cor: T.rustText, bg: T.rustSoft };
+      else if (vYtd != null && vYtd <= -0.5) sinal = { k: 'queda', rot: 'Queda forte em 2026', cor: T.rustText, bg: T.rustSoft };
+      else if (vYtd != null && vYtd <= -0.2) sinal = { k: 'atencao', rot: 'Em retração', cor: T.amberText, bg: T.amberSoft };
+      else if (vYtd != null && vYtd >= 0.2) sinal = { k: 'cresce', rot: 'Em crescimento', cor: T.oliveText, bg: T.oliveSoft };
+      else if (vYtd != null) sinal = { k: 'estavel', rot: 'Estável', cor: T.blueText, bg: T.blueSoft };
       else if (varUlt <= -0.5) sinal = { k: 'queda', rot: 'Queda forte', cor: T.rustText, bg: T.rustSoft };
-      else if (varUlt <= -0.2) sinal = { k: 'atencao', rot: 'Em retração', cor: T.amberText, bg: T.amberSoft };
       else if (varUlt >= 0.2) sinal = { k: 'cresce', rot: 'Em crescimento', cor: T.oliveText, bg: T.oliveSoft };
       else sinal = { k: 'estavel', rot: 'Estável', cor: T.blueText, bg: T.blueSoft };
 
@@ -2824,10 +2832,15 @@ function ModeloPreditivo() {
       // incerteza do R² mais a de 2026 ser estimativa, não fato.
       const confianca27 = est26 === 0 ? 'Sem base'
         : r2_27 >= 0.8 ? 'Média' : r2_27 >= 0.4 ? 'Baixa' : 'Muito baixa';
-      const var27 = est26 > 0 ? (proj27 - est26) / est26 : null;
+      // Base minuscula gera percentual sem sentido: a Vale Porto - Tubarao
+      // vendeu R$ 17.831 no ano, o que produzia '+3175% vs 2026'. Abaixo de
+      // R$ 50 mil de base a variacao nao e mostrada -- o numero existiria, mas
+      // nao significaria nada.
+      const baseFragil = est26 < 50000;
+      const var27 = est26 > 0 && !baseFragil ? (proj27 - est26) / est26 : null;
 
       return {
-        ...c, serie, a23, a24, a25, proj, r2, sinal, confianca, varUlt,
+        ...c, serie, a23, a24, a25, proj, r2, sinal, confianca, varUlt, baseFragil,
         ytd26, ytd25, varYtd, atingido,
         est26, serie4, proj27, r2_27, confianca27, var27, fatorAno, dispersaoFator,
         mediaMes: c.total / 36, mesesAtivos,
@@ -2904,7 +2917,10 @@ function ModeloPreditivo() {
   const maxSerie = Math.max(1, ...dados.flatMap(c => c.serie));
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+    // A tabela tem 13 colunas e o container padrao de 1400px espremia tudo.
+    // Aqui a largura acompanha a tela, com um teto alto para nao esticar
+    // demais em monitor ultrawide.
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16, width: '100%', maxWidth: 2000, marginLeft: -40, marginRight: -40 }}>
       <div style={{ display: 'flex', gap: 3 }}>
         {[{ id: 'top', l: 'Top 15 clientes' },
           { id: 'vale', l: 'Grupo Vale' },
@@ -3431,7 +3447,8 @@ function ModeloPreditivo() {
                         {c.est26 > 0 && (
                           <div style={{ fontSize: 10, fontWeight: 400,
                             color: c.var27 == null ? T.inkFaint : c.var27 >= 0 ? T.oliveText : T.rustText }}>
-                            {c.var27 != null ? `${pct(c.var27)} vs 2026` : ''}
+                            {c.var27 != null ? `${pct(c.var27)} vs 2026`
+                              : c.baseFragil && c.est26 > 0 ? 'base pequena demais para comparar' : ''}
                             <span style={{ color: T.inkFaint }}> · {c.confianca27.toLowerCase()}</span>
                           </div>
                         )}
