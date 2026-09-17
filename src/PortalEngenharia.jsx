@@ -16879,6 +16879,9 @@ function Custeio() {
   const [clientes, setClientes] = useState([]);
   const [insumoMes, setInsumoMes] = useState([]);
   const [rateioNat, setRateioNat] = useState([]);
+  const [rateioDet, setRateioDet] = useState([]);
+  const [rateioAberto, setRateioAberto] = useState(null);
+  const [excBusy, setExcBusy] = useState(null);
   const [analise, setAnalise] = useState([]);
   const [suspeitos, setSuspeitos] = useState([]);
   const [opBusy, setOpBusy] = useState(null);
@@ -16939,6 +16942,7 @@ function Custeio() {
       setClientes(await lerTudo('v_custeio_cliente'));
       setInsumoMes(await lerTudo('custeio_insumo_mensal'));
       setRateioNat(await lerTudo('v_custeio_rateio_natureza'));
+      setRateioDet(await lerTudo('v_custeio_rateio_detalhe'));
       setAnalise(await lerTudo('v_custeio_analise'));
       setSuspeitos(await lerTudo('v_custeio_custo_suspeito'));
       // Historico do verificador. 60 dias bastam para ver tendencia sem
@@ -17006,6 +17010,27 @@ function Custeio() {
       setOpInput(o => ({ ...o, [codproj]: '' }));
     } catch (e) { setErro(e.message || String(e)); }
     setOpBusy(null);
+  }, [lerTudo]);
+
+  // Excluir do rateio: nem tudo que o financeiro rateia e custo de fabrica.
+  // Pode ser despesa administrativa que caiu em centro de producao, ou
+  // lancamento errado. Tira aqui, sem mexer no Sankhya, e da para voltar.
+  const alternarExclusao = useCallback(async (descrnat, documento) => {
+    const chave = documento || descrnat;
+    setExcBusy(chave);
+    try {
+      const { error } = await supabase.rpc('fn_rateio_excluir', {
+        p_descrnat: documento ? null : descrnat,
+        p_documento: documento || null,
+        p_motivo: null, p_quem: 'portal',
+      });
+      if (error) throw error;
+      const [rd, rn] = await Promise.all([
+        lerTudo('v_custeio_rateio_detalhe'), lerTudo('v_custeio_rateio_natureza'),
+      ]);
+      setRateioDet(rd); setRateioNat(rn);
+    } catch (e) { setErro(e.message || String(e)); }
+    setExcBusy(null);
   }, [lerTudo]);
 
   const classificarNatureza = useCallback(async (codnat, destino) => {
@@ -17752,22 +17777,70 @@ function Custeio() {
                     </div>
                   )}
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-                    {nats.slice(0, 14).map(([nome, v]) => (
-                      <div key={nome} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <span style={{ fontSize: 11.5, color: T.inkDim, width: 220,
-                          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={nome}>
-                          {nome}
-                        </span>
-                        <div style={{ flex: 1, height: 12, background: T.lineSoft, borderRadius: 3, overflow: 'hidden' }}>
-                          <div style={{ height: '100%', width: `${(v.prod / maxProd) * 100}%`, background: T.oliveText }} />
+                    {nats.slice(0, 16).map(([nome, v]) => {
+                      const notas = rateioDet.filter(d => (d.descrnat || '(sem natureza)') === nome
+                        && String(d.competencia).slice(0, 4) === String(anoCif));
+                      const excluida = notas.length > 0 && notas.every(d => d.excluido);
+                      const aberto = rateioAberto === nome;
+                      return (
+                        <div key={nome}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8,
+                            opacity: excluida ? 0.45 : 1 }}>
+                            <span onClick={() => setRateioAberto(aberto ? null : nome)}
+                              style={{ fontSize: 11.5, color: T.inkDim, width: 220, cursor: 'pointer',
+                                whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                                textDecoration: excluida ? 'line-through' : 'none' }}
+                              title={`${nome} — clique para ver as ${notas.length} notas`}>
+                              {aberto ? '▾ ' : '▸ '}{nome}
+                            </span>
+                            <div style={{ flex: 1, height: 12, background: T.lineSoft, borderRadius: 3, overflow: 'hidden' }}>
+                              <div style={{ height: '100%', width: `${(v.prod / maxProd) * 100}%`,
+                                background: excluida ? T.inkFaint : T.oliveText }} />
+                            </div>
+                            <span style={{ fontSize: 11.5, fontWeight: 600, width: 88, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{moeda(v.prod)}</span>
+                            <span style={{ fontSize: 10.5, color: T.inkFaint, width: 74, textAlign: 'right' }}
+                              title="Fatia da nota que o financeiro atribuiu a centros de produção">
+                              {Math.round(v.prod / v.total * 100)}% de {moeda(v.total)}
+                            </span>
+                            <button onClick={() => alternarExclusao(nome, null)} disabled={excBusy != null}
+                              title={excluida ? 'Voltar para o rateio' : 'Tirar do rateio — não é custo de fábrica'}
+                              style={{ fontFamily: 'inherit', fontSize: 10.5, padding: '3px 9px', borderRadius: 4,
+                                cursor: 'pointer', border: `1px solid ${T.line}`, background: 'transparent',
+                                color: excluida ? T.blueText : T.inkFaint, width: 74 }}>
+                              {excBusy === nome ? '…' : excluida ? 'voltar' : 'excluir'}
+                            </button>
+                          </div>
+                          {aberto && (
+                            <div style={{ margin: '4px 0 8px 18px', borderLeft: `2px solid ${T.lineSoft}`, paddingLeft: 10 }}>
+                              {notas.sort((x, y) => Number(y.valor_producao) - Number(x.valor_producao)).slice(0, 12).map(d => (
+                                <div key={`${d.origem}-${d.documento}`} style={{ display: 'flex', alignItems: 'center',
+                                  gap: 8, padding: '3px 0', opacity: d.excluido ? 0.45 : 1 }}>
+                                  <span style={{ fontSize: 10.5, color: T.inkFaint, width: 58 }}>{d.competencia?.slice(5)}/{d.competencia?.slice(2, 4)}</span>
+                                  <span style={{ fontSize: 10.5, color: T.inkFaint, width: 56 }}>{d.origem === 'E' ? 'nota' : 'título'} {d.documento}</span>
+                                  <span style={{ fontSize: 11, color: T.inkDim, flex: 1, whiteSpace: 'nowrap',
+                                    overflow: 'hidden', textOverflow: 'ellipsis',
+                                    textDecoration: d.excluido ? 'line-through' : 'none' }}
+                                    title={d.centros_producao || ''}>{d.nomeparc || '—'}</span>
+                                  <span style={{ fontSize: 10.5, color: T.inkFaint, width: 62, textAlign: 'right' }}>{d.centros} centros</span>
+                                  <span style={{ fontSize: 11, fontWeight: 600, width: 84, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{moeda(d.valor_producao)}</span>
+                                  <button onClick={() => alternarExclusao(null, d.documento)} disabled={excBusy != null}
+                                    style={{ fontFamily: 'inherit', fontSize: 10, padding: '2px 7px', borderRadius: 4,
+                                      cursor: 'pointer', border: `1px solid ${T.line}`, background: 'transparent',
+                                      color: d.excluido ? T.blueText : T.inkFaint, width: 60 }}>
+                                    {d.excluido ? 'voltar' : 'excluir'}
+                                  </button>
+                                </div>
+                              ))}
+                              {notas.length > 12 && (
+                                <div style={{ fontSize: 10, color: T.inkFaint, marginTop: 4 }}>
+                                  mostrando as 12 maiores de {notas.length}
+                                </div>
+                              )}
+                            </div>
+                          )}
                         </div>
-                        <span style={{ fontSize: 11.5, fontWeight: 600, width: 88, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{moeda(v.prod)}</span>
-                        <span style={{ fontSize: 10.5, color: T.inkFaint, width: 74, textAlign: 'right' }}
-                          title="Fatia da nota que o financeiro atribuiu a centros de produção">
-                          {Math.round(v.prod / v.total * 100)}% de {moeda(v.total)}
-                        </span>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                   <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 10, paddingTop: 8, borderTop: `1px solid ${T.lineSoft}` }}>
                     São <strong style={{ color: T.ink }}>{moeda(mediaR)}</strong> por mês de despesa de produção com
