@@ -11312,6 +11312,22 @@ function ValidacaoRecebimento({ currentUser }) {
     await carregar();
   };
 
+  // Desfazer recusa: volta para a fila. Recusa e um julgamento, e julgamento
+  // se revisa -- antes disso, recusar era porta de saida sem volta e o item
+  // ficava parado esperando alguem mexer no banco.
+  const desfazerRecusa = async (item) => {
+    if (salvandoId === item.id) return;
+    if (!window.confirm(`Desfazer a recusa da NF ${item.numero_nota_fiscal}? Ela volta para a fila de validação.`)) return;
+    setSalvandoId(item.id);
+    try {
+      const { error } = await supabase.rpc('fn_recebimento_desfazer_recusa', {
+        p_id: item.id, p_quem: currentUser?.nome || null });
+      if (error) throw error;
+      await carregar();
+    } catch (err) { alert(`Não deu para desfazer: ${err.message || err}`); }
+    setSalvandoId(null);
+  };
+
   const recusar = async (item) => {
     const motivo = prompt(
       'Por que precisa ser refeito? (ex: foto da nota ilegível, faltou foto do material)\n\n' +
@@ -11456,8 +11472,17 @@ function ValidacaoRecebimento({ currentUser }) {
                 </div>
               )}
               {item.status === 'recusado' && (
-                <span style={{ fontSize: 11, fontWeight: 700, color: T.amberText, background: T.amberSoft, padding: '4px 10px', borderRadius: 5 }}>
-                  ↩ Recusado por {item.recusado_por || '—'} em {fmtDataHora(item.recusado_em)}
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: T.amberText, background: T.amberSoft, padding: '4px 10px', borderRadius: 5 }}>
+                    ↩ Recusado por {item.recusado_por || '—'} em {fmtDataHora(item.recusado_em)}
+                  </span>
+                  <button onClick={() => desfazerRecusa(item)} disabled={salvandoId === item.id}
+                    title="Volta para a fila de validação, como se não tivesse sido recusado."
+                    style={{ fontSize: 10.5, fontWeight: 600, color: T.blueText, background: 'transparent',
+                      border: `1px solid ${T.blueText}55`, borderRadius: 5, padding: '3px 9px',
+                      cursor: salvandoId === item.id ? 'default' : 'pointer' }}>
+                    {salvandoId === item.id ? '…' : 'desfazer recusa'}
+                  </button>
                 </span>
               )}
               {item.status === 'descartado' && (
