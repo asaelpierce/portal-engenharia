@@ -18558,19 +18558,20 @@ function Custeio() {
         const porProjC = {};
         consProjF.forEach(c => {
           if (!c.br) return;
-          // O material e do PROJETO INTEIRO, nao do mes. Com um mes
-          // selecionado, mostrar o material todo ao lado de uma fracao da mao
-          // de obra daria margem falsa -- entao ele so entra no acumulado.
-          if (!porProjC[c.br]) porProjC[c.br] = { mo: 0, oh: 0, h: 0,
-            mat: mesCons === 'acumulado' ? Number(c.material_projeto || 0) : null,
-            rec: mesCons === 'acumulado' ? Number(c.receita_projeto || 0) : null };
+          // Material e receita do MES sao os ENTREGUES no mes -- custo direto
+          // e faturamento pela fatia entregue. No acumulado, somam os meses e
+          // chegam ao total do projeto.
+          if (!porProjC[c.br]) porProjC[c.br] = { mo: 0, oh: 0, h: 0, mat: 0, rec: 0 };
           porProjC[c.br].mo += Number(c.mao_obra || 0);
           porProjC[c.br].oh += Number(c.overhead || 0);
           porProjC[c.br].h += Number(c.horas || 0);
+          porProjC[c.br].mat += Number(c.material_mes || 0);
+          porProjC[c.br].rec += Number(c.receita_mes || 0);
         });
         const projsC = Object.entries(porProjC)
-          .map(([br, v]) => ({ br, ...v, total: (v.mat || 0) + v.mo + v.oh,
-            margem: v.rec > 0 ? v.rec - ((v.mat || 0) + v.mo + v.oh) : null }))
+          .map(([br, v]) => ({ br, ...v, total: v.mat + v.mo + v.oh,
+            margem: v.rec > 0 ? v.rec - (v.mat + v.mo + v.oh) : null,
+            margemPct: v.rec > 0 ? (v.rec - (v.mat + v.mo + v.oh)) / v.rec * 100 : null }))
           .sort((a2, b2) => b2.total - a2.total);
 
         const barra = (mat, mo, oh) => {
@@ -18719,18 +18720,17 @@ function Custeio() {
               <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
                 <div style={{ padding: '10px 12px', borderBottom: `1px solid ${T.line}`, fontSize: 12, fontWeight: 700 }}>
                   Consolidado por projeto — {projsC.length}
-                  {mesCons !== 'acumulado' && (
-                    <span style={{ fontWeight: 400, color: T.inkFaint, fontSize: 10.5 }}>
-                      {' '}· {mesCons}, só mão de obra e overhead do mês — o material é do projeto inteiro
-                    </span>
-                  )}
+                  <span style={{ fontWeight: 400, color: T.inkFaint, fontSize: 10.5 }}>
+                    {' '}· {mesCons === 'acumulado' ? 'todos os meses' : mesCons}; material e receita são os
+                    entregues no período, mão de obra e overhead o que a fábrica gastou nele
+                  </span>
                 </div>
                 <div style={{ overflowX: 'auto' }}>
                   <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 940 }}>
                     <thead style={{ position: 'sticky', top: 0, zIndex: 1 }}><tr style={{ background: T.panelAlt }}>
-                      {['BR', 'Horas', 'Material', 'Mão de obra', 'Overhead', 'Custo total', 'Receita', 'Margem', 'Composição'].map((h, i) => (
+                      {['BR', 'Horas', 'Material', 'Mão de obra', 'Overhead', 'Custo total', 'Receita', 'Margem', '%', 'Composição'].map((h, i) => (
                         <th key={h} style={{ padding: '9px 12px', fontSize: 11, fontWeight: 600, color: T.inkFaint,
-                          textAlign: i >= 1 && i <= 7 ? 'right' : 'left', whiteSpace: 'nowrap' }}>{h}</th>
+                          textAlign: i >= 1 && i <= 8 ? 'right' : 'left', whiteSpace: 'nowrap' }}>{h}</th>
                       ))}
                     </tr></thead>
                     <tbody>
@@ -18739,8 +18739,8 @@ function Custeio() {
                           <td style={{ padding: '7px 12px', fontSize: 12.5, fontWeight: 600 }}>{p.br}</td>
                           <td style={{ padding: '7px 12px', fontSize: 11.5, textAlign: 'right', color: T.inkFaint, fontVariantNumeric: 'tabular-nums' }}>{Math.round(p.h)}</td>
                           <td style={{ padding: '7px 12px', fontSize: 12, textAlign: 'right', color: T.terracotta, fontVariantNumeric: 'tabular-nums' }}
-                            title={p.mat == null ? 'O material é do projeto inteiro, não do mês — só aparece no acumulado' : ''}>
-                            {p.mat == null ? '—' : moeda(p.mat)}
+                            title="Custo direto do projeto pela fatia entregue no período">
+                            {p.mat > 0 ? moeda(p.mat) : '—'}
                           </td>
                           <td style={{ padding: '7px 12px', fontSize: 12, textAlign: 'right', color: T.blueText, fontVariantNumeric: 'tabular-nums' }}>{moeda(p.mo)}</td>
                           <td style={{ padding: '7px 12px', fontSize: 12, textAlign: 'right', color: T.amberText, fontVariantNumeric: 'tabular-nums' }}>{moeda(p.oh)}</td>
@@ -18750,7 +18750,11 @@ function Custeio() {
                             color: p.margem == null ? T.inkFaint : p.margem < 0 ? T.rustText : T.oliveText }}>
                             {p.margem == null ? '—' : moeda(p.margem)}
                           </td>
-                          <td style={{ padding: '7px 12px', minWidth: 150 }}>{barra(p.mat || 0, p.mo, p.oh)}</td>
+                          <td style={{ padding: '7px 12px', fontSize: 11.5, textAlign: 'right', fontVariantNumeric: 'tabular-nums',
+                            color: p.margemPct == null ? T.inkFaint : p.margemPct < 0 ? T.rustText : T.oliveText }}>
+                            {p.margemPct == null ? '—' : `${p.margemPct.toFixed(0)}%`}
+                          </td>
+                          <td style={{ padding: '7px 12px', minWidth: 140 }}>{barra(p.mat, p.mo, p.oh)}</td>
                         </tr>
                       ))}
                     </tbody>
