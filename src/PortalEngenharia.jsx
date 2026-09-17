@@ -16646,6 +16646,7 @@ function Custeio() {
   const [catComp, setCatComp] = useState([]);
   const [opExtra, setOpExtra] = useState([]);
   const [piApont, setPiApont] = useState([]);
+  const [clientes, setClientes] = useState([]);
   const [analise, setAnalise] = useState([]);
   const [suspeitos, setSuspeitos] = useState([]);
   const [opBusy, setOpBusy] = useState(null);
@@ -16703,6 +16704,7 @@ function Custeio() {
       setCatComp(rc);
       setOpExtra(await lerTudo('v_custeio_op_extra'));
       setPiApont(await lerTudo('v_custeio_pi_apontado'));
+      setClientes(await lerTudo('v_custeio_cliente'));
       setAnalise(await lerTudo('v_custeio_analise'));
       setSuspeitos(await lerTudo('v_custeio_custo_suspeito'));
       // Historico do verificador. 60 dias bastam para ver tendencia sem
@@ -17754,6 +17756,9 @@ function Custeio() {
         // [PI] e comprado em lote e dividido: a nota cai num projeto so. Para
         // esses, o custo vem do APONTAMENTO, entao a compra e o estoque deles
         // saem da soma e entra o valor apontado.
+        const cliDe = {};
+        clientes.forEach(c2 => { if (c2.cliente) cliDe[c2.br] = c2.cliente; });
+
         const piPorProj = {}; const piChave = new Set();
         piApont.forEach(x => {
           piPorProj[x.codproj] = (piPorProj[x.codproj] || 0) + (Number(x.custo_apontado) || 0);
@@ -17830,6 +17835,7 @@ function Custeio() {
           b2.op = opPorProj[b2.codproj] || 0;
           b2.dev = devPorProj[b2.codproj] || 0;
           b2.pi = piPorProj[b2.codproj] || 0;
+          b2.cliente = cliDe[b2.br] || null;
         });
 
         const todosOrc = Object.values(porOrc)
@@ -17921,7 +17927,7 @@ function Custeio() {
               <div style={{ overflowX: 'auto' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 820 }}>
                   <thead><tr style={{ background: T.panelAlt }}>
-                    {['BR', 'Pedido venda', 'Comprado (líq.)', 'Do estoque', 'Devolvido', 'Custo total', 'Receita líq.', 'Margem', '%'].map((h, i) => (
+                    {['BR', 'Cliente', 'Pedido venda', 'Comprado (líq.)', 'Do estoque', 'Devolvido', 'Custo total', 'Receita líq.', 'Margem', '%'].map((h, i) => (
                       <th key={h} style={{ padding: '10px 12px', fontSize: 11, fontWeight: 600, color: T.inkFaint, textAlign: i === 0 ? 'left' : 'right' }}>{h}</th>
                     ))}
                   </tr></thead>
@@ -17938,6 +17944,10 @@ function Custeio() {
                             title={`Projeto com ${b.nuregs.size} orçamentos (revisão ou escopo adicional). O custo soma todos.`}>{b.nuregs.size} orçamentos</span>}
                           {b.calculado && <span style={{ marginLeft: 6, fontSize: 10, color: T.inkDim, background: T.panelAlt, border: `1px solid ${T.line}`, padding: '2px 6px', borderRadius: 4 }}
                             title="O campo Net Offer Value não foi digitado nessas notas. O líquido veio do rateio do valor líquido da nota na proporção do VLRTOT — a mesma conta usada do lado do custo.">∑ líquido calculado</span>}
+                        </td>
+                        <td style={{ padding: '9px 12px', fontSize: 12, color: T.inkDim, maxWidth: 210,
+                          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={b.cliente || ''}>
+                          {b.cliente || '—'}
                         </td>
                         <td style={{ padding: '9px 12px', fontSize: 11.5, textAlign: 'right', color: T.inkDim, whiteSpace: 'nowrap' }}>
                           {b.pedido || '—'}{b.data && <span style={{ color: T.inkFaint }}> · {b.data.split('-').reverse().join('/')}</span>}
