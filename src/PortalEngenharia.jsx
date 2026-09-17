@@ -16878,6 +16878,7 @@ function Custeio() {
   const [piApont, setPiApont] = useState([]);
   const [clientes, setClientes] = useState([]);
   const [insumoMes, setInsumoMes] = useState([]);
+  const [rateioNat, setRateioNat] = useState([]);
   const [analise, setAnalise] = useState([]);
   const [suspeitos, setSuspeitos] = useState([]);
   const [opBusy, setOpBusy] = useState(null);
@@ -16937,6 +16938,7 @@ function Custeio() {
       setPiApont(await lerTudo('v_custeio_pi_apontado'));
       setClientes(await lerTudo('v_custeio_cliente'));
       setInsumoMes(await lerTudo('custeio_insumo_mensal'));
+      setRateioNat(await lerTudo('v_custeio_rateio_natureza'));
       setAnalise(await lerTudo('v_custeio_analise'));
       setSuspeitos(await lerTudo('v_custeio_custo_suspeito'));
       // Historico do verificador. 60 dias bastam para ver tendencia sem
@@ -17682,6 +17684,70 @@ function Custeio() {
                   <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 8 }}>
                     Em âmbar os meses 15% acima da média. O rateio é mensal: o CIF de cada mês vai para os
                     projetos que faturaram naquele mês, então um mês caro pesa só em quem entregou nele.
+                  </div>
+                </div>
+              );
+            })()}
+
+            {(() => {
+              // RATEIO DO SANKHYA: o financeiro reparte a nota por centro de
+              // custo na propria tela de compras. E a fonte certa da fatia de
+              // producao -- nao precisa estimar percentual nenhum.
+              const doAnoR = rateioNat.filter(r => String(r.competencia).slice(0, 4) === String(anoCif));
+              if (!doAnoR.length) return null;
+              const porNat = {};
+              doAnoR.forEach(r => {
+                const k = r.descrnat || '(sem natureza)';
+                if (!porNat[k]) porNat[k] = { total: 0, prod: 0, notas: 0, jaNoCif: false };
+                porNat[k].total += Number(r.total) || 0;
+                porNat[k].prod += Number(r.producao) || 0;
+                porNat[k].notas += Number(r.notas) || 0;
+                porNat[k].jaNoCif = porNat[k].jaNoCif || r.ja_no_cif;
+              });
+              const nats = Object.entries(porNat)
+                .filter(([, v]) => v.prod > 0)
+                .sort((a2, b2) => b2[1].prod - a2[1].prod);
+              if (!nats.length) return null;
+              const totalProd = nats.reduce((s2, [, v]) => s2 + v.prod, 0);
+              const novoProd = nats.filter(([, v]) => !v.jaNoCif).reduce((s2, [, v]) => s2 + v.prod, 0);
+              const maxProd = nats[0][1].prod;
+              return (
+                <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: 12 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+                    <span style={{ fontSize: 12, fontWeight: 700 }}>Rateio do Sankhya por centro de custo — {anoCif}</span>
+                    <span style={{ fontSize: 13, fontWeight: 700, color: T.terracotta, fontVariantNumeric: 'tabular-nums' }}>{moeda(totalProd)}</span>
+                  </div>
+                  <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 3, marginBottom: 10, maxWidth: 780 }}>
+                    O financeiro já reparte estas notas por centro de custo na tela de compras. A coluna de produção
+                    usa <strong>esse</strong> percentual, não uma estimativa. {nats.filter(([, v]) => v.jaNoCif).length > 0 && (
+                      <>As marcadas em âmbar <strong>já entram no CIF</strong> pela regra de natureza — somar o rateio
+                      por cima contaria duas vezes.</>
+                    )}
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                    {nats.slice(0, 14).map(([nome, v]) => (
+                      <div key={nome} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span style={{ fontSize: 11.5, color: v.jaNoCif ? T.amberText : T.inkDim, width: 220,
+                          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
+                          title={`${nome}${v.jaNoCif ? ' — já está no CIF pela regra de natureza' : ''}`}>
+                          {v.jaNoCif ? '⚠ ' : ''}{nome}
+                        </span>
+                        <div style={{ flex: 1, height: 12, background: T.lineSoft, borderRadius: 3, overflow: 'hidden' }}>
+                          <div style={{ height: '100%', width: `${(v.prod / maxProd) * 100}%`,
+                            background: v.jaNoCif ? T.amberText : T.oliveText }} />
+                        </div>
+                        <span style={{ fontSize: 11.5, fontWeight: 600, width: 88, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{moeda(v.prod)}</span>
+                        <span style={{ fontSize: 10.5, color: T.inkFaint, width: 74, textAlign: 'right' }}
+                          title="Fatia da nota que o financeiro atribuiu a centros de produção">
+                          {Math.round(v.prod / v.total * 100)}% de {moeda(v.total)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                  <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 10, paddingTop: 8, borderTop: `1px solid ${T.lineSoft}` }}>
+                    Fora o que já está no CIF, sobram <strong style={{ color: T.ink }}>{moeda(novoProd)}</strong> de
+                    despesa de produção com rateio pronto — plano de saúde, transporte e alimentação, principalmente.
+                    Ainda não entra no rateio dos projetos: falta decidir com você.
                   </div>
                 </div>
               );
