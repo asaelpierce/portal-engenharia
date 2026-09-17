@@ -2570,6 +2570,7 @@ function AnaliseProduto({ diag, itens }) {
 function ModeloPreditivo() {
   const [visao, setVisao] = useState('top');      // top | vale | alerta
   const [indic, setIndic] = useState(null);
+  const [pipeline, setPipeline] = useState([]);
   const [alertas, setAlertas] = useState([]);
   const [investigando, setInvestigando] = useState(null);
   const [abertoAlerta, setAbertoAlerta] = useState(null);
@@ -2637,6 +2638,8 @@ function ModeloPreditivo() {
         .eq('tem_dado_publico', true).order('venda_3anos', { ascending: false });
       setPotencial(pt || []);
       const { data: ind } = await supabase.from('modelo_indicadores').select('*');
+      const { data: pl } = await supabase.from('v_modelo_venda_e_pipeline').select('*');
+      setPipeline(pl || []);
       setIndic(ind?.[0] || null);
       const { data: al } = await supabase.from('modelo_alerta_completo').select('*');
       setAlertas(al || []);
@@ -2903,6 +2906,7 @@ function ModeloPreditivo() {
         {[{ id: 'top', l: 'Top 15 clientes' },
           { id: 'vale', l: 'Grupo Vale' },
           { id: 'alerta', l: `Quedas${alertas.length ? ` (${alertas.length})` : ''}` },
+          { id: 'pipeline', l: 'Propostas em aberto' },
           { id: 'potencial', l: 'Potencial' },
           { id: 'concorrencia', l: 'Concorrência' }].map(v => (
           <button key={v.id} onClick={() => setVisao(v.id)} style={{
@@ -3153,6 +3157,101 @@ function ModeloPreditivo() {
           </div>
         </div>
       )}
+
+      {visao === 'pipeline' && (() => {
+        // PROPOSTA EM ABERTO: cotado e ainda sem pedido. Sem isso, a analise de
+        // quedas fica torta -- cliente que caiu 60% mas tem proposta aberta e
+        // caso bem diferente de cliente que caiu 60% e sumiu.
+        const comProposta = pipeline.filter(p => Number(p.valor_aberto) > 0)
+          .sort((a, b) => Number(b.valor_aberto) - Number(a.valor_aberto));
+        const totalAberto = comProposta.reduce((s2, p) => s2 + Number(p.valor_aberto || 0), 0);
+        const parado = comProposta.reduce((s2, p) => s2 + Number(p.valor_parado_180d || 0), 0);
+
+        const GRUPOS = [
+          { k: 'parou de comprar, mas tem proposta', l: 'Parou de comprar, mas tem proposta aberta',
+            nota: 'Ainda não foi embora — depende de fechar.', cor: T.amberText },
+          { k: 'caiu, mas tem proposta', l: 'Caiu mais de 50%, mas tem proposta aberta',
+            nota: 'A queda pode ser atraso de fechamento, não perda.', cor: T.amberText },
+          { k: 'ativo com proposta', l: 'Comprando e com proposta aberta',
+            nota: 'Cliente ativo, com mais por vir.', cor: T.oliveText },
+          { k: 'caiu, sem proposta', l: 'Caiu mais de 50% e não tem nada cotado',
+            nota: 'Sem proposta aberta, a queda tende a continuar.', cor: T.rustText },
+          { k: 'sumiu, sem proposta', l: 'Parou de comprar e não tem nada cotado',
+            nota: 'Perda efetiva, até alguém cotar de novo.', cor: T.rustText },
+        ];
+
+        return (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '14px 18px', fontSize: 12.5, color: T.inkDim, lineHeight: 1.65 }}>
+              Há <strong style={{ color: T.ink }}>{moeda(totalAberto)}</strong> em propostas que ainda não viraram
+              pedido, de <strong style={{ color: T.ink }}>{comProposta.length} clientes</strong>.
+              {parado > 0 && <> Desse total, <strong style={{ color: T.rustText }}>{moeda(parado)}</strong> está
+              parado há mais de 180 dias — proposta velha raramente fecha sozinha.</>}
+              {' '}O valor em aberto é o líquido da proposta, e não entra em nenhuma projeção: é o que existe hoje
+              como possibilidade, não como previsão.
+            </div>
+
+            <div style={{ display: 'grid', gap: 8, gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))' }}>
+              {GRUPOS.map(g => {
+                const d = pipeline.filter(p => p.leitura === g.k);
+                const v = d.reduce((s2, p) => s2 + Number(p.valor_aberto || 0), 0);
+                if (!d.length) return null;
+                return (
+                  <div key={g.k} style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 8, padding: '9px 12px' }}>
+                    <div style={{ fontSize: 10.5, color: T.inkFaint, minHeight: 28 }}>{g.l}</div>
+                    <div style={{ fontSize: 17, fontWeight: 700, color: g.cor, fontVariantNumeric: 'tabular-nums' }}>{d.length}</div>
+                    {v > 0 && <div style={{ fontSize: 11, color: T.inkDim }}>{moeda(v)} cotados</div>}
+                  </div>
+                );
+              })}
+            </div>
+
+            {GRUPOS.filter(g => g.k.includes('proposta')).map(g => {
+              const d = pipeline.filter(p => p.leitura === g.k)
+                .sort((a, b) => Number(b.valor_aberto) - Number(a.valor_aberto));
+              if (!d.length) return null;
+              return (
+                <div key={g.k} style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
+                  <div style={{ padding: '10px 12px', borderBottom: `1px solid ${T.line}` }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: g.cor }}>{g.l} — {d.length}</div>
+                    <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 2 }}>{g.nota}</div>
+                  </div>
+                  <div style={{ overflowX: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 820 }}>
+                      <thead><tr style={{ background: T.panelAlt }}>
+                        {['Cliente', 'Vendeu 2026', 'Vendeu 2025', 'Variação', 'Propostas', 'Valor em aberto', 'Parado 180d+'].map((h, i) => (
+                          <th key={h} style={{ padding: '8px 12px', fontSize: 11, fontWeight: 600, color: T.inkFaint,
+                            textAlign: i === 0 ? 'left' : 'right', whiteSpace: 'nowrap' }}>{h}</th>
+                        ))}
+                      </tr></thead>
+                      <tbody>
+                        {d.slice(0, 20).map(p => (
+                          <tr key={p.cliente} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                            <td style={{ padding: '7px 12px', fontSize: 12, maxWidth: 240, whiteSpace: 'nowrap',
+                              overflow: 'hidden', textOverflow: 'ellipsis' }} title={p.cliente}>{p.cliente}</td>
+                            <td style={{ padding: '7px 12px', fontSize: 12, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{moeda(p.ytd26)}</td>
+                            <td style={{ padding: '7px 12px', fontSize: 12, textAlign: 'right', color: T.inkDim, fontVariantNumeric: 'tabular-nums' }}>{moeda(p.ytd25)}</td>
+                            <td style={{ padding: '7px 12px', fontSize: 12, textAlign: 'right', fontVariantNumeric: 'tabular-nums',
+                              color: p.var_ytd_pct == null ? T.inkFaint : Number(p.var_ytd_pct) < 0 ? T.rustText : T.oliveText }}>
+                              {p.var_ytd_pct == null ? '—' : `${Number(p.var_ytd_pct) > 0 ? '+' : ''}${p.var_ytd_pct}%`}
+                            </td>
+                            <td style={{ padding: '7px 12px', fontSize: 12, textAlign: 'right', color: T.inkDim }}>{p.propostas_abertas}</td>
+                            <td style={{ padding: '7px 12px', fontSize: 12.5, textAlign: 'right', fontWeight: 600, color: T.terracotta, fontVariantNumeric: 'tabular-nums' }}>{moeda(p.valor_aberto)}</td>
+                            <td style={{ padding: '7px 12px', fontSize: 12, textAlign: 'right', color: Number(p.valor_parado_180d) > 0 ? T.rustText : T.inkFaint, fontVariantNumeric: 'tabular-nums' }}
+                              title={p.mais_antiga_dias ? `Proposta mais antiga: ${p.mais_antiga_dias} dias` : ''}>
+                              {Number(p.valor_parado_180d) > 0 ? moeda(p.valor_parado_180d) : '—'}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        );
+      })()}
 
       {visao === 'potencial' && <AbaPotencial dados={potencial} />}
       {visao === 'concorrencia' && <AbaConcorrencia dados={concorrentes} />}
