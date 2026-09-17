@@ -16880,6 +16880,8 @@ function Custeio() {
   const [insumoMes, setInsumoMes] = useState([]);
   const [rateioNat, setRateioNat] = useState([]);
   const [rateioDet, setRateioDet] = useState([]);
+  const [folhaCentro, setFolhaCentro] = useState([]);
+  const [encargos, setEncargos] = useState([]);
   const [rateioAberto, setRateioAberto] = useState(null);
   const [excBusy, setExcBusy] = useState(null);
   const [analise, setAnalise] = useState([]);
@@ -16943,6 +16945,8 @@ function Custeio() {
       setInsumoMes(await lerTudo('custeio_insumo_mensal'));
       setRateioNat(await lerTudo('v_custeio_rateio_natureza'));
       setRateioDet(await lerTudo('v_custeio_rateio_detalhe'));
+      setFolhaCentro(await lerTudo('v_custeio_folha_cif'));
+      setEncargos(await lerTudo('custeio_encargo_folha'));
       setAnalise(await lerTudo('v_custeio_analise'));
       setSuspeitos(await lerTudo('v_custeio_custo_suspeito'));
       // Historico do verificador. 60 dias bastam para ver tendencia sem
@@ -17709,6 +17713,94 @@ function Custeio() {
                   <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 8 }}>
                     Em âmbar os meses 15% acima da média. O rateio é mensal: o CIF de cada mês vai para os
                     projetos que faturaram naquele mês, então um mês caro pesa só em quem entregou nele.
+                  </div>
+                </div>
+              );
+            })()}
+
+            {folhaCentro.length > 0 && (() => {
+              // FOLHA DE PRODUCAO. Vem da planilha do RH, nao do Sankhya: 95%
+              // dos titulos de folha estao em <SEM CENTRO DE RESULTADO>, entao
+              // o financeiro nao distribui por setor. A planilha e a unica
+              // fonte da distribuicao.
+              const salario = folhaCentro.reduce((s2, f) => s2 + Number(f.salario_base || 0), 0);
+              const encargo = folhaCentro.reduce((s2, f) => s2 + Number(f.encargo || 0), 0);
+              const provisao = folhaCentro.reduce((s2, f) => s2 + Number(f.provisao || 0), 0);
+              const encProv = folhaCentro.reduce((s2, f) => s2 + Number(f.encargo_da_provisao || 0), 0);
+              const custoMes = folhaCentro.reduce((s2, f) => s2 + Number(f.custo_mes || 0), 0);
+              const pessoas = folhaCentro.reduce((s2, f) => s2 + Number(f.pessoas || 0), 0);
+              const ordenados = [...folhaCentro].sort((a2, b2) => Number(b2.custo_mes) - Number(a2.custo_mes));
+              const maxC = Math.max(1, ...ordenados.map(f => Number(f.custo_mes)));
+              const porConfirmar = encargos.filter(e => e.ativo && !e.confirmado);
+              return (
+                <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: 12 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+                    <span style={{ fontSize: 12, fontWeight: 700 }}>
+                      Folha de produção — {pessoas} pessoas em {folhaCentro.length} centros
+                    </span>
+                    <span style={{ fontSize: 13, fontWeight: 700, color: T.terracotta, fontVariantNumeric: 'tabular-nums' }}>
+                      {moeda(custoMes)}<span style={{ fontSize: 10.5, fontWeight: 400, color: T.inkFaint }}> / mês</span>
+                    </span>
+                  </div>
+                  <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 3, marginBottom: 10, maxWidth: 800 }}>
+                    O salário base vem da planilha do RH, não do Sankhya: 95% dos títulos de folha estão sem centro
+                    de resultado, então o financeiro não distribui por setor. Só entram os centros de produção —
+                    engenharia comercial e administrativo ficam de fora.
+                  </div>
+
+                  <div style={{ display: 'grid', gap: 8, gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', marginBottom: 12 }}>
+                    {[
+                      { t: 'Salário base', v: salario, c: T.ink },
+                      { t: 'Encargo sobre salário', v: encargo, c: T.inkDim },
+                      { t: 'Provisão 13º e férias', v: provisao, c: T.inkDim },
+                      { t: 'Encargo da provisão', v: encProv, c: T.inkDim },
+                      { t: 'Custo total', v: custoMes, c: T.terracotta },
+                    ].map(k => (
+                      <div key={k.t} style={{ background: T.panelAlt, borderRadius: 7, padding: '8px 11px' }}>
+                        <div style={{ fontSize: 10, color: T.inkFaint, minHeight: 24 }}>{k.t}</div>
+                        <div style={{ fontSize: 14.5, fontWeight: 700, color: k.c, fontVariantNumeric: 'tabular-nums' }}>{moeda(k.v)}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {porConfirmar.length > 0 && (
+                    <div style={{ fontSize: 11, color: T.amberText, background: T.amberSoft, border: `1px solid ${T.amberText}`,
+                      borderRadius: 6, padding: '8px 11px', marginBottom: 12 }}>
+                      <strong>{porConfirmar.map(e => e.componente).join(' e ')}</strong>{' '}
+                      {porConfirmar.length === 1 ? 'ainda não foi confirmado' : 'ainda não foram confirmados'} —
+                      somam {porConfirmar.reduce((s2, e) => s2 + Number(e.aliquota), 0).toFixed(1)} dos{' '}
+                      {encargos.filter(e => e.ativo).reduce((s2, e) => s2 + Number(e.aliquota), 0).toFixed(1)} pontos de encargo.
+                      O RAT depende do CNAE e o FAP do histórico de acidentes; estão na GFIP.
+                    </div>
+                  )}
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 5, marginBottom: 12 }}>
+                    {ordenados.map(f => (
+                      <div key={f.centro_custo} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span style={{ fontSize: 11.5, color: T.inkDim, width: 250, whiteSpace: 'nowrap',
+                          overflow: 'hidden', textOverflow: 'ellipsis' }} title={f.centro_custo}>{f.centro_custo}</span>
+                        <span style={{ fontSize: 10.5, color: T.inkFaint, width: 58, textAlign: 'right' }}>
+                          {f.pessoas} {f.pessoas === 1 ? 'pessoa' : 'pessoas'}
+                        </span>
+                        <div style={{ flex: 1, height: 12, background: T.lineSoft, borderRadius: 3, overflow: 'hidden' }}>
+                          <div style={{ height: '100%', width: `${(Number(f.custo_mes) / maxC) * 100}%`, background: T.terracotta }} />
+                        </div>
+                        <span style={{ fontSize: 11, color: T.inkFaint, width: 82, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}
+                          title="Salário base, sem encargo">{moeda(f.salario_base)}</span>
+                        <span style={{ fontSize: 11.5, fontWeight: 600, width: 88, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}
+                          title="Com encargo e provisão">{moeda(f.custo_mes)}</span>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', fontSize: 10.5, color: T.inkFaint,
+                    paddingTop: 8, borderTop: `1px solid ${T.lineSoft}` }}>
+                    {encargos.filter(e => e.ativo).sort((a2, b2) => Number(b2.aliquota) - Number(a2.aliquota)).map(e => (
+                      <span key={e.componente} title={e.observacao || ''}
+                        style={{ color: e.confirmado ? T.inkFaint : T.amberText }}>
+                        {e.confirmado ? '' : '⚠ '}{e.componente} {Number(e.aliquota).toFixed(2).replace('.', ',')}%
+                      </span>
+                    ))}
                   </div>
                 </div>
               );
