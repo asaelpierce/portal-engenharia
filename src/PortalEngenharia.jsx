@@ -16886,6 +16886,8 @@ function Custeio() {
   const [custoHora, setCustoHora] = useState([]);
   const [setorAberto, setSetorAberto] = useState(null);
   const [mesHoras, setMesHoras] = useState('todos');
+  const [visaoHoras, setVisaoHoras] = useState('projeto');
+  const [itemHoras, setItemHoras] = useState([]);
   const [rateioAberto, setRateioAberto] = useState(null);
   const [excBusy, setExcBusy] = useState(null);
   const [analise, setAnalise] = useState([]);
@@ -16953,6 +16955,7 @@ function Custeio() {
       setEncargos(await lerTudo('custeio_encargo_folha'));
       setMaoObra(await lerTudo('v_custeio_mao_de_obra'));
       setCustoHora(await lerTudo('v_custeio_hora_custo_medio'));
+      setItemHoras(await lerTudo('v_custeio_mao_de_obra_item'));
       setAnalise(await lerTudo('v_custeio_analise'));
       setSuspeitos(await lerTudo('v_custeio_custo_suspeito'));
       // Historico do verificador. 60 dias bastam para ver tendencia sem
@@ -18326,6 +18329,121 @@ function Custeio() {
               </div>
             </div>
 
+            <div style={{ display: 'flex', gap: 4 }}>
+              {[{ id: 'projeto', l: 'Por projeto' }, { id: 'op', l: 'Por OP' }, { id: 'item', l: 'Por item' }].map(v => (
+                <button key={v.id} onClick={() => setVisaoHoras(v.id)} style={{
+                  fontFamily: 'inherit', fontSize: 12, fontWeight: visaoHoras === v.id ? 700 : 400, cursor: 'pointer',
+                  padding: '6px 14px', borderRadius: 6, border: `1px solid ${visaoHoras === v.id ? T.ink : T.line}`,
+                  background: visaoHoras === v.id ? T.ink : T.panel,
+                  color: visaoHoras === v.id ? T.panel : T.inkDim }}>{v.l}</button>
+              ))}
+            </div>
+
+            {visaoHoras === 'item' && (() => {
+              // ITEM: o que o Asael quer no fim -- custo de mao de obra por PECA.
+              // As OPs genericas de apontamento ficam de fora; a hora delas nao
+              // some, continua no projeto e no setor, so nao vira custo de peca.
+              const itens = [...itemHoras].sort((a2, b2) => Number(b2.horas) - Number(a2.horas));
+              if (!itens.length) return null;
+              return (
+                <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
+                  <div style={{ padding: '10px 12px', borderBottom: `1px solid ${T.line}` }}>
+                    <div style={{ fontSize: 12, fontWeight: 700 }}>Horas por item — {itens.length} produtos</div>
+                    <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 2, maxWidth: 780 }}>
+                      Cada OP produz um produto só, então a hora chega até a peça. As OPs genéricas de apontamento
+                      ficam fora desta lista — a hora delas continua no projeto e no setor, mas não vira custo de peça.
+                    </div>
+                  </div>
+                  <div style={{ overflowX: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 900 }}>
+                      <thead style={{ position: 'sticky', top: 0, zIndex: 1 }}><tr style={{ background: T.panelAlt }}>
+                        {['Cód', 'Produto', 'OPs', 'Projetos', 'Peças', 'Horas', 'Horas/peça', 'Custo', 'Custo/peça'].map((h, i) => (
+                          <th key={h} style={{ padding: '9px 12px', fontSize: 11, fontWeight: 600, color: T.inkFaint,
+                            textAlign: i >= 2 ? 'right' : 'left', whiteSpace: 'nowrap' }}>{h}</th>
+                        ))}
+                      </tr></thead>
+                      <tbody>
+                        {itens.slice(0, 100).map(it => (
+                          <tr key={it.cod_prod} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                            <td style={{ padding: '7px 12px', fontSize: 11.5, color: T.inkFaint }}>{it.cod_prod}</td>
+                            <td style={{ padding: '7px 12px', fontSize: 12, maxWidth: 290, whiteSpace: 'nowrap',
+                              overflow: 'hidden', textOverflow: 'ellipsis' }} title={it.descr_prod}>{it.descr_prod}</td>
+                            <td style={{ padding: '7px 12px', fontSize: 11.5, textAlign: 'right', color: T.inkFaint }}>{it.ops}</td>
+                            <td style={{ padding: '7px 12px', fontSize: 11.5, textAlign: 'right', color: T.inkFaint }}>{it.projetos}</td>
+                            <td style={{ padding: '7px 12px', fontSize: 12, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{Number(it.pecas).toLocaleString('pt-BR')}</td>
+                            <td style={{ padding: '7px 12px', fontSize: 12, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{Math.round(it.horas).toLocaleString('pt-BR')}</td>
+                            <td style={{ padding: '7px 12px', fontSize: 12, textAlign: 'right', color: T.blueText, fontVariantNumeric: 'tabular-nums' }}>{Number(it.horas_por_peca).toFixed(2)}</td>
+                            <td style={{ padding: '7px 12px', fontSize: 12, textAlign: 'right', color: T.inkDim, fontVariantNumeric: 'tabular-nums' }}>{moeda(it.custo)}</td>
+                            <td style={{ padding: '7px 12px', fontSize: 12.5, textAlign: 'right', fontWeight: 600, color: T.terracotta, fontVariantNumeric: 'tabular-nums' }}>{moeda(it.custo_por_peca)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              );
+            })()}
+
+            {visaoHoras === 'op' && (() => {
+              const porOp = {};
+              doAnoH.forEach(m => {
+                if (!m.idiproc) return;
+                if (!porOp[m.idiproc]) porOp[m.idiproc] = { br: m.br, prod: m.descr_prod, cod: m.cod_prod,
+                  qtd: m.qtd_produzir, horas: 0, custo: 0, setores: {} };
+                porOp[m.idiproc].horas += Number(m.horas || 0);
+                porOp[m.idiproc].custo += Number(m.custo_mao_obra || 0);
+                const sk = m.setor_nome || 'Sem setor';
+                porOp[m.idiproc].setores[sk] = (porOp[m.idiproc].setores[sk] || 0) + Number(m.horas || 0);
+              });
+              const ops = Object.entries(porOp).sort((a2, b2) => b2[1].horas - a2[1].horas);
+              if (!ops.length) return null;
+              return (
+                <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
+                  <div style={{ padding: '10px 12px', borderBottom: `1px solid ${T.line}`, fontSize: 12, fontWeight: 700 }}>
+                    Horas por OP — {ops.length} ordens
+                    {mesAtivo !== 'todos' && <span style={{ color: T.terracotta }}> em {mesAtivo}</span>}
+                  </div>
+                  <div style={{ overflowX: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 900 }}>
+                      <thead style={{ position: 'sticky', top: 0, zIndex: 1 }}><tr style={{ background: T.panelAlt }}>
+                        {['OP', 'BR', 'Produto', 'Qtd', 'Horas', 'Custo', 'Divisão entre setores'].map((h, i) => (
+                          <th key={h} style={{ padding: '9px 12px', fontSize: 11, fontWeight: 600, color: T.inkFaint,
+                            textAlign: i >= 3 && i <= 5 ? 'right' : 'left', whiteSpace: 'nowrap' }}>{h}</th>
+                        ))}
+                      </tr></thead>
+                      <tbody>
+                        {ops.slice(0, 100).map(([op, v]) => {
+                          const partes = Object.entries(v.setores).sort((a2, b2) => b2[1] - a2[1]);
+                          return (
+                            <tr key={op} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                              <td style={{ padding: '7px 12px', fontSize: 12, fontWeight: 600 }}>{op}</td>
+                              <td style={{ padding: '7px 12px', fontSize: 11.5, color: T.inkDim }}>{v.br || '—'}</td>
+                              <td style={{ padding: '7px 12px', fontSize: 11.5, color: T.inkDim, maxWidth: 260,
+                                whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={v.prod || ''}>
+                                {v.cod ? `${v.cod} · ` : ''}{v.prod || '—'}
+                              </td>
+                              <td style={{ padding: '7px 12px', fontSize: 11.5, textAlign: 'right', color: T.inkFaint }}>{v.qtd ? Number(v.qtd).toLocaleString('pt-BR') : '—'}</td>
+                              <td style={{ padding: '7px 12px', fontSize: 12, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{Math.round(v.horas).toLocaleString('pt-BR')}</td>
+                              <td style={{ padding: '7px 12px', fontSize: 12.5, textAlign: 'right', fontWeight: 600, color: T.terracotta, fontVariantNumeric: 'tabular-nums' }}>{moeda(v.custo)}</td>
+                              <td style={{ padding: '7px 12px', minWidth: 170 }}>
+                                <div style={{ display: 'flex', height: 9, borderRadius: 2, overflow: 'hidden', background: T.lineSoft }}>
+                                  {partes.map(([sn, sh]) => (
+                                    <div key={sn} style={{ width: `${(sh / v.horas) * 100}%`, background: CORES[sn] || T.inkFaint }}
+                                      title={`${sn}: ${Math.round(sh)} h`} />
+                                  ))}
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              );
+            })()}
+
+            {visaoHoras === 'projeto' && (
             <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
               <div style={{ padding: '10px 12px', borderBottom: `1px solid ${T.line}` }}>
                 <div style={{ fontSize: 12, fontWeight: 700 }}>
@@ -18394,6 +18512,7 @@ function Custeio() {
                 </div>
               )}
             </div>
+            )}
           </div>
         );
       })()}
