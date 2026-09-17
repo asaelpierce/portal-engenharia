@@ -17553,7 +17553,14 @@ function Custeio() {
                 const k = i.descr_prod || `cod ${i.cod_prod}`;
                 porItem[k] = (porItem[k] || 0) + (Number(i.valor) || 0);
               });
-              const itens = Object.entries(porItem).sort((a2, b2) => b2[1] - a2[1]);
+              // Com o almoxarifado inteiro no pool sao mais de mil itens: mostra
+              // os 12 maiores e agrupa o resto, senao a lista vira um extrato.
+              const todosItens = Object.entries(porItem).sort((a2, b2) => b2[1] - a2[1]);
+              const TOPO = 12;
+              const resto = todosItens.slice(TOPO).reduce((s2, x) => s2 + x[1], 0);
+              const itens = resto > 0
+                ? [...todosItens.slice(0, TOPO), [`outros ${todosItens.length - TOPO} itens`, resto]]
+                : todosItens;
               const mesesIns = [...new Set(doAnoIns.map(i => i.competencia))].sort();
               const porMesIns = mesesIns.map(m => ({
                 m, v: doAnoIns.filter(i => i.competencia === m).reduce((s2, i) => s2 + (Number(i.valor) || 0), 0),
@@ -17569,6 +17576,8 @@ function Custeio() {
                   <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 3, marginBottom: 10, maxWidth: 760 }}>
                     Comprada em lote, sem projeto, e consumida em todos. Não é custo direto de nenhum: entra como
                     pool e rateia pela mesma base do CIF — o custo direto da parcela entregue em cada mês.
+                    Entram os itens da lista de consumíveis e <strong>tudo que é estocado no almoxarifado (1003)</strong>.
+                    {todosItens.length > TOPO ? ` São ${todosItens.length} itens; a lista mostra os ${TOPO} maiores.` : ''}
                   </div>
 
                   <div style={{ display: 'flex', alignItems: 'flex-end', gap: 6, height: 100, marginBottom: 12 }}>
