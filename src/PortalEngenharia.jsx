@@ -17908,13 +17908,13 @@ function Custeio() {
               <div style={{ overflowX: 'auto' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 820 }}>
                   <thead><tr style={{ background: T.panelAlt }}>
-                    {['BR', 'Pedido venda', 'Comprado (líq.)', 'Do estoque', 'Custo total', 'Receita líq.', 'Margem', '%'].map((h, i) => (
+                    {['BR', 'Pedido venda', 'Comprado (líq.)', 'Do estoque', 'Devolvido', 'Custo total', 'Receita líq.', 'Margem', '%'].map((h, i) => (
                       <th key={h} style={{ padding: '10px 12px', fontSize: 11, fontWeight: 600, color: T.inkFaint, textAlign: i === 0 ? 'left' : 'right' }}>{h}</th>
                     ))}
                   </tr></thead>
                   <tbody>
                     {listaBr.length === 0 ? (
-                      <tr><td colSpan={8} style={{ padding: 24, textAlign: 'center', color: T.inkFaint }}>Nada nesse filtro.</td></tr>
+                      <tr><td colSpan={9} style={{ padding: 24, textAlign: 'center', color: T.inkFaint }}>Nada nesse filtro.</td></tr>
                     ) : listaBr.slice(0, 150).map(b => (
                       <tr key={b.chave} onClick={() => { setBrOrc(b.br); setCaixaAberta(null); }}
                           style={{ borderBottom: `1px solid ${T.lineSoft}`, cursor: 'pointer', background: 'transparent' }}>
@@ -17933,6 +17933,10 @@ function Custeio() {
                             title="Net Offer Value / Vlr. Realizado_ do Portal de Compras: valor da nota menos os impostos (fórmula do próprio Sankhya)">{moeda(b.comLiq)}</td>
                         <td style={{ padding: '9px 12px', fontSize: 12.5, textAlign: 'right', color: T.blueText, fontVariantNumeric: 'tabular-nums' }}
                             title="Material que a empresa já tinha e usou — só entra aqui se NÃO houve compra dele neste projeto (senão contaria duas vezes)">{b.est ? moeda(b.est) : '—'}</td>
+                        <td style={{ padding: '9px 12px', fontSize: 12.5, textAlign: 'right', color: T.oliveText, fontVariantNumeric: 'tabular-nums' }}
+                            title="Material que saiu para produção e voltou ao estoque. Abate do custo — por isso 'Do estoque' pode ser maior que o custo total.">
+                          {b.dev ? `−${moeda(b.dev)}` : '—'}
+                        </td>
                         <td style={{ padding: '9px 12px', fontSize: 12.5, textAlign: 'right', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}
                             title="Comprado (NF) + o que saiu do estoque + material de OP de estoque − sobra devolvida">{moeda(b.comLiq + b.est + (b.op || 0) - (b.dev || 0))}</td>
                         <td style={{ padding: '9px 12px', fontSize: 12.5, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}
@@ -18008,7 +18012,10 @@ function Custeio() {
                   <div style={{ padding: 12, display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))' }}>
                     {ORDEM.map(cat => {
                       const d = porCat[cat.id] || { orc: 0, com: 0, est: 0, dev: 0, custo: 0, emp: 0, op: 0, semCod: 0 };
-                      if (!d.custo && !d.emp) return null;
+                      // Custo zero COM movimento e diferente de zero sem nada: no
+                      // BR14417/26 saiu 1,4 mil e voltou 1,4 mil no mesmo dia.
+                      // Esconder o bloco tirava a unica forma de investigar.
+                      if (!d.custo && !d.emp && !d.dev && !d.com && !d.est) return null;
                       const estourou = false; // sem orçado não existe estouro a marcar
                       const barra = v => `${Math.min(100, (v / teto) * 100)}%`;
 
@@ -18296,7 +18303,7 @@ function Custeio() {
                   </tr></thead>
                   <tbody>
                     {lista.length === 0 ? (
-                      <tr><td colSpan={8} style={{ padding: 24, textAlign: 'center', color: T.inkFaint }}>Nada nesse filtro.</td></tr>
+                      <tr><td colSpan={9} style={{ padding: 24, textAlign: 'center', color: T.inkFaint }}>Nada nesse filtro.</td></tr>
                     ) : lista.slice(0, 200).map(m => {
                       const val = Number(m[campoMargem]) || 0;
                       const pct = m[campoPct];
