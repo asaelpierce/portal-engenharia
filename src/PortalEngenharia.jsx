@@ -17576,7 +17576,8 @@ function Custeio() {
                   <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 3, marginBottom: 10, maxWidth: 760 }}>
                     Comprada em lote, sem projeto, e consumida em todos. Não é custo direto de nenhum: entra como
                     pool e rateia pela mesma base do CIF — o custo direto da parcela entregue em cada mês.
-                    Entram os itens da lista de consumíveis e <strong>tudo que é estocado no almoxarifado (1003)</strong>.
+                    Entram os itens da lista de consumíveis e os produtos cujo <strong>&ldquo;Usado como&rdquo;</strong> no
+                    cadastro é <strong>Consumo</strong> ou <strong>Outros insumos</strong>.
                     {todosItens.length > TOPO ? ` São ${todosItens.length} itens; a lista mostra os ${TOPO} maiores.` : ''}
                   </div>
 
