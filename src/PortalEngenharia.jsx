@@ -2849,6 +2849,12 @@ function ModeloPreditivo() {
     });
   }, [linhas, visao]);
 
+  // O escopo vai no rotulo porque os cartoes somam SO a lista em tela.
+  // 'Fechado em 2025' mostrava R$ 20,66 mi (top 15) e parecia o total da
+  // empresa, que e R$ 32,20 mi. E na aba Grupo Vale os mesmos cartoes
+  // somavam so a Vale, com o mesmo nome.
+  const escopoCard = visao === 'vale' ? 'Grupo Vale' : `top ${dados.length}`;
+
   const totais = useMemo(() => ({
     total: dados.reduce((s, c) => s + c.total, 0),
     proj: dados.reduce((s, c) => s + c.proj, 0),
