@@ -2918,14 +2918,16 @@ function ModeloPreditivo() {
       {indic && (
         <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '14px 18px' }}>
           <div style={{ fontSize: 12.5, color: T.inkDim, lineHeight: 1.65 }}>
-            Até hoje em 2026 a empresa faturou <strong style={{ color: T.ink }}>
-            {fmtMoedaCompacta(indic.ytd_2026)}</strong>, contra <strong style={{ color: T.ink }}>
-            {fmtMoedaCompacta(indic.ytd_2025)}</strong> no mesmo intervalo de 2025 —{' '}
+            Até hoje em 2026 a empresa <strong>vendeu</strong> <strong style={{ color: T.ink }}>
+            {moeda(indic.ytd_2026)}</strong>, contra <strong style={{ color: T.ink }}>
+            {moeda(indic.ytd_2025)}</strong> no mesmo intervalo de 2025 —{' '}
             <strong style={{ color: indic.var_pct >= 0 ? T.oliveText : T.rustText }}>
-            {indic.var_pct >= 0 ? '+' : ''}{indic.var_pct}%</strong>. Mesmo com o total em alta,{' '}
+            {indic.var_pct >= 0 ? '+' : ''}{indic.var_pct}%</strong> em pedido líquido.{' '}
             <strong style={{ color: T.rustText }}>{indic.quedas_relevantes} clientes caíram mais de 50%</strong> e{' '}
             <strong style={{ color: T.rustText }}>{indic.clientes_sumiram} pararam de comprar</strong>.
-            O crescimento de uns esconde a perda de outros, e é isso que a aba Quedas mostra.
+            {indic.var_pct < 0
+              ? ' A queda no total e a perda de clientes apontam para o mesmo lado — a aba Quedas mostra onde.'
+              : ' O crescimento de uns esconde a perda de outros, e é isso que a aba Quedas mostra.'}
           </div>
         </div>
       )}
