@@ -17704,37 +17704,62 @@ function Custeio() {
                 porNat[k].notas += Number(r.notas) || 0;
                 porNat[k].jaNoCif = porNat[k].jaNoCif || r.ja_no_cif;
               });
+              // FORA o que ja entra no CIF pela regra de natureza -- aluguel de
+              // galpao e energia. Somar os dois contaria duas vezes.
               const nats = Object.entries(porNat)
-                .filter(([, v]) => v.prod > 0)
+                .filter(([, v]) => v.prod > 0 && !v.jaNoCif)
                 .sort((a2, b2) => b2[1].prod - a2[1].prod);
               if (!nats.length) return null;
               const totalProd = nats.reduce((s2, [, v]) => s2 + v.prod, 0);
-              const novoProd = nats.filter(([, v]) => !v.jaNoCif).reduce((s2, [, v]) => s2 + v.prod, 0);
+              const duplicado = Object.entries(porNat).filter(([, v]) => v.jaNoCif && v.prod > 0);
               const maxProd = nats[0][1].prod;
+
+              // mes a mes, so o que nao duplica
+              const natsFora = new Set(nats.map(([k]) => k));
+              const mesesR = [...new Set(doAnoR.map(r => r.competencia))].sort();
+              const porMesR = mesesR.map(m => ({
+                m, v: doAnoR.filter(r => r.competencia === m && natsFora.has(r.descrnat || '(sem natureza)'))
+                            .reduce((s2, r) => s2 + (Number(r.producao) || 0), 0),
+              })).filter(x => x.v > 0);
+              const maxMesR = Math.max(1, ...porMesR.map(x => x.v));
+              const mediaR = porMesR.length ? porMesR.reduce((s2, x) => s2 + x.v, 0) / porMesR.length : 0;
               return (
                 <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: 12 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
                     <span style={{ fontSize: 12, fontWeight: 700 }}>Rateio do Sankhya por centro de custo — {anoCif}</span>
                     <span style={{ fontSize: 13, fontWeight: 700, color: T.terracotta, fontVariantNumeric: 'tabular-nums' }}>{moeda(totalProd)}</span>
                   </div>
-                  <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 3, marginBottom: 10, maxWidth: 780 }}>
-                    O financeiro já reparte estas notas por centro de custo na tela de compras. A coluna de produção
-                    usa <strong>esse</strong> percentual, não uma estimativa. {nats.filter(([, v]) => v.jaNoCif).length > 0 && (
-                      <>As marcadas em âmbar <strong>já entram no CIF</strong> pela regra de natureza — somar o rateio
-                      por cima contaria duas vezes.</>
+                  <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 3, marginBottom: 10, maxWidth: 800 }}>
+                    O financeiro já reparte estas notas por centro de custo na tela de compras. A fatia de produção
+                    usa <strong>esse</strong> percentual, não uma estimativa.
+                    {duplicado.length > 0 && (
+                      <> Fora da lista: {duplicado.map(([k]) => k).join(', ')} — já entram no CIF pela regra de
+                      natureza, e apareceriam duas vezes.</>
                     )}
                   </div>
+
+                  {porMesR.length > 1 && (
+                    <div style={{ display: 'flex', alignItems: 'flex-end', gap: 6, height: 104, marginBottom: 14 }}>
+                      {porMesR.map(x => (
+                        <div key={x.m} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}
+                          title={`${x.m}: ${moeda(x.v)}`}>
+                          <div style={{ fontSize: 9.5, color: T.inkFaint, fontVariantNumeric: 'tabular-nums' }}>{(x.v / 1000).toFixed(0)}k</div>
+                          <div style={{ width: '100%', height: `${Math.max((x.v / maxMesR) * 72, 3)}px`,
+                            background: x.v > mediaR * 1.15 ? T.amberText : T.oliveText, borderRadius: '3px 3px 0 0' }} />
+                          <div style={{ fontSize: 9.5, color: T.inkFaint }}>{x.m.slice(5)}</div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
                     {nats.slice(0, 14).map(([nome, v]) => (
                       <div key={nome} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <span style={{ fontSize: 11.5, color: v.jaNoCif ? T.amberText : T.inkDim, width: 220,
-                          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
-                          title={`${nome}${v.jaNoCif ? ' — já está no CIF pela regra de natureza' : ''}`}>
-                          {v.jaNoCif ? '⚠ ' : ''}{nome}
+                        <span style={{ fontSize: 11.5, color: T.inkDim, width: 220,
+                          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={nome}>
+                          {nome}
                         </span>
                         <div style={{ flex: 1, height: 12, background: T.lineSoft, borderRadius: 3, overflow: 'hidden' }}>
-                          <div style={{ height: '100%', width: `${(v.prod / maxProd) * 100}%`,
-                            background: v.jaNoCif ? T.amberText : T.oliveText }} />
+                          <div style={{ height: '100%', width: `${(v.prod / maxProd) * 100}%`, background: T.oliveText }} />
                         </div>
                         <span style={{ fontSize: 11.5, fontWeight: 600, width: 88, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{moeda(v.prod)}</span>
                         <span style={{ fontSize: 10.5, color: T.inkFaint, width: 74, textAlign: 'right' }}
@@ -17745,9 +17770,9 @@ function Custeio() {
                     ))}
                   </div>
                   <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 10, paddingTop: 8, borderTop: `1px solid ${T.lineSoft}` }}>
-                    Fora o que já está no CIF, sobram <strong style={{ color: T.ink }}>{moeda(novoProd)}</strong> de
-                    despesa de produção com rateio pronto — plano de saúde, transporte e alimentação, principalmente.
-                    Ainda não entra no rateio dos projetos: falta decidir com você.
+                    São <strong style={{ color: T.ink }}>{moeda(mediaR)}</strong> por mês de despesa de produção com
+                    rateio pronto, sem contar o que já está no CIF. Ainda não entra no rateio dos projetos:
+                    falta decidir com você.
                   </div>
                 </div>
               );
