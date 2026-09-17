@@ -16892,6 +16892,8 @@ function Custeio() {
   const [consItem, setConsItem] = useState([]);
   const [consOp, setConsOp] = useState([]);
   const [visaoCons, setVisaoCons] = useState('projeto');
+  const [resMensal, setResMensal] = useState([]);
+  const [mesCons, setMesCons] = useState('acumulado');
   const [rateioAberto, setRateioAberto] = useState(null);
   const [excBusy, setExcBusy] = useState(null);
   const [analise, setAnalise] = useState([]);
@@ -16963,6 +16965,7 @@ function Custeio() {
       setConsProj(await lerTudo('v_custeio_consolidado_projeto'));
       setConsItem(await lerTudo('v_custeio_consolidado_item'));
       setConsOp(await lerTudo('v_custeio_consolidado_op'));
+      setResMensal(await lerTudo('v_custeio_resultado_mensal'));
       setAnalise(await lerTudo('v_custeio_analise'));
       setSuspeitos(await lerTudo('v_custeio_custo_suspeito'));
       // Historico do verificador. 60 dias bastam para ver tendencia sem
@@ -18551,17 +18554,23 @@ function Custeio() {
         const maxC = Math.max(1, ...porMesC.map(x => x.mo + x.oh));
 
         // por projeto: material é do projeto inteiro, mão de obra e overhead somam os meses
+        const consProjF = mesCons === 'acumulado' ? consProj : consProj.filter(c => c.competencia === mesCons);
         const porProjC = {};
-        consProj.forEach(c => {
+        consProjF.forEach(c => {
           if (!c.br) return;
-          if (!porProjC[c.br]) porProjC[c.br] = { mo: 0, oh: 0, h: 0, mat: Number(c.material_projeto || 0), rec: Number(c.receita_projeto || 0) };
+          // O material e do PROJETO INTEIRO, nao do mes. Com um mes
+          // selecionado, mostrar o material todo ao lado de uma fracao da mao
+          // de obra daria margem falsa -- entao ele so entra no acumulado.
+          if (!porProjC[c.br]) porProjC[c.br] = { mo: 0, oh: 0, h: 0,
+            mat: mesCons === 'acumulado' ? Number(c.material_projeto || 0) : null,
+            rec: mesCons === 'acumulado' ? Number(c.receita_projeto || 0) : null };
           porProjC[c.br].mo += Number(c.mao_obra || 0);
           porProjC[c.br].oh += Number(c.overhead || 0);
           porProjC[c.br].h += Number(c.horas || 0);
         });
         const projsC = Object.entries(porProjC)
-          .map(([br, v]) => ({ br, ...v, total: v.mat + v.mo + v.oh,
-            margem: v.rec > 0 ? v.rec - (v.mat + v.mo + v.oh) : null }))
+          .map(([br, v]) => ({ br, ...v, total: (v.mat || 0) + v.mo + v.oh,
+            margem: v.rec > 0 ? v.rec - ((v.mat || 0) + v.mo + v.oh) : null }))
           .sort((a2, b2) => b2.total - a2.total);
 
         const barra = (mat, mo, oh) => {
@@ -18587,6 +18596,71 @@ function Custeio() {
               A folha <strong>não</strong> entra no overhead — ela já é distribuída inteira pela hora, e somar nos dois
               lugares dobraria o custo.
             </div>
+
+            <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}>
+              <button onClick={() => setMesCons('acumulado')} style={{
+                fontFamily: 'inherit', fontSize: 12, fontWeight: mesCons === 'acumulado' ? 700 : 400, cursor: 'pointer',
+                padding: '6px 14px', borderRadius: 6, border: `1px solid ${mesCons === 'acumulado' ? T.ink : T.line}`,
+                background: mesCons === 'acumulado' ? T.ink : T.panel,
+                color: mesCons === 'acumulado' ? T.panel : T.inkDim }}>Acumulado</button>
+              <div style={{ width: 1, height: 20, background: T.line, margin: '0 4px' }} />
+              {mesesC.map(mm => (
+                <button key={mm} onClick={() => setMesCons(mm)} style={{
+                  fontFamily: 'inherit', fontSize: 11.5, fontWeight: mesCons === mm ? 700 : 400, cursor: 'pointer',
+                  padding: '5px 11px', borderRadius: 14, border: `1px solid ${mesCons === mm ? T.terracotta : T.line}`,
+                  background: mesCons === mm ? `${T.rustSoft}66` : 'transparent',
+                  color: mesCons === mm ? T.terracotta : T.inkDim }}>{mm.slice(5)}</button>
+              ))}
+            </div>
+
+            {(() => {
+              // RESULTADO DO PERIODO: o que a fabrica gastou contra o que faturou.
+              // Material acompanha a ENTREGA (custo direto x fatia faturada no
+              // mes); mao de obra e overhead sao de PERIODO -- a fabrica custa o
+              // mesmo tendo entregue muito ou pouco, e e isso que o mes mostra e
+              // o acumulado esconde.
+              const linhas = mesCons === 'acumulado' ? resMensal : resMensal.filter(r => r.competencia === mesCons);
+              if (!linhas.length) return null;
+              const sm = (k) => linhas.reduce((s2, r) => s2 + Number(r[k] || 0), 0);
+              const rec = sm('receita'), mat = sm('material'), mo2 = sm('mao_obra'), oh2 = sm('overhead');
+              const custo = mat + mo2 + oh2, marg = rec - custo;
+              return (
+                <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: 14 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
+                    <span style={{ fontSize: 12.5, fontWeight: 700 }}>
+                      Resultado {mesCons === 'acumulado' ? `acumulado — ${linhas.length} meses` : `de ${mesCons}`}
+                    </span>
+                    <span style={{ fontSize: 12, color: T.inkFaint }}>
+                      margem de <strong style={{ color: marg >= 0 ? T.oliveText : T.rustText, fontSize: 14 }}>
+                        {rec > 0 ? `${(marg / rec * 100).toFixed(1)}%` : '—'}</strong>
+                    </span>
+                  </div>
+                  <div style={{ display: 'grid', gap: 8, gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))' }}>
+                    {[
+                      { t: 'Receita líquida', v: rec, c: T.ink },
+                      { t: 'Material entregue', v: mat, c: T.terracotta },
+                      { t: 'Mão de obra', v: mo2, c: T.blueText },
+                      { t: 'Overhead', v: oh2, c: T.amberText },
+                      { t: 'Custo total', v: custo, c: T.inkDim },
+                      { t: 'Margem', v: marg, c: marg >= 0 ? T.oliveText : T.rustText },
+                    ].map(k => (
+                      <div key={k.t} style={{ background: T.panelAlt, borderRadius: 7, padding: '9px 11px' }}>
+                        <div style={{ fontSize: 10, color: T.inkFaint, minHeight: 24 }}>{k.t}</div>
+                        <div style={{ fontSize: 15, fontWeight: 700, color: k.c, fontVariantNumeric: 'tabular-nums' }}>{moeda(k.v)}</div>
+                        {rec > 0 && k.t !== 'Receita líquida' && (
+                          <div style={{ fontSize: 10, color: T.inkFaint }}>{(k.v / rec * 100).toFixed(1)}% da receita</div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                  <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 10, paddingTop: 8, borderTop: `1px solid ${T.lineSoft}` }}>
+                    O material acompanha a <strong>entrega</strong> — custo direto do projeto pela fatia faturada no mês.
+                    Mão de obra e overhead são de <strong>período</strong>: a fábrica custa o mesmo tendo entregue muito
+                    ou pouco, e é isso que o mês mostra e o acumulado esconde.
+                  </div>
+                </div>
+              );
+            })()}
 
             <div style={{ display: 'grid', gap: 8, gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))' }}>
               {[
@@ -18645,6 +18719,11 @@ function Custeio() {
               <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
                 <div style={{ padding: '10px 12px', borderBottom: `1px solid ${T.line}`, fontSize: 12, fontWeight: 700 }}>
                   Consolidado por projeto — {projsC.length}
+                  {mesCons !== 'acumulado' && (
+                    <span style={{ fontWeight: 400, color: T.inkFaint, fontSize: 10.5 }}>
+                      {' '}· {mesCons}, só mão de obra e overhead do mês — o material é do projeto inteiro
+                    </span>
+                  )}
                 </div>
                 <div style={{ overflowX: 'auto' }}>
                   <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 940 }}>
@@ -18659,7 +18738,10 @@ function Custeio() {
                         <tr key={p.br} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
                           <td style={{ padding: '7px 12px', fontSize: 12.5, fontWeight: 600 }}>{p.br}</td>
                           <td style={{ padding: '7px 12px', fontSize: 11.5, textAlign: 'right', color: T.inkFaint, fontVariantNumeric: 'tabular-nums' }}>{Math.round(p.h)}</td>
-                          <td style={{ padding: '7px 12px', fontSize: 12, textAlign: 'right', color: T.terracotta, fontVariantNumeric: 'tabular-nums' }}>{moeda(p.mat)}</td>
+                          <td style={{ padding: '7px 12px', fontSize: 12, textAlign: 'right', color: T.terracotta, fontVariantNumeric: 'tabular-nums' }}
+                            title={p.mat == null ? 'O material é do projeto inteiro, não do mês — só aparece no acumulado' : ''}>
+                            {p.mat == null ? '—' : moeda(p.mat)}
+                          </td>
                           <td style={{ padding: '7px 12px', fontSize: 12, textAlign: 'right', color: T.blueText, fontVariantNumeric: 'tabular-nums' }}>{moeda(p.mo)}</td>
                           <td style={{ padding: '7px 12px', fontSize: 12, textAlign: 'right', color: T.amberText, fontVariantNumeric: 'tabular-nums' }}>{moeda(p.oh)}</td>
                           <td style={{ padding: '7px 12px', fontSize: 12.5, textAlign: 'right', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{moeda(p.total)}</td>
@@ -18668,7 +18750,7 @@ function Custeio() {
                             color: p.margem == null ? T.inkFaint : p.margem < 0 ? T.rustText : T.oliveText }}>
                             {p.margem == null ? '—' : moeda(p.margem)}
                           </td>
-                          <td style={{ padding: '7px 12px', minWidth: 150 }}>{barra(p.mat, p.mo, p.oh)}</td>
+                          <td style={{ padding: '7px 12px', minWidth: 150 }}>{barra(p.mat || 0, p.mo, p.oh)}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -18727,7 +18809,8 @@ function Custeio() {
                       ))}
                     </tr></thead>
                     <tbody>
-                      {[...consOp].sort((a2, b2) => Number(b2.custo_total) - Number(a2.custo_total)).slice(0, 100).map(o => (
+                      {[...consOp].filter(o => mesCons === 'acumulado' || o.competencia === mesCons)
+                        .sort((a2, b2) => Number(b2.custo_total) - Number(a2.custo_total)).slice(0, 100).map(o => (
                         <tr key={`${o.competencia}-${o.idiproc}`} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
                           <td style={{ padding: '7px 12px', fontSize: 12, fontWeight: 600 }}>{o.idiproc}</td>
                           <td style={{ padding: '7px 12px', fontSize: 11.5, color: T.inkDim }}>{o.br || '—'}</td>
