@@ -2591,23 +2591,36 @@ function ModeloPreditivo() {
   const carregar = useCallback(async () => {
     setLoading(true); setErro('');
     try {
-      const { data: tops } = await supabase.from('sankhya_tops_venda').select('codtipoper');
-      const validos = new Set((tops || []).map(t => t.codtipoper));
+      // TOPs de PEDIDO, nao de nota. Pedido usa a faixa 3100+ e nota usa outra:
+      // filtrar por sankhya_tops_venda zerava tudo. A lista marca o que conta
+      // como demanda -- retrabalho e brinde ficam fora.
+      const { data: tops } = await supabase.from('sankhya_tops_pedido')
+        .select('codtipoper').eq('conta_no_modelo', true);
+      const validos = new Set((tops || []).map(t => String(t.codtipoper)));
 
       let todos = [], de = 0, passo = 1000;
       for (;;) {
+        // FONTE: PEDIDO DE VENDA, nao faturamento. O comercial trabalha com o
+        // que foi fechado; o faturamento vem depois e desloca o mes -- pedido
+        // de dezembro faturado em marco aparecia em marco, distorcendo a
+        // sazonalidade que o modelo mede.
+        // data_neg e a data do pedido; valor_liquido e a mesma base do resto do
+        // portal.
         const { data, error } = await supabase
-          .from('nota_venda_itens')
-          .select('cliente_nome,segmento_descricao,produto_kaleng,codtipoper,valor_bruto,data_faturamento')
-          .gte('data_faturamento', '2023-01-01')
-          .lte('data_faturamento', '2026-12-31')
+          .from('pedidos_itens')
+          .select('cliente_nome,segmento_descricao,produto_kaleng,codtipoper,valor_liquido,data_neg')
+          .gte('data_neg', '2023-01-01')
+          .lte('data_neg', '2026-12-31')
           .range(de, de + passo - 1);
         if (error) throw error;
         todos = todos.concat(data || []);
         if (!data || data.length < passo) break;
         de += passo;
       }
-      setLinhas(todos.filter(r => validos.has(r.codtipoper)));
+      // renomeia para os campos que o resto do componente ja espera
+      setLinhas(todos
+        .filter(r => validos.has(String(r.codtipoper)))
+        .map(r => ({ ...r, valor_bruto: r.valor_liquido, data_faturamento: r.data_neg })));
 
       const { data: ctx } = await supabase.from('modelo_contexto_cliente').select('*');
       setContexto(Object.fromEntries((ctx || []).map(c => [c.cliente, c])));
