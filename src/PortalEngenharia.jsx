@@ -17751,9 +17751,22 @@ function Custeio() {
         // um com seu pedido de venda -- por isso a linha e por ORCAMENTO.
         const porOrc = {};
         orcComp.forEach(r => {
-          const k = `${r.br || 'proj ' + r.codproj}|${r.nureg}`;
+          // AGRUPA POR PROJETO, nao por orcamento. Um BR pode ter varios
+          // orcamentos (revisao, escopo adicional) e o custo se espalha entre
+          // eles. Chaveando por NUREG, a tabela mostrava so um e escondia o
+          // resto: no BR14323/26 aparecia R$ 14,8 mil quando o projeto tem
+          // R$ 99,2 mil. Sao 237 BRs nessa situacao, R$ 5,35 milhoes.
+          const k = String(r.codproj || r.br);
           if (!porOrc[k]) porOrc[k] = { chave: k, codproj: r.codproj, br: r.br || `proj ${r.codproj}`, nureg: r.nureg,
-            pedido: r.pedido_venda, data: r.data_ref_orcamento, orc: 0, sol: 0, com: 0, comLiq: 0, emp: 0, est: 0, op: 0, rec: 0, recBruta: 0, fonteRec: null, itens: 0, cats: {} };
+            nuregs: new Set(), pedido: r.pedido_venda, data: r.data_ref_orcamento,
+            orc: 0, sol: 0, com: 0, comLiq: 0, emp: 0, est: 0, op: 0, rec: 0, recBruta: 0, fonteRec: null, itens: 0, cats: {} };
+          porOrc[k].nuregs.add(r.nureg);
+          // fica o pedido e a data do orcamento mais recente
+          if ((r.nureg || 0) > (porOrc[k].nureg || 0)) {
+            porOrc[k].nureg = r.nureg;
+            porOrc[k].pedido = r.pedido_venda;
+            porOrc[k].data = r.data_ref_orcamento;
+          }
           porOrc[k].orc += Number(r.valor_orcado) || 0;
           porOrc[k].sol += Number(r.valor_solicitado) || 0;
           // Consumivel rateado no fechamento nao entra no custo do projeto
@@ -17763,6 +17776,7 @@ function Custeio() {
             porOrc[k].est += Number(r.valor_estoque_liquido) || 0;
             porOrc[k].comLiq += Number(r.valor_comprado_liquido) || 0;
           }
+          // receita ja vem agregada por projeto na view: atribui, nao soma
           porOrc[k].rec = Number(r.receita_liquida) || porOrc[k].rec;
           porOrc[k].recBruta = Number(r.receita_bruta) || porOrc[k].recBruta;
           porOrc[k].fonteRec = r.fonte_receita_liquida || porOrc[k].fonteRec;
@@ -17787,17 +17801,10 @@ function Custeio() {
           const v = Number(e.custo_a_acrescentar) || 0;
           if (v > 0) opPorProj[e.codproj] = (opPorProj[e.codproj] || 0) + v;
         });
-        // Um BR pode ter varios orcamentos. A parcela da OP e do PROJETO, nao
-        // do orcamento: some no orcamento mais antigo, uma vez so, senao
-        // multiplicaria por quantos NUREG o projeto tiver.
-        const jaRecebeuOp = new Set();
-        Object.values(porOrc)
-          .sort((x, y) => (x.nureg || 0) - (y.nureg || 0))
-          .forEach(b2 => {
-            if (jaRecebeuOp.has(b2.codproj)) { b2.op = 0; return; }
-            b2.op = opPorProj[b2.codproj] || 0;
-            if (b2.op > 0) jaRecebeuOp.add(b2.codproj);
-          });
+        // A parcela da OP e do projeto, e agora a linha tambem: atribuicao
+        // direta. A guarda contra multiplicar por orcamento saiu junto com o
+        // agrupamento por NUREG.
+        Object.values(porOrc).forEach(b2 => { b2.op = opPorProj[b2.codproj] || 0; });
 
         const todosOrc = Object.values(porOrc)
           .filter(b => b.com > 0 || b.est > 0 || b.op > 0)
@@ -17901,6 +17908,8 @@ function Custeio() {
                         <td style={{ padding: '9px 12px', fontSize: 12.5, fontWeight: 600 }}>
                           {b.br}
                           {!b.faturado && <span style={{ marginLeft: 6, fontSize: 10, color: T.amberText, background: T.amberSoft, padding: '2px 6px', borderRadius: 4 }}>⏳ não faturado</span>}
+                          {b.nuregs && b.nuregs.size > 1 && <span style={{ marginLeft: 6, fontSize: 10, color: T.inkDim, background: T.panelAlt, border: `1px solid ${T.line}`, padding: '2px 6px', borderRadius: 4 }}
+                            title={`Projeto com ${b.nuregs.size} orçamentos (revisão ou escopo adicional). O custo soma todos.`}>{b.nuregs.size} orçamentos</span>}
                           {b.calculado && <span style={{ marginLeft: 6, fontSize: 10, color: T.inkDim, background: T.panelAlt, border: `1px solid ${T.line}`, padding: '2px 6px', borderRadius: 4 }}
                             title="O campo Net Offer Value não foi digitado nessas notas. O líquido veio do rateio do valor líquido da nota na proporção do VLRTOT — a mesma conta usada do lado do custo.">∑ líquido calculado</span>}
                         </td>
