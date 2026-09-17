@@ -16645,6 +16645,7 @@ function Custeio() {
   const [orcComp, setOrcComp] = useState([]);
   const [catComp, setCatComp] = useState([]);
   const [opExtra, setOpExtra] = useState([]);
+  const [piApont, setPiApont] = useState([]);
   const [analise, setAnalise] = useState([]);
   const [suspeitos, setSuspeitos] = useState([]);
   const [opBusy, setOpBusy] = useState(null);
@@ -16701,6 +16702,7 @@ function Custeio() {
       const rc = await lerTudo('v_custeio_categoria');
       setCatComp(rc);
       setOpExtra(await lerTudo('v_custeio_op_extra'));
+      setPiApont(await lerTudo('v_custeio_pi_apontado'));
       setAnalise(await lerTudo('v_custeio_analise'));
       setSuspeitos(await lerTudo('v_custeio_custo_suspeito'));
       // Historico do verificador. 60 dias bastam para ver tendencia sem
@@ -17769,8 +17771,9 @@ function Custeio() {
           }
           porOrc[k].orc += Number(r.valor_orcado) || 0;
           porOrc[k].sol += Number(r.valor_solicitado) || 0;
-          // Consumivel rateado no fechamento nao entra no custo do projeto
-          if (!r.consumivel_rateado) {
+          // Consumivel rateado nao entra; item [PI] com apontamento tambem
+          // nao, porque entra pelo valor apontado mais abaixo.
+          if (!r.consumivel_rateado && !piChave.has(`${r.codproj}|${r.cod_prod}`)) {
             porOrc[k].com += Number(r.valor_comprado) || 0;
             porOrc[k].emp += Number(r.valor_empenhado) || 0;
             porOrc[k].est += Number(r.valor_estoque_liquido) || 0;
@@ -17809,6 +17812,15 @@ function Custeio() {
         // A view ja descontava e a tela nao, entao a linha do projeto mostrava
         // a mais -- R$ 195 mil no BR12491/25, em 135 projetos no total. Ela nao
         // esta na view de itens, so na de categoria, por isso vem de catComp.
+        // [PI] e comprado em lote e dividido: a nota cai num projeto so. Para
+        // esses, o custo vem do APONTAMENTO, entao a compra e o estoque deles
+        // saem da soma e entra o valor apontado.
+        const piPorProj = {}; const piChave = new Set();
+        piApont.forEach(x => {
+          piPorProj[x.codproj] = (piPorProj[x.codproj] || 0) + (Number(x.custo_apontado) || 0);
+          piChave.add(`${x.codproj}|${x.cod_prod}`);
+        });
+
         const devPorProj = {};
         catComp.forEach(c2 => {
           const v = Number(c2.valor_devolvido) || 0;
@@ -17817,10 +17829,11 @@ function Custeio() {
         Object.values(porOrc).forEach(b2 => {
           b2.op = opPorProj[b2.codproj] || 0;
           b2.dev = devPorProj[b2.codproj] || 0;
+          b2.pi = piPorProj[b2.codproj] || 0;
         });
 
         const todosOrc = Object.values(porOrc)
-          .filter(b => b.com > 0 || b.est > 0 || b.op > 0)
+          .filter(b => b.com > 0 || b.est > 0 || b.op > 0 || b.pi > 0)
           .map(b => ({ ...b, faturado: b.recBruta > 0,
                        calculado: b.recBruta > 0 && b.fonteRec !== 'manual' }));
         const nFat = todosOrc.filter(b => b.faturado).length;
@@ -17938,7 +17951,7 @@ function Custeio() {
                           {b.dev ? `−${moeda(b.dev)}` : '—'}
                         </td>
                         <td style={{ padding: '9px 12px', fontSize: 12.5, textAlign: 'right', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}
-                            title="Comprado (NF) + o que saiu do estoque + material de OP de estoque − sobra devolvida">{moeda(b.comLiq + b.est + (b.op || 0) - (b.dev || 0))}</td>
+                            title="Comprado (NF) + o que saiu do estoque + material de OP de estoque − sobra devolvida">{moeda(b.comLiq + b.est + (b.op || 0) + (b.pi || 0) - (b.dev || 0))}</td>
                         <td style={{ padding: '9px 12px', fontSize: 12.5, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}
                             title={!b.rec ? 'Sem nota de venda'
                                    : b.calculado ? `Rateio do líquido da nota. Bruto faturado: ${moeda(b.recBruta)}`
@@ -17946,7 +17959,7 @@ function Custeio() {
                           {b.rec ? moeda(b.rec) : '—'}
                         </td>
                         {(() => {
-                          const custo = b.comLiq + b.est + (b.op || 0) - (b.dev || 0);
+                          const custo = b.comLiq + b.est + (b.op || 0) + (b.pi || 0) - (b.dev || 0);
                           const marg = b.rec ? b.rec - custo : null;
                           const pct = b.rec ? (marg / b.rec * 100) : null;
                           const cor = marg == null ? T.inkFaint : marg >= 0 ? T.oliveText : T.rustText;
@@ -17989,7 +18002,7 @@ function Custeio() {
                 porCat[c].est += Number(r.valor_estoque) || 0;
                 porCat[c].dev += Number(r.valor_devolvido) || 0;
                 porCat[c].emp += Number(r.valor_empenhado) || 0;
-                porCat[c].op += Number(r.valor_op_estoque) || 0;
+                porCat[c].op += (Number(r.valor_op_estoque) || 0) + (Number(r.valor_pi_apontado) || 0);
                 porCat[c].custo += Number(r.custo_real) || 0;
                 porCat[c].semCod += Number(r.itens_sem_codigo) || 0;
               });
