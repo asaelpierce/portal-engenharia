@@ -17804,7 +17804,20 @@ function Custeio() {
         // A parcela da OP e do projeto, e agora a linha tambem: atribuicao
         // direta. A guarda contra multiplicar por orcamento saiu junto com o
         // agrupamento por NUREG.
-        Object.values(porOrc).forEach(b2 => { b2.op = opPorProj[b2.codproj] || 0; });
+        //
+        // A DEVOLUCAO tambem: sobra que voltou para o estoque abate do custo.
+        // A view ja descontava e a tela nao, entao a linha do projeto mostrava
+        // a mais -- R$ 195 mil no BR12491/25, em 135 projetos no total. Ela nao
+        // esta na view de itens, so na de categoria, por isso vem de catComp.
+        const devPorProj = {};
+        catComp.forEach(c2 => {
+          const v = Number(c2.valor_devolvido) || 0;
+          if (v > 0) devPorProj[c2.codproj] = (devPorProj[c2.codproj] || 0) + v;
+        });
+        Object.values(porOrc).forEach(b2 => {
+          b2.op = opPorProj[b2.codproj] || 0;
+          b2.dev = devPorProj[b2.codproj] || 0;
+        });
 
         const todosOrc = Object.values(porOrc)
           .filter(b => b.com > 0 || b.est > 0 || b.op > 0)
@@ -17921,7 +17934,7 @@ function Custeio() {
                         <td style={{ padding: '9px 12px', fontSize: 12.5, textAlign: 'right', color: T.blueText, fontVariantNumeric: 'tabular-nums' }}
                             title="Material que a empresa já tinha e usou — só entra aqui se NÃO houve compra dele neste projeto (senão contaria duas vezes)">{b.est ? moeda(b.est) : '—'}</td>
                         <td style={{ padding: '9px 12px', fontSize: 12.5, textAlign: 'right', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}
-                            title="Comprado (NF) + o que saiu do estoque + material de OP de estoque">{moeda(b.comLiq + b.est + (b.op || 0))}</td>
+                            title="Comprado (NF) + o que saiu do estoque + material de OP de estoque − sobra devolvida">{moeda(b.comLiq + b.est + (b.op || 0) - (b.dev || 0))}</td>
                         <td style={{ padding: '9px 12px', fontSize: 12.5, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}
                             title={!b.rec ? 'Sem nota de venda'
                                    : b.calculado ? `Rateio do líquido da nota. Bruto faturado: ${moeda(b.recBruta)}`
@@ -17929,7 +17942,7 @@ function Custeio() {
                           {b.rec ? moeda(b.rec) : '—'}
                         </td>
                         {(() => {
-                          const custo = b.comLiq + b.est + (b.op || 0);
+                          const custo = b.comLiq + b.est + (b.op || 0) - (b.dev || 0);
                           const marg = b.rec ? b.rec - custo : null;
                           const pct = b.rec ? (marg / b.rec * 100) : null;
                           const cor = marg == null ? T.inkFaint : marg >= 0 ? T.oliveText : T.rustText;
