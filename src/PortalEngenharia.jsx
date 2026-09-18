@@ -3645,13 +3645,20 @@ function FollowUpComercial({ currentUser }) {
 
   const salvar = useCallback(async (br, campos) => {
     setSalvando(br);
+    setAvisoEnvio(null);
     try {
       const { error } = await supabase.from('comercial_follow_up')
         .upsert({ br, ...campos, atualizado_por: currentUser?.nome || null,
                   atualizado_em: new Date().toISOString() }, { onConflict: 'br' });
       if (error) throw error;
       await carregar();
-    } catch (err) { console.error(err); }
+    } catch (err) {
+      // O erro PRECISA aparecer. Antes ia so para o console.error, e quando a
+      // coluna estagio_comercial era NOT NULL o botao 'tirar classificacao'
+      // falhava em silencio -- a tela nao mudava e ninguem sabia por que.
+      console.error(err);
+      setAvisoEnvio({ tipo: 'erro', texto: `Não deu para salvar ${br}: ${err.message || err}` });
+    }
     setSalvando(null);
   }, [carregar, currentUser]);
 
