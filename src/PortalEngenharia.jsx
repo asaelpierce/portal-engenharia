@@ -17258,6 +17258,7 @@ function Custeio() {
   const [opExtra, setOpExtra] = useState([]);
   const [piApont, setPiApont] = useState([]);
   const [clientes, setClientes] = useState([]);
+  const [movInterna, setMovInterna] = useState([]);
   const [insumoMes, setInsumoMes] = useState([]);
   const [rateioNat, setRateioNat] = useState([]);
   const [opSug, setOpSug] = useState([]);
@@ -17336,6 +17337,7 @@ function Custeio() {
       setOpExtra(await lerTudo('v_custeio_op_extra'));
       setPiApont(await lerTudo('v_custeio_pi_apontado'));
       setClientes(await lerTudo('v_custeio_cliente'));
+      setMovInterna(await lerTudo('v_custeio_categoria'));
       setInsumoMes(await lerTudo('custeio_insumo_mensal'));
       setRateioNat(await lerTudo('v_custeio_rateio_natureza'));
       setOpSug(await lerTudo('v_custeio_op_sugerida'));
@@ -19568,7 +19570,17 @@ function Custeio() {
           const v = Number(c2.valor_devolvido) || 0;
           if (v > 0) devPorProj[c2.codproj] = (devPorProj[c2.codproj] || 0) + v;
         });
+        // MOVIMENTACAO INTERNA de produto acabado: quando a OP foi aberta no
+        // projeto errado, o saldo e transferido de codigo e a nota fica no
+        // projeto de origem. O valor sai de um e entra no outro.
+        const movPorProj = {};
+        movInterna.forEach(c2 => {
+          const v = Number(c2.valor_mov_interna) || 0;
+          if (v !== 0) movPorProj[c2.codproj] = (movPorProj[c2.codproj] || 0) + v;
+        });
+
         Object.values(porOrc).forEach(b2 => {
+          b2.mov = movPorProj[b2.codproj] || 0;
           b2.op = opPorProj[b2.codproj] || 0;
           b2.dev = devPorProj[b2.codproj] || 0;
           b2.pi = piPorProj[b2.codproj] || 0;
@@ -19576,7 +19588,7 @@ function Custeio() {
         });
 
         const todosOrc = Object.values(porOrc)
-          .filter(b => b.com > 0 || b.est > 0 || b.op > 0 || b.pi > 0)
+          .filter(b => b.com > 0 || b.est > 0 || b.op > 0 || b.pi > 0 || b.mov)
           .map(b => ({ ...b, faturado: b.recBruta > 0,
                        calculado: b.recBruta > 0 && b.fonteRec !== 'manual' }));
         const nFat = todosOrc.filter(b => b.faturado).length;
@@ -19698,7 +19710,7 @@ function Custeio() {
                           {b.dev ? `−${moeda(b.dev)}` : '—'}
                         </td>
                         <td style={{ padding: '9px 12px', fontSize: 12.5, textAlign: 'right', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}
-                            title="Comprado (NF) + o que saiu do estoque + material de OP de estoque − sobra devolvida">{moeda(b.comLiq + b.est + (b.op || 0) + (b.pi || 0) - (b.dev || 0))}</td>
+                            title="Comprado (NF) + o que saiu do estoque + material de OP de estoque − sobra devolvida">{moeda(b.comLiq + b.est + (b.op || 0) + (b.pi || 0) + (b.mov || 0) - (b.dev || 0))}</td>
                         <td style={{ padding: '9px 12px', fontSize: 12.5, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}
                             title={!b.rec ? 'Sem nota de venda'
                                    : b.calculado ? `Rateio do líquido da nota. Bruto faturado: ${moeda(b.recBruta)}`
@@ -19706,7 +19718,7 @@ function Custeio() {
                           {b.rec ? moeda(b.rec) : '—'}
                         </td>
                         {(() => {
-                          const custo = b.comLiq + b.est + (b.op || 0) + (b.pi || 0) - (b.dev || 0);
+                          const custo = b.comLiq + b.est + (b.op || 0) + (b.pi || 0) + (b.mov || 0) - (b.dev || 0);
                           const marg = b.rec ? b.rec - custo : null;
                           const pct = b.rec ? (marg / b.rec * 100) : null;
                           const cor = marg == null ? T.inkFaint : marg >= 0 ? T.oliveText : T.rustText;
@@ -19749,7 +19761,7 @@ function Custeio() {
                 porCat[c].est += Number(r.valor_estoque) || 0;
                 porCat[c].dev += Number(r.valor_devolvido) || 0;
                 porCat[c].emp += Number(r.valor_empenhado) || 0;
-                porCat[c].op += (Number(r.valor_op_estoque) || 0) + (Number(r.valor_pi_apontado) || 0);
+                porCat[c].op += (Number(r.valor_op_estoque) || 0) + (Number(r.valor_pi_apontado) || 0) + (Number(r.valor_mov_interna) || 0);
                 porCat[c].custo += Number(r.custo_real) || 0;
                 porCat[c].semCod += Number(r.itens_sem_codigo) || 0;
               });
