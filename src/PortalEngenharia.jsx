@@ -3786,15 +3786,26 @@ function FollowUpComercial({ currentUser }) {
           { t: 'Pedido em carteira', v: moeda(soma(confirmados, 'valor_proposta')), c: T.oliveText },
           { t: 'Em aberto', v: String(emAberto.length), c: T.ink },
           { t: 'Valor em aberto', v: moeda(soma(emAberto, 'valor_proposta')), c: T.inkDim },
-          { t: 'Previsão ponderada', v: moeda(soma(emAberto, 'valor_ponderado')), c: T.terracotta },
+          { t: 'Previsão ponderada ⚠', v: moeda(soma(emAberto, 'valor_ponderado')), c: T.terracotta,
+            ajuda: 'Valor × chance de fechar, somado. Serve para estimar o TOTAL do funil, não o quanto cada cliente vai comprar — proposta de R$ 1 mi com 30% de chance entra como R$ 300 mil, mas o cliente não compra 30% do escopo. Regra definitiva pendente com o comercial.' },
           { t: 'Total esperado', v: moeda(soma(confirmados, 'valor_proposta') + soma(emAberto, 'valor_ponderado')), c: T.ink },
           { t: 'Sem classificação', v: String(semClass), c: semClass ? T.amberText : T.inkFaint },
         ].map(k => (
-          <div key={k.t} style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 8, padding: '9px 12px' }}>
-            <div style={{ fontSize: 10.5, color: T.inkFaint }}>{k.t}</div>
+          <div key={k.t} title={k.ajuda || ''}
+            style={{ background: T.panel, border: `1px solid ${k.ajuda ? T.amberText : T.line}`, borderRadius: 8,
+              padding: '9px 12px', cursor: k.ajuda ? 'help' : 'default' }}>
+            <div style={{ fontSize: 10.5, color: k.ajuda ? T.amberText : T.inkFaint }}>{k.t}</div>
             <div style={{ fontSize: 18, fontWeight: 700, color: k.c, fontVariantNumeric: 'tabular-nums' }}>{k.v}</div>
           </div>
         ))}
+      </div>
+
+      <div style={{ fontSize: 11, color: T.amberText, background: T.amberSoft, border: `1px solid ${T.amberText}`,
+        borderRadius: 6, padding: '8px 11px', maxWidth: 940, lineHeight: 1.55 }}>
+        <strong>O ponderado ainda não é a regra de vocês.</strong> Hoje ele multiplica o valor da proposta pela chance
+        de fechar do estágio — uma proposta de R$ 1 milhão em &ldquo;Baixo&rdquo; (30%) entra como R$ 300 mil. Isso estima
+        o <strong>total</strong> do funil, mas lido linha a linha engana: o cliente não vai comprar 30% do escopo.
+        A regra definitiva está pendente com o comercial.
       </div>
 
       {porVend.length > 1 && (
@@ -3895,7 +3906,7 @@ function FollowUpComercial({ currentUser }) {
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 940 }}>
             <thead style={{ position: 'sticky', top: 0, zIndex: 1 }}><tr style={{ background: T.panelAlt }}>
-              {['BR', 'Cliente', 'Vendedor', 'Dias', 'Valor da proposta', 'Margin', 'Estágio comercial', 'Estágio vendedor', 'Ponderado', 'Próximo contato', 'Observação'].map((h, i) => (
+              {['BR', 'Cliente', 'Vendedor', 'Dias', 'Valor da proposta', 'Margin', 'Estágio comercial', 'Estágio vendedor', 'Ponderado ⚠', 'Próximo contato', 'Observação'].map((h, i) => (
                 <th key={h + i} style={{ padding: '9px 12px', fontSize: 11, fontWeight: 600, color: T.inkFaint,
                   textAlign: [3,4,5,8].includes(i) ? 'right' : 'left', whiteSpace: 'nowrap' }}>{h}</th>
               ))}
@@ -3970,7 +3981,9 @@ function FollowUpComercial({ currentUser }) {
                       </td>
                       <td style={{ padding: '8px 12px', fontSize: 12.5, textAlign: 'right', fontWeight: 600,
                         color: T.terracotta, fontVariantNumeric: 'tabular-nums' }}>
-                        {l.valor_ponderado ? moeda(l.valor_ponderado) : '—'}
+                        <span title="Valor × chance de fechar. Lido linha a linha o número engana: o cliente não compra a fração do escopo. Regra definitiva pendente com o comercial.">
+                          {l.valor_ponderado ? moeda(l.valor_ponderado) : '—'}
+                        </span>
                       </td>
                       <td style={{ padding: '8px 12px' }}>
                         <input type="date" value={l.proximo_contato || ''}
