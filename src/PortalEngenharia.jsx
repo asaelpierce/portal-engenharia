@@ -9426,11 +9426,25 @@ function MonitoramentoOP({ currentUser }) {
       // opsPorBr ficava vazio para TODOS -- a tela dizia 'Nenhuma OP
       // sincronizada ainda' mesmo com a OP existindo no Sankhya. Foi o caso do
       // BR14567/26 com a OP 8073, que o Monitoramento mostrava e aqui nao.
+      // O NOME DO CARD NO PLANNER carrega o cliente junto: 'BR14567/26-VALE',
+      // 'BR14484/26- CRVD', 'BR14336/26 MINERAÇÃO VALE VERDE'. O Sankhya so
+      // conhece 'BR14567/26', entao a busca com o sufixo voltava vazia e a tela
+      // dizia que nao havia OP -- quando havia (a 8073).
+      // Cada pessoa escreve o sufixo de um jeito, com ou sem traco, com ou sem
+      // espaco. Em vez de tentar cobrir as variacoes, corta no padrao do BR.
+      const soBr = (nome) => {
+        const m = String(nome || '').match(/^(BR\d+\/\d+)/i);
+        return m ? m[1].toUpperCase() : nome;
+      };
+      const paraSankhya = {};
+      brs.forEach(b2 => { paraSankhya[soBr(b2)] = b2; });
+      const brsLimpos = Object.keys(paraSankhya);
+
       const LOTE = 25;
       const juntos = {};
       let falhou = 0;
-      for (let i = 0; i < brs.length; i += LOTE) {
-        const pedaco = brs.slice(i, i + LOTE);
+      for (let i = 0; i < brsLimpos.length; i += LOTE) {
+        const pedaco = brsLimpos.slice(i, i + LOTE);
         try {
           const res = await fetch(`${SUPABASE_URL}/functions/v1/buscar-op-por-br`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -9438,7 +9452,9 @@ function MonitoramentoOP({ currentUser }) {
           }).then(r => r.json());
           if (res.ok && res.opsPorBr) {
             Object.entries(res.opsPorBr).forEach(([br, lista]) => {
-              juntos[br] = (lista || []).map(x => x.op);
+              // devolve na chave ORIGINAL do card, senao a tela nao acha
+              const chave = paraSankhya[br] || br;
+              juntos[chave] = (lista || []).map(x => x.op);
             });
           } else { falhou += pedaco.length; }
         } catch (e) {
