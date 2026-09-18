@@ -3613,6 +3613,14 @@ function FollowUpComercial({ currentUser }) {
   // Dispara o fluxo do Power Automate. O portal nao manda e-mail: ele avisa o
   // fluxo, que busca a planilha no endpoint e envia. Assim o Outlook fica com
   // a Microsoft e o portal so decide QUANDO e PARA QUEM.
+  // Recarrega so o historico. Usar o carregar() inteiro acende o loading e
+  // pisca a tela toda por causa de uma tabela de 14 linhas.
+  const recarregarHistorico = useCallback(async () => {
+    const { data } = await supabase.from('v_comercial_followup_historico')
+      .select('*').order('enviado_em', { ascending: false }).limit(60);
+    setEnvioHist(data || []);
+  }, []);
+
   const dispararEnvio = useCallback(async (vendedor) => {
     const alvo = vendedor || 'todos';
     const quantos = vendedor ? 1 : new Set(linhas.map(l => l.vendedor)).size;
@@ -3628,12 +3636,15 @@ function FollowUpComercial({ currentUser }) {
       setAvisoEnvio(data?.ok
         ? { tipo: 'ok', texto: data.mensagem || 'Disparado.' }
         : { tipo: 'erro', texto: data?.erro || 'Não deu para disparar.' });
-      if (data?.ok) setTimeout(carregar, 3000);
+      // O Power Automate leva alguns segundos para chamar o endpoint e gerar
+      // os registros. Uma recarga aos 3s pegava a tela antes de existir
+      // qualquer linha -- por isso o historico parecia nao atualizar.
+      if (data?.ok) [4000, 10000, 20000].forEach(ms => setTimeout(recarregarHistorico, ms));
     } catch (err) {
       setAvisoEnvio({ tipo: 'erro', texto: err.message || String(err) });
     }
     setDisparando(null);
-  }, [linhas, currentUser, carregar]);
+  }, [linhas, currentUser, recarregarHistorico]);
 
   const salvarWebhook = useCallback(async (url) => {
     await supabase.from('comercial_followup_config').upsert({
@@ -3989,6 +4000,11 @@ function FollowUpComercial({ currentUser }) {
                     {semResposta} sem resposta há mais de 7 dias
                   </span>
                 )}
+                <button onClick={recarregarHistorico} title="Buscar os envios e respostas mais recentes"
+                  style={{ fontFamily: 'inherit', fontSize: 11, padding: '4px 9px', borderRadius: 5,
+                    cursor: 'pointer', border: `1px solid ${T.line}`, background: 'transparent', color: T.inkDim }}>
+                  ↻ atualizar
+                </button>
                 <button onClick={() => setVerHistorico(v => !v)}
                   style={{ fontFamily: 'inherit', fontSize: 11, padding: '4px 10px', borderRadius: 5,
                     cursor: 'pointer', border: `1px solid ${T.line}`, background: 'transparent', color: T.inkDim }}>
