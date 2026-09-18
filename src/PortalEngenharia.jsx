@@ -16890,6 +16890,7 @@ function Custeio() {
   const [clientes, setClientes] = useState([]);
   const [insumoMes, setInsumoMes] = useState([]);
   const [rateioNat, setRateioNat] = useState([]);
+  const [opSug, setOpSug] = useState([]);
   const [rateioDet, setRateioDet] = useState([]);
   const [folhaCentro, setFolhaCentro] = useState([]);
   const [encargos, setEncargos] = useState([]);
@@ -16967,6 +16968,7 @@ function Custeio() {
       setClientes(await lerTudo('v_custeio_cliente'));
       setInsumoMes(await lerTudo('custeio_insumo_mensal'));
       setRateioNat(await lerTudo('v_custeio_rateio_natureza'));
+      setOpSug(await lerTudo('v_custeio_op_sugerida'));
       setRateioDet(await lerTudo('v_custeio_rateio_detalhe'));
       setFolhaCentro(await lerTudo('v_custeio_folha_cif'));
       setEncargos(await lerTudo('custeio_encargo_folha'));
@@ -17512,12 +17514,23 @@ function Custeio() {
                   <div style={{ padding: '10px 12px', borderBottom: `1px solid ${T.line}` }}>
                     <div style={{ fontSize: 12, fontWeight: 700, color: T.rustText }}>
                       Custo não fecha — {fila.length} {fila.length === 1 ? 'projeto' : 'projetos'}
+                      {(() => {
+                        const comSug = new Set(opSug.filter(o => !o.ja_vinculada).map(o => o.br));
+                        const n = fila.filter(x => comSug.has(x.br)).length;
+                        return n > 0 ? (
+                          <span style={{ fontWeight: 400, color: T.oliveText, fontSize: 11 }}>
+                            {' '}· {n} com OP já identificada pelo apontamento
+                          </span>
+                        ) : null;
+                      })()}
                     </div>
                     <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 3, maxWidth: 780 }}>
                       Faturaram mas quase não têm custo. Quase sempre é material que saiu de uma OP de projeto
-                      estoque e nunca foi amarrado ao BR. <strong>Não há como descobrir sozinho</strong> — a OP de
-                      origem não está gravada em lugar nenhum. Quem conhece o projeto informa o número da OP e o
-                      custo entra, já descontado o que o projeto comprou por conta própria.
+                      estoque e nunca foi amarrado ao BR. <strong>Quando o projeto tem hora
+                      apontada, a OP já está identificada</strong> — o apontamento grava projeto e OP na mesma linha, e o botão
+                      verde liga com um clique. Sem hora apontada não há o que sugerir: aí alguém que conhece o projeto informa
+                      o número. Em qualquer dos dois, entra o material consumido pela OP, já descontado o que o projeto comprou
+                      por conta própria.
                     </div>
                   </div>
                   <div style={{ overflowX: 'auto' }}>
@@ -17539,19 +17552,48 @@ function Custeio() {
                             <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', color: x.itens_com_custo === 0 ? T.rustText : T.inkDim, fontVariantNumeric: 'tabular-nums' }}>{x.itens_com_custo}</td>
                             <td style={{ padding: '8px 12px', fontSize: 11, color: T.inkDim, whiteSpace: 'nowrap' }}>{x.sintoma}</td>
                             <td style={{ padding: '8px 12px', whiteSpace: 'nowrap' }}>
-                              <input value={opInput[x.codproj] || ''} placeholder="nº da OP"
-                                onChange={e => setOpInput(o => ({ ...o, [x.codproj]: e.target.value.replace(/\D/g, '') }))}
-                                onKeyDown={e => { if (e.key === 'Enter') vincularOp(x.codproj, opInput[x.codproj]); }}
-                                style={{ fontFamily: 'inherit', fontSize: 11.5, width: 78, padding: '4px 7px',
-                                  borderRadius: 4, border: `1px solid ${T.line}`, background: T.panel, color: T.ink }} />
-                              <button disabled={opBusy != null || !opInput[x.codproj]}
-                                onClick={() => vincularOp(x.codproj, opInput[x.codproj])}
-                                style={{ fontFamily: 'inherit', fontSize: 11.5, marginLeft: 5, padding: '4px 9px',
-                                  borderRadius: 4, cursor: opInput[x.codproj] ? 'pointer' : 'default',
-                                  border: `1px solid ${T.line}`, background: 'transparent',
-                                  color: opInput[x.codproj] ? T.terracotta : T.inkFaint }}>
-                                {opBusy === x.codproj ? '…' : 'ligar'}
-                              </button>
+                              {(() => {
+                                // O apontamento de hora grava projeto E OP na mesma linha.
+                                // Quando existe, nao ha o que digitar: sugere com um clique,
+                                // mostrando horas, pessoas e o produto que a OP fez.
+                                const sug = opSug.filter(o => o.br === x.br && !o.ja_vinculada);
+                                if (sug.length) {
+                                  return (
+                                    <span style={{ display: 'inline-flex', gap: 5, flexWrap: 'wrap', alignItems: 'center' }}>
+                                      {sug.slice(0, 3).map(o => (
+                                        <button key={o.idiproc} disabled={opBusy != null}
+                                          onClick={() => vincularOp(x.codproj, String(o.idiproc))}
+                                          title={`OP ${o.idiproc} — ${o.horas} h, ${o.pessoas} ${o.pessoas === 1 ? 'pessoa' : 'pessoas'}${o.setores ? ` · ${o.setores}` : ''}${o.descr_prod ? `\n${o.descr_prod}` : ''}`}
+                                          style={{ fontFamily: 'inherit', fontSize: 11, padding: '4px 9px', borderRadius: 4,
+                                            cursor: 'pointer', border: `1px solid ${T.oliveText}66`,
+                                            background: `${T.oliveSoft}99`, color: T.oliveText, fontWeight: 600 }}>
+                                          {opBusy === x.codproj ? '…' : `ligar OP ${o.idiproc}`}
+                                          <span style={{ fontWeight: 400, opacity: .75 }}> · {Math.round(o.horas)}h</span>
+                                        </button>
+                                      ))}
+                                      {sug.length > 3 && <span style={{ fontSize: 10.5, color: T.inkFaint }}>+{sug.length - 3}</span>}
+                                    </span>
+                                  );
+                                }
+                                return (
+                                  <span style={{ display: 'inline-flex', alignItems: 'center' }}>
+                                    <input value={opInput[x.codproj] || ''} placeholder="nº da OP"
+                                      onChange={e => setOpInput(o => ({ ...o, [x.codproj]: e.target.value.replace(/\D/g, '') }))}
+                                      onKeyDown={e => { if (e.key === 'Enter') vincularOp(x.codproj, opInput[x.codproj]); }}
+                                      title="Sem hora apontada neste projeto — não há OP para sugerir"
+                                      style={{ fontFamily: 'inherit', fontSize: 11.5, width: 78, padding: '4px 7px',
+                                        borderRadius: 4, border: `1px solid ${T.line}`, background: T.panel, color: T.ink }} />
+                                    <button disabled={opBusy != null || !opInput[x.codproj]}
+                                      onClick={() => vincularOp(x.codproj, opInput[x.codproj])}
+                                      style={{ fontFamily: 'inherit', fontSize: 11.5, marginLeft: 5, padding: '4px 9px',
+                                        borderRadius: 4, cursor: opInput[x.codproj] ? 'pointer' : 'default',
+                                        border: `1px solid ${T.line}`, background: 'transparent',
+                                        color: opInput[x.codproj] ? T.terracotta : T.inkFaint }}>
+                                      {opBusy === x.codproj ? '…' : 'ligar'}
+                                    </button>
+                                  </span>
+                                );
+                              })()}
                             </td>
                           </tr>
                         ))}
