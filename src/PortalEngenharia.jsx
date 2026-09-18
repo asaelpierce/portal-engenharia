@@ -3957,7 +3957,13 @@ function FollowUpComercial({ currentUser }) {
                           style={{ fontFamily: 'inherit', fontSize: 11.5, padding: '4px 7px', borderRadius: 5,
                             border: `1px solid ${l.estagio_comercial ? T.line : T.amberText}`,
                             background: T.panel, color: l.estagio_comercial ? T.ink : T.amberText }}>
-                          <option value="">classificar…</option>
+                          {/* A opcao vazia serve para DESFAZER: quem classificou
+                              errado volta para sem classificacao escolhendo ela.
+                              O rotulo antes era so 'classificar...', que nao
+                              parecia acao -- parecia rotulo de campo vazio. */}
+                          <option value="">
+                            {l.estagio_comercial ? '↩ tirar classificação' : 'classificar…'}
+                          </option>
                           {estagios.map(e2 => (
                             <option key={e2.estagio} value={e2.estagio}>
                               {e2.rotulo} — {Math.round(Number(e2.peso) * 100)}%
