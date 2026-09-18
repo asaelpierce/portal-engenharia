@@ -3586,19 +3586,62 @@ function FollowUpComercial({ currentUser }) {
   const [vend, setVend] = useState('Todos');
   const [verPerdidos, setVerPerdidos] = useState(false);
   const [obsAberta, setObsAberta] = useState(null);
+  const [envioHist, setEnvioHist] = useState([]);
+  const [webhook, setWebhook] = useState('');
+  const [webhookEdit, setWebhookEdit] = useState(false);
+  const [disparando, setDisparando] = useState(null);
+  const [avisoEnvio, setAvisoEnvio] = useState(null);
+  const [verHistorico, setVerHistorico] = useState(false);
   const moeda = (v) => fmtMoedaCompacta(v);
 
   const carregar = useCallback(async () => {
     setLoading(true);
-    const [p, e] = await Promise.all([
+    const [p, e, h, c] = await Promise.all([
       supabase.from('v_comercial_pipeline').select('*'),
       supabase.from('comercial_estagio').select('*').order('ordem'),
+      supabase.from('v_comercial_followup_historico').select('*').order('enviado_em', { ascending: false }).limit(60),
+      supabase.from('comercial_followup_config').select('webhook_url').eq('id', 1).maybeSingle(),
     ]);
     setLinhas(p.data || []);
     setEstagios(e.data || []);
+    setEnvioHist(h.data || []);
+    setWebhook(c.data?.webhook_url || '');
     setLoading(false);
   }, []);
   useEffect(() => { carregar(); }, [carregar]);
+
+  // Dispara o fluxo do Power Automate. O portal nao manda e-mail: ele avisa o
+  // fluxo, que busca a planilha no endpoint e envia. Assim o Outlook fica com
+  // a Microsoft e o portal so decide QUANDO e PARA QUEM.
+  const dispararEnvio = useCallback(async (vendedor) => {
+    const alvo = vendedor || 'todos';
+    const quantos = vendedor ? 1 : new Set(linhas.map(l => l.vendedor)).size;
+    if (!window.confirm(vendedor
+      ? `Enviar o follow up para ${vendedor}?`
+      : `Enviar o follow up para todos os vendedores? São ${quantos} e-mails.`)) return;
+    setDisparando(alvo);
+    setAvisoEnvio(null);
+    try {
+      const { data, error } = await supabase.rpc('fn_followup_disparar', {
+        p_vendedor: vendedor || null, p_quem: currentUser?.nome || null });
+      if (error) throw error;
+      setAvisoEnvio(data?.ok
+        ? { tipo: 'ok', texto: data.mensagem || 'Disparado.' }
+        : { tipo: 'erro', texto: data?.erro || 'Não deu para disparar.' });
+      if (data?.ok) setTimeout(carregar, 3000);
+    } catch (err) {
+      setAvisoEnvio({ tipo: 'erro', texto: err.message || String(err) });
+    }
+    setDisparando(null);
+  }, [linhas, currentUser, carregar]);
+
+  const salvarWebhook = useCallback(async (url) => {
+    await supabase.from('comercial_followup_config').upsert({
+      id: 1, webhook_url: url || null, atualizado_em: new Date().toISOString(),
+      atualizado_por: currentUser?.nome || null });
+    setWebhook(url);
+    setWebhookEdit(false);
+  }, [currentUser]);
 
   const salvar = useCallback(async (br, campos) => {
     setSalvando(br);
@@ -3807,6 +3850,144 @@ function FollowUpComercial({ currentUser }) {
         o <strong>total</strong> do funil, mas lido linha a linha engana: o cliente não vai comprar 30% do escopo.
         A regra definitiva está pendente com o comercial.
       </div>
+
+      {(() => {
+        // ENVIO DO FOLLOW UP. O portal nao manda e-mail: ele chama o fluxo do
+        // Power Automate, que busca a planilha no endpoint e envia pelo Outlook.
+        // Assim o e-mail fica com a Microsoft e o portal decide QUANDO e PARA QUEM.
+        const vendedores = [...new Set(linhas.map(l => l.vendedor).filter(Boolean))].sort();
+        const ultimoDe = {};
+        envioHist.forEach(h => { if (!ultimoDe[h.vendedor]) ultimoDe[h.vendedor] = h; });
+        const semResposta = envioHist.filter(h => h.status === 'sem resposta há mais de 7 dias').length;
+
+        return (
+          <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: 12 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginBottom: 10 }}>
+              <span style={{ fontSize: 12, fontWeight: 700 }}>Enviar follow up por e-mail</span>
+              <span style={{ display: 'inline-flex', gap: 8, alignItems: 'center' }}>
+                {semResposta > 0 && (
+                  <span style={{ fontSize: 10.5, color: T.rustText }}>
+                    {semResposta} sem resposta há mais de 7 dias
+                  </span>
+                )}
+                <button onClick={() => setVerHistorico(v => !v)}
+                  style={{ fontFamily: 'inherit', fontSize: 11, padding: '4px 10px', borderRadius: 5,
+                    cursor: 'pointer', border: `1px solid ${T.line}`, background: 'transparent', color: T.inkDim }}>
+                  {verHistorico ? 'esconder histórico' : `histórico (${envioHist.length})`}
+                </button>
+                <button onClick={() => dispararEnvio(null)} disabled={disparando != null || !webhook}
+                  title={!webhook ? 'Configure a URL do Power Automate primeiro' : 'Envia para todos os vendedores ativos'}
+                  style={{ fontFamily: 'inherit', fontSize: 11.5, fontWeight: 700, padding: '6px 14px', borderRadius: 5,
+                    cursor: webhook && disparando == null ? 'pointer' : 'default', border: 'none',
+                    background: webhook ? T.terracotta : T.lineSoft, color: webhook ? '#fff' : T.inkFaint }}>
+                  {disparando === 'todos' ? 'disparando…' : 'Enviar para todos'}
+                </button>
+              </span>
+            </div>
+
+            {avisoEnvio && (
+              <div style={{ fontSize: 11.5, padding: '7px 11px', borderRadius: 6, marginBottom: 10,
+                color: avisoEnvio.tipo === 'ok' ? T.oliveText : T.rustText,
+                background: avisoEnvio.tipo === 'ok' ? T.oliveSoft : T.rustSoft,
+                border: `1px solid ${avisoEnvio.tipo === 'ok' ? T.oliveText : T.rustText}44` }}>
+                {avisoEnvio.texto}
+              </div>
+            )}
+
+            {!webhook && !webhookEdit && (
+              <div style={{ fontSize: 11, color: T.amberText, background: T.amberSoft, border: `1px solid ${T.amberText}`,
+                borderRadius: 6, padding: '8px 11px', marginBottom: 10 }}>
+                <strong>Falta a URL do Power Automate.</strong> No fluxo, troque o gatilho para
+                &ldquo;Quando uma solicitação HTTP for recebida&rdquo;, salve, copie a URL que ele gera e cole aqui.{' '}
+                <button onClick={() => setWebhookEdit(true)}
+                  style={{ fontFamily: 'inherit', fontSize: 11, padding: '2px 8px', borderRadius: 4, cursor: 'pointer',
+                    border: `1px solid ${T.amberText}`, background: 'transparent', color: T.amberText }}>colar URL</button>
+              </div>
+            )}
+            {webhookEdit && (
+              <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
+                <input defaultValue={webhook} placeholder="https://prod-XX.brazilsouth.logic.azure.com:443/workflows/..."
+                  id="fu-webhook"
+                  style={{ flex: 1, fontFamily: 'inherit', fontSize: 11.5, padding: '6px 9px', borderRadius: 5,
+                    border: `1px solid ${T.line}`, background: T.panel, color: T.ink }} />
+                <button onClick={() => salvarWebhook(document.getElementById('fu-webhook').value.trim())}
+                  style={{ fontFamily: 'inherit', fontSize: 11.5, padding: '6px 12px', borderRadius: 5, cursor: 'pointer',
+                    border: 'none', background: T.ink, color: T.panel }}>salvar</button>
+                <button onClick={() => setWebhookEdit(false)}
+                  style={{ fontFamily: 'inherit', fontSize: 11.5, padding: '6px 10px', borderRadius: 5, cursor: 'pointer',
+                    border: `1px solid ${T.line}`, background: 'transparent', color: T.inkDim }}>cancelar</button>
+              </div>
+            )}
+
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+              {vendedores.map(v => {
+                const u = ultimoDe[v];
+                const cor = !u ? T.inkFaint
+                  : u.status === 'respondeu' ? T.oliveText
+                  : u.status === 'aguardando' ? T.amberText : T.rustText;
+                return (
+                  <button key={v} onClick={() => dispararEnvio(v)} disabled={disparando != null || !webhook}
+                    title={u
+                      ? `Último envio em ${new Date(u.enviado_em).toLocaleDateString('pt-BR')} — ${u.status}${u.respondido_em ? ` (${u.horas_para_responder}h para responder)` : ''}`
+                      : 'Nunca enviado'}
+                    style={{ fontFamily: 'inherit', fontSize: 11, padding: '5px 11px', borderRadius: 14,
+                      cursor: webhook && disparando == null ? 'pointer' : 'default',
+                      border: `1px solid ${cor}55`, background: 'transparent', color: T.inkDim,
+                      display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ width: 7, height: 7, borderRadius: '50%', background: cor }} />
+                    {disparando === v ? 'enviando…' : v}
+                    {u && <span style={{ fontSize: 9.5, color: T.inkFaint }}>
+                      {new Date(u.enviado_em).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })}
+                    </span>}
+                  </button>
+                );
+              })}
+            </div>
+            <div style={{ fontSize: 10, color: T.inkFaint, marginTop: 8 }}>
+              Verde: respondeu · Âmbar: aguardando · Vermelho: sem resposta há mais de 7 dias · Cinza: nunca enviado
+            </div>
+
+            {verHistorico && (
+              <div style={{ marginTop: 12, borderTop: `1px solid ${T.line}`, paddingTop: 10, overflowX: 'auto' }}>
+                {!envioHist.length ? (
+                  <div style={{ fontSize: 11.5, color: T.inkFaint }}>Nenhum envio ainda.</div>
+                ) : (
+                  <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 760 }}>
+                    <thead><tr style={{ background: T.panelAlt }}>
+                      {['Vendedor', 'Enviado', 'Linhas', 'A classificar', 'Respondido', 'Importadas', 'Recusadas', 'Status'].map((h, i) => (
+                        <th key={h} style={{ padding: '7px 10px', fontSize: 10.5, fontWeight: 600, color: T.inkFaint,
+                          textAlign: i >= 2 && i <= 6 ? 'right' : 'left', whiteSpace: 'nowrap' }}>{h}</th>
+                      ))}
+                    </tr></thead>
+                    <tbody>
+                      {envioHist.map(h => (
+                        <tr key={h.id} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                          <td style={{ padding: '6px 10px', fontSize: 11.5 }}>{h.vendedor}</td>
+                          <td style={{ padding: '6px 10px', fontSize: 11, color: T.inkDim, whiteSpace: 'nowrap' }}>
+                            {new Date(h.enviado_em).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                          </td>
+                          <td style={{ padding: '6px 10px', fontSize: 11, textAlign: 'right', color: T.inkDim }}>{h.linhas_enviadas}</td>
+                          <td style={{ padding: '6px 10px', fontSize: 11, textAlign: 'right', color: T.inkDim }}>{h.a_classificar}</td>
+                          <td style={{ padding: '6px 10px', fontSize: 11, color: T.inkDim, whiteSpace: 'nowrap' }}>
+                            {h.respondido_em ? new Date(h.respondido_em).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—'}
+                          </td>
+                          <td style={{ padding: '6px 10px', fontSize: 11, textAlign: 'right', color: T.oliveText }}>{h.linhas_importadas ?? '—'}</td>
+                          <td style={{ padding: '6px 10px', fontSize: 11, textAlign: 'right', color: h.linhas_recusadas ? T.rustText : T.inkFaint }}
+                            title={h.observacao || ''}>{h.linhas_recusadas ?? '—'}</td>
+                          <td style={{ padding: '6px 10px', fontSize: 10.5,
+                            color: h.status === 'respondeu' ? T.oliveText : h.status === 'aguardando' ? T.amberText : T.rustText }}>
+                            {h.status}{h.horas_para_responder ? ` · ${h.horas_para_responder}h` : ''}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {porVend.length > 1 && (
         <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: 12 }}>
