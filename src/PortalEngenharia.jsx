@@ -4203,7 +4203,7 @@ function FollowUpComercial({ currentUser }) {
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 940 }}>
             <thead style={{ position: 'sticky', top: 0, zIndex: 1 }}><tr style={{ background: T.panelAlt }}>
-              {['BR', 'Cliente', 'Vendedor', 'Dias', 'Valor da proposta', 'Margin', 'Estágio comercial', 'Estágio vendedor', 'Próximo contato', 'Observação'].map((h, i) => (
+              {['BR', 'Cliente', 'Vendedor', 'Dias', 'Valor da proposta', 'Margin', 'Estágio comercial', 'Estágio vendedor', 'Observação'].map((h, i) => (
                 <th key={h + i} style={{ padding: '9px 12px', fontSize: 11, fontWeight: 600, color: T.inkFaint,
                   textAlign: [3,4,5,8].includes(i) ? 'right' : 'left', whiteSpace: 'nowrap' }}>{h}</th>
               ))}
@@ -4214,7 +4214,6 @@ function FollowUpComercial({ currentUser }) {
                   Nenhum BR aqui ainda. Eles aparecem assim que forem criados na tela Criar BR.
                 </td></tr>
               ) : lista.map(l => {
-                const atrasado = l.situacao === 'em aberto' && l.proximo_contato && l.proximo_contato < new Date().toISOString().slice(0, 10);
                 return (
                   <React.Fragment key={l.br}>
                     <tr style={{ borderBottom: `1px solid ${T.lineSoft}`,
@@ -4283,13 +4282,6 @@ function FollowUpComercial({ currentUser }) {
                         )}
                       </td>
                       
-                      <td style={{ padding: '8px 12px' }}>
-                        <input type="date" value={l.proximo_contato || ''}
-                          onChange={e => salvar(l.br, { proximo_contato: e.target.value || null })}
-                          style={{ fontFamily: 'inherit', fontSize: 11, padding: '3px 6px', borderRadius: 4,
-                            border: `1px solid ${atrasado ? T.rustText : T.line}`,
-                            background: T.panel, color: atrasado ? T.rustText : T.inkDim }} />
-                      </td>
                       <td style={{ padding: '8px 12px', maxWidth: 260 }}>
                         <div onClick={() => setObsAberta(obsAberta === l.br ? null : l.br)}
                           title={l.observacao || 'Clique para escrever'}
