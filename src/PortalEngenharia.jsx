@@ -3847,6 +3847,44 @@ function FollowUpComercial({ currentUser }) {
                   atualizado_em: new Date().toISOString() }, { onConflict: 'br' });
       if (error) ignorados.push(`${item.br}: ${error.message}`); else gravados += 1;
     }
+
+    // FECHA O ENVIO do vendedor cujos BRs foram importados. Sem isso, arrastar
+    // a planilha gravava a classificacao mas o historico continuava dizendo
+    // 'aguardando' -- duas verdades diferentes sobre o mesmo fato.
+    // O vendedor sai do nome do arquivo (FOLLOWUP_GIVALDO_NONATO_...), e se
+    // nao der, dos proprios BRs importados.
+    try {
+      const semAcentoV = (t) => String(t ?? '').normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '').replace(/[^A-Za-z0-9]+/g, '_').toUpperCase();
+      const vendedoresTocados = new Set();
+      for (const f of files) {
+        const nome = semAcentoV(f.name);
+        const achou = [...new Set(linhas.map(l => l.vendedor).filter(Boolean))]
+          .find(v => nome.includes(semAcentoV(v)));
+        if (achou) vendedoresTocados.add(achou);
+      }
+      if (!vendedoresTocados.size) {
+        aplicar.forEach(it => {
+          const l = linhas.find(x => x.br === it.br);
+          if (l?.vendedor) vendedoresTocados.add(l.vendedor);
+        });
+      }
+      for (const v of vendedoresTocados) {
+        const { data: aberto } = await supabase.from('comercial_followup_envio')
+          .select('id').eq('vendedor', v).is('respondido_em', null)
+          .order('enviado_em', { ascending: false }).limit(1).maybeSingle();
+        if (aberto?.id) {
+          await supabase.from('comercial_followup_envio').update({
+            respondido_em: new Date().toISOString(),
+            resposta_arquivo: files[0]?.name || null,
+            linhas_importadas: gravados,
+            linhas_recusadas: ignorados.length,
+            observacao: `Importado pela tela${currentUser?.nome ? ` por ${currentUser.nome}` : ''}`,
+          }).eq('id', aberto.id);
+        }
+      }
+    } catch (err) { console.error('não deu para fechar o envio:', err); }
+
     await carregar();
     setResultadoImp({ gravados, ignorados });
     setImportando(false);
