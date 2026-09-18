@@ -19586,7 +19586,17 @@ function Custeio() {
           if (v !== 0) movPorProj[c2.codproj] = (movPorProj[c2.codproj] || 0) + v;
         });
 
+        // NOTA SEM BR: a nota de compra nao tem projeto, mas a ORDEM DE COMPRA
+        // que a originou tem. Sao 105 notas e R$ 1,93 milhao que existiam e nao
+        // chegavam em projeto nenhum.
+        const semBrPorProj = {};
+        movInterna.forEach(c2 => {
+          const v = Number(c2.valor_nota_sem_br) || 0;
+          if (v !== 0) semBrPorProj[c2.codproj] = (semBrPorProj[c2.codproj] || 0) + v;
+        });
+
         Object.values(porOrc).forEach(b2 => {
+          b2.semBr = semBrPorProj[b2.codproj] || 0;
           b2.mov = movPorProj[b2.codproj] || 0;
           b2.op = opPorProj[b2.codproj] || 0;
           b2.dev = devPorProj[b2.codproj] || 0;
@@ -19595,7 +19605,7 @@ function Custeio() {
         });
 
         const todosOrc = Object.values(porOrc)
-          .filter(b => b.com > 0 || b.est > 0 || b.op > 0 || b.pi > 0 || b.mov)
+          .filter(b => b.com > 0 || b.est > 0 || b.op > 0 || b.pi > 0 || b.mov || b.semBr)
           .map(b => ({ ...b, faturado: b.recBruta > 0,
                        calculado: b.recBruta > 0 && b.fonteRec !== 'manual' }));
         const nFat = todosOrc.filter(b => b.faturado).length;
@@ -19717,7 +19727,7 @@ function Custeio() {
                           {b.dev ? `−${moeda(b.dev)}` : '—'}
                         </td>
                         <td style={{ padding: '9px 12px', fontSize: 12.5, textAlign: 'right', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}
-                            title="Comprado (NF) + o que saiu do estoque + material de OP de estoque − sobra devolvida">{moeda(b.comLiq + b.est + (b.op || 0) + (b.pi || 0) + (b.mov || 0) - (b.dev || 0))}</td>
+                            title="Comprado (NF) + o que saiu do estoque + material de OP de estoque − sobra devolvida">{moeda(b.comLiq + b.est + (b.op || 0) + (b.pi || 0) + (b.mov || 0) + (b.semBr || 0) - (b.dev || 0))}</td>
                         <td style={{ padding: '9px 12px', fontSize: 12.5, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}
                             title={!b.rec ? 'Sem nota de venda'
                                    : b.calculado ? `Rateio do líquido da nota. Bruto faturado: ${moeda(b.recBruta)}`
@@ -19725,7 +19735,7 @@ function Custeio() {
                           {b.rec ? moeda(b.rec) : '—'}
                         </td>
                         {(() => {
-                          const custo = b.comLiq + b.est + (b.op || 0) + (b.pi || 0) + (b.mov || 0) - (b.dev || 0);
+                          const custo = b.comLiq + b.est + (b.op || 0) + (b.pi || 0) + (b.mov || 0) + (b.semBr || 0) - (b.dev || 0);
                           const marg = b.rec ? b.rec - custo : null;
                           const pct = b.rec ? (marg / b.rec * 100) : null;
                           const cor = marg == null ? T.inkFaint : marg >= 0 ? T.oliveText : T.rustText;
@@ -19774,6 +19784,7 @@ function Custeio() {
           // BR14559/26 vieram de OP de estoque -- vieram de transferencia do
           // BR13947, que e outra coisa.
           porCat[c].mov = (porCat[c].mov || 0) + (Number(r.valor_mov_interna) || 0);
+          porCat[c].semBr = (porCat[c].semBr || 0) + (Number(r.valor_nota_sem_br) || 0);
                 porCat[c].custo += Number(r.custo_real) || 0;
                 porCat[c].semCod += Number(r.itens_sem_codigo) || 0;
               });
@@ -19850,6 +19861,19 @@ function Custeio() {
                                 </div>
                                 <div style={{ height: 7, background: T.lineSoft, borderRadius: 4, overflow: 'hidden' }}>
                                   <div style={{ height: '100%', width: barra(d.op), background: T.amberText }} />
+                                </div>
+                              </div>
+                            )}
+                            {d.semBr > 0 && (
+                              <div>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11.5, color: T.inkDim, marginBottom: 3 }}>
+                                  <span title="Nota de compra que não tem o BR preenchido, mas cuja ordem de compra aponta este projeto. O vínculo é do próprio Sankhya.">
+                                    ↩ Nota sem BR, achada pela OC
+                                  </span>
+                                  <span style={{ fontVariantNumeric: 'tabular-nums' }}>{moeda(d.semBr)}</span>
+                                </div>
+                                <div style={{ height: 7, background: T.lineSoft, borderRadius: 4, overflow: 'hidden' }}>
+                                  <div style={{ height: '100%', width: barra(d.semBr), background: T.oliveText }} />
                                 </div>
                               </div>
                             )}
