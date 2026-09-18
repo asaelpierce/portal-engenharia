@@ -9335,6 +9335,7 @@ function MonitoramentoOP({ currentUser }) {
   const [cardsOpsGeradas, setCardsOpsGeradas] = useState([]);
   const [cardsFinalizados, setCardsFinalizados] = useState([]); // completou as duas etapas -- não sumir da tela
   const [loadingOpsGeradas, setLoadingOpsGeradas] = useState(true);
+  const [erroBuscaOp, setErroBuscaOp] = useState(null);
   const [opsPorBr, setOpsPorBr] = useState({}); // br -> [ops]
   const [modalPendencia, setModalPendencia] = useState(null);
   const [tick, setTick] = useState(0); // força recálculo do tempo ao vivo a cada segundo
@@ -9418,16 +9419,38 @@ function MonitoramentoOP({ currentUser }) {
     const brs = [...new Set((data || []).map(c => c.br).filter(Boolean))];
     if (brs.length) {
       // Busca direto no Sankhya (não depende de já ter apontamento de produção
-      // -- pega a OP assim que ela é criada, mesmo ainda "Aberto")
-      try {
-        const res = await fetch(`${SUPABASE_URL}/functions/v1/buscar-op-por-br`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ brs }),
-        }).then(r => r.json());
-        if (res.ok) {
-          setOpsPorBr(Object.fromEntries(Object.entries(res.opsPorBr).map(([br, lista]) => [br, lista.map(x => x.op)])));
+      // -- pega a OP assim que ela é criada, mesmo ainda "Aberto").
+      //
+      // EM LOTES DE 25: mandava todos os BRs de uma vez, e quando a lista
+      // crescia a consulta demorava ou estourava. A funcao devolvia erro e
+      // opsPorBr ficava vazio para TODOS -- a tela dizia 'Nenhuma OP
+      // sincronizada ainda' mesmo com a OP existindo no Sankhya. Foi o caso do
+      // BR14567/26 com a OP 8073, que o Monitoramento mostrava e aqui nao.
+      const LOTE = 25;
+      const juntos = {};
+      let falhou = 0;
+      for (let i = 0; i < brs.length; i += LOTE) {
+        const pedaco = brs.slice(i, i + LOTE);
+        try {
+          const res = await fetch(`${SUPABASE_URL}/functions/v1/buscar-op-por-br`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ brs: pedaco }),
+          }).then(r => r.json());
+          if (res.ok && res.opsPorBr) {
+            Object.entries(res.opsPorBr).forEach(([br, lista]) => {
+              juntos[br] = (lista || []).map(x => x.op);
+            });
+          } else { falhou += pedaco.length; }
+        } catch (e) {
+          falhou += pedaco.length;
+          console.error('Erro buscando OP por BR:', e);
         }
-      } catch (e) { console.error('Erro buscando OP por BR:', e); }
+      }
+      setOpsPorBr(juntos);
+      // Um lote que falha deixa BRs sem OP na tela, e sem isso a mensagem
+      // 'Nenhuma OP sincronizada' vira mentira -- parece ausência de OP quando
+      // foi falha de busca.
+      setErroBuscaOp(falhou > 0 ? falhou : null);
     }
     // Traz a ÚLTIMA solicitação de escrita de OP de cada card -- pra mostrar
     // exatamente quem/quando/qual OP foi escrita (ou se deu erro), sem
@@ -10485,7 +10508,14 @@ function MonitoramentoOP({ currentUser }) {
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                     <span style={{ fontSize: 11.5, color: T.inkFaint, fontWeight: 600 }}>OPs encontradas pra esse BR:</span>
                     {ops.length === 0 ? (
-                      <span style={{ fontSize: 10.5, fontWeight: 700, color: T.amberText, background: T.amberSoft, padding: '3px 8px', borderRadius: 4 }}>⚠ Nenhuma OP sincronizada ainda</span>
+                      <span style={{ fontSize: 10.5, fontWeight: 700,
+                        color: erroBuscaOp ? T.rustText : T.amberText,
+                        background: erroBuscaOp ? T.rustSoft : T.amberSoft, padding: '3px 8px', borderRadius: 4 }}
+                        title={erroBuscaOp
+                          ? 'A busca de OPs no Sankhya falhou nesta carga — pode haver OP e a tela não estar vendo. Atualize em alguns segundos.'
+                          : 'O Sankhya respondeu e não há OP criada para este BR.'}>
+                        {erroBuscaOp ? '⚠ Não deu para conferir no Sankhya' : '⚠ Nenhuma OP sincronizada ainda'}
+                      </span>
                     ) : ops.map(op => (
                       <span key={op} style={{ fontSize: 11, fontWeight: 700, fontFamily: FONT_DISPLAY, color: T.oliveText, background: T.oliveSoft, padding: '3px 9px', borderRadius: 4 }}>{op}</span>
                     ))}
