@@ -19761,7 +19761,12 @@ function Custeio() {
                 porCat[c].est += Number(r.valor_estoque) || 0;
                 porCat[c].dev += Number(r.valor_devolvido) || 0;
                 porCat[c].emp += Number(r.valor_empenhado) || 0;
-                porCat[c].op += (Number(r.valor_op_estoque) || 0) + (Number(r.valor_pi_apontado) || 0) + (Number(r.valor_mov_interna) || 0);
+                porCat[c].op += (Number(r.valor_op_estoque) || 0) + (Number(r.valor_pi_apontado) || 0);
+          // movimentacao interna e origem PROPRIA, nao 'de OP de estoque'.
+          // Estava somada no mesmo campo e a tela dizia que R$ 111 mil do
+          // BR14559/26 vieram de OP de estoque -- vieram de transferencia do
+          // BR13947, que e outra coisa.
+          porCat[c].mov = (porCat[c].mov || 0) + (Number(r.valor_mov_interna) || 0);
                 porCat[c].custo += Number(r.custo_real) || 0;
                 porCat[c].semCod += Number(r.itens_sem_codigo) || 0;
               });
@@ -19841,6 +19846,19 @@ function Custeio() {
                                 </div>
                               </div>
                             )}
+                            {!!d.mov && (
+                              <div>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11.5, color: T.inkDim, marginBottom: 3 }}>
+                                  <span title="Custo transferido de outro projeto por movimentação interna — a OP foi aberta no projeto errado e o saldo passou para cá. Não há item comprado neste projeto, por isso a lista abaixo fica vazia.">
+                                    ⇄ De outro projeto
+                                  </span>
+                                  <span style={{ fontVariantNumeric: 'tabular-nums' }}>{moeda(d.mov)}</span>
+                                </div>
+                                <div style={{ height: 7, background: T.lineSoft, borderRadius: 4, overflow: 'hidden' }}>
+                                  <div style={{ height: '100%', width: barra(Math.abs(d.mov)), background: T.rustText }} />
+                                </div>
+                              </div>
+                            )}
                           </div>
 
                           <div style={{ marginTop: 9, paddingTop: 8, borderTop: `1px solid ${T.lineSoft}`, fontSize: 11, color: T.inkDim, display: 'flex', flexWrap: 'wrap', gap: 10 }}>
@@ -19895,7 +19913,23 @@ function Custeio() {
                       .concat(itensOp.filter(e => e.caixa === caixaAberta))
                       .map(r => ({ ...r, _custo: r._com + r._est + (r._op || 0) }))
                       .sort((a, b) => Math.max(b._orc, b._custo) - Math.max(a._orc, a._custo));
-                    if (!itens.length) return null;
+                     // Lista vazia PRECISA dizer por que. Antes retornava null e
+                     // clicar em 'ver itens' nao fazia nada -- o BR14559/26 tem
+                     // R$ 111 mil de custo e zero item, porque tudo veio por
+                     // movimentacao interna de outro projeto.
+                     if (!itens.length) {
+                       const dCat = (porCat[caixaAberta] || {});
+                       return (
+                         <div style={{ marginTop: 10, padding: '10px 12px', background: T.panelAlt,
+                           borderRadius: 6, fontSize: 11.5, color: T.inkDim, lineHeight: 1.55 }}>
+                           {dCat.mov
+                             ? <>Não há item comprado nesta categoria: o custo de <strong>{moeda(dCat.mov)}</strong> veio
+                                 por <strong>movimentação interna</strong> de outro projeto — a OP foi aberta no projeto
+                                 errado e o saldo foi transferido para cá. O detalhe está na nota de transferência, no Sankhya.</>
+                             : <>Nenhum item com custo nesta categoria.</>}
+                         </div>
+                       );
+                     }
 
                     return (
                       <div style={{ borderTop: `1px solid ${T.line}`, background: T.panelAlt }}>
