@@ -17891,7 +17891,7 @@ function Custeio() {
                         const n = fila.filter(x => comSug.has(x.br)).length;
                         return n > 0 ? (
                           <span style={{ fontWeight: 400, color: T.oliveText, fontSize: 11 }}>
-                            {' '}· {n} com OP já identificada pelo apontamento
+                            {' '}· {n} com OP já identificada
                           </span>
                         ) : null;
                       })()}
@@ -17928,22 +17928,29 @@ function Custeio() {
                                 // O apontamento de hora grava projeto E OP na mesma linha.
                                 // Quando existe, nao ha o que digitar: sugere com um clique,
                                 // mostrando horas, pessoas e o produto que a OP fez.
-                                const sug = opSug.filter(o => o.br === x.br && !o.ja_vinculada);
+                                // ordena pelo material que a OP traz -- a maior primeiro,
+                            // porque e a que mais muda o custo do projeto
+                            const sug = opSug.filter(o => o.br === x.br && !o.ja_vinculada)
+                              .sort((a2, b2) => (Number(b2.material_op) || 0) - (Number(a2.material_op) || 0));
                                 if (sug.length) {
                                   return (
                                     <span style={{ display: 'inline-flex', gap: 5, flexWrap: 'wrap', alignItems: 'center' }}>
-                                      {sug.slice(0, 3).map(o => (
+                                      {sug.slice(0, 4).map(o => (
                                         <button key={o.idiproc} disabled={opBusy != null}
                                           onClick={() => vincularOp(x.codproj, String(o.idiproc))}
-                                          title={`OP ${o.idiproc} — ${o.horas} h, ${o.pessoas} ${o.pessoas === 1 ? 'pessoa' : 'pessoas'}${o.setores ? ` · ${o.setores}` : ''}${o.descr_prod ? `\n${o.descr_prod}` : ''}`}
+                                          title={`OP ${o.idiproc} — achada pelo ${o.achada_por}${o.horas > 0 ? `, ${o.horas} h, ${o.pessoas} ${o.pessoas === 1 ? 'pessoa' : 'pessoas'}` : ', sem hora apontada'}${o.setores ? ` · ${o.setores}` : ''}${o.descr_prod ? `\n${o.descr_prod}` : ''}${o.material_op ? `\nMaterial da OP: ${moeda(o.material_op)}` : ''}`}
                                           style={{ fontFamily: 'inherit', fontSize: 11, padding: '4px 9px', borderRadius: 4,
-                                            cursor: 'pointer', border: `1px solid ${T.oliveText}66`,
-                                            background: `${T.oliveSoft}99`, color: T.oliveText, fontWeight: 600 }}>
+                                            cursor: 'pointer',
+                                            border: `1px solid ${o.horas > 0 ? T.oliveText : T.blueText}66`,
+                                            background: o.horas > 0 ? `${T.oliveSoft}99` : `${T.blueSoft}99`,
+                                            color: o.horas > 0 ? T.oliveText : T.blueText, fontWeight: 600 }}>
                                           {opBusy === x.codproj ? '…' : `ligar OP ${o.idiproc}`}
-                                          <span style={{ fontWeight: 400, opacity: .75 }}> · {Math.round(o.horas)}h</span>
+                                          <span style={{ fontWeight: 400, opacity: .75 }}>
+                                            {' · '}{o.material_op ? moeda(o.material_op) : o.horas > 0 ? `${Math.round(o.horas)}h` : 'sem hora'}
+                                          </span>
                                         </button>
                                       ))}
-                                      {sug.length > 3 && <span style={{ fontSize: 10.5, color: T.inkFaint }}>+{sug.length - 3}</span>}
+                                      {sug.length > 4 && <span style={{ fontSize: 10.5, color: T.inkFaint }}>+{sug.length - 4}</span>}
                                     </span>
                                   );
                                 }
