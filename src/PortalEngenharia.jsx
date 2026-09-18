@@ -3925,14 +3925,16 @@ function FollowUpComercial({ currentUser }) {
         // cliente e sabe a chance real. O estagio comercial e leitura de
         // dentro de casa, e hoje esta em 'Medio' como padrao inicial, o que
         // encheria os cartoes com uma classificacao que ninguem avaliou.
+        // Perdido entra tambem: e o unico cartao que mostra o que NAO vai
+        // fechar, e esconder isso deixa so a parte boa do funil a vista.
         const porEstagio = estagios
-          .filter(e2 => e2.estagio !== 'perdido')
           .map(e2 => {
             const d = emAberto.filter(l => l.estagio_vendedor === e2.estagio);
             return { ...e2, n: d.length, valor: soma(d, 'valor_proposta') };
           });
         const semEstagio = emAberto.filter(l => !l.estagio_vendedor);
-        const CORES_EST = { avancado: T.oliveText, alto: T.blueText, medio: T.amberText, baixo: T.rustText };
+        const CORES_EST = { avancado: T.oliveText, alto: T.blueText, medio: T.amberText,
+                            baixo: T.rustText, perdido: T.inkFaint };
         return (
           <div>
             <div style={{ fontSize: 11, color: T.inkFaint, marginBottom: 7 }}>
