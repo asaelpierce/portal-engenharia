@@ -3793,22 +3793,49 @@ function FollowUpComercial({ currentUser }) {
     const brsConhecidos = new Set(linhas.map(l => l.br));
     const aplicar = []; const ignorados = [];
 
+    // Acha as colunas pelo CABECALHO e a aba pelo NOME. Antes era posicao fixa
+    // -- pulava 2 linhas, lia estagio na coluna 6 e observacao na 7 -- e quando
+    // a planilha passou a ter 1 linha de cabecalho e duas abas, a importacao
+    // lia coluna vazia e nao gravava nada, sem erro nenhum.
+    const semAcento = (t) => String(t ?? '').normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '').trim().toUpperCase();
+
     for (const f of files) {
       try {
         const wb = new ExcelJS.Workbook();
         await wb.xlsx.load(await f.arrayBuffer());
-        const ws = wb.worksheets[0];
+        const ws = wb.worksheets.find(w => semAcento(w.name).startsWith('PREENCHER'))
+          || wb.worksheets[0];
+
+        const cab = [];
+        ws.getRow(1).eachCell({ includeEmpty: true }, (c, col) => { cab[col] = semAcento(c.value); });
+        const achaCol = (teste) => cab.findIndex((t, idx) => idx > 0 && t && teste(t));
+        const cBr = achaCol(t => t === 'BR');
+        const cEst = achaCol(t => t.startsWith('ESTAGIO'));
+        const cObs = achaCol(t => t.startsWith('OBSERVAC'));
+        if (cBr < 0 || cEst < 0) {
+          ignorados.push(`${f.name}: não achei as colunas BR e Estágio na aba "${ws.name}" (achei: ${cab.filter(Boolean).join(', ')})`);
+          continue;
+        }
+
         ws.eachRow((row, i) => {
-          if (i <= 2) return;
-          const br = String(row.getCell(1).value || '').trim();
-          const rot = String(row.getCell(6).value || '').trim();
-          const obs = String(row.getCell(7).value || '').trim();
+          if (i === 1) return;
+          const br = String(row.getCell(cBr).value ?? '').trim();
+          const rot = String(row.getCell(cEst).value ?? '').trim();
+          const obs = cObs > 0 ? String(row.getCell(cObs).value ?? '').trim() : '';
           if (!br) return;
           if (!brsConhecidos.has(br)) { ignorados.push(`${br}: não existe no portal`); return; }
           const estagio = porRotulo[rot.toLowerCase()];
           if (rot && !estagio) { ignorados.push(`${br}: estágio "${rot}" não reconhecido`); return; }
-          if (!estagio && !obs) return;
-          aplicar.push({ br, ...(estagio ? { estagio_vendedor: estagio, estagio_vendedor_em: new Date().toISOString() } : {}), ...(obs ? { observacao_vendedor: obs } : {}) });
+          // celula de estagio APAGADA limpa a classificacao, igual ao botao da
+          // tela -- e como o vendedor desfaz pelo Excel
+          if (!rot && !obs) return;
+          aplicar.push({
+            br,
+            estagio_vendedor: estagio ?? null,
+            ...(estagio ? { estagio_vendedor_em: new Date().toISOString() } : { estagio_vendedor_em: null }),
+            ...(obs ? { observacao_vendedor: obs } : {}),
+          });
         });
       } catch (err) { ignorados.push(`${f.name}: não deu para ler (${err.message})`); }
     }
@@ -4105,8 +4132,10 @@ function FollowUpComercial({ currentUser }) {
         </div>
         {resultadoImp && (
           <div style={{ marginTop: 10, fontSize: 11.5, textAlign: 'left', display: 'inline-block' }}>
-            <div style={{ color: resultadoImp.gravados ? T.oliveText : T.inkFaint, fontWeight: 600 }}>
+            <div style={{ color: resultadoImp.gravados ? T.oliveText : T.rustText, fontWeight: 600 }}>
               {resultadoImp.gravados} {resultadoImp.gravados === 1 ? 'linha atualizada' : 'linhas atualizadas'}
+              {resultadoImp.gravados === 0 && resultadoImp.ignorados.length === 0 &&
+                ' — a planilha foi lida mas nenhuma linha tinha estágio ou observação preenchidos'}
             </div>
             {resultadoImp.ignorados.length > 0 && (
               <div style={{ color: T.rustText, marginTop: 4 }}>
