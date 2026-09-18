@@ -3669,7 +3669,7 @@ function FollowUpComercial({ currentUser }) {
   const lista = base
     .filter(l => vend === 'Todos' || l.vendedor === vend)
     .filter(l => verPerdidos || l.situacao !== 'perdido')
-    .sort((a, b) => (Number(b.valor_ponderado) || 0) - (Number(a.valor_ponderado) || 0)
+    .sort((a, b) => (Number(b.valor_proposta) || 0) - (Number(a.valor_proposta) || 0)
                  || (Number(b.valor_proposta) || 0) - (Number(a.valor_proposta) || 0));
 
   const soma = (arr, c) => arr.reduce((s, r) => s + (Number(r[c]) || 0), 0);
@@ -3677,17 +3677,21 @@ function FollowUpComercial({ currentUser }) {
   const confirmados = lista.filter(l => l.situacao === 'pedido confirmado');
   const semClass = emAberto.filter(l => !l.estagio_comercial && !l.estagio_vendedor).length;
 
-  // Funil por vendedor: o que interessa e o ponderado, nao o bruto.
+  // Funil por vendedor pelo VALOR CHEIO, nao pelo ponderado. O peso do estagio
+  // e chance de fechar, e multiplicar o valor por ele produzia um numero que
+  // nao significa nada linha a linha -- o cliente nao compra 70% do escopo.
   const porVend = [...new Set(base.filter(l => ['em aberto','pedido confirmado'].includes(l.situacao)).map(l => l.vendedor))]
     .map(v => {
       const d = base.filter(l => l.vendedor === v && ['em aberto','pedido confirmado'].includes(l.situacao));
-      return { v, n: d.length, bruto: soma(d, 'valor_proposta'), pond: soma(d, 'valor_ponderado'),
-               confirmado: soma(d.filter(x => x.situacao === 'pedido confirmado'), 'valor_ponderado'),
-               emAberto: d.filter(x => x.situacao === 'em aberto').length,
-               semClass: d.filter(x => !x.estagio_comercial && !x.estagio_vendedor && x.situacao === 'em aberto').length };
+      const abertos = d.filter(x => x.situacao === 'em aberto');
+      return { v, n: d.length, bruto: soma(d, 'valor_proposta'),
+               pond: soma(abertos, 'valor_proposta'),
+               confirmado: soma(d.filter(x => x.situacao === 'pedido confirmado'), 'valor_proposta'),
+               emAberto: abertos.length,
+               semClass: abertos.filter(x => !x.estagio_comercial && !x.estagio_vendedor).length };
     })
-    .sort((a, b) => b.pond - a.pond);
-  const maxPond = Math.max(1, ...porVend.map(x => x.pond));
+    .sort((a, b) => b.bruto - a.bruto);
+  const maxPond = Math.max(1, ...porVend.map(x => x.bruto));
 
   // ---- Excel para o vendedor preencher -------------------------------------
   // Uma planilha por vendedor, so com o que ele precisa ver e um campo para
@@ -3836,9 +3840,6 @@ function FollowUpComercial({ currentUser }) {
           { t: 'Pedido em carteira', v: moeda(soma(confirmados, 'valor_proposta')), c: T.oliveText },
           { t: 'Em aberto', v: String(emAberto.length), c: T.ink },
           { t: 'Valor em aberto', v: moeda(soma(emAberto, 'valor_proposta')), c: T.inkDim },
-          { t: 'Previsão ponderada ⚠', v: moeda(soma(emAberto, 'valor_ponderado')), c: T.terracotta,
-            ajuda: 'Valor × chance de fechar, somado. Serve para estimar o TOTAL do funil, não o quanto cada cliente vai comprar — proposta de R$ 1 mi com 30% de chance entra como R$ 300 mil, mas o cliente não compra 30% do escopo. Regra definitiva pendente com o comercial.' },
-          { t: 'Total esperado', v: moeda(soma(confirmados, 'valor_proposta') + soma(emAberto, 'valor_ponderado')), c: T.ink },
           { t: 'Sem classificação', v: String(semClass), c: semClass ? T.amberText : T.inkFaint },
         ].map(k => (
           <div key={k.t} title={k.ajuda || ''}
@@ -3850,13 +3851,54 @@ function FollowUpComercial({ currentUser }) {
         ))}
       </div>
 
-      <div style={{ fontSize: 11, color: T.amberText, background: T.amberSoft, border: `1px solid ${T.amberText}`,
-        borderRadius: 6, padding: '8px 11px', maxWidth: 940, lineHeight: 1.55 }}>
-        <strong>O ponderado ainda não é a regra de vocês.</strong> Hoje ele multiplica o valor da proposta pela chance
-        de fechar do estágio — uma proposta de R$ 1 milhão em &ldquo;Baixo&rdquo; (30%) entra como R$ 300 mil. Isso estima
-        o <strong>total</strong> do funil, mas lido linha a linha engana: o cliente não vai comprar 30% do escopo.
-        A regra definitiva está pendente com o comercial.
-      </div>
+      {(() => {
+        // VALOR POR ESTAGIO, cheio. Antes eu multiplicava valor x peso e
+        // somava tudo num cartao so -- o Asael apontou que isso esta errado:
+        // o peso e CHANCE DE FECHAR, e o cliente nao compra 70% do escopo.
+        // Agora cada estagio mostra quanto ha de proposta ali, sem multiplicar.
+        const porEstagio = estagios
+          .filter(e2 => e2.estagio !== 'perdido')
+          .map(e2 => {
+            const d = emAberto.filter(l =>
+              (l.estagio_comercial || l.estagio_vendedor) === e2.estagio);
+            return { ...e2, n: d.length, valor: soma(d, 'valor_proposta') };
+          });
+        const semEstagio = emAberto.filter(l => !l.estagio_comercial && !l.estagio_vendedor);
+        const CORES_EST = { avancado: T.oliveText, alto: T.blueText, medio: T.amberText, baixo: T.rustText };
+        return (
+          <div>
+            <div style={{ fontSize: 11, color: T.inkFaint, marginBottom: 7 }}>
+              Proposta em aberto por estágio — <strong style={{ color: T.ink }}>valor cheio</strong>, sem multiplicar
+              pela chance de fechar. O estágio diz a probabilidade de o negócio sair, não a fatia do escopo que o
+              cliente vai comprar.
+            </div>
+            <div style={{ display: 'grid', gap: 8, gridTemplateColumns: 'repeat(auto-fit, minmax(165px, 1fr))' }}>
+              {porEstagio.map(e2 => (
+                <div key={e2.estagio} style={{ background: T.panel, borderRadius: 8, padding: '10px 12px',
+                  border: `1px solid ${T.line}`, borderLeft: `3px solid ${CORES_EST[e2.estagio] || T.line}` }}>
+                  <div style={{ fontSize: 10.5, color: T.inkFaint, display: 'flex', justifyContent: 'space-between' }}>
+                    <span>{e2.rotulo}</span>
+                    <span>{e2.n} {e2.n === 1 ? 'proposta' : 'propostas'}</span>
+                  </div>
+                  <div style={{ fontSize: 17, fontWeight: 700, color: CORES_EST[e2.estagio] || T.ink,
+                    fontVariantNumeric: 'tabular-nums', marginTop: 4 }}>{moeda(e2.valor)}</div>
+                </div>
+              ))}
+              {semEstagio.length > 0 && (
+                <div style={{ background: T.panel, borderRadius: 8, padding: '10px 12px',
+                  border: `1px dashed ${T.amberText}` }}>
+                  <div style={{ fontSize: 10.5, color: T.amberText, display: 'flex', justifyContent: 'space-between' }}>
+                    <span>Sem estágio</span>
+                    <span>{semEstagio.length}</span>
+                  </div>
+                  <div style={{ fontSize: 17, fontWeight: 700, color: T.amberText,
+                    fontVariantNumeric: 'tabular-nums', marginTop: 4 }}>{moeda(soma(semEstagio, 'valor_proposta'))}</div>
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })()}
 
       {(() => {
         // ENVIO DO FOLLOW UP. O portal nao manda e-mail: ele chama o fluxo do
@@ -3998,7 +4040,7 @@ function FollowUpComercial({ currentUser }) {
 
       {porVend.length > 1 && (
         <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: 12 }}>
-          <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 10 }}>Funil por vendedor — previsão ponderada</div>
+          <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 10 }}>Funil por vendedor — proposta em aberto</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
             {porVend.map(x => (
               <div key={x.v} style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}
@@ -4094,7 +4136,7 @@ function FollowUpComercial({ currentUser }) {
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 940 }}>
             <thead style={{ position: 'sticky', top: 0, zIndex: 1 }}><tr style={{ background: T.panelAlt }}>
-              {['BR', 'Cliente', 'Vendedor', 'Dias', 'Valor da proposta', 'Margin', 'Estágio comercial', 'Estágio vendedor', 'Ponderado ⚠', 'Próximo contato', 'Observação'].map((h, i) => (
+              {['BR', 'Cliente', 'Vendedor', 'Dias', 'Valor da proposta', 'Margin', 'Estágio comercial', 'Estágio vendedor', 'Próximo contato', 'Observação'].map((h, i) => (
                 <th key={h + i} style={{ padding: '9px 12px', fontSize: 11, fontWeight: 600, color: T.inkFaint,
                   textAlign: [3,4,5,8].includes(i) ? 'right' : 'left', whiteSpace: 'nowrap' }}>{h}</th>
               ))}
@@ -4173,12 +4215,7 @@ function FollowUpComercial({ currentUser }) {
                           <span style={{ fontSize: 11, color: T.inkFaint }}>—</span>
                         )}
                       </td>
-                      <td style={{ padding: '8px 12px', fontSize: 12.5, textAlign: 'right', fontWeight: 600,
-                        color: T.terracotta, fontVariantNumeric: 'tabular-nums' }}>
-                        <span title="Valor × chance de fechar. Lido linha a linha o número engana: o cliente não compra a fração do escopo. Regra definitiva pendente com o comercial.">
-                          {l.valor_ponderado ? moeda(l.valor_ponderado) : '—'}
-                        </span>
-                      </td>
+                      
                       <td style={{ padding: '8px 12px' }}>
                         <input type="date" value={l.proximo_contato || ''}
                           onChange={e => salvar(l.br, { proximo_contato: e.target.value || null })}
