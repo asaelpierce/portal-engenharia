@@ -536,6 +536,11 @@ function PortalConteudo({ currentUser, session }) {
 
         /* Sidebar: desktop expandida, mobile ícones */
         .sidebar-responsive { width: 248px; flex-shrink: 0; }
+        .sidebar-nav { scrollbar-width: thin; scrollbar-color: rgba(28,26,23,.18) transparent; }
+        .sidebar-nav::-webkit-scrollbar { width: 7px; }
+        .sidebar-nav::-webkit-scrollbar-track { background: transparent; }
+        .sidebar-nav::-webkit-scrollbar-thumb { background: rgba(28,26,23,.16); border-radius: 4px; }
+        .sidebar-nav::-webkit-scrollbar-thumb:hover { background: rgba(28,26,23,.3); }
         @media (max-width: 900px) {
           .sidebar-responsive { width: 60px; }
           .sidebar-brand-text, .sidebar-item-label { display: none; }
@@ -664,8 +669,13 @@ function Sidebar({ view, setView, pendCount, papel, telasPermitidas }) {
   const permitidos = telasPermitidas || ACESSO_LEGADO[papel];
   const items = permitidos ? todosItems.filter(i => permitidos.includes(i.id)) : todosItems;
   return (
-    <div className="sidebar-responsive" style={{ background: T.panel, borderRight: `1px solid ${T.line}`, display: 'flex', flexDirection: 'column', flexShrink: 0, boxShadow: '1px 0 0 rgba(28,26,23,.02), 2px 0 8px rgba(28,26,23,.03)' }}>
-      <div className="sidebar-header" style={{ padding: '24px 22px 22px', borderBottom: `1px solid ${T.line}` }}>
+    // O menu tem 20+ itens e crescia junto com a pagina: quem estava no fim da
+    // tela precisava rolar tudo de volta, ou tirar o zoom, para trocar de aba.
+    // Agora ele fica preso na altura da janela e rola sozinho.
+    <div className="sidebar-responsive" style={{ background: T.panel, borderRight: `1px solid ${T.line}`,
+      display: 'flex', flexDirection: 'column', flexShrink: 0, height: '100vh', position: 'sticky', top: 0,
+      boxShadow: '1px 0 0 rgba(28,26,23,.02), 2px 0 8px rgba(28,26,23,.03)' }}>
+      <div className="sidebar-header" style={{ padding: '24px 22px 22px', borderBottom: `1px solid ${T.line}`, flexShrink: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 11 }}>
           <div style={{
             width: 36, height: 36, borderRadius: 8, background: `linear-gradient(135deg, ${T.terracotta} 0%, ${T.terracottaDeep} 100%)`, display: 'flex',
@@ -679,7 +689,8 @@ function Sidebar({ view, setView, pendCount, papel, telasPermitidas }) {
         </div>
       </div>
 
-      <nav style={{ flex: 1, padding: '14px 12px', display: 'flex', flexDirection: 'column', gap: 2 }}>
+      <nav className="sidebar-nav" style={{ flex: 1, minHeight: 0, overflowY: 'auto', overscrollBehavior: 'contain',
+        padding: '14px 12px', display: 'flex', flexDirection: 'column', gap: 2 }}>
         {items.map(it => {
           const active = view === it.id;
           const Icon = it.icon;
@@ -722,7 +733,7 @@ function Sidebar({ view, setView, pendCount, papel, telasPermitidas }) {
         )}
       </nav>
 
-      <div className="sidebar-item-label" style={{ padding: 16, borderTop: `1px solid ${T.line}` }}>
+      <div className="sidebar-item-label" style={{ padding: 16, borderTop: `1px solid ${T.line}`, flexShrink: 0 }}>
         <div style={{ fontSize: 11, color: T.inkFaint, lineHeight: 1.6 }}>
           547 propostas · Jan–Jun 2026<br />Migrado da planilha de controle
         </div>
