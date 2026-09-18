@@ -3921,21 +3921,24 @@ function FollowUpComercial({ currentUser }) {
         // somava tudo num cartao so -- o Asael apontou que isso esta errado:
         // o peso e CHANCE DE FECHAR, e o cliente nao compra 70% do escopo.
         // Agora cada estagio mostra quanto ha de proposta ali, sem multiplicar.
+        // O estagio que conta aqui e o do VENDEDOR -- e ele quem fala com o
+        // cliente e sabe a chance real. O estagio comercial e leitura de
+        // dentro de casa, e hoje esta em 'Medio' como padrao inicial, o que
+        // encheria os cartoes com uma classificacao que ninguem avaliou.
         const porEstagio = estagios
           .filter(e2 => e2.estagio !== 'perdido')
           .map(e2 => {
-            const d = emAberto.filter(l =>
-              (l.estagio_comercial || l.estagio_vendedor) === e2.estagio);
+            const d = emAberto.filter(l => l.estagio_vendedor === e2.estagio);
             return { ...e2, n: d.length, valor: soma(d, 'valor_proposta') };
           });
-        const semEstagio = emAberto.filter(l => !l.estagio_comercial && !l.estagio_vendedor);
+        const semEstagio = emAberto.filter(l => !l.estagio_vendedor);
         const CORES_EST = { avancado: T.oliveText, alto: T.blueText, medio: T.amberText, baixo: T.rustText };
         return (
           <div>
             <div style={{ fontSize: 11, color: T.inkFaint, marginBottom: 7 }}>
-              Proposta em aberto por estágio — <strong style={{ color: T.ink }}>valor cheio</strong>, sem multiplicar
-              pela chance de fechar. O estágio diz a probabilidade de o negócio sair, não a fatia do escopo que o
-              cliente vai comprar.
+              Proposta em aberto por <strong style={{ color: T.ink }}>estágio do vendedor</strong> — valor cheio, sem
+              multiplicar pela chance de fechar. É o vendedor quem fala com o cliente e sabe a chance real; o estágio
+              comercial fica na tabela, para comparar as duas leituras.
             </div>
             <div style={{ display: 'grid', gap: 8, gridTemplateColumns: 'repeat(auto-fit, minmax(165px, 1fr))' }}>
               {porEstagio.map(e2 => (
@@ -3953,7 +3956,7 @@ function FollowUpComercial({ currentUser }) {
                 <div style={{ background: T.panel, borderRadius: 8, padding: '10px 12px',
                   border: `1px dashed ${T.amberText}` }}>
                   <div style={{ fontSize: 10.5, color: T.amberText, display: 'flex', justifyContent: 'space-between' }}>
-                    <span>Sem estágio</span>
+                    <span>Vendedor não classificou</span>
                     <span>{semEstagio.length}</span>
                   </div>
                   <div style={{ fontSize: 17, fontWeight: 700, color: T.amberText,
