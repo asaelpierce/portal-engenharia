@@ -22561,6 +22561,8 @@ function CriarBR({ currentUser }) {
   const [identificacao, setIdentificacao] = useState('');
   const [abreviatura, setAbreviatura] = useState('');
   const [refCliente, setRefCliente] = useState('');
+  const [estagioIni, setEstagioIni] = useState('medio');
+  const [estagios, setEstagios] = useState([]);
   const [ativo, setAtivo] = useState(true);
   const [analitico, setAnalitico] = useState(true);
   // Data de início já vem com hoje/agora preenchido, que é o caso normal.
@@ -22603,6 +22605,8 @@ function CriarBR({ currentUser }) {
   }, []);
 
   const carregarHistorico = useCallback(async () => {
+    const { data: est } = await supabase.from('comercial_estagio').select('*').order('ordem');
+    setEstagios(est || []);
     const { data } = await supabase.from('brs_criados_portal').select('*').order('criado_em', { ascending: false }).limit(100);
     setHistorico(data || []);
   }, []);
@@ -22666,8 +22670,21 @@ function CriarBR({ currentUser }) {
       criado_por: currentUser?.nome || null,
     });
 
-    setSucesso(`Projeto ${r.identificacao} criado no Sankhya.`);
-    setParceiro(null); setBuscaParc(''); setRefCliente(''); setCodVendedor('');
+    // Guarda o estagio comercial JA NA CRIACAO. Antes o BR nascia sem
+    // classificacao e alguem tinha que voltar depois para dizer a chance de
+    // fechar -- quem pediu para criar sabe disso na hora, e depois esquece.
+    if (estagioIni) {
+      const { error: errEst } = await supabase.from('comercial_follow_up').upsert({
+        br: r.identificacao || identificacao.trim(),
+        estagio_comercial: estagioIni,
+        atualizado_por: currentUser?.nome || null,
+        atualizado_em: new Date().toISOString(),
+      }, { onConflict: 'br' });
+      if (errEst) console.error('BR criado, mas não deu para gravar o estágio:', errEst);
+    }
+
+    setSucesso(`Projeto ${r.identificacao} criado no Sankhya${estagioIni ? `, com estágio ${estagios.find(e => e.estagio === estagioIni)?.rotulo || estagioIni}` : ''}.`);
+    setParceiro(null); setBuscaParc(''); setRefCliente(''); setCodVendedor(''); setEstagioIni('medio');
     await carregarSugestao();
     await carregarHistorico();
   };
@@ -22750,6 +22767,25 @@ function CriarBR({ currentUser }) {
               <div style={{ flex: 1, minWidth: 180 }}>
                 {label('Referência do cliente (opcional)')}
                 <input value={refCliente} onChange={e => setRefCliente(e.target.value)} style={{ ...inputStyle(), width: '100%' }} />
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+              <div style={{ minWidth: 220 }}>
+                {label('Chance de fechar')}
+                <select value={estagioIni} onChange={e => setEstagioIni(e.target.value)}
+                  style={{ ...inputStyle(), width: '100%' }}>
+                  <option value="">não classificar agora</option>
+                  {estagios.filter(e2 => e2.estagio !== 'perdido').map(e2 => (
+                    <option key={e2.estagio} value={e2.estagio}>
+                      {e2.rotulo} — {Math.round(Number(e2.peso) * 100)}%
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div style={{ flex: 1, minWidth: 260, fontSize: 11, color: T.inkFaint, lineHeight: 1.5, paddingBottom: 7 }}>
+                Quem pede o BR sabe a chance na hora — e depois esquece. Guardando aqui, o funil
+                nasce classificado e o vendedor só confirma ou corrige no follow up.
               </div>
             </div>
 
