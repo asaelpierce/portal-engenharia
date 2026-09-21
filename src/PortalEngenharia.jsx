@@ -3592,6 +3592,11 @@ function FollowUpComercial({ currentUser }) {
   const [disparando, setDisparando] = useState(null);
   const [avisoEnvio, setAvisoEnvio] = useState(null);
   const [verHistorico, setVerHistorico] = useState(false);
+  // Filtros por coluna, como no Excel. Texto para BR e Cliente, lista para
+  // Vendedor e os dois estagios.
+  const [filtros, setFiltros] = useState({ br: '', cliente: '', vendedor: '', estC: '', estV: '' });
+  const setFiltro = (k, v) => setFiltros(f => ({ ...f, [k]: v }));
+  const limparFiltros = () => setFiltros({ br: '', cliente: '', vendedor: '', estC: '', estV: '' });
   const moeda = (v) => fmtMoedaCompacta(v);
 
   const carregar = useCallback(async () => {
@@ -3677,9 +3682,19 @@ function FollowUpComercial({ currentUser }) {
   const soMinhas = currentUser?.vendedor_sankhya && !currentUser?.ve_todos_vendedores;
   const base = linhas.filter(l => !soMinhas || String(l.cod_vendedor) === String(currentUser.vendedor_sankhya));
   const vendedores = ['Todos', ...[...new Set(base.map(l => l.vendedor).filter(Boolean))].sort()];
+  const contem = (valor, busca) =>
+    !busca || String(valor ?? '').toLowerCase().includes(busca.toLowerCase());
+
   const lista = base
     .filter(l => vend === 'Todos' || l.vendedor === vend)
     .filter(l => verPerdidos || l.situacao !== 'perdido')
+    .filter(l => contem(l.br, filtros.br))
+    .filter(l => contem(l.cliente, filtros.cliente))
+    .filter(l => !filtros.vendedor || l.vendedor === filtros.vendedor)
+    .filter(l => !filtros.estC || (filtros.estC === '(vazio)'
+      ? !l.estagio_comercial : l.estagio_comercial === filtros.estC))
+    .filter(l => !filtros.estV || (filtros.estV === '(vazio)'
+      ? !l.estagio_vendedor : l.estagio_vendedor === filtros.estV))
     .sort((a, b) => (Number(b.valor_proposta) || 0) - (Number(a.valor_proposta) || 0)
                  || (Number(b.valor_proposta) || 0) - (Number(a.valor_proposta) || 0));
 
@@ -3955,8 +3970,12 @@ function FollowUpComercial({ currentUser }) {
             </div>
             <div style={{ display: 'grid', gap: 8, gridTemplateColumns: 'repeat(auto-fit, minmax(165px, 1fr))' }}>
               {porEstagio.map(e2 => (
-                <div key={e2.estagio} style={{ background: T.panel, borderRadius: 8, padding: '10px 12px',
-                  border: `1px solid ${T.line}`, borderLeft: `3px solid ${CORES_EST[e2.estagio] || T.line}` }}>
+                <div key={e2.estagio} onClick={() => setFiltro('estV', filtros.estV === e2.estagio ? '' : e2.estagio)}
+                  title={`Clique para ver as ${e2.n} propostas em ${e2.rotulo}`}
+                  style={{ background: filtros.estV === e2.estagio ? T.panelAlt : T.panel, borderRadius: 8,
+                    padding: '10px 12px', cursor: 'pointer',
+                    border: `1px solid ${filtros.estV === e2.estagio ? CORES_EST[e2.estagio] : T.line}`,
+                    borderLeft: `3px solid ${CORES_EST[e2.estagio] || T.line}` }}>
                   <div style={{ fontSize: 10.5, color: T.inkFaint, display: 'flex', justifyContent: 'space-between' }}>
                     <span>{e2.rotulo}</span>
                     <span>{e2.n} {e2.n === 1 ? 'proposta' : 'propostas'}</span>
@@ -3966,8 +3985,10 @@ function FollowUpComercial({ currentUser }) {
                 </div>
               ))}
               {semEstagio.length > 0 && (
-                <div style={{ background: T.panel, borderRadius: 8, padding: '10px 12px',
-                  border: `1px dashed ${T.amberText}` }}>
+                <div onClick={() => setFiltro('estV', filtros.estV === '(vazio)' ? '' : '(vazio)')}
+                  title={`Clique para ver as ${semEstagio.length} propostas sem classificação do vendedor`}
+                  style={{ background: filtros.estV === '(vazio)' ? T.amberSoft : T.panel, borderRadius: 8,
+                    padding: '10px 12px', cursor: 'pointer', border: `1px dashed ${T.amberText}` }}>
                   <div style={{ fontSize: 10.5, color: T.amberText, display: 'flex', justifyContent: 'space-between' }}>
                     <span>Vendedor não classificou</span>
                     <span>{semEstagio.length}</span>
@@ -4218,6 +4239,16 @@ function FollowUpComercial({ currentUser }) {
           <input type="checkbox" checked={verPerdidos} onChange={e => setVerPerdidos(e.target.checked)} />
           mostrar perdidos
         </label>
+        {Object.values(filtros).some(Boolean) && (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 11.5, color: T.terracotta }}>
+            {lista.length} {lista.length === 1 ? 'linha' : 'linhas'} no filtro
+            <button onClick={limparFiltros}
+              style={{ fontFamily: 'inherit', fontSize: 11, padding: '3px 9px', borderRadius: 4, cursor: 'pointer',
+                border: `1px solid ${T.terracotta}`, background: 'transparent', color: T.terracotta }}>
+              limpar filtros
+            </button>
+          </span>
+        )}
       </div>
 
       <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
@@ -4227,6 +4258,43 @@ function FollowUpComercial({ currentUser }) {
               {['BR', 'Cliente', 'Vendedor', 'Dias', 'Valor da proposta', 'Margin', 'Estágio comercial', 'Estágio vendedor', 'Observação'].map((h, i) => (
                 <th key={h + i} style={{ padding: '9px 12px', fontSize: 11, fontWeight: 600, color: T.inkFaint,
                   textAlign: [3,4,5,8].includes(i) ? 'right' : 'left', whiteSpace: 'nowrap' }}>{h}</th>
+              ))}
+            </tr>
+            {/* Linha de filtro por coluna, como no Excel. Texto onde a busca e
+                livre, lista onde os valores sao fechados. */}
+            <tr style={{ background: T.panelAlt }}>
+              {[
+                { k: 'br', tipo: 'texto', ph: 'filtrar BR' },
+                { k: 'cliente', tipo: 'texto', ph: 'filtrar cliente' },
+                { k: 'vendedor', tipo: 'lista',
+                  ops: [...new Set(base.map(l => l.vendedor).filter(Boolean))].sort() },
+                null, null, null,
+                { k: 'estC', tipo: 'lista', estagio: true },
+                { k: 'estV', tipo: 'lista', estagio: true },
+                null,
+              ].map((f, i) => (
+                <th key={i} style={{ padding: '4px 8px 8px', borderBottom: `1px solid ${T.line}` }}>
+                  {f?.tipo === 'texto' && (
+                    <input value={filtros[f.k]} onChange={e => setFiltro(f.k, e.target.value)}
+                      placeholder={f.ph}
+                      style={{ fontFamily: 'inherit', fontSize: 11, padding: '3px 6px', width: '100%',
+                        borderRadius: 4, border: `1px solid ${filtros[f.k] ? T.terracotta : T.line}`,
+                        background: T.panel, color: T.ink, fontWeight: 400 }} />
+                  )}
+                  {f?.tipo === 'lista' && (
+                    <select value={filtros[f.k]} onChange={e => setFiltro(f.k, e.target.value)}
+                      style={{ fontFamily: 'inherit', fontSize: 11, padding: '3px 4px', width: '100%',
+                        borderRadius: 4, border: `1px solid ${filtros[f.k] ? T.terracotta : T.line}`,
+                        background: T.panel, color: filtros[f.k] ? T.ink : T.inkFaint, fontWeight: 400 }}>
+                      <option value="">todos</option>
+                      {f.estagio
+                        ? [...estagios.map(e2 => ({ v: e2.estagio, r: e2.rotulo })),
+                           { v: '(vazio)', r: 'sem classificação' }].map(o => (
+                            <option key={o.v} value={o.v}>{o.r}</option>))
+                        : (f.ops || []).map(o => <option key={o} value={o}>{o}</option>)}
+                    </select>
+                  )}
+                </th>
               ))}
             </tr></thead>
             <tbody>
