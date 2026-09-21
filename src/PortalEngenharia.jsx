@@ -17357,6 +17357,7 @@ function Custeio() {
   const [insumoMes, setInsumoMes] = useState([]);
   const [rateioNat, setRateioNat] = useState([]);
   const [opSug, setOpSug] = useState([]);
+  const [obsOp, setObsOp] = useState([]);
   const [rateioDet, setRateioDet] = useState([]);
   const [folhaCentro, setFolhaCentro] = useState([]);
   const [encargos, setEncargos] = useState([]);
@@ -17436,6 +17437,7 @@ function Custeio() {
       setInsumoMes(await lerTudo('custeio_insumo_mensal'));
       setRateioNat(await lerTudo('v_custeio_rateio_natureza'));
       setOpSug(await lerTudo('v_custeio_op_sugerida'));
+      setObsOp(await lerTudo('v_custeio_observacao_op'));
       setRateioDet(await lerTudo('v_custeio_rateio_detalhe'));
       setFolhaCentro(await lerTudo('v_custeio_folha_cif'));
       setEncargos(await lerTudo('custeio_encargo_folha'));
@@ -18011,7 +18013,26 @@ function Custeio() {
                       <tbody>
                         {fila.slice(0, 60).map(x => (
                           <tr key={`${x.codproj}-${x.competencia}`} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
-                            <td style={{ padding: '8px 12px', fontSize: 12.5, fontWeight: 600 }}>{x.br}</td>
+<td style={{ padding: '8px 12px', fontSize: 12.5, fontWeight: 600 }}>
+                              {x.br}
+                              {(() => {
+                                // A producao escreve no campo Observacao da OP o que nao
+                                // cabe em outro lugar -- 'foi usado projeto estoque da OP
+                                // 7726', 'op substituida pela 8039'. Sao 11 dos projetos
+                                // da fila, e varias dizem a resposta direto.
+                                const o = obsOp.find(z => z.br === x.br);
+                                if (!o) return null;
+                                return (
+                                  <div title={o.observacoes}
+                                    style={{ fontSize: 10.5, fontWeight: 400, color: T.blueText,
+                                      marginTop: 3, maxWidth: 260, lineHeight: 1.4,
+                                      display: '-webkit-box', WebkitLineClamp: 2,
+                                      WebkitBoxOrient: 'vertical', overflow: 'hidden', cursor: 'help' }}>
+                                    ✎ {o.observacoes}
+                                  </div>
+                                );
+                              })()}
+                            </td>
                             <td style={{ padding: '8px 12px', fontSize: 11.5, color: T.inkDim }}>{x.competencia}</td>
                             <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{moeda(x.receita_liquida)}</td>
                             <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', color: T.rustText, fontVariantNumeric: 'tabular-nums' }}>{moeda(x.custo)}</td>
