@@ -3732,30 +3732,37 @@ function FollowUpComercial({ currentUser }) {
 
     ws.mergeCells('A1:G1');
     const t = ws.getCell('A1');
-    t.value = `Follow Up comercial — ${vendedor} — preencher a coluna Estágio`;
+    t.value = `Follow Up comercial — ${vendedor} — preencher Estágio e Expectativa de fechamento`;
     t.font = { bold: true, size: 12 };
     t.alignment = { vertical: 'middle' };
     ws.getRow(1).height = 24;
 
-    ws.getRow(2).values = ['BR', 'Cliente', 'Valor líquido', 'Margin', 'Situação', 'Estágio', 'Observação'];
+    // MESMAS COLUNAS da planilha que vai por e-mail. Eram duas geracoes de
+    // Excel com formatos diferentes: se alguem baixasse por aqui e devolvesse,
+    // a importacao nao acharia as colunas. Margin saiu -- ela fica na TELA,
+    // nao vai para o vendedor.
+    ws.getRow(2).values = ['BR', 'Cliente', 'Valor líquido', 'Situação', 'Estágio',
+                           'Expectativa de fechamento (MM/AAAA)', 'Observação'];
     ws.getRow(2).font = { bold: true };
     ws.getRow(2).eachCell(c => {
       c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEDE7DE' } };
       c.border = { bottom: { style: 'thin' } };
     });
-    ws.columns = [{ width: 15 }, { width: 36 }, { width: 16 }, { width: 19 }, { width: 18 }, { width: 44 }];
+    ws.columns = [{ width: 15 }, { width: 36 }, { width: 17 }, { width: 20 },
+                  { width: 16 }, { width: 22 }, { width: 48 }];
 
     dados.forEach(d => {
       const fechado = d.situacao !== 'em aberto';
       const r = ws.addRow([
         d.br, d.cliente, Number(d.valor_proposta) || null,
-        d.margin == null ? null : Number(d.margin) / 100,
         fechado ? (d.situacao === 'faturado' ? 'Faturado' : 'Pedido em carteira') : 'Proposta em aberto',
         fechado ? 'Pedido em carteira' : (d.estagio_vendedor_rotulo || ''),
+        d.expectativa_fechamento || '',
         d.observacao_vendedor || '',
       ]);
       r.getCell(3).numFmt = 'R$ #,##0.00';
-      r.getCell(4).numFmt = '0.0%';
+      // texto, senao o Excel converte 03/2027 em 03/03/2027 sozinho
+      r.getCell(6).numFmt = '@';
 
       if (fechado) {
         // Linha travada: o cliente ja decidiu, nao ha o que classificar.
@@ -3765,10 +3772,11 @@ function FollowUpComercial({ currentUser }) {
           c.font = { color: { argb: 'FF5A6B5D' } };
         });
       } else {
-        // So Estagio e Observacao ficam liberados para digitar.
+        // Estagio, Expectativa e Observacao liberados para digitar.
+        r.getCell(5).protection = { locked: false };
         r.getCell(6).protection = { locked: false };
         r.getCell(7).protection = { locked: false };
-        r.getCell(6).dataValidation = {
+        r.getCell(5).dataValidation = {
           type: 'list', allowBlank: true,
           formulae: [`"${ESTAGIO_ROTULOS.join(',')}"`],
           showErrorMessage: true, errorTitle: 'Valor inválido',
@@ -3834,20 +3842,38 @@ function FollowUpComercial({ currentUser }) {
           || wb.worksheets[0];
 
         const cab = [];
-        ws.getRow(1).eachCell({ includeEmpty: true }, (c, col) => { cab[col] = semAcento(c.value); });
+        let linhaDoCab = 1;
+        for (let r = 1; r <= 3; r++) {
+          const v = [];
+          ws.getRow(r).eachCell({ includeEmpty: true }, (c, col) => { v[col] = semAcento(c.value); });
+          if (v.some(t => t === 'BR')) { linhaDoCab = r; v.forEach((t, k) => { cab[k] = t; }); break; }
+        }
+        void linhaDoCab;
         const achaCol = (teste) => cab.findIndex((t, idx) => idx > 0 && t && teste(t));
         const cBr = achaCol(t => t === 'BR');
         const cEst = achaCol(t => t.startsWith('ESTAGIO'));
+        const cExp = achaCol(t => t.startsWith('EXPECTATIVA'));
         const cObs = achaCol(t => t.startsWith('OBSERVAC'));
         if (cBr < 0 || cEst < 0) {
           ignorados.push(`${f.name}: não achei as colunas BR e Estágio na aba "${ws.name}" (achei: ${cab.filter(Boolean).join(', ')})`);
           continue;
         }
 
+        // O cabecalho pode estar na linha 1 (planilha do e-mail) ou na 2
+        // (a que o portal gera, que tem titulo em A1). A linha de cabecalho e
+        // a que contem 'BR'.
+        let linhaCab = 1;
+        for (let r = 1; r <= 3; r++) {
+          const vals = [];
+          ws.getRow(r).eachCell({ includeEmpty: true }, (c, col) => { vals[col] = semAcento(c.value); });
+          if (vals.some(t => t === 'BR')) { linhaCab = r; break; }
+        }
+
         ws.eachRow((row, i) => {
-          if (i === 1) return;
+          if (i <= linhaCab) return;
           const br = String(row.getCell(cBr).value ?? '').trim();
           const rot = String(row.getCell(cEst).value ?? '').trim();
+          const exp = cExp > 0 ? String(row.getCell(cExp).value ?? '').trim() : '';
           const obs = cObs > 0 ? String(row.getCell(cObs).value ?? '').trim() : '';
           if (!br) return;
           if (!brsConhecidos.has(br)) { ignorados.push(`${br}: não existe no portal`); return; }
@@ -3855,11 +3881,12 @@ function FollowUpComercial({ currentUser }) {
           if (rot && !estagio) { ignorados.push(`${br}: estágio "${rot}" não reconhecido`); return; }
           // celula de estagio APAGADA limpa a classificacao, igual ao botao da
           // tela -- e como o vendedor desfaz pelo Excel
-          if (!rot && !obs) return;
+          if (!rot && !obs && !exp) return;
           aplicar.push({
             br,
             estagio_vendedor: estagio ?? null,
             ...(estagio ? { estagio_vendedor_em: new Date().toISOString() } : { estagio_vendedor_em: null }),
+            ...(exp ? { expectativa_fechamento: exp } : {}),
             ...(obs ? { observacao_vendedor: obs } : {}),
           });
         });
