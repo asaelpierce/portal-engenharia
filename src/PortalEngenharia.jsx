@@ -3595,62 +3595,99 @@ function ModeloPreditivo() {
 // ===========================================================================
 const TXT = {
   pt: {
-    titulo: 'Painel da diretoria', funil: 'Funil comercial', moeda: 'Moeda',
+    titulo: 'Painel da diretoria', moeda: 'Moeda', idioma: 'Idioma', cenario: 'Cenário',
     emAberto: 'Em aberto', pedido: 'Pedido em carteira', faturado: 'Faturado',
-    perdido: 'Perdido', total: 'Total do funil', conversao: 'Conversão',
-    porEstagio: 'Proposta em aberto por estágio', porVendedor: 'Por vendedor',
-    porMes: 'Propostas por mês', topClientes: 'Maiores clientes',
-    propostas: 'propostas', brs: 'BRs', ticket: 'Ticket médio',
-    cotacao: 'cotação de', semClass: 'Sem classificação',
-    ganhou: 'virou pedido', explicaConv: 'BRs que viraram pedido ou faturamento, sobre o total',
-    explicaFunil: 'Valor da proposta, sem multiplicar pela chance de fechar.',
-    aberto: 'em aberto', idioma: 'Idioma',
+    perdido: 'Perdido', conversao: 'Conversão', previsto: 'Previsto no cenário',
+    propostas: 'propostas', brs: 'BRs', ganhou: 'fecharam', estagio: 'Estágio',
+    bruto: 'Valor cheio', vendedor: 'Vendedor', dias: 'dias', ticket: 'Ticket médio',
+    cotacao: 'cotação de', semData: 'sem data',
+    previsaoMes: 'Previsão de fechamento por mês',
+    porEstagioCen: 'Funil por estágio, nos três cenários',
+    porVendedor: 'Desempenho por vendedor',
+    cicloTitulo: 'Propostas e fechamento, mês a mês',
+    diasAtePedido: 'Da proposta ao pedido', diasAteFaturar: 'Do pedido ao faturamento',
+    convMedia: 'Conversão média',
+    explicaConv: 'BRs que viraram pedido ou faturamento, sobre os que já se decidiram. Proposta ainda em aberto fica fora.',
+    explicaPrev: 'Soma das propostas em aberto, cada uma multiplicada pelo fator do seu estágio no cenário escolhido.',
+    explicaCenario: 'os fatores por estágio são editáveis — a regra de vocês ainda está sendo definida',
+    explicaPrevisaoMes: 'pelo mês que o vendedor espera fechar, não pelo mês da proposta · barra cheia = valor bruto, barra escura = cenário',
+    explicaEstagio: 'valor cheio e o que sobra em cada cenário',
+    explicaVendedor: 'barra verde = fechado, âmbar = em aberto',
+    explicaCiclo: 'barra cheia = proposto, verde = virou pedido',
+    semPrevisaoTitulo: 'Nenhuma proposta tem expectativa de fechamento preenchida ainda.',
+    semPrevisao: 'A coluna é nova e vai chegar quando os vendedores devolverem o follow up. Até lá, a previsão existe mas não tem como ser distribuída por mês.',
+    semDataValor: '{n} propostas sem data de fechamento, somando {v} no cenário.',
   },
   en: {
-    titulo: 'Executive dashboard', funil: 'Sales funnel', moeda: 'Currency',
-    emAberto: 'Open', pedido: 'Won — in backlog', faturado: 'Invoiced',
-    perdido: 'Lost', total: 'Total pipeline', conversao: 'Conversion',
-    porEstagio: 'Open proposals by stage', porVendedor: 'By salesperson',
-    porMes: 'Proposals by month', topClientes: 'Top customers',
-    propostas: 'proposals', brs: 'projects', ticket: 'Average deal',
-    cotacao: 'rate as of', semClass: 'Unclassified',
-    ganhou: 'won', explicaConv: 'Projects that became an order or invoice, over the total',
-    explicaFunil: 'Proposal value, not weighted by probability.',
-    aberto: 'open', idioma: 'Language',
+    titulo: 'Executive dashboard', moeda: 'Currency', idioma: 'Language', cenario: 'Scenario',
+    emAberto: 'Open', pedido: 'Won — backlog', faturado: 'Invoiced',
+    perdido: 'Lost', conversao: 'Win rate', previsto: 'Forecast',
+    propostas: 'proposals', brs: 'projects', ganhou: 'closed', estagio: 'Stage',
+    bruto: 'Full value', vendedor: 'Salesperson', dias: 'days', ticket: 'Average deal',
+    cotacao: 'rate as of', semData: 'no date',
+    previsaoMes: 'Forecast by expected closing month',
+    porEstagioCen: 'Pipeline by stage, across scenarios',
+    porVendedor: 'Performance by salesperson',
+    cicloTitulo: 'Proposals and closings, month by month',
+    diasAtePedido: 'Proposal to order', diasAteFaturar: 'Order to invoice',
+    convMedia: 'Average win rate',
+    explicaConv: 'Projects that became an order or invoice, over those already decided. Still-open proposals are excluded.',
+    explicaPrev: 'Open proposals, each multiplied by its stage factor in the chosen scenario.',
+    explicaCenario: 'stage factors are editable — the final rule is still being defined',
+    explicaPrevisaoMes: 'by the month the salesperson expects to close, not the proposal month · light bar = full value, dark bar = scenario',
+    explicaEstagio: 'full value and what remains in each scenario',
+    explicaVendedor: 'green = closed, amber = open',
+    explicaCiclo: 'light bar = proposed, green = became an order',
+    semPrevisaoTitulo: 'No proposal has an expected closing date yet.',
+    semPrevisao: 'The column is new and will arrive as salespeople return the follow-up. Until then the forecast exists but cannot be spread across months.',
+    semDataValor: '{n} proposals with no closing date, totalling {v} in this scenario.',
   },
 };
+
 
 function PainelDiretoria() {
   const [dados, setDados] = useState([]);
   const [cambio, setCambio] = useState([]);
+  const [previsao, setPrevisao] = useState([]);
+  const [ciclo, setCiclo] = useState([]);
   const [loading, setLoading] = useState(true);
   const [moeda, setMoeda] = useState('BRL');
   const [idioma, setIdioma] = useState('pt');
+  const [cenario, setCenario] = useState('realista');
   const t = TXT[idioma];
 
   useEffect(() => {
     (async () => {
-      const [d, c] = await Promise.all([
+      const [d, c, pv, cc] = await Promise.all([
         supabase.from('v_comercial_diretoria').select('*'),
         supabase.from('comercial_cambio').select('*'),
+        supabase.from('v_comercial_previsao').select('*'),
+        supabase.from('v_comercial_ciclo_resumo').select('*').order('competencia'),
       ]);
-      setDados(d.data || []);
-      setCambio(c.data || []);
+      setDados(d.data || []); setCambio(c.data || []);
+      setPrevisao(pv.data || []); setCiclo(cc.data || []);
       setLoading(false);
     })();
   }, []);
 
   const cx = cambio.find(c => c.moeda === moeda) || { taxa: 1, simbolo: 'R$' };
+  const loc = idioma === 'pt' ? 'pt-BR' : 'en-US';
   const conv = (v) => (Number(v) || 0) / (Number(cx.taxa) || 1);
   const val = (v) => {
-    const n = conv(v);
-    const abs = Math.abs(n);
-    const loc = idioma === 'pt' ? 'pt-BR' : 'en-US';
+    const n = conv(v), abs = Math.abs(n);
     if (abs >= 1e6) return `${cx.simbolo} ${(n / 1e6).toLocaleString(loc, { maximumFractionDigits: 1 })} mi`;
     if (abs >= 1e3) return `${cx.simbolo} ${(n / 1e3).toLocaleString(loc, { maximumFractionDigits: 0 })} mil`;
     return `${cx.simbolo} ${n.toLocaleString(loc, { maximumFractionDigits: 0 })}`;
   };
-  const soma = (arr) => arr.reduce((s, r) => s + (Number(r.valor) || 0), 0);
+  const soma = (arr, campo = 'valor') => arr.reduce((s, r) => s + (Number(r[campo]) || 0), 0);
+  const rotMes = (m) => {
+    if (!m) return t.semData;
+    const [a, mm] = m.split('-');
+    const nomes = idioma === 'pt'
+      ? ['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez']
+      : ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    return `${nomes[Number(mm) - 1]}/${a.slice(2)}`;
+  };
 
   if (loading) return <div style={{ padding: 40, color: T.inkFaint }}>carregando…</div>;
   if (!dados.length) return <div style={{ padding: 40, color: T.inkFaint }}>Sem dados no período.</div>;
@@ -3663,53 +3700,57 @@ function PainelDiretoria() {
   const decididos = ganhos + perdidos.length;
   const convPct = decididos > 0 ? (ganhos / decididos) * 100 : null;
 
-  const agrupa = (arr, campo) => {
-    const m = {};
-    arr.forEach(d => {
-      const k = d[campo] || '—';
-      if (!m[k]) m[k] = { n: 0, v: 0 };
-      m[k].n += 1; m[k].v += Number(d.valor) || 0;
+  // ---- PREVISÃO no cenário escolhido, pelo MÊS ESPERADO de fechamento ------
+  const doCenario = previsao.filter(p => p.cenario === cenario);
+  const cenarios = [...new Map(previsao.map(p => [p.cenario, { c: p.cenario, r: p.cenario_rotulo, o: p.cenario_ordem }])).values()]
+    .sort((a, b) => a.o - b.o);
+  const mesesPrev = [...new Set(doCenario.map(p => p.mes_previsto).filter(Boolean))].sort();
+  const semData = doCenario.filter(p => !p.mes_previsto);
+  const porMesPrev = mesesPrev.map(m => {
+    const d = doCenario.filter(p => p.mes_previsto === m);
+    return { m, v: soma(d, 'valor_cenario'), bruto: soma(d, 'valor'), n: d.length };
+  });
+  const maxPrev = Math.max(1, ...porMesPrev.map(x => x.v));
+  const totalCenario = soma(doCenario, 'valor_cenario');
+
+  // por estágio, nos três cenários lado a lado
+  const estagios = [...new Set(previsao.map(p => p.estagio_rotulo))];
+  const porEstagioCen = estagios.map(e => {
+    const linha = { e, bruto: soma(previsao.filter(p => p.estagio_rotulo === e && p.cenario === cenario), 'valor'),
+                    n: previsao.filter(p => p.estagio_rotulo === e && p.cenario === cenario).length };
+    cenarios.forEach(c => {
+      linha[c.c] = soma(previsao.filter(p => p.estagio_rotulo === e && p.cenario === c.c), 'valor_cenario');
     });
-    return Object.entries(m).map(([k, x]) => ({ k, ...x })).sort((a, b) => b.v - a.v);
-  };
+    return linha;
+  }).sort((a, b) => b.bruto - a.bruto);
+  const maxEst = Math.max(1, ...porEstagioCen.map(x => x.bruto));
 
-  const porEstagio = agrupa(abertos, 'estagio');
-  const porVendedor = agrupa(dados.filter(d => d.situacao !== 'perdido'), 'vendedor').slice(0, 8);
-  const porCliente = agrupa(dados.filter(d => d.situacao !== 'perdido'), 'cliente').slice(0, 8);
-  const meses = [...new Set(dados.map(d => d.competencia))].sort();
-  const porMes = meses.map(m => ({
-    m, v: soma(dados.filter(d => d.competencia === m)),
-    ganho: soma(dados.filter(d => d.competencia === m && d.situacao !== 'em aberto' && d.situacao !== 'perdido')),
-  }));
-  const maxMes = Math.max(1, ...porMes.map(x => x.v));
+  // por vendedor: propostas, fechadas e previsão
+  const vendedores = [...new Set(dados.map(d => d.vendedor).filter(Boolean))];
+  const porVend = vendedores.map(v => {
+    const meus = dados.filter(d => d.vendedor === v);
+    const meusAbertos = meus.filter(d => d.situacao === 'em aberto');
+    const meusGanhos = meus.filter(d => d.situacao === 'pedido confirmado' || d.situacao === 'faturado');
+    const meusPerd = meus.filter(d => d.situacao === 'perdido');
+    const dec = meusGanhos.length + meusPerd.length;
+    return {
+      v, propostas: meus.length,
+      aberto: soma(meusAbertos), nAberto: meusAbertos.length,
+      ganho: soma(meusGanhos), nGanho: meusGanhos.length,
+      conv: dec > 0 ? (meusGanhos.length / dec) * 100 : null,
+      prev: soma(doCenario.filter(p => p.vendedor === v), 'valor_cenario'),
+    };
+  }).sort((a, b) => b.ganho - a.ganho);
+  const maxVend = Math.max(1, ...porVend.map(x => Math.max(x.ganho, x.aberto)));
 
-  const CORES = { 'Avançado': T.oliveText, 'Alto': T.blueText, 'Médio': T.amberText,
-                  'Baixo': T.rustText, 'Perdido': T.inkFaint };
-
-  const barras = (itens, cor) => {
-    const max = Math.max(1, ...itens.map(i => i.v));
-    return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
-        {itens.map(i => (
-          <div key={i.k} style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-            <span style={{ fontSize: 11.5, color: T.inkDim, width: 150, whiteSpace: 'nowrap',
-              overflow: 'hidden', textOverflow: 'ellipsis' }} title={i.k}>{i.k}</span>
-            <div style={{ flex: 1, height: 13, background: T.lineSoft, borderRadius: 3, overflow: 'hidden' }}>
-              <div style={{ height: '100%', width: `${(i.v / max) * 100}%`,
-                background: cor || CORES[i.k] || T.terracotta }} />
-            </div>
-            <span style={{ fontSize: 11.5, fontWeight: 600, width: 88, textAlign: 'right',
-              fontVariantNumeric: 'tabular-nums' }}>{val(i.v)}</span>
-            <span style={{ fontSize: 10.5, color: T.inkFaint, width: 40, textAlign: 'right' }}>{i.n}</span>
-          </div>
-        ))}
-      </div>
-    );
-  };
+  const maxCiclo = Math.max(1, ...ciclo.map(c => Number(c.valor_proposto) || 0));
+  const CORES_E = { 'Avançado': T.oliveText, 'Alto': T.blueText, 'Médio': T.amberText,
+                    'Baixo': T.rustText, 'Perdido': T.inkFaint, 'Sem classificação': T.inkFaint };
 
   const painel = (titulo, conteudo, extra) => (
     <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: 14 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 12 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
+        marginBottom: 12, gap: 10, flexWrap: 'wrap' }}>
         <span style={{ fontSize: 12.5, fontWeight: 700 }}>{titulo}</span>
         {extra && <span style={{ fontSize: 10.5, color: T.inkFaint }}>{extra}</span>}
       </div>
@@ -3717,54 +3758,52 @@ function PainelDiretoria() {
     </div>
   );
 
+  const botoes = (lista, atual, troca) => (
+    <span style={{ display: 'inline-flex', gap: 3 }}>
+      {lista.map(([k, r]) => (
+        <button key={k} onClick={() => troca(k)} style={{
+          fontFamily: 'inherit', fontSize: 11.5, fontWeight: atual === k ? 700 : 400,
+          padding: '4px 11px', borderRadius: 5, cursor: 'pointer',
+          border: `1px solid ${atual === k ? T.ink : T.line}`,
+          background: atual === k ? T.ink : T.panel,
+          color: atual === k ? T.panel : T.inkDim }}>{r}</button>
+      ))}
+    </span>
+  );
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
         <span style={{ fontFamily: FONT_DISPLAY, fontSize: 19, fontWeight: 700 }}>{t.titulo}</span>
-        <span style={{ display: 'inline-flex', gap: 14, alignItems: 'center', flexWrap: 'wrap' }}>
-          <span style={{ display: 'inline-flex', gap: 3, alignItems: 'center' }}>
-            <span style={{ fontSize: 10.5, color: T.inkFaint, marginRight: 4 }}>{t.moeda}</span>
-            {cambio.map(c => (
-              <button key={c.moeda} onClick={() => setMoeda(c.moeda)}
-                title={c.moeda === 'BRL' ? '' :
-                  `1 ${c.moeda} = R$ ${Number(c.taxa).toFixed(2)} · ${t.cotacao} ${new Date(c.atualizado_em).toLocaleDateString(idioma === 'pt' ? 'pt-BR' : 'en-US')}`}
-                style={{ fontFamily: 'inherit', fontSize: 11.5, fontWeight: moeda === c.moeda ? 700 : 400,
-                  padding: '4px 11px', borderRadius: 5, cursor: 'pointer',
-                  border: `1px solid ${moeda === c.moeda ? T.ink : T.line}`,
-                  background: moeda === c.moeda ? T.ink : T.panel,
-                  color: moeda === c.moeda ? T.panel : T.inkDim }}>{c.moeda}</button>
-            ))}
+        <span style={{ display: 'inline-flex', gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>
+          <span style={{ display: 'inline-flex', gap: 5, alignItems: 'center' }}>
+            <span style={{ fontSize: 10.5, color: T.inkFaint }}>{t.moeda}</span>
+            {botoes(cambio.map(c => [c.moeda, c.moeda]), moeda, setMoeda)}
           </span>
-          <span style={{ display: 'inline-flex', gap: 3, alignItems: 'center' }}>
-            <span style={{ fontSize: 10.5, color: T.inkFaint, marginRight: 4 }}>{t.idioma}</span>
-            {[['pt', 'PT'], ['en', 'EN']].map(([k, r]) => (
-              <button key={k} onClick={() => setIdioma(k)}
-                style={{ fontFamily: 'inherit', fontSize: 11.5, fontWeight: idioma === k ? 700 : 400,
-                  padding: '4px 11px', borderRadius: 5, cursor: 'pointer',
-                  border: `1px solid ${idioma === k ? T.ink : T.line}`,
-                  background: idioma === k ? T.ink : T.panel,
-                  color: idioma === k ? T.panel : T.inkDim }}>{r}</button>
-            ))}
+          <span style={{ display: 'inline-flex', gap: 5, alignItems: 'center' }}>
+            <span style={{ fontSize: 10.5, color: T.inkFaint }}>{t.idioma}</span>
+            {botoes([['pt', 'PT'], ['en', 'EN']], idioma, setIdioma)}
           </span>
         </span>
       </div>
 
       {moeda !== 'BRL' && (
         <div style={{ fontSize: 10.5, color: T.inkFaint }}>
-          1 {moeda} = R$ {Number(cx.taxa).toFixed(2)} · {t.cotacao}{' '}
-          {new Date(cx.atualizado_em).toLocaleDateString(idioma === 'pt' ? 'pt-BR' : 'en-US')}
+          1 {moeda} = R$ {Number(cx.taxa).toFixed(4)} · {t.cotacao}{' '}
+          {new Date(cx.atualizado_em).toLocaleDateString(loc)} · {cx.fonte}
         </div>
       )}
 
-      <div style={{ display: 'grid', gap: 9, gridTemplateColumns: 'repeat(auto-fit, minmax(165px, 1fr))' }}>
+      <div style={{ display: 'grid', gap: 9, gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))' }}>
         {[
           { t: t.emAberto, v: val(soma(abertos)), n: `${abertos.length} ${t.propostas}`, c: T.amberText },
           { t: t.pedido, v: val(soma(pedidos)), n: `${pedidos.length} ${t.brs}`, c: T.blueText },
           { t: t.faturado, v: val(soma(faturados)), n: `${faturados.length} ${t.brs}`, c: T.oliveText },
           { t: t.perdido, v: val(soma(perdidos)), n: `${perdidos.length} ${t.brs}`, c: T.rustText },
-          { t: t.total, v: val(soma(dados)), n: `${dados.length} ${t.brs}`, c: T.ink },
           { t: t.conversao, v: convPct == null ? '—' : `${convPct.toFixed(0)}%`,
             n: `${ganhos} ${t.ganhou}`, c: T.terracotta, ajuda: t.explicaConv },
+          { t: t.previsto, v: val(totalCenario), n: cenarios.find(c => c.c === cenario)?.r || '', c: T.ink,
+            ajuda: t.explicaPrev },
         ].map(k => (
           <div key={k.t} title={k.ajuda || ''}
             style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 9, padding: '11px 13px' }}>
@@ -3775,32 +3814,169 @@ function PainelDiretoria() {
         ))}
       </div>
 
-      {painel(t.porMes, (
-        <div style={{ display: 'flex', alignItems: 'flex-end', gap: 7, height: 150 }}>
-          {porMes.map(x => (
-            <div key={x.m} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}
-              title={`${x.m}: ${val(x.v)}`}>
-              <div style={{ fontSize: 9.5, color: T.inkFaint, fontVariantNumeric: 'tabular-nums' }}>
-                {(conv(x.v) / 1e6).toFixed(1)}
-              </div>
-              <div style={{ width: '100%', display: 'flex', flexDirection: 'column-reverse',
-                height: `${Math.max((x.v / maxMes) * 108, 3)}px` }}>
-                <div style={{ height: `${(x.ganho / (x.v || 1)) * 100}%`, background: T.oliveText }}
-                  title={`${t.ganhou}: ${val(x.ganho)}`} />
-                <div style={{ flex: 1, background: T.terracotta, borderRadius: '3px 3px 0 0' }} />
-              </div>
-              <div style={{ fontSize: 9.5, color: T.inkFaint }}>{x.m.slice(5)}</div>
-            </div>
-          ))}
-        </div>
-      ), `${cx.simbolo} mi · ${t.ganhou} = ${idioma === 'pt' ? 'verde' : 'green'}`)}
-
-      <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))' }}>
-        {painel(t.porEstagio, barras(porEstagio), t.explicaFunil)}
-        {painel(t.porVendedor, barras(porVendedor, T.blueText))}
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 11.5, color: T.inkDim, fontWeight: 600 }}>{t.cenario}</span>
+        {botoes(cenarios.map(c => [c.c, c.r]), cenario, setCenario)}
+        <span style={{ fontSize: 10.5, color: T.inkFaint }}>{t.explicaCenario}</span>
       </div>
 
-      {painel(t.topClientes, barras(porCliente, T.terracotta))}
+      {painel(t.previsaoMes, (
+        porMesPrev.length === 0 ? (
+          <div style={{ fontSize: 11.5, color: T.amberText, background: T.amberSoft, padding: '10px 12px',
+            borderRadius: 6, lineHeight: 1.55 }}>
+            <strong>{t.semPrevisaoTitulo}</strong> {t.semPrevisao}
+            {semData.length > 0 && <> {t.semDataValor.replace('{n}', String(semData.length)).replace('{v}', val(soma(semData, 'valor_cenario')))}</>}
+          </div>
+        ) : (
+          <>
+            <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8, height: 160 }}>
+              {porMesPrev.map(x => (
+                <div key={x.m} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}
+                  title={`${rotMes(x.m)} · ${x.n} ${t.propostas} · ${t.bruto}: ${val(x.bruto)} · ${t.previsto}: ${val(x.v)}`}>
+                  <div style={{ fontSize: 10, fontWeight: 600, color: T.ink, fontVariantNumeric: 'tabular-nums' }}>{val(x.v)}</div>
+                  <div style={{ width: '100%', position: 'relative',
+                    height: `${Math.max((x.bruto / Math.max(...porMesPrev.map(y => y.bruto))) * 112, 4)}px`,
+                    background: `${T.lineSoft}`, borderRadius: '3px 3px 0 0', display: 'flex', alignItems: 'flex-end' }}>
+                    <div style={{ width: '100%', height: `${(x.v / (x.bruto || 1)) * 100}%`,
+                      background: T.terracotta, borderRadius: '3px 3px 0 0' }} />
+                  </div>
+                  <div style={{ fontSize: 9.5, color: T.inkFaint }}>{rotMes(x.m)}</div>
+                  <div style={{ fontSize: 9, color: T.inkFaint }}>{x.n}</div>
+                </div>
+              ))}
+            </div>
+            {semData.length > 0 && (
+              <div style={{ fontSize: 10.5, color: T.amberText, marginTop: 10, paddingTop: 8,
+                borderTop: `1px solid ${T.lineSoft}` }}>
+                {t.semDataValor.replace('{n}', String(semData.length)).replace('{v}', val(soma(semData, 'valor_cenario')))}
+              </div>
+            )}
+          </>
+        )
+      ), t.explicaPrevisaoMes)}
+
+      {painel(t.porEstagioCen, (
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 560 }}>
+            <thead><tr style={{ background: T.panelAlt }}>
+              <th style={{ padding: '8px 10px', fontSize: 11, fontWeight: 600, color: T.inkFaint, textAlign: 'left' }}>{t.estagio}</th>
+              <th style={{ padding: '8px 10px', fontSize: 11, fontWeight: 600, color: T.inkFaint, textAlign: 'right' }}>{t.propostas}</th>
+              <th style={{ padding: '8px 10px', fontSize: 11, fontWeight: 600, color: T.inkFaint, textAlign: 'right' }}>{t.bruto}</th>
+              {cenarios.map(c => (
+                <th key={c.c} style={{ padding: '8px 10px', fontSize: 11, fontWeight: 600,
+                  color: c.c === cenario ? T.ink : T.inkFaint, textAlign: 'right' }}>{c.r}</th>
+              ))}
+              <th style={{ padding: '8px 10px', minWidth: 130 }} />
+            </tr></thead>
+            <tbody>
+              {porEstagioCen.map(x => (
+                <tr key={x.e} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                  <td style={{ padding: '7px 10px', fontSize: 12 }}>
+                    <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 2,
+                      background: CORES_E[x.e] || T.inkFaint, marginRight: 7 }} />
+                    {x.e}
+                  </td>
+                  <td style={{ padding: '7px 10px', fontSize: 11.5, textAlign: 'right', color: T.inkFaint }}>{x.n}</td>
+                  <td style={{ padding: '7px 10px', fontSize: 12, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{val(x.bruto)}</td>
+                  {cenarios.map(c => (
+                    <td key={c.c} style={{ padding: '7px 10px', fontSize: 12, textAlign: 'right',
+                      fontWeight: c.c === cenario ? 700 : 400,
+                      color: c.c === cenario ? T.terracotta : T.inkDim, fontVariantNumeric: 'tabular-nums' }}>
+                      {val(x[c.c])}
+                    </td>
+                  ))}
+                  <td style={{ padding: '7px 10px' }}>
+                    <div style={{ height: 9, background: T.lineSoft, borderRadius: 2, position: 'relative' }}>
+                      <div style={{ position: 'absolute', inset: 0, width: `${(x.bruto / maxEst) * 100}%`,
+                        background: `${CORES_E[x.e] || T.inkFaint}33`, borderRadius: 2 }} />
+                      <div style={{ position: 'absolute', inset: 0, width: `${(x[cenario] / maxEst) * 100}%`,
+                        background: CORES_E[x.e] || T.inkFaint, borderRadius: 2 }} />
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ), t.explicaEstagio)}
+
+      {painel(t.porVendedor, (
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 620 }}>
+            <thead><tr style={{ background: T.panelAlt }}>
+              {[t.vendedor, t.propostas, t.emAberto, t.ganhou, t.conversao, t.previsto, ''].map((h, i) => (
+                <th key={h + i} style={{ padding: '8px 10px', fontSize: 11, fontWeight: 600, color: T.inkFaint,
+                  textAlign: i === 0 ? 'left' : i === 6 ? 'left' : 'right', minWidth: i === 6 ? 140 : undefined }}>{h}</th>
+              ))}
+            </tr></thead>
+            <tbody>
+              {porVend.map(x => (
+                <tr key={x.v} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                  <td style={{ padding: '7px 10px', fontSize: 12, fontWeight: 600 }}>{x.v}</td>
+                  <td style={{ padding: '7px 10px', fontSize: 11.5, textAlign: 'right', color: T.inkFaint }}>{x.propostas}</td>
+                  <td style={{ padding: '7px 10px', fontSize: 12, textAlign: 'right', color: T.amberText, fontVariantNumeric: 'tabular-nums' }}>
+                    {val(x.aberto)} <span style={{ fontSize: 10, color: T.inkFaint }}>({x.nAberto})</span>
+                  </td>
+                  <td style={{ padding: '7px 10px', fontSize: 12, textAlign: 'right', color: T.oliveText, fontVariantNumeric: 'tabular-nums' }}>
+                    {val(x.ganho)} <span style={{ fontSize: 10, color: T.inkFaint }}>({x.nGanho})</span>
+                  </td>
+                  <td style={{ padding: '7px 10px', fontSize: 12, textAlign: 'right', fontWeight: 600,
+                    color: x.conv == null ? T.inkFaint : x.conv >= 70 ? T.oliveText : x.conv >= 40 ? T.amberText : T.rustText }}>
+                    {x.conv == null ? '—' : `${x.conv.toFixed(0)}%`}
+                  </td>
+                  <td style={{ padding: '7px 10px', fontSize: 12, textAlign: 'right', color: T.terracotta,
+                    fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{val(x.prev)}</td>
+                  <td style={{ padding: '7px 10px' }}>
+                    <div style={{ display: 'flex', height: 9, borderRadius: 2, overflow: 'hidden', background: T.lineSoft }}>
+                      <div style={{ width: `${(x.ganho / maxVend) * 100}%`, background: T.oliveText }} title={t.ganhou} />
+                      <div style={{ width: `${(x.aberto / maxVend) * 100}%`, background: T.amberText }} title={t.emAberto} />
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ), t.explicaVendedor)}
+
+      {ciclo.length > 0 && painel(t.cicloTitulo, (
+        <>
+          <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8, height: 150 }}>
+            {ciclo.map(c => {
+              const prop = Number(c.valor_proposto) || 0;
+              const ped = Number(c.valor_pedido) || 0;
+              return (
+                <div key={c.competencia} style={{ flex: 1, display: 'flex', flexDirection: 'column',
+                  alignItems: 'center', gap: 4 }}
+                  title={`${rotMes(c.competencia)} · ${c.propostas} ${t.propostas} · ${c.viraram_pedido} ${t.ganhou} · ${c.conversao_pct}%`}>
+                  <div style={{ fontSize: 9.5, color: T.oliveText, fontWeight: 600 }}>{c.conversao_pct}%</div>
+                  <div style={{ width: '100%', height: `${Math.max((prop / maxCiclo) * 100, 4)}px`,
+                    background: T.lineSoft, borderRadius: '3px 3px 0 0', display: 'flex', alignItems: 'flex-end' }}>
+                    <div style={{ width: '100%', height: `${(ped / (prop || 1)) * 100}%`,
+                      background: T.oliveText, borderRadius: '3px 3px 0 0' }} />
+                  </div>
+                  <div style={{ fontSize: 9.5, color: T.inkFaint }}>{rotMes(c.competencia)}</div>
+                  <div style={{ fontSize: 9, color: T.inkFaint }}>{c.propostas}/{c.viraram_pedido}</div>
+                </div>
+              );
+            })}
+          </div>
+          <div style={{ display: 'grid', gap: 8, marginTop: 14, paddingTop: 12,
+            borderTop: `1px solid ${T.lineSoft}`, gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))' }}>
+            {[
+              { t: t.diasAtePedido, v: `${Math.round(ciclo.reduce((s, c) => s + (Number(c.dias_ate_pedido) || 0), 0) / ciclo.length)} ${t.dias}` },
+              { t: t.diasAteFaturar, v: `${Math.round(ciclo.reduce((s, c) => s + (Number(c.dias_ate_faturar) || 0), 0) / ciclo.length)} ${t.dias}` },
+              { t: t.convMedia, v: `${(ciclo.reduce((s, c) => s + (Number(c.conversao_pct) || 0), 0) / ciclo.length).toFixed(0)}%` },
+              { t: t.ticket, v: val(soma(ciclo, 'valor_proposto') / Math.max(ciclo.reduce((s, c) => s + c.propostas, 0), 1)) },
+            ].map(k => (
+              <div key={k.t}>
+                <div style={{ fontSize: 10.5, color: T.inkFaint }}>{k.t}</div>
+                <div style={{ fontSize: 15, fontWeight: 700, color: T.ink, fontVariantNumeric: 'tabular-nums' }}>{k.v}</div>
+              </div>
+            ))}
+          </div>
+        </>
+      ), t.explicaCiclo)}
     </div>
   );
 }
