@@ -509,11 +509,24 @@ function PortalConteudo({ currentUser, session }) {
         @keyframes barGrow { from { transform: scaleX(0); transform-origin: left; }
                              to { transform: scaleX(1); } }
         @keyframes pulseRing { 0% { stroke-width: 30; } 50% { stroke-width: 34; } 100% { stroke-width: 30; } }
-        .g-clicavel { cursor: pointer; transition: opacity .18s, filter .18s; }
-        .g-clicavel:hover { opacity: .78; filter: brightness(1.08); }
-        .g-drawer { animation: drawerIn .26s cubic-bezier(.2,.8,.3,1) both; }
-        .g-linha { animation: rowIn .24s cubic-bezier(.2,.8,.3,1) both; }
-        .g-barra { animation: barGrow .4s cubic-bezier(.2,.8,.3,1) both; }
+        .g-clicavel { cursor: pointer; transition: transform .22s cubic-bezier(.34,1.3,.5,1), filter .22s; }
+        .g-clicavel:hover { filter: brightness(1.12) saturate(1.15); }
+        .g-drawer { animation: drawerIn .34s cubic-bezier(.16,1,.3,1) both; }
+        .g-linha { animation: rowIn .3s cubic-bezier(.16,1,.3,1) both; }
+        .g-barra { animation: barGrow .55s cubic-bezier(.16,1,.3,1) both; }
+        /* A rosca se desenha girando: o traco comeca escondido e vai sendo
+           revelado no sentido horario. */
+        @keyframes arcoDraw { from { stroke-dashoffset: var(--len); } to { stroke-dashoffset: 0; } }
+        .g-arco { animation: arcoDraw .9s cubic-bezier(.22,1,.3,1) both; }
+        @keyframes colGrow { from { transform: scaleY(0); } to { transform: scaleY(1); } }
+        .g-col { animation: colGrow .6s cubic-bezier(.16,1,.3,1) both; transform-origin: bottom; }
+        /* Anel que gira enquanto o detalhe carrega. */
+        @keyframes girar { to { transform: rotate(360deg); } }
+        .g-spin { animation: girar .75s linear infinite; }
+        @keyframes brilho { 0%,100% { opacity: .55; } 50% { opacity: 1; } }
+        .g-brilho { animation: brilho 2.4s ease-in-out infinite; }
+        .g-card { transition: transform .25s cubic-bezier(.34,1.3,.5,1), box-shadow .25s; }
+        .g-card:hover { transform: translateY(-3px); box-shadow: 0 8px 26px rgba(28,26,23,.10); }
         .fade-up { animation: fadeUp .35s ease both; }
         .scale-in { animation: scaleIn .2s ease both; }
         .spin { animation: spin 1s linear infinite; }
@@ -3619,7 +3632,7 @@ const TXT = {
     cotacao: 'cotação de', semData: 'sem data',
     previsaoMes: 'Previsão de fechamento por mês',
     funilSituacao: 'Funil por situação', cenariosTitulo: 'Cenários de fechamento',
-    regra: 'Como este número é calculado', linhas: 'Linhas', somaTotal: 'Soma',
+    regra: 'Como este número é calculado', linhas: 'Linhas', somaTotal: 'Soma', carregando: 'abrindo os dados',
     valorCol: 'Valor', clique: 'clique em qualquer fatia, coluna ou barra para abrir os BRs e a regra',
     regraSituacao: 'BRs cuja situação é “{s}”. A situação vem do Sankhya: tem nota → faturado; tem pedido → pedido em carteira; marcado como Perdido pelo vendedor → perdido; o resto fica em aberto. O valor é o da proposta. Não entram BRV (duplicatas) nem projetos do cliente Kalenborn do Brasil (estoque).',
     regraFaturado: 'BRs que já têm nota fiscal. Aqui o valor é a RECEITA das notas, não o da proposta — é o que entrou de fato. Só aparecem BRs com proposta no funil desde janeiro de 2026.',
@@ -3667,7 +3680,7 @@ const TXT = {
     cotacao: 'rate as of', semData: 'no date',
     previsaoMes: 'Forecast by expected closing month',
     funilSituacao: 'Pipeline by status', cenariosTitulo: 'Closing scenarios',
-    regra: 'How this number is calculated', linhas: 'Rows', somaTotal: 'Total',
+    regra: 'How this number is calculated', linhas: 'Rows', somaTotal: 'Total', carregando: 'loading data',
     valorCol: 'Value', clique: 'click any slice, column or bar to open the projects and the rule',
     regraSituacao: 'Projects with status “{s}”. Status comes from the ERP: has an invoice → invoiced; has an order → won; marked Lost by the salesperson → lost; everything else stays open. Value is the proposal amount. BRV duplicates and Kalenborn do Brasil (stock) projects are excluded.',
     regraFaturado: 'Projects that already have an invoice. Here the value is the invoiced REVENUE, not the proposal — what actually came in. Only projects with a proposal in the funnel since January 2026 appear.',
@@ -3714,56 +3727,127 @@ const TXT = {
 // so para esta tela custaria mais do que vale -- sao quatro formas simples.
 // ---------------------------------------------------------------------------
 
+// PALETA DOS GRAFICOS. A paleta do portal e sobria de proposito -- os tons
+// 'Text' sao escuros para ler bem em texto pequeno. Num grafico eles ficam
+// sem vida: cinco marrons parecidos. Aqui vao as versoes VIVAS, cada uma com
+// um par claro/escuro para o gradiente.
+const G = {
+  verde:   ['#34C26B', '#0E7A3C'],
+  azul:    ['#3B9EE8', '#14508C'],
+  ambar:   ['#F5A524', '#B26A00'],
+  vermelho:['#F05A47', '#A11B0C'],
+  roxo:    ['#9B6DD6', '#5B2E9E'],
+  ciano:   ['#2ED3C6', '#0A7A73'],
+  rosa:    ['#F2709C', '#B32552'],
+  cinza:   ['#B9B2A6', '#7B7264'],
+};
+
+// Numero que sobe ate o valor final. Dashboard parado nao impressiona; o
+// numero contando prende o olho no cartao por meio segundo.
+function useContador(alvo, ms = 900) {
+  const [n, setN] = useState(0);
+  const ref = useRef(0);
+  useEffect(() => {
+    const de = ref.current;
+    const inicio = performance.now();
+    let raf;
+    const passo = (agora) => {
+      const t = Math.min((agora - inicio) / ms, 1);
+      // desacelera no fim: sobe rapido e assenta devagar
+      const e = 1 - Math.pow(1 - t, 3);
+      const v = de + (alvo - de) * e;
+      setN(v);
+      ref.current = v;
+      if (t < 1) raf = requestAnimationFrame(passo);
+      else { ref.current = alvo; setN(alvo); }
+    };
+    raf = requestAnimationFrame(passo);
+    return () => cancelAnimationFrame(raf);
+  }, [alvo, ms]);
+  return n;
+}
+
+function Contador({ valor, formata }) {
+  const n = useContador(Number(valor) || 0);
+  return <>{formata(n)}</>;
+}
+
 // Rosca: fatias com furo no meio e o total no centro.
-function Rosca({ dados, tamanho = 190, espessura = 30, centro, subcentro, aoClicar, ativo }) {
+function Rosca({ dados, tamanho = 200, espessura = 32, centro, subcentro, aoClicar, ativo }) {
   const total = dados.reduce((s, d) => s + d.v, 0) || 1;
-  const r = (tamanho - espessura) / 2;
+  const r = (tamanho - espessura - 10) / 2;
   const c = tamanho / 2;
-  let ang = -Math.PI / 2;
-  const arcos = dados.filter(d => d.v > 0).map(d => {
-    const fatia = (d.v / total) * Math.PI * 2;
-    const x1 = c + r * Math.cos(ang), y1 = c + r * Math.sin(ang);
-    ang += fatia;
-    const x2 = c + r * Math.cos(ang), y2 = c + r * Math.sin(ang);
-    // fatia de quase 100% nao fecha com arco simples: o SVG precisa de dois
-    const grande = fatia > Math.PI ? 1 : 0;
-    return { ...d, d: `M ${x1} ${y1} A ${r} ${r} 0 ${grande} 1 ${x2} ${y2}`, pct: (d.v / total) * 100 };
+  const circ = 2 * Math.PI * r;
+  const id = useRef(`g${Math.random().toString(36).slice(2, 8)}`).current;
+  let acumulado = 0;
+  const fatias = dados.filter(d => d.v > 0).map((d, i) => {
+    const frac = d.v / total;
+    const dash = frac * circ;
+    const offset = -acumulado * circ;
+    acumulado += frac;
+    return { ...d, dash, offset, pct: frac * 100, i };
   });
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 18, flexWrap: 'wrap' }}>
-      <svg width={tamanho} height={tamanho} style={{ flexShrink: 0 }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 20, flexWrap: 'wrap' }}>
+      <svg width={tamanho} height={tamanho} style={{ flexShrink: 0, overflow: 'visible' }}>
+        <defs>
+          {fatias.map((f, i) => (
+            <linearGradient key={i} id={`${id}-${i}`} x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0%" stopColor={f.par[0]} />
+              <stop offset="100%" stopColor={f.par[1]} />
+            </linearGradient>
+          ))}
+          <filter id={`${id}-glow`} x="-40%" y="-40%" width="180%" height="180%">
+            <feGaussianBlur stdDeviation="5" result="b" />
+            <feMerge><feMergeNode in="b" /><feMergeNode in="SourceGraphic" /></feMerge>
+          </filter>
+        </defs>
         <circle cx={c} cy={c} r={r} fill="none" stroke={T.lineSoft} strokeWidth={espessura} />
-        {arcos.map((a, i) => (
-          <path key={i} d={a.d} fill="none" stroke={a.cor}
-            strokeWidth={ativo === a.k ? espessura + 6 : espessura}
-            className={aoClicar ? 'g-clicavel' : undefined}
-            onClick={aoClicar ? () => aoClicar(a) : undefined}
-            style={{ transition: 'stroke-width .2s' }}>
-            <title>{`${a.k}: ${a.rot} (${a.pct.toFixed(1)}%)`}</title>
-          </path>
-        ))}
+        <g transform={`rotate(-90 ${c} ${c})`}>
+          {fatias.map((f, i) => (
+            <circle key={i} cx={c} cy={c} r={r} fill="none"
+              className={`g-arco ${aoClicar ? 'g-clicavel' : ''}`}
+              stroke={`url(#${id}-${i})`}
+              strokeWidth={ativo === f.k ? espessura + 8 : espessura}
+              strokeDasharray={`${f.dash} ${circ}`}
+              strokeDashoffset={f.offset}
+              strokeLinecap={fatias.length > 1 ? 'butt' : 'round'}
+              filter={ativo === f.k ? `url(#${id}-glow)` : undefined}
+              onClick={aoClicar ? () => aoClicar(f) : undefined}
+              style={{ '--len': circ, animationDelay: `${i * 130}ms`,
+                transition: 'stroke-width .25s cubic-bezier(.34,1.3,.5,1)' }}>
+              <title>{`${f.k}: ${f.rot} (${f.pct.toFixed(1)}%)`}</title>
+            </circle>
+          ))}
+        </g>
         {centro && (
-          <text x={c} y={c - 2} textAnchor="middle" style={{ fontSize: 19, fontWeight: 700, fill: T.ink }}>
+          <text x={c} y={c - 1} textAnchor="middle"
+            style={{ fontSize: 21, fontWeight: 800, fill: T.ink, letterSpacing: '-.02em' }}>
             {centro}
           </text>
         )}
         {subcentro && (
-          <text x={c} y={c + 16} textAnchor="middle" style={{ fontSize: 10.5, fill: T.inkFaint }}>
+          <text x={c} y={c + 17} textAnchor="middle"
+            style={{ fontSize: 10.5, fill: T.inkFaint, letterSpacing: '.04em', textTransform: 'uppercase' }}>
             {subcentro}
           </text>
         )}
       </svg>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 7, flex: 1, minWidth: 170 }}>
-        {arcos.map((a, i) => (
-          <div key={i} className={aoClicar ? 'g-clicavel' : undefined}
-            onClick={aoClicar ? () => aoClicar(a) : undefined}
-            style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '2px 5px', borderRadius: 4,
-              background: ativo === a.k ? T.panelAlt : 'transparent' }}>
-            <span style={{ width: 10, height: 10, borderRadius: 2, background: a.cor, flexShrink: 0 }} />
-            <span style={{ fontSize: 11.5, color: T.inkDim, flex: 1 }}>{a.k}</span>
-            <span style={{ fontSize: 11.5, fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{a.rot}</span>
-            <span style={{ fontSize: 10.5, color: T.inkFaint, width: 40, textAlign: 'right' }}>
-              {a.pct.toFixed(0)}%
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 5, flex: 1, minWidth: 175 }}>
+        {fatias.map((f, i) => (
+          <div key={i} className={`g-linha ${aoClicar ? 'g-clicavel' : ''}`}
+            onClick={aoClicar ? () => aoClicar(f) : undefined}
+            style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '5px 8px', borderRadius: 6,
+              background: ativo === f.k ? `linear-gradient(90deg, ${f.par[0]}1F, transparent)` : 'transparent',
+              borderLeft: `3px solid ${ativo === f.k ? f.par[0] : 'transparent'}`,
+              animationDelay: `${300 + i * 70}ms` }}>
+            <span style={{ width: 11, height: 11, borderRadius: 3, flexShrink: 0,
+              background: `linear-gradient(135deg, ${f.par[0]}, ${f.par[1]})`,
+              boxShadow: `0 1px 5px ${f.par[0]}66` }} />
+            <span style={{ fontSize: 11.5, color: T.inkDim, flex: 1 }}>{f.k}</span>
+            <span style={{ fontSize: 12, fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{f.rot}</span>
+            <span style={{ fontSize: 11, fontWeight: 600, color: f.par[1], width: 42, textAlign: 'right' }}>
+              {f.pct.toFixed(0)}%
             </span>
           </div>
         ))}
@@ -3772,102 +3856,136 @@ function Rosca({ dados, tamanho = 190, espessura = 30, centro, subcentro, aoClic
   );
 }
 
-// Colunas, com uma parte destacada dentro de cada uma.
-function Colunas({ dados, altura = 170, cor, corBase, rotulo, dica, aoClicar, ativo }) {
+// Colunas com gradiente e uma parte destacada dentro de cada uma.
+function Colunas({ dados, altura = 180, par, rotulo, dica, aoClicar, ativo }) {
   const max = Math.max(1, ...dados.map(d => d.total));
   const largura = 100 / Math.max(dados.length, 1);
+  const id = useRef(`c${Math.random().toString(36).slice(2, 8)}`).current;
   return (
-    <svg width="100%" height={altura + 34} style={{ display: 'block', overflow: 'visible' }}>
+    <svg width="100%" height={altura + 40} style={{ display: 'block', overflow: 'visible' }}>
+      <defs>
+        <linearGradient id={`${id}-f`} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={par[0]} />
+          <stop offset="100%" stopColor={par[1]} />
+        </linearGradient>
+        <linearGradient id={`${id}-b`} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={`${par[0]}30`} />
+          <stop offset="100%" stopColor={`${par[0]}12`} />
+        </linearGradient>
+      </defs>
       {[0.25, 0.5, 0.75, 1].map(g => (
         <line key={g} x1="0" x2="100%" y1={altura * (1 - g)} y2={altura * (1 - g)}
-          stroke={T.lineSoft} strokeWidth="1" strokeDasharray="3 3" />
+          stroke={T.lineSoft} strokeWidth="1" />
       ))}
       {dados.map((d, i) => {
-        const h = Math.max((d.total / max) * altura, 2);
+        const h = Math.max((d.total / max) * altura, 3);
         const hDentro = d.dentro != null ? Math.max((d.dentro / max) * altura, 0) : 0;
-        const x = `${i * largura + largura * 0.18}%`;
-        const w = `${largura * 0.64}%`;
+        const x = `${i * largura + largura * 0.2}%`;
+        const w = `${largura * 0.6}%`;
+        const on = ativo === d.k;
         return (
           <g key={d.k} className={aoClicar ? 'g-clicavel' : undefined}
             onClick={aoClicar ? () => aoClicar(d) : undefined}>
-            {ativo === d.k && (
-              <rect x={x} y={0} width={w} height={altura} rx="3" fill={`${cor}14`} />
-            )}
-            <rect x={x} y={altura - h} width={w} height={h} rx="3" fill={corBase || `${cor}33`}>
+            {on && <rect x={`${i * largura + largura * 0.08}%`} y={-6} width={`${largura * 0.84}%`}
+              height={altura + 34} rx="6" fill={`${par[0]}0E`} />}
+            <g className="g-col" style={{ animationDelay: `${i * 55}ms` }}>
+              <rect x={x} y={altura - h} width={w} height={h} rx="4" fill={`url(#${id}-b)`} />
+              {d.dentro != null && (
+                <rect x={x} y={altura - hDentro} width={w} height={hDentro} rx="4" fill={`url(#${id}-f)`}
+                  style={{ filter: on ? `drop-shadow(0 0 7px ${par[0]}88)` : undefined }} />
+              )}
+            </g>
+            <rect x={x} y={0} width={w} height={altura} fill="transparent">
               <title>{dica ? dica(d) : `${d.k}: ${d.rot}`}</title>
             </rect>
-            {d.dentro != null && (
-              <rect x={x} y={altura - hDentro} width={w} height={hDentro} rx="3" fill={cor}>
-                <title>{dica ? dica(d) : `${d.k}: ${d.rot}`}</title>
-              </rect>
-            )}
-            <text x={`${i * largura + largura / 2}%`} y={altura - h - 6} textAnchor="middle"
-              style={{ fontSize: 9.5, fill: T.inkDim, fontWeight: 600 }}>{d.rot}</text>
-            <text x={`${i * largura + largura / 2}%`} y={altura + 15} textAnchor="middle"
-              style={{ fontSize: 10, fill: T.inkFaint }}>{d.k}</text>
+            <text x={`${i * largura + largura / 2}%`} y={altura - h - 7} textAnchor="middle"
+              style={{ fontSize: 10, fill: on ? par[1] : T.inkDim, fontWeight: 700 }}>{d.rot}</text>
+            <text x={`${i * largura + largura / 2}%`} y={altura + 16} textAnchor="middle"
+              style={{ fontSize: 10.5, fill: on ? T.ink : T.inkFaint, fontWeight: on ? 700 : 400 }}>{d.k}</text>
             {d.sub && (
-              <text x={`${i * largura + largura / 2}%`} y={altura + 28} textAnchor="middle"
+              <text x={`${i * largura + largura / 2}%`} y={altura + 30} textAnchor="middle"
                 style={{ fontSize: 9, fill: T.inkFaint }}>{d.sub}</text>
             )}
           </g>
         );
       })}
-      {rotulo && (
-        <text x="0" y={altura + 30} style={{ fontSize: 9.5, fill: T.inkFaint }}>{rotulo}</text>
-      )}
+      {rotulo && <text x="0" y={altura + 38} style={{ fontSize: 9.5, fill: T.inkFaint }}>{rotulo}</text>}
     </svg>
   );
 }
 
 // Barras deitadas, para ranking com nome comprido.
-function BarrasH({ dados, cor, altura = 22, aoClicar, ativo }) {
+function BarrasH({ dados, altura = 24, aoClicar, ativo }) {
   const max = Math.max(1, ...dados.map(d => d.v));
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-      {dados.map((d, i) => (
-        <div key={d.k} className={aoClicar ? 'g-clicavel' : undefined}
-          onClick={aoClicar ? () => aoClicar(d) : undefined}
-          style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '2px 4px', borderRadius: 4,
-            background: ativo === d.k ? T.panelAlt : 'transparent' }}>
-          <span style={{ fontSize: 11.5, color: T.inkDim, width: 145, whiteSpace: 'nowrap',
-            overflow: 'hidden', textOverflow: 'ellipsis' }} title={d.k}>{d.k}</span>
-          <div style={{ flex: 1, height: altura, background: T.lineSoft, borderRadius: 3,
-            position: 'relative', overflow: 'hidden' }}>
-            <div className="g-barra" style={{ height: '100%', width: `${(d.v / max) * 100}%`,
-              background: d.cor || cor, borderRadius: 3, animationDelay: `${i * 45}ms` }} />
-            {d.dentro != null && (
-              <div style={{ position: 'absolute', top: 0, left: 0, height: '100%',
-                width: `${(d.dentro / max) * 100}%`, background: T.oliveText, borderRadius: 3 }} />
+      {dados.map((d, i) => {
+        const on = ativo === d.k;
+        return (
+          <div key={d.k} className={aoClicar ? 'g-clicavel' : undefined}
+            onClick={aoClicar ? () => aoClicar(d) : undefined}
+            style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '3px 6px', borderRadius: 6,
+              background: on ? `linear-gradient(90deg, ${d.par[0]}16, transparent)` : 'transparent' }}>
+            <span style={{ fontSize: 11.5, color: on ? T.ink : T.inkDim, fontWeight: on ? 700 : 400,
+              width: 142, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
+              title={d.k}>{d.k}</span>
+            <div style={{ flex: 1, height: altura, background: T.lineSoft, borderRadius: 5,
+              position: 'relative', overflow: 'hidden' }}>
+              <div className="g-barra" style={{ height: '100%', width: `${(d.v / max) * 100}%`,
+                background: `linear-gradient(90deg, ${d.par[0]}44, ${d.par[0]}88)`,
+                borderRadius: 5, animationDelay: `${i * 55}ms` }} />
+              {d.dentro != null && (
+                <div className="g-barra" style={{ position: 'absolute', top: 0, left: 0, height: '100%',
+                  width: `${(d.dentro / max) * 100}%`, borderRadius: 5,
+                  background: `linear-gradient(90deg, ${d.par[0]}, ${d.par[1]})`,
+                  boxShadow: on ? `0 0 12px ${d.par[0]}77` : undefined,
+                  animationDelay: `${i * 55 + 90}ms` }} />
+              )}
+            </div>
+            <span style={{ fontSize: 12, fontWeight: 700, width: 92, textAlign: 'right',
+              fontVariantNumeric: 'tabular-nums' }}>{d.rot}</span>
+            {d.extra && (
+              <span style={{ fontSize: 11, fontWeight: 600, width: 46, textAlign: 'right', color: d.par[1] }}>
+                {d.extra}
+              </span>
             )}
           </div>
-          <span style={{ fontSize: 11.5, fontWeight: 600, width: 92, textAlign: 'right',
-            fontVariantNumeric: 'tabular-nums' }}>{d.rot}</span>
-          {d.extra && <span style={{ fontSize: 10.5, color: T.inkFaint, width: 48, textAlign: 'right' }}>{d.extra}</span>}
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
 
-// Medidor semicircular, para percentual.
-function Medidor({ pct, tamanho = 130, cor, rotulo }) {
-  const r = tamanho / 2 - 14;
+// Medidor semicircular, com gradiente e o ponteiro na ponta.
+function Medidor({ pct, tamanho = 150, par, rotulo }) {
+  const r = tamanho / 2 - 16;
   const c = tamanho / 2;
-  const p = Math.max(0, Math.min(100, pct || 0));
+  const alvo = Math.max(0, Math.min(100, pct || 0));
+  const p = useContador(alvo, 1100);
   const ang = Math.PI * (p / 100);
   const x = c - r * Math.cos(ang), y = c - r * Math.sin(ang);
-  const arco = `M ${c - r} ${c} A ${r} ${r} 0 ${p > 50 ? 1 : 0} 1 ${x} ${y}`;
+  const id = useRef(`m${Math.random().toString(36).slice(2, 8)}`).current;
   return (
     <div style={{ textAlign: 'center' }}>
-      <svg width={tamanho} height={tamanho / 2 + 20}>
+      <svg width={tamanho} height={tamanho / 2 + 26} style={{ overflow: 'visible' }}>
+        <defs>
+          <linearGradient id={id} x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%" stopColor={par[0]} />
+            <stop offset="100%" stopColor={par[1]} />
+          </linearGradient>
+        </defs>
         <path d={`M ${c - r} ${c} A ${r} ${r} 0 1 1 ${c + r} ${c}`}
-          fill="none" stroke={T.lineSoft} strokeWidth="13" strokeLinecap="round" />
-        <path d={arco} fill="none" stroke={cor} strokeWidth="13" strokeLinecap="round" />
-        <text x={c} y={c - 4} textAnchor="middle" style={{ fontSize: 22, fontWeight: 700, fill: cor }}>
+          fill="none" stroke={T.lineSoft} strokeWidth="14" strokeLinecap="round" />
+        <path d={`M ${c - r} ${c} A ${r} ${r} 0 ${p > 50 ? 1 : 0} 1 ${x} ${y}`}
+          fill="none" stroke={`url(#${id})`} strokeWidth="14" strokeLinecap="round"
+          style={{ filter: `drop-shadow(0 0 6px ${par[0]}66)` }} />
+        <circle cx={x} cy={y} r="6" fill="#fff" stroke={par[1]} strokeWidth="3" />
+        <text x={c} y={c - 6} textAnchor="middle"
+          style={{ fontSize: 25, fontWeight: 800, fill: par[1], letterSpacing: '-.02em' }}>
           {p.toFixed(0)}%
         </text>
       </svg>
-      <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: -4 }}>{rotulo}</div>
+      <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: -2 }}>{rotulo}</div>
     </div>
   );
 }
@@ -3940,22 +4058,22 @@ function PainelDiretoria() {
   const mesesPrev = [...new Set(doCenario.map(p => p.mes_previsto).filter(Boolean))].sort();
   const semData = doCenario.filter(p => !p.mes_previsto);
 
-  const CORES_E = { 'Avançado': T.oliveText, 'Alto': T.blueText, 'Médio': T.amberText,
-                    'Baixo': T.rustText, 'Perdido': T.inkFaint, 'Sem classificação': '#B5AFA6' };
+  const CORES_E = { 'Avançado': G.verde, 'Alto': G.azul, 'Médio': G.ambar,
+                    'Baixo': G.vermelho, 'Perdido': G.cinza, 'Sem classificação': G.roxo };
 
   // rosca do funil por situação
   const roscaFunil = [
-    { k: t.emAberto, v: soma(abertos), cor: T.amberText, rot: val(soma(abertos)) },
-    { k: t.pedido, v: soma(pedidos), cor: T.blueText, rot: val(soma(pedidos)) },
-    { k: t.faturado, v: receitaFat, cor: T.oliveText, rot: val(receitaFat) },
-    { k: t.perdido, v: soma(perdidos), cor: T.rustText, rot: val(soma(perdidos)) },
+    { k: t.emAberto, v: soma(abertos), par: G.ambar, rot: val(soma(abertos)) },
+    { k: t.pedido, v: soma(pedidos), par: G.azul, rot: val(soma(pedidos)) },
+    { k: t.faturado, v: receitaFat, par: G.verde, rot: val(receitaFat) },
+    { k: t.perdido, v: soma(perdidos), par: G.vermelho, rot: val(soma(perdidos)) },
   ].filter(x => x.v > 0);
 
   // rosca do funil em aberto por estágio
   const estagiosSet = [...new Set(abertos.map(d => d.estagio))];
   const roscaEstagio = estagiosSet.map(e => {
     const v = soma(abertos.filter(d => d.estagio === e));
-    return { k: e, v, cor: CORES_E[e] || T.inkFaint, rot: val(v) };
+    return { k: e, v, par: CORES_E[e] || G.cinza, rot: val(v) };
   }).filter(x => x.v > 0).sort((a, b) => b.v - a.v);
 
   // rosca da origem do faturamento
@@ -3966,9 +4084,9 @@ function PainelDiretoria() {
     porOrigem[k].v += Number(f.valor) || 0;
     porOrigem[k].n += Number(f.brs) || 0;
   });
-  const CORES_O = { funil: T.oliveText, anterior: T.blueText, sem_proposta: T.amberText, duplicata: T.inkFaint };
+  const CORES_O = { funil: G.verde, anterior: G.ciano, sem_proposta: G.ambar, duplicata: G.cinza };
   const roscaOrigem = Object.entries(porOrigem)
-    .map(([k, x]) => ({ k: x.rot, v: x.v, cor: CORES_O[k] || T.inkFaint, rot: val(x.v) }))
+    .map(([k, x]) => ({ k: x.rot, v: x.v, par: CORES_O[k] || G.cinza, rot: val(x.v) }))
     .sort((a, b) => b.v - a.v);
   const totalFat = roscaOrigem.reduce((s, x) => s + x.v, 0);
 
@@ -3994,7 +4112,7 @@ function PainelDiretoria() {
     const meus = dados.filter(d => d.vendedor === v);
     const meusGanhos = meus.filter(d => d.situacao === 'pedido confirmado' || d.situacao === 'faturado');
     return { k: v, v: soma(meus), dentro: soma(meusGanhos), rot: val(soma(meus)),
-             extra: `${((meusGanhos.length / meus.length) * 100).toFixed(0)}%`, cor: T.amberText };
+             extra: `${((meusGanhos.length / meus.length) * 100).toFixed(0)}%`, par: G.azul };
   }).sort((a, b) => b.v - a.v);
 
   // top clientes
@@ -4003,14 +4121,15 @@ function PainelDiretoria() {
     const k = d.cliente || '—';
     porCliente[k] = (porCliente[k] || 0) + (Number(d.valor) || 0);
   });
-  const barrasCli = Object.entries(porCliente).map(([k, v]) => ({ k, v, rot: val(v), cor: T.terracotta }))
+  const PARES_CLI = [G.roxo, G.ciano, G.rosa, G.azul, G.verde, G.ambar, G.vermelho, G.cinza];
+  const barrasCli = Object.entries(porCliente).map(([k, v], i) => ({ k, v, rot: val(v), par: PARES_CLI[i % 8] }))
     .sort((a, b) => b.v - a.v).slice(0, 8);
 
   // cenários lado a lado
   const barrasCen = cenarios.map(c => {
     const v = soma(previsao.filter(p => p.cenario === c.c), 'valor_cenario');
     return { k: c.r, v, rot: val(v),
-             cor: c.c === 'pessimista' ? T.rustText : c.c === 'realista' ? T.amberText : T.oliveText };
+             par: c.c === 'pessimista' ? G.vermelho : c.c === 'realista' ? G.ambar : G.verde };
   });
 
   const diasPedido = ciclo.length ? Math.round(ciclo.reduce((s, c) => s + (Number(c.dias_ate_pedido) || 0), 0) / ciclo.length) : null;
@@ -4021,8 +4140,14 @@ function PainelDiretoria() {
   // aparece na reuniao.
   const abrir = (chave, titulo, regra, linhas, total) => {
     if (detalhe?.chave === chave) { setDetalhe(null); return; }
-    setDetalhe({ chave, titulo, regra, total,
-      linhas: [...linhas].sort((a, b) => (Number(b.valor) || 0) - (Number(a.valor) || 0)) });
+    // Meio segundo de anel girando antes de mostrar. Nao e espera de verdade
+    // -- o dado ja esta na memoria -- e o tempo de o olho entender que algo
+    // novo apareceu. Sem ele, a tabela surge do nada e a pessoa se perde.
+    setDetalhe({ chave, titulo, regra, total, carregando: true, linhas: [] });
+    setTimeout(() => setDetalhe(d => (d && d.chave === chave
+      ? { ...d, carregando: false,
+          linhas: [...linhas].sort((a, b) => (Number(b.valor) || 0) - (Number(a.valor) || 0)) }
+      : d)), 520);
   };
 
   const gaveta = detalhe && (
@@ -4039,17 +4164,38 @@ function PainelDiretoria() {
           style={{ fontFamily: 'inherit', fontSize: 15, lineHeight: 1, padding: '3px 8px', borderRadius: 5,
             cursor: 'pointer', border: `1px solid ${T.line}`, background: 'transparent', color: T.inkFaint }}>×</button>
       </div>
-      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', padding: '8px 11px', background: T.panelAlt,
-        borderRadius: 6, marginBottom: 11 }}>
+      <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', padding: '10px 13px',
+        background: `linear-gradient(90deg, ${T.terracotta}0C, transparent)`,
+        borderRadius: 7, marginBottom: 11 }}>
         <span style={{ fontSize: 11.5 }}>
           <span style={{ color: T.inkFaint }}>{t.linhas}: </span>
-          <strong>{detalhe.linhas.length}</strong>
+          <strong style={{ fontSize: 14 }}>{detalhe.carregando ? '—' : detalhe.linhas.length}</strong>
         </span>
         <span style={{ fontSize: 11.5 }}>
           <span style={{ color: T.inkFaint }}>{t.somaTotal}: </span>
-          <strong style={{ color: T.terracotta }}>{val(detalhe.total)}</strong>
+          <strong style={{ color: T.terracotta, fontSize: 15, fontVariantNumeric: 'tabular-nums' }}>
+            {detalhe.carregando ? '—' : <Contador valor={detalhe.total} formata={val} />}
+          </strong>
         </span>
       </div>
+      {detalhe.carregando ? (
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center',
+          justifyContent: 'center', gap: 11, padding: '44px 0' }}>
+          <svg width="46" height="46" viewBox="0 0 46 46" className="g-spin">
+            <defs>
+              <linearGradient id="spinGrad" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0%" stopColor={T.terracotta} />
+                <stop offset="100%" stopColor={T.terracotta} stopOpacity="0.08" />
+              </linearGradient>
+            </defs>
+            <circle cx="23" cy="23" r="18" fill="none" stroke={T.lineSoft} strokeWidth="4" />
+            <circle cx="23" cy="23" r="18" fill="none" stroke="url(#spinGrad)" strokeWidth="4"
+              strokeLinecap="round" strokeDasharray="60 113" />
+          </svg>
+          <span className="g-brilho" style={{ fontSize: 11, color: T.inkFaint, letterSpacing: '.06em',
+            textTransform: 'uppercase' }}>{t.carregando}</span>
+        </div>
+      ) : (
       <div style={{ maxHeight: 340, overflowY: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead style={{ position: 'sticky', top: 0, zIndex: 1 }}><tr style={{ background: T.panelAlt }}>
@@ -4074,7 +4220,8 @@ function PainelDiretoria() {
           </tbody>
         </table>
       </div>
-      {detalhe.linhas.length > 80 && (
+      )}
+      {!detalhe.carregando && detalhe.linhas.length > 80 && (
         <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 8 }}>
           {t.mostrando.replace('{n}', '80').replace('{t}', String(detalhe.linhas.length))}
         </div>
@@ -4133,18 +4280,27 @@ function PainelDiretoria() {
 
       <div style={{ display: 'grid', gap: 9, gridTemplateColumns: 'repeat(auto-fit, minmax(158px, 1fr))' }}>
         {[
-          { t: t.emAberto, v: val(soma(abertos)), n: `${abertos.length} ${t.propostas}`, c: T.amberText },
-          { t: t.pedido, v: val(soma(pedidos)), n: `${pedidos.length} ${t.brs}`, c: T.blueText },
-          { t: t.faturado, v: val(receitaFat), n: `${faturados.length} ${t.brs}`, c: T.oliveText, ajuda: t.explicaFaturado },
-          { t: t.previsto, v: val(totalCenario), n: cenarios.find(c => c.c === cenario)?.r || '', c: T.terracotta },
-          { t: t.diasAtePedido, v: diasPedido == null ? '—' : `${diasPedido} ${t.dias}`, n: t.medio, c: T.ink },
-          { t: t.diasAteFaturar, v: diasFat == null ? '—' : `${diasFat} ${t.dias}`, n: t.medio, c: T.ink },
-        ].map(k => (
-          <div key={k.t} title={k.ajuda || ''}
-            style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 9, padding: '11px 13px' }}>
-            <div style={{ fontSize: 10.5, color: T.inkFaint, minHeight: 26 }}>{k.t}</div>
-            <div style={{ fontSize: 19, fontWeight: 700, color: k.c, fontVariantNumeric: 'tabular-nums' }}>{k.v}</div>
-            <div style={{ fontSize: 10, color: T.inkFaint, marginTop: 2 }}>{k.n}</div>
+          { t: t.emAberto, bruto: soma(abertos), n: `${abertos.length} ${t.propostas}`, p: G.ambar },
+          { t: t.pedido, bruto: soma(pedidos), n: `${pedidos.length} ${t.brs}`, p: G.azul },
+          { t: t.faturado, bruto: receitaFat, n: `${faturados.length} ${t.brs}`, p: G.verde, ajuda: t.explicaFaturado },
+          { t: t.previsto, bruto: totalCenario, n: cenarios.find(c => c.c === cenario)?.r || '', p: G.roxo },
+          { t: t.diasAtePedido, txt: diasPedido == null ? '—' : `${diasPedido} ${t.dias}`, n: t.medio, p: G.ciano },
+          { t: t.diasAteFaturar, txt: diasFat == null ? '—' : `${diasFat} ${t.dias}`, n: t.medio, p: G.rosa },
+        ].map((k, i) => (
+          <div key={k.t} title={k.ajuda || ''} className="g-card g-linha"
+            style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 11,
+              padding: '13px 14px', position: 'relative', overflow: 'hidden',
+              animationDelay: `${i * 55}ms` }}>
+            <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 3,
+              background: `linear-gradient(90deg, ${k.p[0]}, ${k.p[1]})` }} />
+            <div style={{ position: 'absolute', top: -22, right: -22, width: 66, height: 66,
+              borderRadius: '50%', background: `radial-gradient(circle, ${k.p[0]}1C, transparent 70%)` }} />
+            <div style={{ fontSize: 10.5, color: T.inkFaint, minHeight: 26, letterSpacing: '.02em' }}>{k.t}</div>
+            <div style={{ fontSize: 21, fontWeight: 800, color: k.p[1], fontVariantNumeric: 'tabular-nums',
+              letterSpacing: '-.02em' }}>
+              {k.txt != null ? k.txt : <Contador valor={k.bruto} formata={val} />}
+            </div>
+            <div style={{ fontSize: 10, color: T.inkFaint, marginTop: 3 }}>{k.n}</div>
           </div>
         ))}
       </div>
@@ -4178,10 +4334,10 @@ function PainelDiretoria() {
       <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))' }}>
         {painel(t.conversao, (
           <div style={{ display: 'flex', justifyContent: 'space-around', alignItems: 'center', flexWrap: 'wrap', gap: 14 }}>
-            <Medidor pct={convPct} cor={T.terracotta} rotulo={`${ganhos} ${t.de} ${dados.length}`} />
+            <Medidor pct={convPct} par={G.roxo} rotulo={`${ganhos} ${t.de} ${dados.length}`} />
             {ciclo.length > 0 && (
               <Medidor pct={ciclo.reduce((s, c) => s + (Number(c.conversao_pct) || 0), 0) / ciclo.length}
-                cor={T.oliveText} rotulo={t.convMedia} />
+                par={G.verde} rotulo={t.convMedia} />
             )}
           </div>
         ), t.explicaConv)}
@@ -4192,7 +4348,7 @@ function PainelDiretoria() {
       </div>
 
       {painel(t.cicloTitulo, (
-        <Colunas dados={colCiclo} cor={T.oliveText} corBase={T.lineSoft}
+        <Colunas dados={colCiclo} par={G.verde}
           dica={(d) => `${d.k} · ${d.rot} · ${d.sub}`} rotulo={t.explicaCiclo}
           ativo={detalhe?.chave?.startsWith('ciclo:') ? detalhe.chave.slice(6) : null}
           aoClicar={(col) => {
@@ -4213,7 +4369,7 @@ function PainelDiretoria() {
 
       <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))' }}>
         {painel(t.cenariosTitulo, (
-          <BarrasH dados={barrasCen} altura={26}
+          <BarrasH dados={barrasCen} altura={28}
             ativo={detalhe?.chave?.startsWith('cen:') ? detalhe.chave.slice(4) : null}
             aoClicar={(b2) => {
               const c2 = cenarios.find(x => x.r === b2.k);
@@ -4234,14 +4390,14 @@ function PainelDiretoria() {
               <strong>{t.semPrevisaoTitulo}</strong> {t.semPrevisao}
               {semData.length > 0 && <> {t.semDataValor.replace('{n}', String(semData.length)).replace('{v}', val(soma(semData, 'valor_cenario')))}</>}
             </div>
-          ) : <Colunas dados={colPrev} cor={T.terracotta} corBase={T.lineSoft}
+          ) : <Colunas dados={colPrev} par={G.roxo}
                 dica={(d) => `${d.k} · ${d.rot}`} rotulo={t.explicaPrevisaoMes} />
         ))}
       </div>
 
       <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))' }}>
         {painel(t.porVendedor, (
-          <BarrasH dados={barrasVend} cor={T.amberText}
+          <BarrasH dados={barrasVend}
             ativo={detalhe?.chave?.startsWith('vend:') ? detalhe.chave.slice(5) : null}
             aoClicar={(b2) => {
               const lista = dados.filter(d => d.vendedor === b2.k);
@@ -4250,7 +4406,7 @@ function PainelDiretoria() {
             }} />
         ), t.explicaVendedor)}
         {painel(t.topClientes, (
-          <BarrasH dados={barrasCli} cor={T.terracotta}
+          <BarrasH dados={barrasCli}
             ativo={detalhe?.chave?.startsWith('cli:') ? detalhe.chave.slice(4) : null}
             aoClicar={(b2) => {
               const lista = dados.filter(d => (d.cliente || '—') === b2.k && d.situacao !== 'perdido');
