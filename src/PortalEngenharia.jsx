@@ -12404,7 +12404,12 @@ function MonitoramentoOP({ currentUser }) {
                     {c.data_iniciado ? `Iniciado em ${fmtData(c.data_iniciado)}${c.iniciado_por ? ` por ${c.iniciado_por}` : ''}` : c.ciente_em ? 'Aguardando iniciar' : c.visto_em ? 'Visto, aguardando confirmação' : 'Ainda não visto'}
                     {c.projetista && ` · Projetista: ${c.projetista}`}
                     {c.data_prevista_finalizacao && ` · Previsto: ${fmtData(c.data_prevista_finalizacao)}`}
-                    {c.data_finalizado && ` · Finalizado em ${fmtData(c.data_finalizado)} · Tempo: ${fmtHoras(c.horas_gastas)}`}
+                    {c.data_finalizado && ` · Finalizado em ${fmtData(c.data_finalizado)} · `}
+                    {c.data_finalizado && (
+                      <span title="Tempo de relógio entre clicar Iniciar e Finalizar — inclui noite, almoço e fim de semana. Não é tempo de trabalho.">
+                        Do início ao fim: {fmtHoras(c.horas_gastas)}
+                      </span>
+                    )}
                     {c.atrasou && <span style={{ color: T.rustText, fontWeight: 700 }}> · ⚠ Atrasou</span>}
                   </div>
                 </div>
@@ -12587,8 +12592,29 @@ function MonitoramentoOP({ currentUser }) {
                       <div style={{ fontSize: 14, fontWeight: 700 }}><span style={{ fontFamily: FONT_DISPLAY, color: T.blueText }}>{c.br}</span></div>
                       <div style={{ fontSize: 12, color: T.inkDim, marginTop: 2 }}>{c.planner_titulo}</div>
                     </div>
-                    <div style={{ fontFamily: FONT_DISPLAY, fontSize: 20, fontWeight: 700, color: c.status_verificacao_op === 'em_andamento' ? T.terracotta : T.inkFaint }}>
-                      {fmtCronometro(tempo)}
+                    {/* O cronômetro parado em 00:00:00 não dizia nada — e era
+                        o número que mais aparecia, já que quase ninguém usa o
+                        cronômetro de verdade. Quando não está correndo, o que
+                        importa é HÁ QUANTO TEMPO a OP espera conferência. */}
+                    <div style={{ textAlign: 'right' }}>
+                      {c.status_verificacao_op === 'em_andamento' ? (
+                        <>
+                          <div style={{ fontFamily: FONT_DISPLAY, fontSize: 20, fontWeight: 700, color: T.terracotta }}>
+                            {fmtCronometro(tempo)}
+                          </div>
+                          <div style={{ fontSize: 10, color: T.inkFaint }}>conferindo agora</div>
+                        </>
+                      ) : (
+                        <>
+                          <div style={{ fontFamily: FONT_DISPLAY, fontSize: 20, fontWeight: 700,
+                            color: (c.horas_espera_verificacao || 0) > 24 ? T.rustText : T.inkFaint }}>
+                            {fmtHoras(c.horas_espera_verificacao)}
+                          </div>
+                          <div style={{ fontSize: 10, color: T.inkFaint }}>
+                            esperando conferência{tempo > 0 ? ` · ${fmtCronometro(tempo)} cronometrados` : ''}
+                          </div>
+                        </>
+                      )}
                     </div>
                   </div>
 
@@ -12644,11 +12670,30 @@ function MonitoramentoOP({ currentUser }) {
                   </div>
 
                   <div style={{ display: 'flex', gap: 8, alignItems: 'center', borderTop: `1px solid ${T.lineSoft}`, paddingTop: 10, flexWrap: 'wrap' }}>
+                    {/* ANTES o único botão aqui era "Iniciar": para dar baixa
+                        num card era obrigatório clicar Iniciar e depois
+                        Finalizar, mesmo quando a conferência levava segundos.
+                        Nos dados, 94% dos cards ficaram com menos de 1 minuto
+                        de cronômetro — ninguém estava medindo nada, só pagando
+                        dois cliques. Agora "Conferido" resolve num clique e o
+                        cronômetro vira opcional, para quem realmente vai parar
+                        para conferir. */}
                     {c.status_verificacao_op === 'nao_iniciado' && (
-                      <button onClick={() => iniciarOuRetomarVerificacao(c)}
-                        style={{ fontSize: 12, fontWeight: 700, color: '#fff', background: T.blueText, border: 'none', borderRadius: 6, padding: '8px 16px', cursor: 'pointer' }}>
-                        ▶ Iniciar
-                      </button>
+                      <>
+                        <button onClick={() => finalizarVerificacao(c)}
+                          style={{ fontSize: 12, fontWeight: 700, color: '#fff', background: T.oliveText, border: 'none', borderRadius: 6, padding: '8px 16px', cursor: 'pointer' }}>
+                          ✓ Conferido
+                        </button>
+                        <button onClick={() => iniciarOuRetomarVerificacao(c)}
+                          title="Só se for parar para conferir agora e quiser medir o tempo gasto"
+                          style={{ fontSize: 12, fontWeight: 600, color: T.blueText, background: 'transparent', border: `1px solid ${T.blue}55`, borderRadius: 6, padding: '8px 14px', cursor: 'pointer' }}>
+                          ▶ Cronometrar
+                        </button>
+                        <button onClick={() => setModalPendencia(c)}
+                          style={{ fontSize: 12, fontWeight: 600, color: T.rustText, background: 'transparent', border: `1px solid ${T.rust}55`, borderRadius: 6, padding: '8px 14px', cursor: 'pointer' }}>
+                          ⚠ Sinalizar pendência
+                        </button>
+                      </>
                     )}
                     {c.status_verificacao_op === 'em_andamento' && (
                       <button onClick={() => pausarVerificacao(c)}
@@ -12708,7 +12753,10 @@ function MonitoramentoOP({ currentUser }) {
                   <div style={{ fontSize: 12.5 }}>
                     <span style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText }}>{c.br}</span>
                     <span style={{ color: T.inkDim }}> · {c.planner_titulo}</span>
-                    <span style={{ color: T.inkFaint }}> · Projetista: {c.projetista || '—'} · Finalizado em {fmtData(c.finalizado_verificacao_em || c.data_finalizado)}</span>
+                    <span style={{ color: T.inkFaint }}> · Projetista: {c.projetista || '—'} · Finalizado em {fmtData(c.finalizado_verificacao_em || c.data_finalizado)}
+                      {c.horas_espera_verificacao != null && ` · da OP gerada até a conferência: ${fmtHoras(c.horas_espera_verificacao)}`}
+                      {c.tempo_acumulado_segundos > 60 && ` · ${fmtCronometro(c.tempo_acumulado_segundos)} cronometrados`}
+                    </span>
                   </div>
                   <button onClick={() => setConfirmandoReset(c)} disabled={processandoCard === c.id}
                     title="Desfazer tudo e voltar esse card pro início do fluxo"
