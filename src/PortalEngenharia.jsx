@@ -3748,6 +3748,16 @@ const TXT = {
     pvRegraMes: 'Propostas em aberto que o vendedor espera fechar em {m}. A coluna é empilhada por estágio: cada pedaço é valor × peso daquele estágio no cenário {c}. Estágio sem peso não aparece.',
     pvRegraVend: 'Todas as propostas em aberto de {v}. Classificado é ter estágio; com data é ter o mês de fechamento preenchido — só as com data entram na previsão por mês.',
     pvAlerta: 'A previsão do cenário {c} soma {v} nos próximos meses, contra uma média de {m} por mês faturados de verdade. Com apenas {p}% do funil com data, o número ainda diz mais sobre o preenchimento do que sobre a demanda.',
+    dscTitulo: 'Onde cabe desconto', dscSub: 'proposta com margem gorda parada num estágio fraco é candidata a fechar com desconto — o custo não muda, o desconto sai inteiro da margem',
+    dscMargemMin: 'Margem acima de', dscEstagios: 'Estágio', dscDesconto: 'Desconto no preço',
+    dscProjetos: 'Projetos no filtro', dscValorHoje: 'Preço de hoje', dscValorNovo: 'Novo preço',
+    dscAbreMao: 'Abre mão de', dscLucroDepois: 'Lucro depois', dscMargemDepois: 'Margem depois',
+    dscMargemHoje: 'Margem hoje', dscNegativo: '{n} propostas ficariam com lucro NEGATIVO neste desconto — o preço cairia abaixo do custo orçado.',
+    dscExplica: 'Uma proposta de R$ 100 com 50% de margem tem R$ 50 de custo. Com 10% de desconto ela vai a R$ 90 e a margem cai para 44,4%, não para 40% — o custo continua o mesmo.',
+    dscVazio: 'Nenhuma proposta no filtro. Solte a margem mínima ou inclua outros estágios.',
+    dscAvisoSemClass: 'Com estágio Médio ou Baixo só aparecem {n} projetos ({v}), porque {p}% do funil ainda está sem classificação. Os {ns} projetos sem classificação com margem acima do filtro somam {vs} — inclua "Sem classificação" acima para vê-los.',
+    dscRegra: 'Propostas em aberto com margem orçada acima de {m}% no estágio {e}. O preço novo é o valor menos o desconto; a margem depois considera que o custo não muda.',
+    dscIncluir: 'Incluir sem classificação',
     compTitulo: 'Proposto, ponderado e realizado — mês a mês',
     explicaComp: 'três colunas por mês: o que foi proposto, o que a régua dos estágios prevê do que ainda está em aberto, e o que já virou pedido ou nota · a coluna do meio é empilhada por nível · Perdido fica de fora (não é previsão)',
     serieCheio: 'Proposto', seriePond: 'Ponderado', serieReal: 'Realizado',
@@ -3886,6 +3896,16 @@ const TXT = {
     pvRegraMes: 'Open proposals the salesperson expects to close in {m}. The column is stacked by stage: each slice is value × that stage weight in the {c} scenario. Stages with no weight do not appear.',
     pvRegraVend: 'All open proposals for {v}. Classified means having a stage; with date means having the closing month filled — only those with a date enter the monthly forecast.',
     pvAlerta: 'The {c} scenario forecasts {v} over the coming months, against an average of {m} actually invoiced per month. With only {p}% of the pipeline dated, the number still says more about filling in the sheet than about demand.',
+    dscTitulo: 'Where a discount fits', dscSub: 'a fat-margin proposal stuck at a weak stage is a candidate to close with a discount — cost does not change, the discount comes entirely out of margin',
+    dscMargemMin: 'Margin above', dscEstagios: 'Stage', dscDesconto: 'Price discount',
+    dscProjetos: 'Proposals in filter', dscValorHoje: 'Current price', dscValorNovo: 'New price',
+    dscAbreMao: 'Given up', dscLucroDepois: 'Profit after', dscMargemDepois: 'Margin after',
+    dscMargemHoje: 'Margin today', dscNegativo: '{n} proposals would end up with NEGATIVE profit at this discount — the price would fall below budgeted cost.',
+    dscExplica: 'A $100 proposal at 50% margin has $50 of cost. A 10% discount takes it to $90 and margin down to 44.4%, not to 40% — the cost stays the same.',
+    dscVazio: 'No proposal in this filter. Lower the minimum margin or include other stages.',
+    dscAvisoSemClass: 'With stage Medium or Low only {n} proposals show up ({v}), because {p}% of the pipeline is still unclassified. The {ns} unclassified proposals above the margin filter add up to {vs} — tick "Unclassified" above to see them.',
+    dscRegra: 'Open proposals with budgeted margin above {m}% at stage {e}. The new price is the value minus the discount; the margin after assumes cost does not change.',
+    dscIncluir: 'Include unclassified',
     compTitulo: 'Proposed, weighted and won — month by month',
     explicaComp: 'three columns per month: what was proposed, what the stage ruler forecasts from what is still open, and what already became an order or invoice · the middle column is stacked by stage · Lost is excluded (it forecasts nothing)',
     serieCheio: 'Proposed', seriePond: 'Weighted', serieReal: 'Won',
@@ -4415,6 +4435,9 @@ function PainelDiretoria() {
   const [rank, setRank] = useState([]);           // ranking de clientes
   const [prevPor, setPrevPor] = useState('vendedor');
   const [rankTudo, setRankTudo] = useState(false);
+  const [dscMargem, setDscMargem] = useState(50);
+  const [dscPct, setDscPct] = useState(10);
+  const [dscEst, setDscEst] = useState(['medio', 'baixo']);
   // ITENS POR BR: busca sob demanda no clique da linha e guarda em cache —
   // carregar item de 750 BRs de uma vez não se justifica para uma consulta
   // que abre um de cada vez.
@@ -4747,6 +4770,36 @@ function PainelDiretoria() {
       lista: d,
     };
   }).sort((a, b) => b.total - a.total);
+
+  // ---- ONDE CABE DESCONTO ----
+  // Margem alta parada num estágio fraco: o cliente não decide, e há margem
+  // para ceder. A conta certa é a do custo fixo -- o desconto sai INTEIRO da
+  // margem, não é subtração de pontos percentuais. Proposta de 100 com 50% de
+  // margem tem 50 de custo; a 10% de desconto vai a 90 e a margem vira 44,4%.
+  const ESTAGIOS_DSC = [
+    ...estagiosCfg.filter(e => e.estagio !== 'perdido')
+      .map(e => ({ cod: e.estagio, rot: e.rotulo })),
+    { cod: 'sem', rot: t.semRef === undefined ? 'Sem classificação' : 'Sem classificação' },
+  ];
+  const codEstDe = (p) => p.estagio_codigo || 'sem';
+  const dscBase = prev.filter(p =>
+    Number(p.margem_pct) > dscMargem && dscEst.includes(codEstDe(p)));
+  const comDesconto = dscBase.map(p => {
+    const v = Number(p.valor) || 0;
+    const m = Number(p.margem_pct) || 0;
+    const custo = v * (1 - m / 100);
+    const novo = v * (1 - dscPct / 100);
+    const lucro = novo - custo;
+    return { ...p, _valor: v, _margem: m, _custo: custo, _novo: novo, _lucro: lucro,
+             _margemNova: novo > 0 ? (lucro / novo) * 100 : 0, _abreMao: v - novo };
+  }).sort((a, b) => b._valor - a._valor);
+  const dscTotHoje = comDesconto.reduce((s, x) => s + x._valor, 0);
+  const dscTotNovo = comDesconto.reduce((s, x) => s + x._novo, 0);
+  const dscTotLucro = comDesconto.reduce((s, x) => s + x._lucro, 0);
+  const dscNegativos = comDesconto.filter(x => x._lucro < 0).length;
+  // Quanto está escondido em "Sem classificação" quando o filtro é só médio/baixo
+  const dscSemClass = prev.filter(p => Number(p.margem_pct) > dscMargem && !p.estagio_codigo);
+  const dscMostraAviso = !dscEst.includes('sem') && dscSemClass.length > comDesconto.length;
 
   // ---- RANKING DE CLIENTES ----
   const rankVis = rankTudo ? rank : rank.slice(0, 20);
@@ -5593,6 +5646,136 @@ function PainelDiretoria() {
       ), t.pvSub)}
 
       {gavetaDe('pv:')}
+
+      {painel(t.dscTitulo, (
+        <>
+          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'center',
+            marginBottom: 13, paddingBottom: 12, borderBottom: `1px solid ${T.lineSoft}` }}>
+            <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+              <span style={{ fontSize: 11, color: T.inkFaint }}>{t.dscMargemMin}</span>
+              {botoes([[30, '30%'], [40, '40%'], [50, '50%'], [60, '60%']], dscMargem, setDscMargem)}
+            </span>
+            <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+              <span style={{ fontSize: 11, color: T.inkFaint }}>{t.dscDesconto}</span>
+              {botoes([[5, '5%'], [10, '10%'], [15, '15%'], [20, '20%']], dscPct, setDscPct)}
+            </span>
+            <span style={{ display: 'inline-flex', gap: 5, alignItems: 'center', flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 11, color: T.inkFaint }}>{t.dscEstagios}</span>
+              {ESTAGIOS_DSC.map(e => {
+                const on = dscEst.includes(e.cod);
+                return (
+                  <button key={e.cod}
+                    onClick={() => setDscEst(on ? dscEst.filter(x => x !== e.cod) : [...dscEst, e.cod])}
+                    style={{ fontFamily: 'inherit', fontSize: 11, fontWeight: on ? 700 : 400,
+                      padding: '4px 10px', borderRadius: 5, cursor: 'pointer',
+                      border: `1px solid ${on ? T.ink : T.line}`,
+                      background: on ? T.ink : T.panel, color: on ? T.panel : T.inkDim }}>
+                    {e.rot}
+                  </button>
+                );
+              })}
+            </span>
+          </div>
+
+          {comDesconto.length === 0 ? (
+            <div style={{ fontSize: 11.5, color: T.inkFaint, padding: '18px 0', textAlign: 'center' }}>
+              {t.dscVazio}
+            </div>
+          ) : (
+            <>
+              <div style={{ display: 'grid', gap: 8, gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
+                marginBottom: 12 }}>
+                {[
+                  { t: t.dscProjetos, v: String(comDesconto.length), p: G.azul },
+                  { t: t.dscValorHoje, v: val(dscTotHoje), p: G.cinza },
+                  { t: t.dscValorNovo, v: val(dscTotNovo), p: G.ambar },
+                  { t: t.dscAbreMao, v: val(dscTotHoje - dscTotNovo), p: G.vermelho },
+                  { t: t.dscLucroDepois, v: val(dscTotLucro), p: G.verde,
+                    s: dscTotNovo > 0 ? `${(dscTotLucro / dscTotNovo * 100).toFixed(1)}% ${t.dscMargemDepois.toLowerCase()}` : null },
+                ].map((k, i) => (
+                  <div key={k.t} className="g-card g-linha" style={{ background: T.panel,
+                    border: `1px solid ${T.line}`, borderRadius: 10, padding: '11px 13px',
+                    position: 'relative', overflow: 'hidden', animationDelay: `${i * 50}ms` }}>
+                    <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 3,
+                      background: `linear-gradient(90deg, ${k.p[0]}, ${k.p[1]})` }} />
+                    <div style={{ fontSize: 10.5, color: T.inkFaint, minHeight: 24 }}>{k.t}</div>
+                    <div style={{ fontSize: 17, fontWeight: 800, color: k.p[1],
+                      fontVariantNumeric: 'tabular-nums' }}>{k.v}</div>
+                    {k.s && <div style={{ fontSize: 9.5, color: T.inkFaint, marginTop: 2 }}>{k.s}</div>}
+                  </div>
+                ))}
+              </div>
+
+              {dscNegativos > 0 && (
+                <div style={{ fontSize: 11, color: T.rustText, background: T.rustSoft,
+                  border: `1px solid ${T.rustText}33`, borderRadius: 7, padding: '9px 12px',
+                  marginBottom: 11 }}>
+                  {t.dscNegativo.replace('{n}', String(dscNegativos))}
+                </div>
+              )}
+
+              <div style={{ overflowX: 'auto', maxHeight: 420, overflowY: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 880 }}>
+                  <thead style={{ position: 'sticky', top: 0, zIndex: 1 }}><tr style={{ background: T.panelAlt }}>
+                    {['BR', t.cliente, t.vendedor, t.estagio, t.idade, t.dscValorHoje, t.dscMargemHoje,
+                      t.dscValorNovo, t.dscLucroDepois, t.dscMargemDepois].map((h, i) => (
+                      <th key={h} style={{ padding: '7px 10px', fontSize: 10.5, fontWeight: 600,
+                        color: T.inkFaint, textAlign: i <= 3 ? 'left' : 'right', whiteSpace: 'nowrap' }}>{h}</th>
+                    ))}
+                  </tr></thead>
+                  <tbody>
+                    {comDesconto.slice(0, 60).map((x, i) => (
+                      <tr key={x.br} className="g-linha" style={{ borderBottom: `1px solid ${T.lineSoft}`,
+                        animationDelay: `${Math.min(i, 20) * 30}ms`,
+                        background: x._lucro < 0 ? `${T.rustSoft}44` : 'transparent' }}>
+                        <td style={{ padding: '7px 10px', fontSize: 11.5, fontWeight: 700, whiteSpace: 'nowrap' }}>{x.br}</td>
+                        <td style={{ padding: '7px 10px', fontSize: 11, color: T.inkDim, maxWidth: 190,
+                          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={x.cliente}>{x.cliente}</td>
+                        <td style={{ padding: '7px 10px', fontSize: 10.5, color: T.inkFaint, whiteSpace: 'nowrap' }}>{x.vendedor}</td>
+                        <td style={{ padding: '7px 10px', fontSize: 10.5, whiteSpace: 'nowrap',
+                          color: x.estagio_codigo ? T.inkDim : T.amberText }}>{x.estagio}</td>
+                        <td style={{ padding: '7px 10px', fontSize: 10.5, textAlign: 'right', whiteSpace: 'nowrap',
+                          color: Number(x.dias_aberto) > 90 ? T.rustText : T.inkFaint }}>{x.dias_aberto} {t.dias}</td>
+                        <td style={{ padding: '7px 10px', fontSize: 11.5, textAlign: 'right',
+                          fontVariantNumeric: 'tabular-nums' }}>{val(x._valor)}</td>
+                        <td style={{ padding: '7px 10px', fontSize: 11, textAlign: 'right', color: T.oliveText,
+                          fontWeight: 600 }}>{x._margem.toFixed(1)}%</td>
+                        <td style={{ padding: '7px 10px', fontSize: 11.5, textAlign: 'right', color: T.amberText,
+                          fontVariantNumeric: 'tabular-nums' }}>{val(x._novo)}</td>
+                        <td style={{ padding: '7px 10px', fontSize: 11.5, textAlign: 'right', fontWeight: 600,
+                          color: x._lucro >= 0 ? T.oliveText : T.rustText,
+                          fontVariantNumeric: 'tabular-nums' }}>{val(x._lucro)}</td>
+                        <td style={{ padding: '7px 10px', fontSize: 11, textAlign: 'right', fontWeight: 700,
+                          color: x._margemNova >= 0 ? T.oliveText : T.rustText }}>{x._margemNova.toFixed(1)}%</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {comDesconto.length > 60 && (
+                <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 8 }}>
+                  {t.mostrando.replace('{n}', '60').replace('{t}', String(comDesconto.length))}
+                </div>
+              )}
+            </>
+          )}
+
+          {dscMostraAviso && (
+            <div style={{ fontSize: 11, color: T.amberText, background: T.amberSoft,
+              border: `1px solid ${T.amberText}33`, borderRadius: 7, padding: '9px 12px',
+              marginTop: 11, lineHeight: 1.5 }}>
+              {t.dscAvisoSemClass.replace('{n}', String(comDesconto.length))
+                .replace('{v}', val(dscTotHoje))
+                .replace('{p}', pctSemClasse.toFixed(0))
+                .replace('{ns}', String(dscSemClass.length))
+                .replace('{vs}', val(soma(dscSemClass)))}
+            </div>
+          )}
+          <div style={{ fontSize: 10, color: T.inkFaint, marginTop: 9, lineHeight: 1.5 }}>
+            {t.dscExplica}
+          </div>
+        </>
+      ), t.dscSub)}
 
       {painel(t.pvCobertura, (
         <div style={{ overflowX: 'auto' }}>
