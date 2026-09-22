@@ -3614,7 +3614,10 @@ const TXT = {
     explicaEstagio: 'valor cheio e o que sobra em cada cenário',
     explicaVendedor: 'barra verde = fechado, âmbar = em aberto · conversão sobre o total de propostas',
     explicaCiclo: 'barra cheia = proposto, verde = virou pedido',
-    explicaFaturado: 'Receita das notas destes BRs. Não é o faturamento total da empresa: só entram BRs que têm proposta no funil desde janeiro. O faturamento completo de 2026 está na tela de Faturamento.',
+    explicaFaturado: 'Receita das notas dos BRs vendidos em 2026. O quadro abaixo abre a diferença para o faturamento total da empresa.',
+    fatTitulo: 'De onde vem o faturamento de 2026', fatTotal: 'Faturamento total do ano',
+    fatSub: 'o painel acima é do funil de 2026; este quadro fecha com a tela de Faturamento',
+    fatExplica: 'O cartão “Faturado” conta só o que foi vendido em 2026. O restante veio de projetos fechados em anos anteriores e entregues agora — em obra longa isso é o normal, e é a diferença entre este painel e a tela de Faturamento.',
     semPrevisaoTitulo: 'Nenhuma proposta tem expectativa de fechamento preenchida ainda.',
     semPrevisao: 'A coluna é nova e vai chegar quando os vendedores devolverem o follow up. Até lá, a previsão existe mas não tem como ser distribuída por mês.',
     semDataValor: '{n} propostas sem data de fechamento, somando {v} no cenário.',
@@ -3639,7 +3642,10 @@ const TXT = {
     explicaEstagio: 'full value and what remains in each scenario',
     explicaVendedor: 'green = closed, amber = open · win rate over all proposals',
     explicaCiclo: 'light bar = proposed, green = became an order',
-    explicaFaturado: 'Invoiced revenue for these projects only. Not company-wide: it covers projects that have a proposal in the funnel since January. Full 2026 revenue is on the Invoicing screen.',
+    explicaFaturado: 'Invoiced revenue for projects sold in 2026. The panel below breaks down the gap to company-wide revenue.',
+    fatTitulo: 'Where 2026 revenue comes from', fatTotal: 'Total revenue for the year',
+    fatSub: 'the cards above cover the 2026 funnel; this panel reconciles with the Invoicing screen',
+    fatExplica: 'The “Invoiced” card counts only what was sold in 2026. The rest came from projects closed in earlier years and delivered now — normal for long-cycle work, and the reason this dashboard differs from the Invoicing screen.',
     semPrevisaoTitulo: 'No proposal has an expected closing date yet.',
     semPrevisao: 'The column is new and will arrive as salespeople return the follow-up. Until then the forecast exists but cannot be spread across months.',
     semDataValor: '{n} proposals with no closing date, totalling {v} in this scenario.',
@@ -3652,6 +3658,7 @@ function PainelDiretoria() {
   const [cambio, setCambio] = useState([]);
   const [previsao, setPrevisao] = useState([]);
   const [ciclo, setCiclo] = useState([]);
+  const [fatOrigem, setFatOrigem] = useState([]);
   const [loading, setLoading] = useState(true);
   const [moeda, setMoeda] = useState('BRL');
   const [idioma, setIdioma] = useState('pt');
@@ -3660,14 +3667,16 @@ function PainelDiretoria() {
 
   useEffect(() => {
     (async () => {
-      const [d, c, pv, cc] = await Promise.all([
+      const [d, c, pv, cc, fo] = await Promise.all([
         supabase.from('v_comercial_diretoria').select('*'),
         supabase.from('comercial_cambio').select('*'),
         supabase.from('v_comercial_previsao').select('*'),
         supabase.from('v_comercial_ciclo_resumo').select('*').order('competencia'),
+        supabase.from('v_comercial_faturamento_origem').select('*'),
       ]);
       setDados(d.data || []); setCambio(c.data || []);
       setPrevisao(pv.data || []); setCiclo(cc.data || []);
+      setFatOrigem(fo.data || []);
       setLoading(false);
     })();
   }, []);
@@ -3946,6 +3955,69 @@ function PainelDiretoria() {
           </table>
         </div>
       ), t.explicaVendedor)}
+
+      {fatOrigem.length > 0 && painel(t.fatTitulo, (() => {
+        // DE ONDE VEM O FATURAMENTO DO ANO. Sem isso, o cartao 'Faturado' do
+        // painel (R$ 16,5 mi) nao bate com a tela de Faturamento (R$ 25 mi) e
+        // parece que uma das duas esta errada. A diferenca sao R$ 8,4 milhoes
+        // de projeto vendido em ano anterior e entregue agora -- em obra longa
+        // isso e o normal, e o funil do ano corrente nao tem como mostrar.
+        const porOrigem = {};
+        fatOrigem.forEach(f => {
+          const k = f.origem;
+          if (!porOrigem[k]) porOrigem[k] = { rot: idioma === 'pt' ? f.rotulo : f.rotulo_en, v: 0, n: 0 };
+          porOrigem[k].v += Number(f.valor) || 0;
+          porOrigem[k].n += Number(f.brs) || 0;
+        });
+        const linhas = Object.entries(porOrigem)
+          .map(([k, x]) => ({ k, ...x })).sort((a2, b2) => b2.v - a2.v);
+        const totalFat = linhas.reduce((s2, x) => s2 + x.v, 0);
+        const CORES_O = { funil: T.oliveText, anterior: T.blueText,
+                          sem_proposta: T.amberText, duplicata: T.inkFaint };
+        return (
+          <>
+            <div style={{ display: 'flex', height: 26, borderRadius: 4, overflow: 'hidden',
+              background: T.lineSoft, marginBottom: 12 }}>
+              {linhas.map(x => (
+                <div key={x.k} title={`${x.rot}: ${val(x.v)} (${x.n} ${t.brs})`}
+                  style={{ width: `${(x.v / totalFat) * 100}%`, background: CORES_O[x.k] || T.inkFaint,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  {(x.v / totalFat) > 0.12 && (
+                    <span style={{ fontSize: 10.5, color: '#fff', fontWeight: 600 }}>
+                      {Math.round((x.v / totalFat) * 100)}%
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+              {linhas.map(x => (
+                <div key={x.k} style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+                  <span style={{ width: 9, height: 9, borderRadius: 2, background: CORES_O[x.k] || T.inkFaint }} />
+                  <span style={{ fontSize: 12, color: T.inkDim, flex: 1 }}>{x.rot}</span>
+                  <span style={{ fontSize: 10.5, color: T.inkFaint, width: 70, textAlign: 'right' }}>{x.n} {t.brs}</span>
+                  <span style={{ fontSize: 12.5, fontWeight: 600, width: 95, textAlign: 'right',
+                    fontVariantNumeric: 'tabular-nums' }}>{val(x.v)}</span>
+                </div>
+              ))}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 9, paddingTop: 8,
+                borderTop: `1px solid ${T.line}`, marginTop: 3 }}>
+                <span style={{ width: 9 }} />
+                <span style={{ fontSize: 12, fontWeight: 700, flex: 1 }}>{t.fatTotal}</span>
+                <span style={{ fontSize: 10.5, color: T.inkFaint, width: 70, textAlign: 'right' }}>
+                  {linhas.reduce((s2, x) => s2 + x.n, 0)} {t.brs}
+                </span>
+                <span style={{ fontSize: 13, fontWeight: 700, width: 95, textAlign: 'right',
+                  fontVariantNumeric: 'tabular-nums' }}>{val(totalFat)}</span>
+              </div>
+            </div>
+            <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 11, paddingTop: 9,
+              borderTop: `1px solid ${T.lineSoft}`, lineHeight: 1.55 }}>
+              {t.fatExplica}
+            </div>
+          </>
+        );
+      })(), t.fatSub)}
 
       {ciclo.length > 0 && painel(t.cicloTitulo, (
         <>
