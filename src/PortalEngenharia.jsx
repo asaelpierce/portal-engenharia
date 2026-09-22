@@ -3713,6 +3713,8 @@ const TXT = {
     regraAbertoPorMes: 'Propostas em aberto abertas em {m}. O valor é o cheio da proposta; a parte intensa da coluna é o ponderado (valor × peso do estágio).',
     regraFatMes: 'BRs faturados em {m}. A coluna "Proposta de" mostra em que mês a proposta nasceu — é o ciclo comercial: o que se fatura hoje foi vendido meses atrás. Valor = receita da nota (net offer value), sem duplicatas BRV.',
     deQualMes: 'De qual mês veio a proposta', propostaDe: 'Proposta de',
+    propostaAno: 'Proposta de {a}', semRef: 'BR sem ano no número',
+    notaAnterior: 'Proposta anterior a 2026 não entra no funil do portal (a janela começa em jan/26), por isso aparece só com o ano — que vem do próprio número do BR.',
     compTitulo: 'Cheio × ponderado, por estágio',
     explicaComp: 'barra clara = valor cheio da proposta · barra intensa = o que sobra ao multiplicar pelo peso do estágio · clique para isolar um estágio',
     totalCheio: 'Total cheio', totalPond: 'Total ponderado', encolhe: 'o funil encolhe',
@@ -3810,6 +3812,8 @@ const TXT = {
     regraAbertoPorMes: 'Open proposals created in {m}. Value is the full proposal; the solid part of the column is the weighted value (value × stage weight).',
     regraFatMes: 'Projects invoiced in {m}. The "Proposal from" column shows the month the proposal was born — that is the commercial cycle: what is invoiced today was sold months ago. Value = invoice revenue (net offer value), BRV duplicates excluded.',
     deQualMes: 'Which month the proposal came from', propostaDe: 'Proposal from',
+    propostaAno: 'Proposal from {a}', semRef: 'BR with no year in its number',
+    notaAnterior: 'Proposals before 2026 are outside the portal funnel (the window starts in Jan/26), so they show only the year — taken from the BR number itself.',
     compTitulo: 'Full vs weighted, by stage',
     explicaComp: 'light bar = full proposal value · solid bar = what remains after the stage weight · click to isolate a stage',
     totalCheio: 'Full total', totalPond: 'Weighted total', encolhe: 'the funnel shrinks',
@@ -4377,6 +4381,16 @@ function PainelDiretoria() {
              rot: fmtMoedaCompacta(conv(soma(lst))), sub: `${lst.length}`, iso: m };
   });
 
+  // Rótulo da origem da proposta faturada. "sem data" era enganoso: não é
+  // dado faltando, é proposta ANTERIOR à janela do funil (jan/26) — e o ano
+  // está no próprio número do BR.
+  const rotOrigem = (o) => {
+    if (!o) return t.semRef;
+    if (o === 'SEM_REF') return t.semRef;
+    if (o.startsWith('ANO:')) return t.propostaAno.replace('{a}', o.slice(4));
+    return rotMes(o);
+  };
+
   // ---- RECEITA FATURADA: detalhe por mês, com o mês de origem da proposta ----
   const fatPorMes = {};
   fatDet.forEach(f => {
@@ -4819,21 +4833,26 @@ function PainelDiretoria() {
                 if (!m) return;
                 const lst = (fatPorMes[m] || []).map(f => ({
                   br: f.br, cliente: f.cliente, vendedor: f.vendedor,
-                  estagio: f.mes_proposta ? rotMes(f.mes_proposta) : '—', valor: f.valor,
+                  estagio: rotOrigem(f.origem_proposta), valor: f.valor,
                 }));
                 // Mini-gráfico: de que meses vieram as propostas faturadas neste
                 // mês. É a resposta visual do ciclo comercial — o que entra no
                 // caixa hoje foi vendido meses atrás.
                 const porOrigemMes = {};
+                let temAnterior = false;
                 (fatPorMes[m] || []).forEach(f => {
-                  const k2 = f.mes_proposta ? rotMes(f.mes_proposta) : t.semData;
+                  const k2 = rotOrigem(f.origem_proposta);
+                  if (String(f.origem_proposta || '').startsWith('ANO:')) temAnterior = true;
                   porOrigemMes[k2] = (porOrigemMes[k2] || 0) + (Number(f.valor) || 0);
                 });
+                // Anos anteriores em ciano; meses do funil 2026 em verde —
+                // separa de relance o que é herança do que é venda do ano.
                 const graf = Object.entries(porOrigemMes)
-                  .map(([k2, v2]) => ({ k: k2, v: v2, rot: val(v2), par: G.ciano }))
+                  .map(([k2, v2]) => ({ k: k2, v: v2, rot: val(v2),
+                    par: k2.startsWith(t.propostaAno.slice(0, 8)) ? G.ciano : G.verde }))
                   .sort((a, b2) => b2.v - a.v);
                 abrir(`fat:${col.k}`, `${t.receitaMesTitulo} · ${col.k}`,
-                  t.regraFatMes.replace('{m}', col.k), lst,
+                  t.regraFatMes.replace('{m}', col.k) + (temAnterior ? ` ${t.notaAnterior}` : ''), lst,
                   lst.reduce((s, l) => s + (Number(l.valor) || 0), 0),
                   { col4: t.propostaDe, grafico: graf, graficoTitulo: t.deQualMes });
               }} />
