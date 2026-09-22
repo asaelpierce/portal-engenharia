@@ -3693,6 +3693,13 @@ const TXT = {
     topDealsTitulo: 'Maiores negócios em aberto',
     explicaTopDeals: 'as {n} maiores propostas sem decisão — as que a diretoria deveria conhecer pelo nome',
     idade: 'Idade',
+    itensDe: 'Itens de', itemCod: 'Código', itemDesc: 'Produto', itemQtd: 'Qtd',
+    itemUn: 'Un', itemValor: 'Valor',
+    itensDoPedido: 'itens do pedido de venda', itensDoOrcamento: 'itens orçados (ainda sem pedido)',
+    semItens: 'Este BR não tem itens sincronizados — orçamento antigo ou ainda sem produtos lançados no Sankhya.',
+    carregandoItens: 'buscando os itens',
+    notaOrcSemValor: 'Orçamento ainda sem pedido: o portal traz o produto e a quantidade, mas o preço por item é calculado por função do Sankhya e não fica espelhado aqui.',
+    cliqueItens: 'clique em uma linha para ver os itens',
     semaforoTitulo: 'Semáforo de investimento',
     semaforoSub: 'onde colocar a energia comercial, pela classificação dos vendedores — clique em uma cor para abrir os BRs',
     semVerde: 'Investir agora', semAmarelo: 'Trabalhar e qualificar', semVermelho: 'Decidir: caçar ou desistir',
@@ -3798,6 +3805,13 @@ const TXT = {
     topDealsTitulo: 'Biggest open deals',
     explicaTopDeals: 'the {n} largest undecided proposals — the ones the board should know by name',
     idade: 'Age',
+    itensDe: 'Items of', itemCod: 'Code', itemDesc: 'Product', itemQtd: 'Qty',
+    itemUn: 'Unit', itemValor: 'Value',
+    itensDoPedido: 'sales order items', itensDoOrcamento: 'quoted items (no order yet)',
+    semItens: 'This project has no synced items — an old quote, or products not yet entered in the ERP.',
+    carregandoItens: 'loading items',
+    notaOrcSemValor: 'Quote with no order yet: the portal brings the product and quantity, but the per-item price is computed by an ERP function that is not mirrored here.',
+    cliqueItens: 'click a row to see its items',
     semaforoTitulo: 'Investment traffic light',
     semaforoSub: 'where to put the sales energy, based on the salespeople\'s own classification — click a color to open the projects',
     semVerde: 'Invest now', semAmarelo: 'Work and qualify', semVermelho: 'Decide: chase or drop',
@@ -4246,6 +4260,22 @@ function PainelDiretoria() {
   const [fatDet, setFatDet] = useState([]);
   const [estagiosCfg, setEstagiosCfg] = useState([]);
   const [estagioIsolado, setEstagioIsolado] = useState(null);
+  // ITENS POR BR: busca sob demanda no clique da linha e guarda em cache —
+  // carregar item de 750 BRs de uma vez não se justifica para uma consulta
+  // que abre um de cada vez.
+  const [brAberto, setBrAberto] = useState(null);
+  const [itensCache, setItensCache] = useState({});
+  const verItens = async (br) => {
+    if (brAberto === br) { setBrAberto(null); return; }
+    setBrAberto(br);
+    if (itensCache[br]) return;
+    setItensCache(c => ({ ...c, [br]: { loading: true, linhas: [] } }));
+    const { data } = await supabase.from('v_comercial_itens_br')
+      .select('*').eq('br', br);
+    const linhas = (data || []).sort((a, b) =>
+      (Number(b.valor) || 0) - (Number(a.valor) || 0) || (Number(b.quantidade) || 0) - (Number(a.quantidade) || 0));
+    setItensCache(c => ({ ...c, [br]: { loading: false, linhas } }));
+  };
   const [loading, setLoading] = useState(true);
   const [moeda, setMoeda] = useState('BRL');
   const [idioma, setIdioma] = useState('pt');
@@ -4619,6 +4649,7 @@ function PainelDiretoria() {
           <div style={{ fontSize: 11, color: T.inkDim, marginTop: 4, lineHeight: 1.5, maxWidth: 680 }}>
             <strong style={{ color: T.ink }}>{t.regra}:</strong> {detalhe.regra}
           </div>
+          <div style={{ fontSize: 10, color: T.inkFaint, marginTop: 5 }}>↗ {t.cliqueItens}</div>
         </div>
         <button onClick={() => setDetalhe(null)}
           style={{ fontFamily: 'inherit', fontSize: 15, lineHeight: 1, padding: '3px 8px', borderRadius: 5,
@@ -4671,18 +4702,86 @@ function PainelDiretoria() {
             ))}
           </tr></thead>
           <tbody>
-            {detalhe.linhas.slice(0, 80).map((l, i) => (
-              <tr key={`${l.br}-${i}`} className="g-linha"
-                style={{ borderBottom: `1px solid ${T.lineSoft}`, animationDelay: `${Math.min(i, 22) * 22}ms` }}>
-                <td style={{ padding: '6px 10px', fontSize: 11.5, fontWeight: 600 }}>{l.br}</td>
-                <td style={{ padding: '6px 10px', fontSize: 11, color: T.inkDim, maxWidth: 220,
-                  whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={l.cliente}>{l.cliente}</td>
-                <td style={{ padding: '6px 10px', fontSize: 11, color: T.inkFaint }}>{l.vendedor}</td>
-                <td style={{ padding: '6px 10px', fontSize: 11, color: T.inkFaint }}>{l.estagio || l.estagio_rotulo || '—'}</td>
-                <td style={{ padding: '6px 10px', fontSize: 11.5, textAlign: 'right', fontWeight: 600,
-                  fontVariantNumeric: 'tabular-nums' }}>{val(l.valor)}</td>
-              </tr>
-            ))}
+            {detalhe.linhas.slice(0, 80).map((l, i) => {
+              const on = brAberto === l.br;
+              const it = itensCache[l.br];
+              return (
+                <React.Fragment key={`${l.br}-${i}`}>
+                  <tr className="g-linha g-clicavel" onClick={() => verItens(l.br)}
+                    style={{ borderBottom: `1px solid ${T.lineSoft}`, animationDelay: `${Math.min(i, 22) * 22}ms`,
+                      background: on ? `${T.terracotta}0A` : 'transparent' }}>
+                    <td style={{ padding: '6px 10px', fontSize: 11.5, fontWeight: 600, whiteSpace: 'nowrap' }}>
+                      <span style={{ display: 'inline-block', width: 11, color: T.inkFaint,
+                        transform: on ? 'rotate(90deg)' : 'none', transition: 'transform .18s' }}>›</span>
+                      {l.br}
+                    </td>
+                    <td style={{ padding: '6px 10px', fontSize: 11, color: T.inkDim, maxWidth: 220,
+                      whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={l.cliente}>{l.cliente}</td>
+                    <td style={{ padding: '6px 10px', fontSize: 11, color: T.inkFaint }}>{l.vendedor}</td>
+                    <td style={{ padding: '6px 10px', fontSize: 11, color: T.inkFaint }}>{l.estagio || l.estagio_rotulo || '—'}</td>
+                    <td style={{ padding: '6px 10px', fontSize: 11.5, textAlign: 'right', fontWeight: 600,
+                      fontVariantNumeric: 'tabular-nums' }}>{val(l.valor)}</td>
+                  </tr>
+                  {on && (
+                    <tr>
+                      <td colSpan={5} style={{ padding: 0, background: T.panelAlt }}>
+                        <div style={{ padding: '10px 14px 12px 24px', borderLeft: `3px solid ${T.terracotta}` }}>
+                          {it?.loading ? (
+                            <div className="g-brilho" style={{ fontSize: 10.5, color: T.inkFaint,
+                              padding: '8px 0', letterSpacing: '.05em', textTransform: 'uppercase' }}>
+                              {t.carregandoItens}…
+                            </div>
+                          ) : !it?.linhas?.length ? (
+                            <div style={{ fontSize: 11, color: T.inkFaint, padding: '6px 0' }}>{t.semItens}</div>
+                          ) : (
+                            <>
+                              <div style={{ fontSize: 10.5, color: T.inkFaint, marginBottom: 6 }}>
+                                {t.itensDe} <strong style={{ color: T.ink }}>{l.br}</strong> ·{' '}
+                                {it.linhas[0].origem === 'pedido' ? t.itensDoPedido : t.itensDoOrcamento}
+                              </div>
+                              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                                <thead><tr>
+                                  {[t.itemCod, t.itemDesc, t.itemQtd, t.itemUn, t.itemValor].map((h, j) => (
+                                    <th key={h} style={{ padding: '4px 8px', fontSize: 9.5, fontWeight: 600,
+                                      color: T.inkFaint, textAlign: j >= 2 ? 'right' : 'left',
+                                      borderBottom: `1px solid ${T.line}` }}>{h}</th>
+                                  ))}
+                                </tr></thead>
+                                <tbody>
+                                  {it.linhas.map((x, j) => (
+                                    <tr key={j} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                                      <td style={{ padding: '5px 8px', fontSize: 10.5, color: T.inkFaint,
+                                        whiteSpace: 'nowrap' }}>{x.cod_produto || '—'}</td>
+                                      <td style={{ padding: '5px 8px', fontSize: 11, color: T.ink }}
+                                        title={x.descricao}>{x.descricao || '—'}</td>
+                                      <td style={{ padding: '5px 8px', fontSize: 10.5, textAlign: 'right',
+                                        fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+                                        {Number(x.quantidade || 0).toLocaleString(loc, { maximumFractionDigits: 2 })}
+                                      </td>
+                                      <td style={{ padding: '5px 8px', fontSize: 10.5, textAlign: 'right',
+                                        color: T.inkFaint }}>{x.unidade || '—'}</td>
+                                      <td style={{ padding: '5px 8px', fontSize: 11, textAlign: 'right',
+                                        fontWeight: 600, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+                                        {x.valor == null ? '—' : val(x.valor)}
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                              {it.linhas[0].origem === 'orcamento' && (
+                                <div style={{ fontSize: 10, color: T.inkFaint, marginTop: 7, lineHeight: 1.5 }}>
+                                  {t.notaOrcSemValor}
+                                </div>
+                              )}
+                            </>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </React.Fragment>
+              );
+            })}
           </tbody>
         </table>
       </div>
