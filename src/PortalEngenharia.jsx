@@ -3707,6 +3707,17 @@ const TXT = {
     ponderadoSub: 'valor × peso do estágio',
     explicaPonderado: 'Cada proposta em aberto multiplicada pelo peso do estágio dado pelo vendedor (pesos cadastrados na tabela de estágios). Proposta SEM classificação vale ZERO aqui — classificar é o que faz este número subir. É a leitura mais honesta do funil: o que ele vale pela régua do próprio time.',
     atualizarSankhya: 'Atualizar do Sankhya', atualizando: 'Atualizando…',
+    somaFaixas: 'Soma das faixas', confereCom: 'fecha com o total em aberto',
+    abertoPorMesTitulo: 'Funil em aberto por mês de abertura',
+    explicaAbertoPorMes: 'onde estão os {v} em aberto, pelo mês em que a proposta nasceu · barra clara = valor cheio, barra intensa = ponderado pelo estágio',
+    regraAbertoPorMes: 'Propostas em aberto abertas em {m}. O valor é o cheio da proposta; a parte intensa da coluna é o ponderado (valor × peso do estágio).',
+    regraFatMes: 'BRs faturados em {m}. A coluna "Proposta de" mostra em que mês a proposta nasceu — é o ciclo comercial: o que se fatura hoje foi vendido meses atrás. Valor = receita da nota (net offer value), sem duplicatas BRV.',
+    deQualMes: 'De qual mês veio a proposta', propostaDe: 'Proposta de',
+    compTitulo: 'Cheio × ponderado, por estágio',
+    explicaComp: 'barra clara = valor cheio da proposta · barra intensa = o que sobra ao multiplicar pelo peso do estágio · clique para isolar um estágio',
+    totalCheio: 'Total cheio', totalPond: 'Total ponderado', encolhe: 'o funil encolhe',
+    verTodos: 'Ver todos', isolado: 'isolando',
+    regraComp: 'Propostas em aberto no estágio {e}, peso {p}. O cheio é o valor da proposta; o ponderado é valor × peso. Sem classificação tem peso zero — por isso some do ponderado.',
     syncOk: '✓ {n} BRs atualizados do Sankhya — novos orçamentos, vendedores e margens. Pedidos e faturamento já sincronizam sozinhos a cada 15 min.',
   },
   en: {
@@ -3793,6 +3804,17 @@ const TXT = {
     ponderadoSub: 'value × stage weight',
     explicaPonderado: 'Each open proposal multiplied by the weight of the stage set by the salesperson (weights from the stage table). UNCLASSIFIED proposals count as ZERO here — classifying is what makes this number grow. The most honest read of the funnel: what it is worth by the team\'s own ruler.',
     atualizarSankhya: 'Refresh from ERP', atualizando: 'Refreshing…',
+    somaFaixas: 'Sum of all bands', confereCom: 'matches the open total',
+    abertoPorMesTitulo: 'Open pipeline by opening month',
+    explicaAbertoPorMes: 'where the {v} open pipeline sits, by the month the proposal was created · light bar = full value, solid bar = weighted by stage',
+    regraAbertoPorMes: 'Open proposals created in {m}. Value is the full proposal; the solid part of the column is the weighted value (value × stage weight).',
+    regraFatMes: 'Projects invoiced in {m}. The "Proposal from" column shows the month the proposal was born — that is the commercial cycle: what is invoiced today was sold months ago. Value = invoice revenue (net offer value), BRV duplicates excluded.',
+    deQualMes: 'Which month the proposal came from', propostaDe: 'Proposal from',
+    compTitulo: 'Full vs weighted, by stage',
+    explicaComp: 'light bar = full proposal value · solid bar = what remains after the stage weight · click to isolate a stage',
+    totalCheio: 'Full total', totalPond: 'Weighted total', encolhe: 'the funnel shrinks',
+    verTodos: 'Show all', isolado: 'isolating',
+    regraComp: 'Open proposals at stage {e}, weight {p}. Full is the proposal value; weighted is value × weight. Unclassified has zero weight — which is why it disappears from the weighted total.',
     syncOk: '✓ {n} projects refreshed from the ERP — new quotes, salespeople and margins. Orders and invoicing already sync on their own every 15 min.',
   },
 };
@@ -3979,9 +4001,12 @@ function Colunas({ dados, altura = 180, par, rotulo, dica, aoClicar, ativo }) {
           <stop offset="0%" stopColor={par[0]} />
           <stop offset="100%" stopColor={par[1]} />
         </linearGradient>
+        {/* Fundo NEUTRO, não a mesma cor clara: com dois tons do mesmo verde a
+            parte de cima (proposto) e a de baixo (fechado) viravam a mesma
+            mancha. Cinza x cor separa as duas leituras de longe. */}
         <linearGradient id={`${id}-b`} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor={`${par[0]}30`} />
-          <stop offset="100%" stopColor={`${par[0]}12`} />
+          <stop offset="0%" stopColor={T.line} />
+          <stop offset="100%" stopColor={T.lineSoft} />
         </linearGradient>
       </defs>
       {[0.25, 0.5, 0.75, 1].map(g => (
@@ -3998,7 +4023,7 @@ function Colunas({ dados, altura = 180, par, rotulo, dica, aoClicar, ativo }) {
           <g key={d.k} className={aoClicar ? 'g-clicavel' : undefined}
             onClick={aoClicar ? () => aoClicar(d) : undefined}>
             {on && <rect x={`${i * largura + largura * 0.08}%`} y={-6} width={`${largura * 0.84}%`}
-              height={altura + 34} rx="6" fill={`${par[0]}0E`} />}
+              height={altura + 34} rx="6" fill={`${par[0]}1F`} stroke={par[0]} strokeWidth="1.5" />}
             <g className="g-col" style={{ animationDelay: `${i * 55}ms` }}>
               <rect x={x} y={altura - h} width={w} height={h} rx="4" fill={`url(#${id}-b)`} />
               {d.dentro != null && (
@@ -4110,6 +4135,9 @@ function PainelDiretoria() {
   const [previsao, setPrevisao] = useState([]);
   const [ciclo, setCiclo] = useState([]);
   const [fatOrigem, setFatOrigem] = useState([]);
+  const [fatDet, setFatDet] = useState([]);
+  const [estagiosCfg, setEstagiosCfg] = useState([]);
+  const [estagioIsolado, setEstagioIsolado] = useState(null);
   const [loading, setLoading] = useState(true);
   const [moeda, setMoeda] = useState('BRL');
   const [idioma, setIdioma] = useState('pt');
@@ -4120,16 +4148,19 @@ function PainelDiretoria() {
   const t = TXT[idioma];
 
   const carregar = useCallback(async () => {
-    const [d, c, pv, cc, fo] = await Promise.all([
+    const [d, c, pv, cc, fo, fd, ec] = await Promise.all([
       supabase.from('v_comercial_diretoria').select('*'),
       supabase.from('comercial_cambio').select('*'),
       supabase.from('v_comercial_previsao').select('*'),
       supabase.from('v_comercial_ciclo_resumo').select('*').order('competencia'),
       supabase.from('v_comercial_faturamento_origem').select('*'),
+      supabase.from('v_comercial_faturado_detalhe').select('*'),
+      supabase.from('comercial_estagio').select('*').order('ordem'),
     ]);
     setDados(d.data || []); setCambio(c.data || []);
     setPrevisao(pv.data || []); setCiclo(cc.data || []);
-    setFatOrigem(fo.data || []);
+    setFatOrigem(fo.data || []); setFatDet(fd.data || []);
+    setEstagiosCfg(ec.data || []);
     setLoading(false);
   }, []);
   useEffect(() => { carregar(); }, [carregar]);
@@ -4335,6 +4366,47 @@ function PainelDiretoria() {
 
   const topDeals = [...abertos].sort((a, b) => (Number(b.valor) || 0) - (Number(a.valor) || 0)).slice(0, 8);
 
+  // ---- ONDE ESTÃO OS R$ EM ABERTO, MÊS A MÊS ----
+  // O cartão diz 71 mi; esta coluna diz de que meses esse dinheiro é. Cheio
+  // na coluna clara, ponderado na escura: a distância entre as duas é o
+  // quanto daquele mês ainda depende de classificação.
+  const mesesAberto = [...new Set(abertos.map(d => d.competencia).filter(Boolean))].sort();
+  const colAberto = mesesAberto.map(m => {
+    const lst = abertos.filter(d => d.competencia === m);
+    return { k: rotMes(m), total: soma(lst), dentro: soma(lst, 'valor_ponderado'),
+             rot: fmtMoedaCompacta(conv(soma(lst))), sub: `${lst.length}`, iso: m };
+  });
+
+  // ---- RECEITA FATURADA: detalhe por mês, com o mês de origem da proposta ----
+  const fatPorMes = {};
+  fatDet.forEach(f => {
+    if (!f.mes_faturamento) return;
+    (fatPorMes[f.mes_faturamento] = fatPorMes[f.mes_faturamento] || []).push(f);
+  });
+
+  // ---- CHEIO × PONDERADO POR ESTÁGIO ----
+  // Responde "o que está proposto e o que sobra quando aplico a régua do
+  // time". Sem classificação entra com peso zero e some do ponderado —
+  // é justamente o que dá a dimensão do problema.
+  const pesoDe = (cod) => {
+    const e = estagiosCfg.find(x => x.estagio === cod);
+    return e ? Number(e.peso) : 0;
+  };
+  const gruposEst = [...estagiosCfg.map(e => ({ cod: e.estagio, rot: e.rotulo, peso: Number(e.peso) })),
+                     { cod: null, rot: 'Sem classificação', peso: 0 }];
+  const CORES_EST_COMP = { avancado: G.verde, alto: G.azul, medio: G.ambar,
+                           baixo: G.rosa, perdido: G.cinza };
+  const barrasComp = gruposEst.map(g => {
+    const lst = abertos.filter(d => (d.estagio_codigo || null) === g.cod);
+    return { k: g.rot, v: soma(lst), dentro: soma(lst, 'valor_ponderado'),
+             rot: val(soma(lst)), par: CORES_EST_COMP[g.cod] || G.roxo,
+             extra: `${(g.peso * 100).toFixed(0)}%`, cod: g.cod, peso: g.peso, lista: lst };
+  }).filter(b => b.v > 0);
+  const compVisivel = estagioIsolado != null
+    ? barrasComp.filter(b => b.cod === estagioIsolado) : barrasComp;
+  const compCheio = compVisivel.reduce((s, b) => s + b.v, 0);
+  const compPond = compVisivel.reduce((s, b) => s + b.dentro, 0);
+
   // ---- SEMÁFORO DE INVESTIMENTO ----
   // Traduz a classificação dos próprios vendedores em três pilhas de AÇÃO:
   // verde fecha, amarelo trabalha, vermelho decide. Regra simples de propósito
@@ -4361,12 +4433,12 @@ function PainelDiretoria() {
   // Abre o detalhe: o QUE esta ali e COMO foi calculado. Mostrar so a lista
   // deixaria a pergunta 'de onde saiu esse numero' sem resposta -- e e ela que
   // aparece na reuniao.
-  const abrir = (chave, titulo, regra, linhas, total) => {
+  const abrir = (chave, titulo, regra, linhas, total, extras = {}) => {
     if (detalhe?.chave === chave) { setDetalhe(null); return; }
     // Meio segundo de anel girando antes de mostrar. Nao e espera de verdade
     // -- o dado ja esta na memoria -- e o tempo de o olho entender que algo
     // novo apareceu. Sem ele, a tabela surge do nada e a pessoa se perde.
-    setDetalhe({ chave, titulo, regra, total, carregando: true, linhas: [] });
+    setDetalhe({ chave, titulo, regra, total, carregando: true, linhas: [], ...extras });
     setTimeout(() => setDetalhe(d => (d && d.chave === chave
       ? { ...d, carregando: false,
           linhas: [...linhas].sort((a, b) => (Number(b.valor) || 0) - (Number(a.valor) || 0)) }
@@ -4432,6 +4504,12 @@ function PainelDiretoria() {
           </strong>
         </span>
       </div>
+      {!detalhe.carregando && detalhe.grafico?.length > 0 && (
+        <div style={{ marginBottom: 12, paddingBottom: 12, borderBottom: `1px solid ${T.lineSoft}` }}>
+          <div style={{ fontSize: 11, color: T.inkFaint, marginBottom: 7 }}>{detalhe.graficoTitulo}</div>
+          <BarrasH dados={detalhe.grafico} altura={20} />
+        </div>
+      )}
       {detalhe.carregando ? (
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center',
           justifyContent: 'center', gap: 11, padding: '44px 0' }}>
@@ -4453,7 +4531,7 @@ function PainelDiretoria() {
       <div style={{ maxHeight: 340, overflowY: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead style={{ position: 'sticky', top: 0, zIndex: 1 }}><tr style={{ background: T.panelAlt }}>
-            {['BR', t.cliente, t.vendedor, t.estagio, t.valorCol].map((h, i) => (
+            {['BR', t.cliente, t.vendedor, detalhe.col4 || t.estagio, t.valorCol].map((h, i) => (
               <th key={h} style={{ padding: '7px 10px', fontSize: 10.5, fontWeight: 600, color: T.inkFaint,
                 textAlign: i === 4 ? 'right' : 'left', whiteSpace: 'nowrap' }}>{h}</th>
             ))}
@@ -4705,18 +4783,60 @@ function PainelDiretoria() {
 
       <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))' }}>
         {painel(t.agingTitulo, (
-          <BarrasH dados={barrasAging}
-            ativo={detalhe?.chave?.startsWith('aging:') ? detalhe.chave.slice(6) : null}
-            aoClicar={(b2) => {
-              const fx = agingListas.find(f => f.k === b2.k);
-              if (!fx) return;
-              abrir(`aging:${b2.k}`, `${t.agingTitulo} · ${b2.k}`,
-                t.regraAging.replace('{f}', b2.k), fx.lista, soma(fx.lista));
-            }} />
+          <>
+            <BarrasH dados={barrasAging}
+              ativo={detalhe?.chave?.startsWith('aging:') ? detalhe.chave.slice(6) : null}
+              aoClicar={(b2) => {
+                const fx = agingListas.find(f => f.k === b2.k);
+                if (!fx) return;
+                abrir(`aging:${b2.k}`, `${t.agingTitulo} · ${b2.k}`,
+                  t.regraAging.replace('{f}', b2.k), fx.lista, soma(fx.lista));
+              }} />
+            {/* TOTAL À VISTA: sem ele, quem olha o gráfico não tem como saber
+                que as faixas fecham com o cartão "Em aberto" — e a primeira
+                pergunta numa reunião é justamente se os números batem. */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
+              gap: 10, flexWrap: 'wrap', marginTop: 10, paddingTop: 9,
+              borderTop: `1px solid ${T.lineSoft}` }}>
+              <span style={{ fontSize: 11, color: T.inkFaint }}>
+                {t.somaFaixas} · {abertos.length} {t.propostas}
+              </span>
+              <span style={{ fontSize: 13, fontWeight: 800, fontVariantNumeric: 'tabular-nums' }}>
+                {val(barrasAging.reduce((s, b2) => s + b2.v, 0))}
+                <span style={{ fontSize: 10, fontWeight: 400, color: T.oliveText, marginLeft: 6 }}>
+                  ✓ {t.confereCom}
+                </span>
+              </span>
+            </div>
+          </>
         ), t.explicaAging)}
         {painel(t.receitaMesTitulo, (
           <>
-            <Colunas dados={colReceita} par={G.verde} altura={150} dica={(d) => `${d.k} · ${val(d.total)}`} />
+            <Colunas dados={colReceita} par={G.verde} altura={150} dica={(d) => `${d.k} · ${val(d.total)}`}
+              ativo={detalhe?.chave?.startsWith('fat:') ? detalhe.chave.slice(4) : null}
+              aoClicar={(col) => {
+                const m = mesesRec.find(x => rotMes(x) === col.k);
+                if (!m) return;
+                const lst = (fatPorMes[m] || []).map(f => ({
+                  br: f.br, cliente: f.cliente, vendedor: f.vendedor,
+                  estagio: f.mes_proposta ? rotMes(f.mes_proposta) : '—', valor: f.valor,
+                }));
+                // Mini-gráfico: de que meses vieram as propostas faturadas neste
+                // mês. É a resposta visual do ciclo comercial — o que entra no
+                // caixa hoje foi vendido meses atrás.
+                const porOrigemMes = {};
+                (fatPorMes[m] || []).forEach(f => {
+                  const k2 = f.mes_proposta ? rotMes(f.mes_proposta) : t.semData;
+                  porOrigemMes[k2] = (porOrigemMes[k2] || 0) + (Number(f.valor) || 0);
+                });
+                const graf = Object.entries(porOrigemMes)
+                  .map(([k2, v2]) => ({ k: k2, v: v2, rot: val(v2), par: G.ciano }))
+                  .sort((a, b2) => b2.v - a.v);
+                abrir(`fat:${col.k}`, `${t.receitaMesTitulo} · ${col.k}`,
+                  t.regraFatMes.replace('{m}', col.k), lst,
+                  lst.reduce((s, l) => s + (Number(l.valor) || 0), 0),
+                  { col4: t.propostaDe, grafico: graf, graficoTitulo: t.deQualMes });
+              }} />
             <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', marginTop: 10, paddingTop: 10,
               borderTop: `1px solid ${T.lineSoft}` }}>
               {[[t.acumAno, acumAno, G.verde], [t.mediaMes, mediaMensal, G.ciano], [t.projecaoAno, projecaoAno, G.roxo]].map(([r, v, p]) => (
@@ -4737,7 +4857,7 @@ function PainelDiretoria() {
         ), t.explicaReceitaMes)}
       </div>
 
-      {gavetaDe('aging:')}
+      {gavetaDe('aging:', 'fat:')}
 
       <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))' }}>
         {painel(t.conversao, (
@@ -4772,6 +4892,64 @@ function PainelDiretoria() {
       ))}
 
       {gavetaDe('ciclo:')}
+
+      <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))' }}>
+        {painel(t.abertoPorMesTitulo, (
+          <Colunas dados={colAberto} par={G.ambar} altura={155}
+            dica={(d) => `${d.k} · ${val(d.total)} · ${d.sub} ${t.propostas}`}
+            ativo={detalhe?.chave?.startsWith('abm:') ? detalhe.chave.slice(4) : null}
+            aoClicar={(col) => {
+              const lst = abertos.filter(d => rotMes(d.competencia) === col.k);
+              abrir(`abm:${col.k}`, `${t.abertoPorMesTitulo} · ${col.k}`,
+                t.regraAbertoPorMes.replace('{m}', col.k), lst, soma(lst));
+            }} />
+        ), t.explicaAbertoPorMes.replace('{v}', val(soma(abertos))))}
+
+        {painel(t.compTitulo, (
+          <>
+            <BarrasH dados={compVisivel} altura={26}
+              ativo={estagioIsolado != null ? (compVisivel[0]?.k || null) : null}
+              aoClicar={(b2) => {
+                // Clique isola o estágio no gráfico E abre os BRs: ver só o
+                // Avançado é a pergunta "o que está mesmo para fechar".
+                const novo = estagioIsolado === b2.cod ? null : b2.cod;
+                setEstagioIsolado(novo);
+                if (novo === null) { setDetalhe(null); return; }
+                abrir(`comp:${b2.k}`, `${t.compTitulo} · ${b2.k}`,
+                  t.regraComp.replace('{e}', b2.k).replace('{p}', `${(b2.peso * 100).toFixed(0)}%`),
+                  b2.lista, soma(b2.lista));
+              }} />
+            <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', alignItems: 'baseline',
+              marginTop: 11, paddingTop: 10, borderTop: `1px solid ${T.lineSoft}` }}>
+              <span style={{ fontSize: 11 }}>
+                <span style={{ color: T.inkFaint }}>{t.totalCheio}: </span>
+                <strong style={{ fontSize: 14, fontVariantNumeric: 'tabular-nums' }}>{val(compCheio)}</strong>
+              </span>
+              <span style={{ fontSize: 11 }}>
+                <span style={{ color: T.inkFaint }}>{t.totalPond}: </span>
+                <strong style={{ fontSize: 14, color: G.ciano[1], fontVariantNumeric: 'tabular-nums' }}>
+                  {val(compPond)}
+                </strong>
+              </span>
+              {compCheio > 0 && (
+                <span style={{ fontSize: 11, color: T.rustText }}>
+                  {t.encolhe} {((1 - compPond / compCheio) * 100).toFixed(0)}%
+                </span>
+              )}
+              {estagioIsolado != null && (
+                <button onClick={() => { setEstagioIsolado(null); setDetalhe(null); }}
+                  style={{ fontFamily: 'inherit', fontSize: 11, fontWeight: 600, padding: '4px 11px',
+                    borderRadius: 5, cursor: 'pointer', border: `1px solid ${T.line}`,
+                    background: T.panel, color: T.inkDim, marginLeft: 'auto' }}>
+                  ↺ {t.verTodos}
+                </button>
+              )}
+            </div>
+          </>
+        ), t.explicaComp)}
+      </div>
+
+      {gavetaDe('abm:', 'comp:')}
 
       {painel(t.topDealsTitulo, (
         <div style={{ overflowX: 'auto' }}>
