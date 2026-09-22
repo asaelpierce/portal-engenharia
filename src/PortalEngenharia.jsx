@@ -11599,24 +11599,6 @@ function MonitoramentoOP({ currentUser }) {
     setMostrandoHistoricoGeral(true);
   };
 
-  const iniciarOuRetomarVerificacao = async (card) => {
-    await supabase.from('monitoramento_op_cards_planner').update({
-      status_verificacao_op: 'em_andamento',
-      ultimo_inicio_verificacao: new Date().toISOString(),
-    }).eq('id', card.id);
-    await carregarOpsGeradas();
-  };
-
-  const pausarVerificacao = async (card) => {
-    const segundosRodados = card.ultimo_inicio_verificacao ? Math.floor((Date.now() - new Date(card.ultimo_inicio_verificacao).getTime()) / 1000) : 0;
-    await supabase.from('monitoramento_op_cards_planner').update({
-      status_verificacao_op: 'pausado',
-      tempo_acumulado_segundos: (card.tempo_acumulado_segundos || 0) + segundosRodados,
-      ultimo_inicio_verificacao: null,
-    }).eq('id', card.id);
-    await carregarOpsGeradas();
-  };
-
   const finalizarVerificacao = async (card) => {
     const segundosRodados = card.ultimo_inicio_verificacao ? Math.floor((Date.now() - new Date(card.ultimo_inicio_verificacao).getTime()) / 1000) : 0;
     await supabase.from('monitoramento_op_cards_planner').update({
@@ -11645,19 +11627,6 @@ function MonitoramentoOP({ currentUser }) {
     });
     setModalPendencia(null);
     await carregarOpsGeradas();
-  };
-
-  const fmtCronometro = (segundos) => {
-    const s = Math.max(0, Math.floor(segundos));
-    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
-    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
-  };
-  const tempoAoVivo = (card) => {
-    const base = card.tempo_acumulado_segundos || 0;
-    if (card.status_verificacao_op === 'em_andamento' && card.ultimo_inicio_verificacao) {
-      return base + Math.floor((Date.now() - new Date(card.ultimo_inicio_verificacao).getTime()) / 1000);
-    }
-    return base;
   };
 
   const carregarSolicitacoes = useCallback(async (silencioso = false) => {
@@ -12584,7 +12553,6 @@ function MonitoramentoOP({ currentUser }) {
               <div style={{ textAlign: 'center', padding: 40, color: T.inkFaint, fontSize: 13 }}>Nenhum card nessa coluna no momento.</div>
             ) : cardsOpsGeradas.map(c => {
               const ops = opsPorBr[c.br] || [];
-              const tempo = tempoAoVivo(c);
               return (
                 <div key={c.id} style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 10 }}>
@@ -12592,29 +12560,14 @@ function MonitoramentoOP({ currentUser }) {
                       <div style={{ fontSize: 14, fontWeight: 700 }}><span style={{ fontFamily: FONT_DISPLAY, color: T.blueText }}>{c.br}</span></div>
                       <div style={{ fontSize: 12, color: T.inkDim, marginTop: 2 }}>{c.planner_titulo}</div>
                     </div>
-                    {/* O cronômetro parado em 00:00:00 não dizia nada — e era
-                        o número que mais aparecia, já que quase ninguém usa o
-                        cronômetro de verdade. Quando não está correndo, o que
-                        importa é HÁ QUANTO TEMPO a OP espera conferência. */}
+                    {/* Sem cronômetro: a etapa é só registro de conferência.
+                        O que importa é HÁ QUANTO TEMPO a OP espera alguém. */}
                     <div style={{ textAlign: 'right' }}>
-                      {c.status_verificacao_op === 'em_andamento' ? (
-                        <>
-                          <div style={{ fontFamily: FONT_DISPLAY, fontSize: 20, fontWeight: 700, color: T.terracotta }}>
-                            {fmtCronometro(tempo)}
-                          </div>
-                          <div style={{ fontSize: 10, color: T.inkFaint }}>conferindo agora</div>
-                        </>
-                      ) : (
-                        <>
-                          <div style={{ fontFamily: FONT_DISPLAY, fontSize: 20, fontWeight: 700,
-                            color: (c.horas_espera_verificacao || 0) > 24 ? T.rustText : T.inkFaint }}>
-                            {fmtHoras(c.horas_espera_verificacao)}
-                          </div>
-                          <div style={{ fontSize: 10, color: T.inkFaint }}>
-                            esperando conferência{tempo > 0 ? ` · ${fmtCronometro(tempo)} cronometrados` : ''}
-                          </div>
-                        </>
-                      )}
+                      <div style={{ fontFamily: FONT_DISPLAY, fontSize: 20, fontWeight: 700,
+                        color: (c.horas_espera_verificacao || 0) > 24 ? T.rustText : T.inkFaint }}>
+                        {fmtHoras(c.horas_espera_verificacao)}
+                      </div>
+                      <div style={{ fontSize: 10, color: T.inkFaint }}>esperando conferência</div>
                     </div>
                   </div>
 
@@ -12670,48 +12623,17 @@ function MonitoramentoOP({ currentUser }) {
                   </div>
 
                   <div style={{ display: 'flex', gap: 8, alignItems: 'center', borderTop: `1px solid ${T.lineSoft}`, paddingTop: 10, flexWrap: 'wrap' }}>
-                    {/* ANTES o único botão aqui era "Iniciar": para dar baixa
-                        num card era obrigatório clicar Iniciar e depois
-                        Finalizar, mesmo quando a conferência levava segundos.
-                        Nos dados, 94% dos cards ficaram com menos de 1 minuto
-                        de cronômetro — ninguém estava medindo nada, só pagando
-                        dois cliques. Agora "Conferido" resolve num clique e o
-                        cronômetro vira opcional, para quem realmente vai parar
-                        para conferir. */}
-                    {c.status_verificacao_op === 'nao_iniciado' && (
+                    {/* UM CLIQUE. O cronômetro (iniciar/pausar/retomar) saiu:
+                        a etapa é registro de conferência, não medição de tempo
+                        -- 94% dos cards marcavam menos de 1 minuto, ninguém
+                        media nada e todo mundo pagava dois cliques.
+                        Cards antigos que ficaram em 'em_andamento' ou 'pausado'
+                        caem aqui também e fecham normal. */}
+                    {c.status_verificacao_op !== 'finalizado' && c.status_verificacao_op !== 'pendencia' && (
                       <>
                         <button onClick={() => finalizarVerificacao(c)}
                           style={{ fontSize: 12, fontWeight: 700, color: '#fff', background: T.oliveText, border: 'none', borderRadius: 6, padding: '8px 16px', cursor: 'pointer' }}>
                           ✓ Conferido
-                        </button>
-                        <button onClick={() => iniciarOuRetomarVerificacao(c)}
-                          title="Só se for parar para conferir agora e quiser medir o tempo gasto"
-                          style={{ fontSize: 12, fontWeight: 600, color: T.blueText, background: 'transparent', border: `1px solid ${T.blue}55`, borderRadius: 6, padding: '8px 14px', cursor: 'pointer' }}>
-                          ▶ Cronometrar
-                        </button>
-                        <button onClick={() => setModalPendencia(c)}
-                          style={{ fontSize: 12, fontWeight: 600, color: T.rustText, background: 'transparent', border: `1px solid ${T.rust}55`, borderRadius: 6, padding: '8px 14px', cursor: 'pointer' }}>
-                          ⚠ Sinalizar pendência
-                        </button>
-                      </>
-                    )}
-                    {c.status_verificacao_op === 'em_andamento' && (
-                      <button onClick={() => pausarVerificacao(c)}
-                        style={{ fontSize: 12, fontWeight: 700, color: '#fff', background: T.amberText, border: 'none', borderRadius: 6, padding: '8px 16px', cursor: 'pointer' }}>
-                        ⏸ Pausar
-                      </button>
-                    )}
-                    {c.status_verificacao_op === 'pausado' && (
-                      <button onClick={() => iniciarOuRetomarVerificacao(c)}
-                        style={{ fontSize: 12, fontWeight: 700, color: '#fff', background: T.blueText, border: 'none', borderRadius: 6, padding: '8px 16px', cursor: 'pointer' }}>
-                        ▶ Retomar
-                      </button>
-                    )}
-                    {(c.status_verificacao_op === 'em_andamento' || c.status_verificacao_op === 'pausado') && (
-                      <>
-                        <button onClick={() => finalizarVerificacao(c)}
-                          style={{ fontSize: 12, fontWeight: 700, color: '#fff', background: T.oliveText, border: 'none', borderRadius: 6, padding: '8px 16px', cursor: 'pointer' }}>
-                          ✓ Finalizar
                         </button>
                         <button onClick={() => setModalPendencia(c)}
                           style={{ fontSize: 12, fontWeight: 600, color: T.rustText, background: 'transparent', border: `1px solid ${T.rust}55`, borderRadius: 6, padding: '8px 14px', cursor: 'pointer' }}>
@@ -12755,7 +12677,6 @@ function MonitoramentoOP({ currentUser }) {
                     <span style={{ color: T.inkDim }}> · {c.planner_titulo}</span>
                     <span style={{ color: T.inkFaint }}> · Projetista: {c.projetista || '—'} · Finalizado em {fmtData(c.finalizado_verificacao_em || c.data_finalizado)}
                       {c.horas_espera_verificacao != null && ` · da OP gerada até a conferência: ${fmtHoras(c.horas_espera_verificacao)}`}
-                      {c.tempo_acumulado_segundos > 60 && ` · ${fmtCronometro(c.tempo_acumulado_segundos)} cronometrados`}
                     </span>
                   </div>
                   <button onClick={() => setConfirmandoReset(c)} disabled={processandoCard === c.id}
