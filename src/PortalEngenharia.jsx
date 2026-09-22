@@ -3622,8 +3622,8 @@ const TXT = {
     simSub: 'proposta que não fecha há semanas pode fechar com desconto',
     simExplica: 'O custo não muda: o desconto sai inteiro da margem. Uma proposta de R$ 100 com 50% de margem tem R$ 50 de custo — com 10% de desconto, ela vai a R$ 90 e a margem cai para 44,4%, não para 40%.',
     desconto: 'Desconto no preço', paradaHa: 'Parada há mais de', margemAcima: 'Margem acima de',
-    propostasParadas: 'Propostas no filtro', valorHoje: 'Valor hoje',
-    valorComDesconto: 'Com o desconto', abreMao: 'Abre mão de',
+    propostasParadas: 'Propostas no filtro', valorHoje: 'Preço de hoje',
+    valorComDesconto: 'Novo preço ao cliente', abreMao: 'Abre mão de',
     lucroDepois: 'Lucro depois', margemDepois: 'Margem depois', margemAtual: 'Margem hoje',
     cliente: 'Cliente', mostrando: 'mostrando {n} de {t}',
     avisoVermelho: '{n} propostas ficam com lucro NEGATIVO neste desconto — o preço cairia abaixo do custo orçado.',
@@ -3659,8 +3659,8 @@ const TXT = {
     simSub: 'a proposal stuck for weeks may close with a discount',
     simExplica: 'Cost stays the same: the discount comes entirely out of margin. A $100 proposal at 50% margin has $50 of cost — a 10% discount takes it to $90 and margin down to 44.4%, not 40%.',
     desconto: 'Price discount', paradaHa: 'Open for more than', margemAcima: 'Margin above',
-    propostasParadas: 'Proposals in filter', valorHoje: 'Value today',
-    valorComDesconto: 'After discount', abreMao: 'Given up',
+    propostasParadas: 'Proposals in filter', valorHoje: 'Current price',
+    valorComDesconto: 'New price to customer', abreMao: 'Given up',
     lucroDepois: 'Profit after', margemDepois: 'Margin after', margemAtual: 'Margin today',
     cliente: 'Customer', mostrando: 'showing {n} of {t}',
     avisoVermelho: '{n} proposals end up with NEGATIVE profit at this discount — the price would fall below budgeted cost.',
@@ -3714,6 +3714,10 @@ function PainelDiretoria() {
     if (abs >= 1e3) return `${cx.simbolo} ${(n / 1e3).toLocaleString(loc, { maximumFractionDigits: 0 })} mil`;
     return `${cx.simbolo} ${n.toLocaleString(loc, { maximumFractionDigits: 0 })}`;
   };
+  // Na simulacao os numeros vao EXATOS: com o arredondamento acima, um
+  // desconto de 5% sobre R$ 3.240 aparecia como 'R$ 3 mil' nas duas colunas e
+  // parecia que nada tinha mudado.
+  const valExato = (v) => `${cx.simbolo} ${conv(v).toLocaleString(loc, { maximumFractionDigits: 0 })}`;
   const soma = (arr, campo = 'valor') => arr.reduce((s, r) => s + (Number(r[campo]) || 0), 0);
   const rotMes = (m) => {
     if (!m) return t.semData;
@@ -4080,17 +4084,18 @@ function PainelDiretoria() {
                         {Number(x.margin).toFixed(0)}%
                       </td>
                       <td style={{ padding: '6px 10px', fontSize: 12, textAlign: 'right',
-                        fontVariantNumeric: 'tabular-nums' }}>{val(x.valor)}</td>
+                        fontVariantNumeric: 'tabular-nums' }}>{valExato(x.valor)}</td>
                       <td style={{ padding: '6px 10px', fontSize: 12, textAlign: 'right', color: T.terracotta,
-                        fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{val(x.novoValor)}</td>
+                        fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{valExato(x.novoValor)}</td>
                       <td style={{ padding: '6px 10px', fontSize: 11.5, textAlign: 'right', fontWeight: 600,
                         color: x.novaMargem == null ? T.inkFaint : x.novaMargem < 10 ? T.rustText
                           : x.novaMargem < 25 ? T.amberText : T.oliveText }}>
                         {x.novaMargem == null ? '—' : `${x.novaMargem.toFixed(1)}%`}
                       </td>
                       <td style={{ padding: '6px 10px', fontSize: 12, textAlign: 'right',
-                        color: x.novoLucro < 0 ? T.rustText : T.inkDim, fontVariantNumeric: 'tabular-nums' }}>
-                        {val(x.novoLucro)}
+                        color: x.novoLucro < 0 ? T.rustText : T.inkDim, fontVariantNumeric: 'tabular-nums' }}
+                        title={`${t.abreMao}: ${valExato(x.abriuMao)}`}>
+                        {valExato(x.novoLucro)}
                       </td>
                     </tr>
                   ))}
