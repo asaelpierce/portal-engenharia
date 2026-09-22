@@ -5409,6 +5409,7 @@ function FollowUpComercial({ currentUser }) {
   const [vend, setVend] = useState('Todos');
   const [verPerdidos, setVerPerdidos] = useState(false);
   const [obsAberta, setObsAberta] = useState(null);
+  const [obsVendAberta, setObsVendAberta] = useState(null);
   const [envioHist, setEnvioHist] = useState([]);
   const [webhook, setWebhook] = useState('');
   const [webhookEdit, setWebhookEdit] = useState(false);
@@ -6411,15 +6412,29 @@ function FollowUpComercial({ currentUser }) {
                         )}
                       </td>
                       <td style={{ padding: '8px 12px' }}>
-                        {l.estagio_vendedor_rotulo ? (
-                          <span title={`Informado pelo vendedor${l.estagio_vendedor_em ? ` em ${new Date(l.estagio_vendedor_em).toLocaleDateString('pt-BR')}` : ''}${l.observacao_vendedor ? ` — "${l.observacao_vendedor}"` : ''}`}
-                            style={{ fontSize: 11, padding: '3px 8px', borderRadius: 4, whiteSpace: 'nowrap',
-                              border: `1px solid ${l.leituras_divergem ? T.amberText : T.line}`,
-                              background: l.leituras_divergem ? T.amberSoft : T.panelAlt,
-                              color: l.leituras_divergem ? T.amberText : T.inkDim }}>
-                            {l.estagio_vendedor_rotulo}{l.leituras_divergem ? ' ≠' : ''}
-                          </span>
-                        ) : (
+                        {l.estagio_vendedor_rotulo ? (() => {
+                          // A OBSERVAÇÃO DO VENDEDOR PRECISA APARECER. Ela só
+                          // existia dentro do title: quem não passasse o mouse
+                          // nunca sabia que o vendedor tinha escrito algo — e é
+                          // justamente o texto que explica a classificação.
+                          // Agora o badge muda de cor, ganha o balãozinho e
+                          // abre o texto no clique.
+                          const temObs = !!l.observacao_vendedor;
+                          const cor = l.leituras_divergem ? T.amberText : temObs ? T.blueText : T.line;
+                          const fundo = l.leituras_divergem ? T.amberSoft : temObs ? T.blueSoft : T.panelAlt;
+                          const texto = l.leituras_divergem ? T.amberText : temObs ? T.blueText : T.inkDim;
+                          return (
+                            <span onClick={temObs ? () => setObsVendAberta(obsVendAberta === l.br ? null : l.br) : undefined}
+                              title={`Informado pelo vendedor${l.estagio_vendedor_em ? ` em ${new Date(l.estagio_vendedor_em).toLocaleDateString('pt-BR')}` : ''}${temObs ? ' — clique para ler a observação' : ''}`}
+                              style={{ fontSize: 11, padding: '3px 8px', borderRadius: 4, whiteSpace: 'nowrap',
+                                border: `1px solid ${cor}`, background: fundo, color: texto,
+                                cursor: temObs ? 'pointer' : 'default', fontWeight: temObs ? 600 : 400,
+                                display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                              {l.estagio_vendedor_rotulo}{l.leituras_divergem ? ' ≠' : ''}
+                              {temObs && <MessageSquareWarning size={11} />}
+                            </span>
+                          );
+                        })() : (
                           <span style={{ fontSize: 11, color: T.inkFaint }}>—</span>
                         )}
                       </td>
@@ -6436,6 +6451,18 @@ function FollowUpComercial({ currentUser }) {
                         </div>
                       </td>
                     </tr>
+                    {obsVendAberta === l.br && l.observacao_vendedor && (
+                      <tr><td colSpan={11} style={{ padding: '10px 14px', background: T.blueSoft,
+                        borderBottom: `1px solid ${T.line}`, borderLeft: `3px solid ${T.blueText}` }}>
+                        <div style={{ fontSize: 10.5, color: T.blueText, fontWeight: 700, marginBottom: 3 }}>
+                          Observação do vendedor · {l.vendedor}
+                          {l.estagio_vendedor_em && ` · ${new Date(l.estagio_vendedor_em).toLocaleDateString('pt-BR')}`}
+                        </div>
+                        <div style={{ fontSize: 12, color: T.ink, lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>
+                          {l.observacao_vendedor}
+                        </div>
+                      </td></tr>
+                    )}
                     {obsAberta === l.br && (
                       <tr><td colSpan={11} style={{ padding: '8px 12px', background: T.panelAlt, borderBottom: `1px solid ${T.line}` }}>
                         <textarea defaultValue={l.observacao || ''} rows={2} placeholder="O que foi conversado, o que trava, próximo passo…"
