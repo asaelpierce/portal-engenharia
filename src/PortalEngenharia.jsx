@@ -3693,6 +3693,16 @@ const TXT = {
     topDealsTitulo: 'Maiores negócios em aberto',
     explicaTopDeals: 'as {n} maiores propostas sem decisão — as que a diretoria deveria conhecer pelo nome',
     idade: 'Idade',
+    semaforoTitulo: 'Semáforo de investimento',
+    semaforoSub: 'onde colocar a energia comercial, pela classificação dos vendedores — clique em uma cor para abrir os BRs',
+    semVerde: 'Investir agora', semAmarelo: 'Trabalhar e qualificar', semVermelho: 'Decidir: caçar ou desistir',
+    semVerdeSub: 'estágio Avançado ou Alto — chance alta declarada, energia aqui converte',
+    semAmareloSub: 'estágio Médio ou sem classificação — precisa de ação do vendedor para mudar de cor',
+    semVermelhoSub: 'estágio Baixo, ou sem classificação parado há +180 dias — energia aqui raramente volta',
+    lucroEmJogo: 'lucro em jogo',
+    regraSemVerde: 'Propostas em aberto com estágio Avançado ou Alto (classificação do vendedor). O lucro em jogo é valor × margem orçada de cada BR — {s} das propostas desta cor têm margem no Sankhya.',
+    regraSemAmarelo: 'Propostas em aberto com estágio Médio, ou ainda sem classificação do vendedor (exceto as paradas há +180 dias, que caem no vermelho). É a pilha que o follow up destrava: classificar muda a cor. O lucro em jogo é valor × margem orçada.',
+    regraSemVermelho: 'Propostas em aberto com estágio Baixo, ou sem classificação e paradas há mais de 180 dias. Não é lista de descarte — é lista de DECISÃO: ou alguém caça, ou desiste formalmente e limpa o funil. O lucro em jogo é valor × margem orçada.',
   },
   en: {
     titulo: 'Executive dashboard', moeda: 'Currency', idioma: 'Language', cenario: 'Scenario',
@@ -3764,6 +3774,16 @@ const TXT = {
     topDealsTitulo: 'Biggest open deals',
     explicaTopDeals: 'the {n} largest undecided proposals — the ones the board should know by name',
     idade: 'Age',
+    semaforoTitulo: 'Investment traffic light',
+    semaforoSub: 'where to put the sales energy, based on the salespeople\'s own classification — click a color to open the projects',
+    semVerde: 'Invest now', semAmarelo: 'Work and qualify', semVermelho: 'Decide: chase or drop',
+    semVerdeSub: 'stage Advanced or High — declared high probability, energy here converts',
+    semAmareloSub: 'stage Medium or unclassified — needs salesperson action to change color',
+    semVermelhoSub: 'stage Low, or unclassified and stuck for 180+ days — energy here rarely comes back',
+    lucroEmJogo: 'profit at stake',
+    regraSemVerde: 'Open proposals staged Advanced or High (salesperson\'s call). Profit at stake is value × budgeted margin per BR — {s} of the proposals in this color have a margin in the ERP.',
+    regraSemAmarelo: 'Open proposals staged Medium, or not yet classified (except those stuck for 180+ days, which fall into red). This is the pile the follow-up unlocks: classifying changes the color. Profit at stake is value × budgeted margin.',
+    regraSemVermelho: 'Open proposals staged Low, or unclassified and stuck for over 180 days. Not a discard list — a DECISION list: either someone chases, or formally drops it and cleans the funnel. Profit at stake is value × budgeted margin.',
   },
 };
 
@@ -4268,6 +4288,29 @@ function PainelDiretoria() {
 
   const topDeals = [...abertos].sort((a, b) => (Number(b.valor) || 0) - (Number(a.valor) || 0)).slice(0, 8);
 
+  // ---- SEMÁFORO DE INVESTIMENTO ----
+  // Traduz a classificação dos próprios vendedores em três pilhas de AÇÃO:
+  // verde fecha, amarelo trabalha, vermelho decide. Regra simples de propósito
+  // — score opaco vira discussão sobre o score; regra visível vira discussão
+  // sobre a proposta, que é o que interessa.
+  const semaforoDe = (d) => {
+    const cod = d.estagio_codigo;
+    if (cod === 'avancado' || cod === 'alto') return 'verde';
+    if (cod === 'baixo') return 'vermelho';
+    if (cod === 'medio') return 'amarelo';
+    return (Number(d.dias_aberto) || 0) > 180 ? 'vermelho' : 'amarelo';
+  };
+  const semGrupos = { verde: [], amarelo: [], vermelho: [] };
+  abertos.forEach(d => semGrupos[semaforoDe(d)].push(d));
+  const lucroDe = (lista) => lista.reduce((s, d) => s + (Number(d.valor) || 0) * ((Number(d.margem) || 0) / 100), 0);
+  const pctComMargem = (lista) => lista.length
+    ? `${((lista.filter(d => d.margem != null).length / lista.length) * 100).toFixed(0)}%` : '—';
+  const SEMAFORO = [
+    { chave: 'verde', par: G.verde, rot: t.semVerde, sub: t.semVerdeSub, regra: t.regraSemVerde },
+    { chave: 'amarelo', par: G.ambar, rot: t.semAmarelo, sub: t.semAmareloSub, regra: t.regraSemAmarelo },
+    { chave: 'vermelho', par: G.vermelho, rot: t.semVermelho, sub: t.semVermelhoSub, regra: t.regraSemVermelho },
+  ];
+
   // Abre o detalhe: o QUE esta ali e COMO foi calculado. Mostrar so a lista
   // deixaria a pergunta 'de onde saiu esse numero' sem resposta -- e e ela que
   // aparece na reuniao.
@@ -4513,6 +4556,51 @@ function PainelDiretoria() {
       )}
 
       {gavetaDe('alerta:')}
+
+      <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 11, padding: 15 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
+          marginBottom: 12, gap: 10, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 12.5, fontWeight: 700 }}>{t.semaforoTitulo}</span>
+          <span style={{ fontSize: 10.5, color: T.inkFaint }}>{t.semaforoSub}</span>
+        </div>
+        <div style={{ display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))' }}>
+          {SEMAFORO.map((s, i) => {
+            const lista = semGrupos[s.chave];
+            const vTotal = soma(lista);
+            const on = detalhe?.chave === `sem:${s.chave}`;
+            return (
+              <div key={s.chave} className="g-linha g-clicavel g-card"
+                onClick={() => abrir(`sem:${s.chave}`, `${t.semaforoTitulo} · ${s.rot}`,
+                  s.regra.replace('{s}', pctComMargem(lista)), lista, vTotal)}
+                style={{ position: 'relative', overflow: 'hidden', borderRadius: 10, padding: '14px 15px',
+                  border: `1px solid ${on ? s.par[0] : T.line}`,
+                  background: on ? `linear-gradient(180deg, ${s.par[0]}0E, transparent)` : T.panelAlt,
+                  animationDelay: `${i * 80}ms` }}>
+                <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 4,
+                  background: `linear-gradient(90deg, ${s.par[0]}, ${s.par[1]})` }} />
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ width: 13, height: 13, borderRadius: '50%', flexShrink: 0,
+                    background: `radial-gradient(circle at 35% 35%, ${s.par[0]}, ${s.par[1]})`,
+                    boxShadow: `0 0 9px ${s.par[0]}88` }} />
+                  <span style={{ fontSize: 12.5, fontWeight: 800, color: s.par[1] }}>{s.rot}</span>
+                </div>
+                <div style={{ fontSize: 22, fontWeight: 800, marginTop: 8, letterSpacing: '-.02em',
+                  fontVariantNumeric: 'tabular-nums' }}>
+                  <Contador valor={vTotal} formata={val} />
+                </div>
+                <div style={{ fontSize: 10.5, color: T.inkDim, marginTop: 2 }}>
+                  {lista.length} {t.propostas} · {t.lucroEmJogo}:{' '}
+                  <strong style={{ color: s.par[1] }}>{val(lucroDe(lista))}</strong>
+                </div>
+                <div style={{ fontSize: 10, color: T.inkFaint, marginTop: 7, lineHeight: 1.5,
+                  paddingTop: 7, borderTop: `1px solid ${T.lineSoft}` }}>{s.sub}</div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {gavetaDe('sem:')}
 
       <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))' }}>
         {painel(t.funilSituacao, (
