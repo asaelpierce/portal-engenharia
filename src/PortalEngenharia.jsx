@@ -3706,6 +3706,8 @@ const TXT = {
     ponderado: 'Em aberto ponderado',
     ponderadoSub: 'valor × peso do estágio',
     explicaPonderado: 'Cada proposta em aberto multiplicada pelo peso do estágio dado pelo vendedor (pesos cadastrados na tabela de estágios). Proposta SEM classificação vale ZERO aqui — classificar é o que faz este número subir. É a leitura mais honesta do funil: o que ele vale pela régua do próprio time.',
+    atualizarSankhya: 'Atualizar do Sankhya', atualizando: 'Atualizando…',
+    syncOk: '✓ {n} BRs atualizados do Sankhya — novos orçamentos, vendedores e margens. Pedidos e faturamento já sincronizam sozinhos a cada 15 min.',
   },
   en: {
     titulo: 'Executive dashboard', moeda: 'Currency', idioma: 'Language', cenario: 'Scenario',
@@ -3790,6 +3792,8 @@ const TXT = {
     ponderado: 'Weighted open pipeline',
     ponderadoSub: 'value × stage weight',
     explicaPonderado: 'Each open proposal multiplied by the weight of the stage set by the salesperson (weights from the stage table). UNCLASSIFIED proposals count as ZERO here — classifying is what makes this number grow. The most honest read of the funnel: what it is worth by the team\'s own ruler.',
+    atualizarSankhya: 'Refresh from ERP', atualizando: 'Refreshing…',
+    syncOk: '✓ {n} projects refreshed from the ERP — new quotes, salespeople and margins. Orders and invoicing already sync on their own every 15 min.',
   },
 };
 
@@ -3939,10 +3943,22 @@ function Rosca({ dados, tamanho = 200, espessura = 32, centro, subcentro, aoClic
             <span style={{ width: 11, height: 11, borderRadius: 3, flexShrink: 0,
               background: `linear-gradient(135deg, ${f.par[0]}, ${f.par[1]})`,
               boxShadow: `0 1px 5px ${f.par[0]}66` }} />
-            <span style={{ fontSize: 11.5, color: T.inkDim, flex: 1 }}>{f.k}</span>
+            <span style={{ flex: 1, minWidth: 0 }}>
+              <span style={{ fontSize: 11.5, color: T.inkDim, display: 'block', whiteSpace: 'nowrap',
+                overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {f.k}{f.n != null && <span style={{ color: T.inkFaint }}> · {f.n}</span>}
+              </span>
+              {/* Mini barra proporcional: quando UMA fatia domina (91%), o anel
+                  vira um círculo de cor única e perde a leitura comparativa —
+                  a barrinha devolve a proporção linha a linha, na legenda. */}
+              <span className="g-barra" style={{ display: 'block', height: 3, marginTop: 3, borderRadius: 2,
+                width: `${Math.max(f.pct, 2)}%`,
+                background: `linear-gradient(90deg, ${f.par[0]}, ${f.par[1]})`,
+                animationDelay: `${340 + i * 70}ms` }} />
+            </span>
             <span style={{ fontSize: 12, fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{f.rot}</span>
             <span style={{ fontSize: 11, fontWeight: 600, color: f.par[1], width: 42, textAlign: 'right' }}>
-              {f.pct.toFixed(0)}%
+              {f.pct < 1 ? '<1' : f.pct.toFixed(0)}%
             </span>
           </div>
         ))}
@@ -4103,21 +4119,39 @@ function PainelDiretoria() {
   const [detalhe, setDetalhe] = useState(null);
   const t = TXT[idioma];
 
-  useEffect(() => {
-    (async () => {
-      const [d, c, pv, cc, fo] = await Promise.all([
-        supabase.from('v_comercial_diretoria').select('*'),
-        supabase.from('comercial_cambio').select('*'),
-        supabase.from('v_comercial_previsao').select('*'),
-        supabase.from('v_comercial_ciclo_resumo').select('*').order('competencia'),
-        supabase.from('v_comercial_faturamento_origem').select('*'),
-      ]);
-      setDados(d.data || []); setCambio(c.data || []);
-      setPrevisao(pv.data || []); setCiclo(cc.data || []);
-      setFatOrigem(fo.data || []);
-      setLoading(false);
-    })();
+  const carregar = useCallback(async () => {
+    const [d, c, pv, cc, fo] = await Promise.all([
+      supabase.from('v_comercial_diretoria').select('*'),
+      supabase.from('comercial_cambio').select('*'),
+      supabase.from('v_comercial_previsao').select('*'),
+      supabase.from('v_comercial_ciclo_resumo').select('*').order('competencia'),
+      supabase.from('v_comercial_faturamento_origem').select('*'),
+    ]);
+    setDados(d.data || []); setCambio(c.data || []);
+    setPrevisao(pv.data || []); setCiclo(cc.data || []);
+    setFatOrigem(fo.data || []);
+    setLoading(false);
   }, []);
+  useEffect(() => { carregar(); }, [carregar]);
+
+  // ATUALIZAR DO SANKHYA: chama fn_sync_br_comercial (a função do banco que já
+  // puxa BRs, vendedores e margens do Sankhya) e recarrega a tela. Pedidos e
+  // faturamento já rodam em cron a cada 15 min — o que faltava botão era isto.
+  const [syncSankhya, setSyncSankhya] = useState(false);
+  const [syncSankhyaMsg, setSyncSankhyaMsg] = useState(null);
+  const atualizarDoSankhya = async () => {
+    setSyncSankhya(true); setSyncSankhyaMsg(null);
+    try {
+      const desde = new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10);
+      const { data: n, error } = await supabase.rpc('fn_sync_br_comercial', { p_desde: desde });
+      if (error) throw error;
+      await carregar();
+      setSyncSankhyaMsg({ ok: true, texto: TXT[idioma].syncOk.replace('{n}', String(n ?? 0)) });
+    } catch (e) {
+      setSyncSankhyaMsg({ ok: false, texto: `✗ ${String(e?.message || e)}` });
+    }
+    setSyncSankhya(false);
+  };
 
   const cx = cambio.find(c => c.moeda === moeda) || { taxa: 1, simbolo: 'R$' };
   const loc = idioma === 'pt' ? 'pt-BR' : 'en-US';
@@ -4163,17 +4197,18 @@ function PainelDiretoria() {
 
   // rosca do funil por situação
   const roscaFunil = [
-    { k: t.emAberto, v: soma(abertos), par: G.ambar, rot: val(soma(abertos)) },
-    { k: t.pedido, v: soma(pedidos), par: G.azul, rot: val(soma(pedidos)) },
-    { k: t.faturado, v: receitaFat, par: G.verde, rot: val(receitaFat) },
-    { k: t.perdido, v: soma(perdidos), par: G.vermelho, rot: val(soma(perdidos)) },
-  ].filter(x => x.v > 0);
+    { k: t.emAberto, v: soma(abertos), par: G.ambar, rot: val(soma(abertos)), n: abertos.length },
+    { k: t.pedido, v: soma(pedidos), par: G.azul, rot: val(soma(pedidos)), n: pedidos.length },
+    { k: t.faturado, v: receitaFat, par: G.verde, rot: val(receitaFat), n: faturados.length },
+    { k: t.perdido, v: soma(perdidos), par: G.vermelho, rot: val(soma(perdidos)), n: perdidos.length },
+  ].filter(x => x.v > 0).sort((a, b) => b.v - a.v);
 
   // rosca do funil em aberto por estágio
   const estagiosSet = [...new Set(abertos.map(d => d.estagio))];
   const roscaEstagio = estagiosSet.map(e => {
-    const v = soma(abertos.filter(d => d.estagio === e));
-    return { k: e, v, par: CORES_E[e] || G.cinza, rot: val(v) };
+    const lst = abertos.filter(d => d.estagio === e);
+    const v = soma(lst);
+    return { k: e, v, par: CORES_E[e] || G.cinza, rot: val(v), n: lst.length };
   }).filter(x => x.v > 0).sort((a, b) => b.v - a.v);
 
   // rosca da origem do faturamento
@@ -4186,7 +4221,7 @@ function PainelDiretoria() {
   });
   const CORES_O = { funil: G.verde, anterior: G.ciano, sem_proposta: G.ambar, duplicata: G.cinza };
   const roscaOrigem = Object.entries(porOrigem)
-    .map(([k, x]) => ({ k: x.rot, v: x.v, par: CORES_O[k] || G.cinza, rot: val(x.v) }))
+    .map(([k, x]) => ({ k: x.rot, v: x.v, par: CORES_O[k] || G.cinza, rot: val(x.v), n: x.n }))
     .sort((a, b) => b.v - a.v);
   const totalFat = roscaOrigem.reduce((s, x) => s + x.v, 0);
 
@@ -4498,6 +4533,14 @@ function PainelDiretoria() {
           <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 2 }}>↗ {t.clique}</div>
         </span>
         <span style={{ display: 'inline-flex', gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>
+          <button onClick={atualizarDoSankhya} disabled={syncSankhya} style={{
+            display: 'inline-flex', alignItems: 'center', gap: 6, fontFamily: 'inherit',
+            fontSize: 12, fontWeight: 600, padding: '7px 13px', borderRadius: 6,
+            border: `1px solid ${T.line}`, background: T.panel, color: T.ink,
+            cursor: syncSankhya ? 'default' : 'pointer', opacity: syncSankhya ? 0.7 : 1 }}>
+            <RefreshCw size={13} className={syncSankhya ? 'spin' : ''} />
+            {syncSankhya ? t.atualizando : t.atualizarSankhya}
+          </button>
           <span style={{ display: 'inline-flex', gap: 5, alignItems: 'center' }}>
             <span style={{ fontSize: 10.5, color: T.inkFaint }}>{t.moeda}</span>
             {botoes(cambio.map(c => [c.moeda, c.moeda]), moeda, setMoeda)}
@@ -4507,6 +4550,12 @@ function PainelDiretoria() {
           </span>
         </span>
       </div>
+
+      {syncSankhyaMsg && (
+        <div style={{ fontSize: 11.5, padding: '8px 12px', borderRadius: 6, marginTop: -4,
+          background: syncSankhyaMsg.ok ? T.oliveSoft : T.rustSoft,
+          color: syncSankhyaMsg.ok ? T.oliveText : T.rustText }}>{syncSankhyaMsg.texto}</div>
+      )}
 
       {moeda !== 'BRL' && (
         <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: -6 }}>
@@ -5198,15 +5247,50 @@ function FollowUpComercial({ currentUser }) {
     setImportando(false);
   }, [estagios, linhas, carregar, currentUser]);
 
+  // ATUALIZAR DO SANKHYA: mesma fn_sync_br_comercial do painel da diretoria —
+  // traz BRs novos, vendedor, cliente e margem. O clique aqui é do Ricardo
+  // antes de trabalhar o follow up, pra classificar em cima da lista fresca.
+  const [syncSankhya, setSyncSankhya] = useState(false);
+  const [syncSankhyaMsg, setSyncSankhyaMsg] = useState(null);
+  const atualizarDoSankhya = async () => {
+    setSyncSankhya(true); setSyncSankhyaMsg(null);
+    try {
+      const desde = new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10);
+      const { data: n, error } = await supabase.rpc('fn_sync_br_comercial', { p_desde: desde });
+      if (error) throw error;
+      await carregar();
+      setSyncSankhyaMsg({ ok: true, texto: `✓ ${n ?? 0} BRs atualizados do Sankhya — novos orçamentos, vendedores e margens. Pedidos e faturamento já sincronizam sozinhos a cada 15 min.` });
+    } catch (e) {
+      setSyncSankhyaMsg({ ok: false, texto: `✗ ${String(e?.message || e)}` });
+    }
+    setSyncSankhya(false);
+  };
+
   if (loading) return <div style={{ padding: 40, textAlign: 'center', color: T.inkFaint }}>Carregando…</div>;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14, paddingTop: 14 }}>
-      <div style={{ fontSize: 11.5, color: T.inkDim, background: T.panelAlt, padding: '9px 12px', borderRadius: 6 }}>
-        Os BRs entram sozinhos assim que são criados na tela <strong>Criar BR</strong> — com vendedor, cliente e valor
-        da proposta já preenchidos. Falta só dizer em que pé está cada um. Essa classificação{' '}
-        <strong>fica no portal e não vai para o Sankhya</strong>.
+      <div style={{ display: 'flex', gap: 10, alignItems: 'stretch', flexWrap: 'wrap' }}>
+        <div style={{ fontSize: 11.5, color: T.inkDim, background: T.panelAlt, padding: '9px 12px', borderRadius: 6,
+          flex: 1, minWidth: 260 }}>
+          Os BRs entram sozinhos assim que são criados na tela <strong>Criar BR</strong> — com vendedor, cliente e valor
+          da proposta já preenchidos. Falta só dizer em que pé está cada um. Essa classificação{' '}
+          <strong>fica no portal e não vai para o Sankhya</strong>.
+        </div>
+        <button onClick={atualizarDoSankhya} disabled={syncSankhya} style={{
+          display: 'inline-flex', alignItems: 'center', gap: 6, fontFamily: 'inherit', alignSelf: 'center',
+          fontSize: 12.5, fontWeight: 700, padding: '10px 16px', borderRadius: 7, flexShrink: 0,
+          border: `1px solid ${T.line}`, background: T.ink, color: T.panel,
+          cursor: syncSankhya ? 'default' : 'pointer', opacity: syncSankhya ? 0.7 : 1 }}>
+          <RefreshCw size={14} className={syncSankhya ? 'spin' : ''} />
+          {syncSankhya ? 'Atualizando…' : 'Atualizar do Sankhya'}
+        </button>
       </div>
+      {syncSankhyaMsg && (
+        <div style={{ fontSize: 11.5, padding: '8px 12px', borderRadius: 6,
+          background: syncSankhyaMsg.ok ? T.oliveSoft : T.rustSoft,
+          color: syncSankhyaMsg.ok ? T.oliveText : T.rustText }}>{syncSankhyaMsg.texto}</div>
+      )}
 
       <div style={{ display: 'grid', gap: 8, gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))' }}>
         {[
