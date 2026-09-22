@@ -3618,6 +3618,15 @@ const TXT = {
     fatTitulo: 'De onde vem o faturamento de 2026', fatTotal: 'Faturamento total do ano',
     fatSub: 'o painel acima é do funil de 2026; este quadro fecha com a tela de Faturamento',
     fatExplica: 'O cartão “Faturado” conta só o que foi vendido em 2026. O restante veio de projetos fechados em anos anteriores e entregues agora — em obra longa isso é o normal, e é a diferença entre este painel e a tela de Faturamento.',
+    simTitulo: 'Simulação de desconto — propostas paradas com margem alta',
+    simSub: 'proposta que não fecha há semanas pode fechar com desconto',
+    simExplica: 'O custo não muda: o desconto sai inteiro da margem. Uma proposta de R$ 100 com 50% de margem tem R$ 50 de custo — com 10% de desconto, ela vai a R$ 90 e a margem cai para 44,4%, não para 40%.',
+    desconto: 'Desconto no preço', paradaHa: 'Parada há mais de', margemAcima: 'Margem acima de',
+    propostasParadas: 'Propostas no filtro', valorHoje: 'Valor hoje',
+    valorComDesconto: 'Com o desconto', abreMao: 'Abre mão de',
+    lucroDepois: 'Lucro depois', margemDepois: 'Margem depois', margemAtual: 'Margem hoje',
+    cliente: 'Cliente', mostrando: 'mostrando {n} de {t}',
+    avisoVermelho: '{n} propostas ficam com lucro NEGATIVO neste desconto — o preço cairia abaixo do custo orçado.',
     semPrevisaoTitulo: 'Nenhuma proposta tem expectativa de fechamento preenchida ainda.',
     semPrevisao: 'A coluna é nova e vai chegar quando os vendedores devolverem o follow up. Até lá, a previsão existe mas não tem como ser distribuída por mês.',
     semDataValor: '{n} propostas sem data de fechamento, somando {v} no cenário.',
@@ -3646,6 +3655,15 @@ const TXT = {
     fatTitulo: 'Where 2026 revenue comes from', fatTotal: 'Total revenue for the year',
     fatSub: 'the cards above cover the 2026 funnel; this panel reconciles with the Invoicing screen',
     fatExplica: 'The “Invoiced” card counts only what was sold in 2026. The rest came from projects closed in earlier years and delivered now — normal for long-cycle work, and the reason this dashboard differs from the Invoicing screen.',
+    simTitulo: 'Discount simulation — stalled proposals with high margin',
+    simSub: 'a proposal stuck for weeks may close with a discount',
+    simExplica: 'Cost stays the same: the discount comes entirely out of margin. A $100 proposal at 50% margin has $50 of cost — a 10% discount takes it to $90 and margin down to 44.4%, not 40%.',
+    desconto: 'Price discount', paradaHa: 'Open for more than', margemAcima: 'Margin above',
+    propostasParadas: 'Proposals in filter', valorHoje: 'Value today',
+    valorComDesconto: 'After discount', abreMao: 'Given up',
+    lucroDepois: 'Profit after', margemDepois: 'Margin after', margemAtual: 'Margin today',
+    cliente: 'Customer', mostrando: 'showing {n} of {t}',
+    avisoVermelho: '{n} proposals end up with NEGATIVE profit at this discount — the price would fall below budgeted cost.',
     semPrevisaoTitulo: 'No proposal has an expected closing date yet.',
     semPrevisao: 'The column is new and will arrive as salespeople return the follow-up. Until then the forecast exists but cannot be spread across months.',
     semDataValor: '{n} proposals with no closing date, totalling {v} in this scenario.',
@@ -3659,6 +3677,10 @@ function PainelDiretoria() {
   const [previsao, setPrevisao] = useState([]);
   const [ciclo, setCiclo] = useState([]);
   const [fatOrigem, setFatOrigem] = useState([]);
+  const [candidatas, setCandidatas] = useState([]);
+  const [descPtos, setDescPtos] = useState(5);
+  const [minDias, setMinDias] = useState(15);
+  const [minMargem, setMinMargem] = useState(40);
   const [loading, setLoading] = useState(true);
   const [moeda, setMoeda] = useState('BRL');
   const [idioma, setIdioma] = useState('pt');
@@ -3667,16 +3689,18 @@ function PainelDiretoria() {
 
   useEffect(() => {
     (async () => {
-      const [d, c, pv, cc, fo] = await Promise.all([
+      const [d, c, pv, cc, fo, cd] = await Promise.all([
         supabase.from('v_comercial_diretoria').select('*'),
         supabase.from('comercial_cambio').select('*'),
         supabase.from('v_comercial_previsao').select('*'),
         supabase.from('v_comercial_ciclo_resumo').select('*').order('competencia'),
         supabase.from('v_comercial_faturamento_origem').select('*'),
+        supabase.from('v_comercial_candidata_desconto').select('*'),
       ]);
       setDados(d.data || []); setCambio(c.data || []);
       setPrevisao(pv.data || []); setCiclo(cc.data || []);
       setFatOrigem(fo.data || []);
+      setCandidatas(cd.data || []);
       setLoading(false);
     })();
   }, []);
@@ -3955,6 +3979,132 @@ function PainelDiretoria() {
           </table>
         </div>
       ), t.explicaVendedor)}
+
+      {candidatas.length > 0 && painel(t.simTitulo, (() => {
+        // SIMULACAO DE DESCONTO. Proposta parada com margem alta pode fechar
+        // com um desconto -- margem menor e melhor que pedido nenhum.
+        //
+        // O CUSTO E FIXO: o desconto sai inteiro da margem. Proposta de 100 com
+        // 50% de margem tem custo 50; dando 10 pontos, o preco vai a 90 e a
+        // margem a 44,4% -- NAO a 40%. Confundir ponto de margem com desconto
+        // no preco e o erro classico dessa conta.
+        const alvo = candidatas
+          .filter(c2 => c2.dias_aberto >= minDias && Number(c2.margin) >= minMargem)
+          .map(c2 => {
+            const valor = Number(c2.valor) || 0;
+            const custo = Number(c2.custo_estimado) || 0;
+            const novoValor = valor * (1 - descPtos / 100);
+            const novoLucro = novoValor - custo;
+            return { ...c2, valor, custo,
+              lucro: Number(c2.lucro_atual) || 0, novoValor, novoLucro,
+              novaMargem: novoValor > 0 ? (novoLucro / novoValor) * 100 : null,
+              abriuMao: valor - novoValor };
+          })
+          .sort((a2, b2) => b2.dias_aberto - a2.dias_aberto);
+
+        const tot = alvo.reduce((s2, x) => ({
+          valor: s2.valor + x.valor, lucro: s2.lucro + x.lucro,
+          novoValor: s2.novoValor + x.novoValor, novoLucro: s2.novoLucro + x.novoLucro,
+        }), { valor: 0, lucro: 0, novoValor: 0, novoLucro: 0 });
+        const noVermelho = alvo.filter(x => x.novoLucro < 0).length;
+
+        return (
+          <>
+            <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'flex-end',
+              background: T.panelAlt, padding: '11px 13px', borderRadius: 7, marginBottom: 13 }}>
+              {[
+                { l: t.desconto, v: descPtos, set: setDescPtos, min: 0, max: 40, suf: '%' },
+                { l: t.paradaHa, v: minDias, set: setMinDias, min: 0, max: 120, suf: ` ${t.dias}` },
+                { l: t.margemAcima, v: minMargem, set: setMinMargem, min: 0, max: 80, suf: '%' },
+              ].map(f => (
+                <div key={f.l} style={{ minWidth: 175 }}>
+                  <div style={{ fontSize: 10.5, color: T.inkFaint, marginBottom: 4 }}>
+                    {f.l}: <strong style={{ color: T.ink, fontSize: 12 }}>{f.v}{f.suf}</strong>
+                  </div>
+                  <input type="range" min={f.min} max={f.max} value={f.v}
+                    onChange={e => f.set(Number(e.target.value))}
+                    style={{ width: '100%', accentColor: T.terracotta }} />
+                </div>
+              ))}
+              <div style={{ fontSize: 11, color: T.inkDim, flex: 1, minWidth: 200, lineHeight: 1.5 }}>
+                {t.simExplica}
+              </div>
+            </div>
+
+            <div style={{ display: 'grid', gap: 9, marginBottom: 13,
+              gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))' }}>
+              {[
+                { t: t.propostasParadas, v: String(alvo.length), c: T.ink },
+                { t: t.valorHoje, v: val(tot.valor), c: T.inkDim },
+                { t: t.valorComDesconto, v: val(tot.novoValor), c: T.terracotta },
+                { t: t.abreMao, v: val(tot.valor - tot.novoValor), c: T.rustText },
+                { t: t.lucroDepois, v: val(tot.novoLucro), c: tot.novoLucro > 0 ? T.oliveText : T.rustText },
+                { t: t.margemDepois, v: tot.novoValor > 0 ? `${((tot.novoLucro / tot.novoValor) * 100).toFixed(1)}%` : '—',
+                  c: T.oliveText },
+              ].map(k => (
+                <div key={k.t} style={{ background: T.panel, border: `1px solid ${T.line}`,
+                  borderRadius: 8, padding: '9px 11px' }}>
+                  <div style={{ fontSize: 10, color: T.inkFaint, minHeight: 24 }}>{k.t}</div>
+                  <div style={{ fontSize: 16, fontWeight: 700, color: k.c, fontVariantNumeric: 'tabular-nums' }}>{k.v}</div>
+                </div>
+              ))}
+            </div>
+
+            {noVermelho > 0 && (
+              <div style={{ fontSize: 11, color: T.rustText, background: T.rustSoft,
+                border: `1px solid ${T.rustText}44`, borderRadius: 6, padding: '8px 11px', marginBottom: 11 }}>
+                {t.avisoVermelho.replace('{n}', String(noVermelho))}
+              </div>
+            )}
+
+            <div style={{ overflowX: 'auto', maxHeight: 420, overflowY: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 760 }}>
+                <thead style={{ position: 'sticky', top: 0, zIndex: 1 }}><tr style={{ background: T.panelAlt }}>
+                  {['BR', t.cliente, t.dias, t.margemAtual, t.valorHoje, t.valorComDesconto,
+                    t.margemDepois, t.lucroDepois].map((h, i) => (
+                    <th key={h + i} style={{ padding: '8px 10px', fontSize: 11, fontWeight: 600,
+                      color: T.inkFaint, textAlign: i <= 1 ? 'left' : 'right', whiteSpace: 'nowrap' }}>{h}</th>
+                  ))}
+                </tr></thead>
+                <tbody>
+                  {alvo.slice(0, 60).map(x => (
+                    <tr key={x.br} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                      <td style={{ padding: '6px 10px', fontSize: 12, fontWeight: 600 }}>{x.br}</td>
+                      <td style={{ padding: '6px 10px', fontSize: 11.5, color: T.inkDim, maxWidth: 200,
+                        whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={x.cliente}>{x.cliente}</td>
+                      <td style={{ padding: '6px 10px', fontSize: 11.5, textAlign: 'right',
+                        color: x.dias_aberto > 60 ? T.rustText : T.inkFaint, fontWeight: x.dias_aberto > 60 ? 600 : 400 }}>
+                        {x.dias_aberto}
+                      </td>
+                      <td style={{ padding: '6px 10px', fontSize: 11.5, textAlign: 'right', color: T.oliveText }}>
+                        {Number(x.margin).toFixed(0)}%
+                      </td>
+                      <td style={{ padding: '6px 10px', fontSize: 12, textAlign: 'right',
+                        fontVariantNumeric: 'tabular-nums' }}>{val(x.valor)}</td>
+                      <td style={{ padding: '6px 10px', fontSize: 12, textAlign: 'right', color: T.terracotta,
+                        fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{val(x.novoValor)}</td>
+                      <td style={{ padding: '6px 10px', fontSize: 11.5, textAlign: 'right', fontWeight: 600,
+                        color: x.novaMargem == null ? T.inkFaint : x.novaMargem < 10 ? T.rustText
+                          : x.novaMargem < 25 ? T.amberText : T.oliveText }}>
+                        {x.novaMargem == null ? '—' : `${x.novaMargem.toFixed(1)}%`}
+                      </td>
+                      <td style={{ padding: '6px 10px', fontSize: 12, textAlign: 'right',
+                        color: x.novoLucro < 0 ? T.rustText : T.inkDim, fontVariantNumeric: 'tabular-nums' }}>
+                        {val(x.novoLucro)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {alvo.length > 60 && (
+              <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 8 }}>
+                {t.mostrando.replace('{n}', '60').replace('{t}', String(alvo.length))}
+              </div>
+            )}
+          </>
+        );
+      })(), t.simSub)}
 
       {fatOrigem.length > 0 && painel(t.fatTitulo, (() => {
         // DE ONDE VEM O FATURAMENTO DO ANO. Sem isso, o cartao 'Faturado' do
