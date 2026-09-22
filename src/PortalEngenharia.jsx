@@ -5558,6 +5558,19 @@ function FollowUpComercial({ currentUser }) {
   // "medio", "Médio", "MEDIO" e nada casaria na volta.
   const ESTAGIO_ROTULOS = estagios.map(e => e.rotulo);
 
+  // MESES DA EXPECTATIVA, em lista suspensa. Digitado à mão vinha "março/27",
+  // "3/27", "03-2027" — e a previsão por mês só entende MM/AAAA, então tudo
+  // que fugia disso virava proposta sem data. Escolher da lista acaba com isso.
+  // 18 meses a partir do mês corrente: cabe no limite de 255 caracteres da
+  // validação embutida do Excel e cobre o horizonte de qualquer proposta viva.
+  const MESES_EXPECTATIVA = (() => {
+    const hoje = new Date();
+    return Array.from({ length: 18 }, (_, i) => {
+      const d = new Date(hoje.getFullYear(), hoje.getMonth() + i, 1);
+      return `${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
+    });
+  })();
+
   const montarPlanilha = useCallback(async (vendedor, dados) => {
     const { default: ExcelJS } = await import('exceljs');
     const wb = new ExcelJS.Workbook();
@@ -5575,7 +5588,7 @@ function FollowUpComercial({ currentUser }) {
     // a importacao nao acharia as colunas. Margin saiu -- ela fica na TELA,
     // nao vai para o vendedor.
     ws.getRow(2).values = ['BR', 'Cliente', 'Valor líquido', 'Situação', 'Estágio',
-                           'Expectativa de fechamento (MM/AAAA)', 'Observação'];
+                           'Expectativa de fechamento', 'Observação'];
     ws.getRow(2).font = { bold: true };
     ws.getRow(2).eachCell(c => {
       c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEDE7DE' } };
@@ -5615,6 +5628,12 @@ function FollowUpComercial({ currentUser }) {
           showErrorMessage: true, errorTitle: 'Valor inválido',
           error: `Escolha um dos estágios: ${ESTAGIO_ROTULOS.join(', ')}`,
         };
+        r.getCell(6).dataValidation = {
+          type: 'list', allowBlank: true,
+          formulae: [`"${MESES_EXPECTATIVA.join(',')}"`],
+          showErrorMessage: true, errorTitle: 'Mês inválido',
+          error: 'Escolha o mês na lista da célula. Se ainda não dá para dizer, deixe em branco.',
+        };
         r.getCell(6).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFF6E0' } };
         r.getCell(7).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFFDF7' } };
       }
@@ -5623,7 +5642,7 @@ function FollowUpComercial({ currentUser }) {
     const nota = ws.addRow([]);
     ws.mergeCells(`A${nota.number + 1}:G${nota.number + 1}`);
     const n = ws.getCell(`A${nota.number + 1}`);
-    n.value = 'As linhas em verde já têm pedido e estão travadas. Preencha só as de fundo amarelo. Não altere BR nem Cliente — é por eles que o portal reconhece a linha na volta.';
+    n.value = 'As linhas em verde já têm pedido e estão travadas. Preencha só as de fundo amarelo — Estágio e Expectativa de fechamento têm lista suspensa: clique na célula e escolha. Não altere BR nem Cliente, é por eles que o portal reconhece a linha na volta.';
     n.font = { italic: true, size: 9, color: { argb: 'FF8A8175' } };
 
     // Protege a planilha sem senha: evita edicao acidental do que esta fechado,
@@ -5706,7 +5725,13 @@ function FollowUpComercial({ currentUser }) {
           if (i <= linhaCab) return;
           const br = String(row.getCell(cBr).value ?? '').trim();
           const rot = String(row.getCell(cEst).value ?? '').trim();
-          const exp = cExp > 0 ? String(row.getCell(cExp).value ?? '').trim() : '';
+          // O Excel às vezes transforma "03/2027" em data apesar do formato
+          // texto (colar de outra planilha, autocorreção). Se vier Date, o
+          // valor é remontado como MM/AAAA em vez de ser descartado.
+          const expBruto = cExp > 0 ? row.getCell(cExp).value : null;
+          const exp = expBruto instanceof Date
+            ? `${String(expBruto.getMonth() + 1).padStart(2, '0')}/${expBruto.getFullYear()}`
+            : String(expBruto ?? '').trim();
           const obs = cObs > 0 ? String(row.getCell(cObs).value ?? '').trim() : '';
           if (!br) return;
           if (!brsConhecidos.has(br)) { ignorados.push(`${br}: não existe no portal`); return; }
