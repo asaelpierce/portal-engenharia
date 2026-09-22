@@ -3971,18 +3971,39 @@ function Rosca({ dados, tamanho = 200, espessura = 32, centro, subcentro, aoClic
             <title>{`${f.k}: ${f.rot} (${f.pct.toFixed(1)}%)`}</title>
           </path>
         ))}
-        {centro && (
-          <text x={c} y={c - 1} textAnchor="middle"
-            style={{ fontSize: 21, fontWeight: 800, fill: T.ink, letterSpacing: '-.02em' }}>
-            {centro}
-          </text>
-        )}
-        {subcentro && (
-          <text x={c} y={c + 17} textAnchor="middle"
-            style={{ fontSize: 10.5, fill: T.inkFaint, letterSpacing: '.04em', textTransform: 'uppercase' }}>
-            {subcentro}
-          </text>
-        )}
+        {/* O QUE ESTÁ NO FURO PRECISA CABER NO FURO. 'FATURAMENTO TOTAL DO
+            ANO' passava por cima do anel e ficava ilegível. O espaço útil é o
+            diâmetro interno; a fonte encolhe até um piso e, se nem assim
+            couber, o texto simplesmente não vai — legenda fora do gráfico
+            resolve melhor do que letra miúda sobreposta. */}
+        {(() => {
+          const util = 2 * (r - espessura / 2) - 8;   // largura livre dentro do anel
+          const cabe = (txt, base, piso) => {
+            if (!txt) return null;
+            const larguraPorLetra = 0.56;             // aproximação para a fonte do portal
+            const ideal = util / (String(txt).length * larguraPorLetra);
+            return ideal >= piso ? Math.min(base, ideal) : null;
+          };
+          const fCentro = cabe(centro, 21, 12);
+          const fSub = cabe(subcentro, 10.5, 8);
+          return (
+            <>
+              {centro && fCentro && (
+                <text x={c} y={c + (fSub ? -1 : 6)} textAnchor="middle"
+                  style={{ fontSize: fCentro, fontWeight: 800, fill: T.ink, letterSpacing: '-.02em' }}>
+                  {centro}
+                </text>
+              )}
+              {subcentro && fSub && (
+                <text x={c} y={c + 17} textAnchor="middle"
+                  style={{ fontSize: fSub, fill: T.inkFaint, letterSpacing: '.04em',
+                    textTransform: 'uppercase' }}>
+                  {subcentro}
+                </text>
+              )}
+            </>
+          );
+        })()}
       </svg>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 5, flex: 1, minWidth: 175 }}>
         {fatias.map((f, i) => (
@@ -5109,8 +5130,13 @@ function PainelDiretoria() {
           </div>
         ), t.explicaConv)}
         {painel(t.fatTitulo, (
-          <Rosca dados={roscaOrigem} tamanho={165} espessura={26}
-            centro={val(totalFat)} subcentro={t.fatTotal} />
+          <>
+            <Rosca dados={roscaOrigem} tamanho={165} espessura={26} centro={val(totalFat)} />
+            <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 10, paddingTop: 9,
+              borderTop: `1px solid ${T.lineSoft}`, letterSpacing: '.04em', textTransform: 'uppercase' }}>
+              {t.fatTotal}: <strong style={{ color: T.ink, letterSpacing: 0 }}>{val(totalFat)}</strong>
+            </div>
+          </>
         ), t.fatSub)}
       </div>
 
