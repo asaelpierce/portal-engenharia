@@ -3739,6 +3739,15 @@ const TXT = {
     tendCrescendo: 'crescendo', tendCaindo: 'caindo', tendParou: 'parou de comprar', tendNovo: 'cliente novo',
     rankAlerta: '{n} clientes do top 20 pararam de comprar ou estão caindo mais de 30% — somam {v} de faturamento histórico.',
     verMais: 'ver mais', verMenos: 'ver menos',
+    pvTitulo: 'Previsão de vendas', pvSub: 'valor da proposta × peso do estágio, no mês que o vendedor espera fechar · a linha tracejada é a média mensal de faturamento real',
+    pvBruto: 'Valor cheio com data', pvPrevisto: 'Previsto no cenário', pvSemData: 'Sem data do vendedor',
+    pvMeses: 'Meses cobertos', pvVsMedia: 'do faturamento médio de um mês',
+    pvCobertura: 'Cobertura do Follow Up', pvCoberturaSub: 'quanto do funil de cada vendedor já tem estágio e mês de fechamento — é daqui que a previsão nasce',
+    pvVend: 'Vendedor', pvTotal: 'Em aberto', pvClass: 'Classificado', pvComData: 'Com data', pvPrev: 'Previsto',
+    pvVazio: 'Nenhuma proposta em aberto tem mês de fechamento preenchido, então ainda não há previsão para desenhar. A lista de meses já está na planilha do follow up: assim que os vendedores devolverem, este gráfico se preenche sozinho.',
+    pvRegraMes: 'Propostas em aberto que o vendedor espera fechar em {m}. A coluna é empilhada por estágio: cada pedaço é valor × peso daquele estágio no cenário {c}. Estágio sem peso não aparece.',
+    pvRegraVend: 'Todas as propostas em aberto de {v}. Classificado é ter estágio; com data é ter o mês de fechamento preenchido — só as com data entram na previsão por mês.',
+    pvAlerta: 'A previsão do cenário {c} soma {v} nos próximos meses, contra uma média de {m} por mês faturados de verdade. Com apenas {p}% do funil com data, o número ainda diz mais sobre o preenchimento do que sobre a demanda.',
     compTitulo: 'Proposto, ponderado e realizado — mês a mês',
     explicaComp: 'três colunas por mês: o que foi proposto, o que a régua dos estágios prevê do que ainda está em aberto, e o que já virou pedido ou nota · a coluna do meio é empilhada por nível · Perdido fica de fora (não é previsão)',
     serieCheio: 'Proposto', seriePond: 'Ponderado', serieReal: 'Realizado',
@@ -3868,6 +3877,15 @@ const TXT = {
     tendCrescendo: 'growing', tendCaindo: 'declining', tendParou: 'stopped buying', tendNovo: 'new customer',
     rankAlerta: '{n} customers in the top 20 stopped buying or are down more than 30% — they add up to {v} in historical revenue.',
     verMais: 'show more', verMenos: 'show less',
+    pvTitulo: 'Sales forecast', pvSub: 'proposal value × stage weight, on the month the salesperson expects to close · the dashed line is the average monthly invoiced revenue',
+    pvBruto: 'Full value with a date', pvPrevisto: 'Forecast in scenario', pvSemData: 'No date from sales',
+    pvMeses: 'Months covered', pvVsMedia: 'of an average invoicing month',
+    pvCobertura: 'Follow-up coverage', pvCoberturaSub: 'how much of each salesperson pipeline already has a stage and a closing month — this is where the forecast comes from',
+    pvVend: 'Salesperson', pvTotal: 'Open', pvClass: 'Classified', pvComData: 'With date', pvPrev: 'Forecast',
+    pvVazio: 'No open proposal has a closing month yet, so there is no forecast to draw. The month list is already in the follow-up sheet: as soon as the sales team returns it, this chart fills itself.',
+    pvRegraMes: 'Open proposals the salesperson expects to close in {m}. The column is stacked by stage: each slice is value × that stage weight in the {c} scenario. Stages with no weight do not appear.',
+    pvRegraVend: 'All open proposals for {v}. Classified means having a stage; with date means having the closing month filled — only those with a date enter the monthly forecast.',
+    pvAlerta: 'The {c} scenario forecasts {v} over the coming months, against an average of {m} actually invoiced per month. With only {p}% of the pipeline dated, the number still says more about filling in the sheet than about demand.',
     compTitulo: 'Proposed, weighted and won — month by month',
     explicaComp: 'three columns per month: what was proposed, what the stage ruler forecasts from what is still open, and what already became an order or invoice · the middle column is stacked by stage · Lost is excluded (it forecasts nothing)',
     serieCheio: 'Proposed', seriePond: 'Weighted', serieReal: 'Won',
@@ -4227,6 +4245,84 @@ function ColunasTrio({ dados, altura = 200, niveis, aoClicar, ativo, fmt }) {
   );
 }
 
+// COLUNAS EMPILHADAS por estágio, com linha de referência.
+//
+// A previsão de vendas não é um número só: R$ 2 mi previstos em Avançado e
+// R$ 2 mi em Baixo são promessas diferentes. Empilhar por estágio mostra a
+// QUALIDADE de cada mês, não só o tamanho.
+//
+// A linha tracejada é a média mensal de faturamento real: previsão acima
+// dela é crescimento, abaixo é queda — sem isso, o número flutua sem régua.
+function ColunasPilha({ dados, faixas, altura = 200, referencia, refRotulo, fmt, aoClicar, ativo }) {
+  const max = Math.max(1, referencia || 0, ...dados.map(d => d.partes.reduce((s, p) => s + p.v, 0)));
+  const largura = 100 / Math.max(dados.length, 1);
+  const id = useRef(`pl${Math.random().toString(36).slice(2, 8)}`).current;
+  const yRef = referencia ? altura - (referencia / max) * altura : null;
+  return (
+    <svg width="100%" height={altura + 42} style={{ display: 'block', overflow: 'visible' }}>
+      <defs>
+        {faixas.map((f, i) => (
+          <linearGradient key={i} id={`${id}-g${i}`} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={f.par[0]} />
+            <stop offset="100%" stopColor={f.par[1]} />
+          </linearGradient>
+        ))}
+      </defs>
+      {[0.25, 0.5, 0.75, 1].map(g => (
+        <line key={g} x1="0" x2="100%" y1={altura * (1 - g)} y2={altura * (1 - g)}
+          stroke={T.lineSoft} strokeWidth="1" />
+      ))}
+      {dados.map((d, i) => {
+        const on = ativo === d.k;
+        const total = d.partes.reduce((s, p) => s + p.v, 0);
+        let acc = 0;
+        return (
+          <g key={d.k} className={aoClicar ? 'g-clicavel' : undefined}
+            onClick={aoClicar ? () => aoClicar(d) : undefined}>
+            {on && <rect x={`${i * largura + largura * 0.08}%`} y={-6} width={`${largura * 0.84}%`}
+              height={altura + 36} rx="6" fill={`${T.ink}0A`} stroke={T.inkFaint} strokeWidth="1" />}
+            <g className="g-col" style={{ animationDelay: `${i * 50}ms` }}>
+              {d.partes.map((p, j) => {
+                const h = (p.v / max) * altura;
+                const y = altura - ((acc + p.v) / max) * altura;
+                acc += p.v;
+                if (h <= 0) return null;
+                const gi = faixas.findIndex(f => f.cod === p.cod);
+                return (
+                  <rect key={j} x={`${i * largura + largura * 0.22}%`} y={y}
+                    width={`${largura * 0.56}%`} height={Math.max(h, 1.5)}
+                    rx={j === d.partes.length - 1 ? 3 : 0} fill={`url(#${id}-g${gi < 0 ? 0 : gi})`}>
+                    <title>{`${d.k} · ${p.rot}: ${fmt(p.v)}`}</title>
+                  </rect>
+                );
+              })}
+            </g>
+            <rect x={`${i * largura + largura * 0.22}%`} y={0} width={`${largura * 0.56}%`}
+              height={altura} fill="transparent">
+              <title>{`${d.k} · ${fmt(total)} · ${d.sub}`}</title>
+            </rect>
+            <text x={`${i * largura + largura / 2}%`} y={altura - (total / max) * altura - 5}
+              textAnchor="middle" style={{ fontSize: 9.5, fill: T.inkDim, fontWeight: 700 }}>{d.rot}</text>
+            <text x={`${i * largura + largura / 2}%`} y={altura + 16} textAnchor="middle"
+              style={{ fontSize: 10.5, fill: on ? T.ink : T.inkFaint, fontWeight: on ? 700 : 400 }}>{d.k}</text>
+            <text x={`${i * largura + largura / 2}%`} y={altura + 29} textAnchor="middle"
+              style={{ fontSize: 9, fill: T.inkFaint }}>{d.sub}</text>
+          </g>
+        );
+      })}
+      {yRef != null && yRef >= 0 && (
+        <>
+          <line x1="0" x2="100%" y1={yRef} y2={yRef} stroke={T.terracotta} strokeWidth="1.5"
+            strokeDasharray="5 4" opacity="0.8" />
+          <text x="4" y={yRef - 5} style={{ fontSize: 9.5, fill: T.terracotta, fontWeight: 700 }}>
+            {refRotulo}
+          </text>
+        </>
+      )}
+    </svg>
+  );
+}
+
 // Barras deitadas, para ranking com nome comprido.
 function BarrasH({ dados, altura = 24, aoClicar, ativo }) {
   const max = Math.max(1, ...dados.map(d => d.v));
@@ -4568,6 +4664,15 @@ function PainelDiretoria() {
 
   const topDeals = [...abertos].sort((a, b) => (Number(b.valor) || 0) - (Number(a.valor) || 0)).slice(0, 8);
 
+  const CORES_EST_COMP = { avancado: G.verde, alto: G.azul, medio: G.ambar,
+                           baixo: G.rosa, perdido: G.cinza };
+  // Níveis que entram na PREVISÃO: perdido não prevê nada e sem classificação
+  // pesa zero — ambos fora do empilhado, mas o cheio deles continua no total.
+  const niveisPrev = estagiosCfg
+    .filter(e => e.estagio !== 'perdido' && Number(e.peso) > 0)
+    .map(e => ({ cod: e.estagio, rot: e.rotulo, peso: Number(e.peso),
+                 par: CORES_EST_COMP[e.estagio] || G.roxo }));
+
   // ---- PREVISIBILIDADE ----
   // O funil em aberto lido pelo mês que o vendedor espera fechar, e aberto
   // pelo eixo que a pergunta pedir: vendedor, tipo de produto, estágio ou
@@ -4601,6 +4706,47 @@ function PainelDiretoria() {
     };
   }).sort((a, b) => b.v - a.v);
   const pgDeduzidos = prev.filter(p => p.pg_origem === 'grupo').length;
+
+  // ---- PREVISÃO DE VENDAS ----
+  // Nasce do Follow Up: o vendedor diz o estágio (que vira peso) e o mês que
+  // espera fechar. Sem esses dois, não há previsão -- e por isso a cobertura
+  // por vendedor fica ao lado do gráfico, não escondida num relatório.
+  const fatorDe = (cod) => {
+    const c = previsao.find(p => p.cenario === cenario && p.estagio === cod);
+    return c ? Number(c.fator) : null;
+  };
+  const faixasPrev = niveisPrev.map(n => ({
+    cod: n.cod, rot: n.rot, par: n.par, fator: fatorDe(n.cod) ?? n.peso,
+  }));
+  const colPrevVendas = mesesPrev2.map(m => {
+    const d = prevComExp.filter(p => p.mes_previsto === m);
+    const partes = faixasPrev.map(f => ({
+      cod: f.cod, rot: f.rot,
+      v: soma(d.filter(x => x.estagio_codigo === f.cod)) * f.fator,
+    }));
+    const tot = partes.reduce((s, p) => s + p.v, 0);
+    return { k: rotMes(m), iso: m, partes, rot: fmtMoedaCompacta(conv(tot)),
+             sub: `${d.length}`, total: tot, bruto: soma(d), lista: d };
+  });
+  const pvTotalPrevisto = colPrevVendas.reduce((s, c) => s + c.total, 0);
+  const pvTotalBruto = soma(prevComExp);
+  const pvPctComData = soma(prev) > 0 ? (pvTotalBruto / soma(prev)) * 100 : 0;
+
+  // Cobertura do follow up, por vendedor: é a cobrança que faz a previsão
+  // existir no mês que vem.
+  const coberturaVend = [...new Set(prev.map(p => p.vendedor).filter(Boolean))].map(v => {
+    const d = prev.filter(p => p.vendedor === v);
+    const comData = d.filter(p => p.mes_previsto);
+    const classif = d.filter(p => p.estagio_codigo);
+    return {
+      k: v, n: d.length, total: soma(d),
+      classif: classif.length, valorClassif: soma(classif),
+      comData: comData.length, valorComData: soma(comData),
+      previsto: faixasPrev.reduce((s, f) =>
+        s + soma(comData.filter(x => x.estagio_codigo === f.cod)) * f.fator, 0),
+      lista: d,
+    };
+  }).sort((a, b) => b.total - a.total);
 
   // ---- RANKING DE CLIENTES ----
   const rankVis = rankTudo ? rank : rank.slice(0, 20);
@@ -4646,15 +4792,6 @@ function PainelDiretoria() {
   // Responde "o que está proposto e o que sobra quando aplico a régua do
   // time". Sem classificação entra com peso zero e some do ponderado —
   // é justamente o que dá a dimensão do problema.
-  const CORES_EST_COMP = { avancado: G.verde, alto: G.azul, medio: G.ambar,
-                           baixo: G.rosa, perdido: G.cinza };
-  // Níveis que entram na PREVISÃO: perdido não prevê nada e sem classificação
-  // pesa zero — ambos fora do empilhado, mas o cheio deles continua no total.
-  const niveisPrev = estagiosCfg
-    .filter(e => e.estagio !== 'perdido' && Number(e.peso) > 0)
-    .map(e => ({ cod: e.estagio, rot: e.rotulo, peso: Number(e.peso),
-                 par: CORES_EST_COMP[e.estagio] || G.roxo }));
-
   // TRIO MÊS A MÊS: proposto (tudo que nasceu no mês), realizado (o que já
   // virou pedido/nota) e ponderado (a régua aplicada ao que segue em aberto).
   const mesesTrio = [...new Set(dados.map(d => d.competencia).filter(Boolean))].sort();
@@ -5390,6 +5527,126 @@ function PainelDiretoria() {
       ), t.cardsSub)}
 
       {gavetaDe('nivel:')}
+
+      {painel(t.pvTitulo, (
+        <>
+          <div style={{ display: 'grid', gap: 8, gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+            marginBottom: 13 }}>
+            {[
+              { t: t.pvBruto, v: val(pvTotalBruto), p: G.ambar, s: `${prevComExp.length} ${t.propostas}` },
+              { t: t.pvPrevisto, v: val(pvTotalPrevisto), p: G.roxo,
+                s: cenarios.find(c => c.c === cenario)?.r || '' },
+              { t: t.pvMeses, v: String(colPrevVendas.length), p: G.ciano,
+                s: colPrevVendas.length ? `${colPrevVendas[0].k} – ${colPrevVendas[colPrevVendas.length - 1].k}` : '—' },
+              { t: t.pvSemData, v: val(soma(prevSemExp)), p: G.vermelho, s: `${prevSemExp.length} ${t.propostas}` },
+              ...(mediaMensal > 0 ? [{ t: t.pvVsMedia, p: G.verde,
+                v: `${(pvTotalPrevisto / mediaMensal).toFixed(1)}×`, s: val(mediaMensal) }] : []),
+            ].map((k, i) => (
+              <div key={k.t} className="g-card g-linha" style={{ background: T.panel,
+                border: `1px solid ${T.line}`, borderRadius: 10, padding: '11px 13px',
+                position: 'relative', overflow: 'hidden', animationDelay: `${i * 50}ms` }}>
+                <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 3,
+                  background: `linear-gradient(90deg, ${k.p[0]}, ${k.p[1]})` }} />
+                <div style={{ fontSize: 10.5, color: T.inkFaint, minHeight: 24 }}>{k.t}</div>
+                <div style={{ fontSize: 18, fontWeight: 800, color: k.p[1],
+                  fontVariantNumeric: 'tabular-nums' }}>{k.v}</div>
+                <div style={{ fontSize: 9.5, color: T.inkFaint, marginTop: 2 }}>{k.s}</div>
+              </div>
+            ))}
+          </div>
+
+          {colPrevVendas.length === 0 ? (
+            <div style={{ fontSize: 11.5, color: T.amberText, background: T.amberSoft,
+              border: `1px solid ${T.amberText}33`, borderRadius: 7, padding: '12px 14px', lineHeight: 1.55 }}>
+              {t.pvVazio}
+            </div>
+          ) : (
+            <>
+              <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 10, fontSize: 10.5 }}>
+                {faixasPrev.map(f => (
+                  <span key={f.cod} style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                    <span style={{ width: 10, height: 10, borderRadius: 2,
+                      background: `linear-gradient(135deg, ${f.par[0]}, ${f.par[1]})` }} />
+                    <span style={{ color: T.inkDim }}>{f.rot}</span>
+                    <span style={{ color: f.par[1], fontWeight: 700 }}>{(f.fator * 100).toFixed(0)}%</span>
+                  </span>
+                ))}
+              </div>
+              <ColunasPilha dados={colPrevVendas} faixas={faixasPrev} fmt={val} altura={200}
+                referencia={mediaMensal} refRotulo={`${t.mediaMes}: ${val(mediaMensal)}`}
+                ativo={detalhe?.chave?.startsWith('pv:') ? detalhe.chave.slice(3) : null}
+                aoClicar={(col) => abrir(`pv:${col.k}`, `${t.pvTitulo} · ${col.k}`,
+                  t.pvRegraMes.replace('{m}', col.k)
+                    .replace('{c}', cenarios.find(c => c.c === cenario)?.r || cenario),
+                  col.lista, col.bruto)} />
+              {mediaMensal > 0 && (
+                <div style={{ fontSize: 10.5, color: T.inkDim, background: T.panelAlt, borderRadius: 7,
+                  padding: '9px 12px', marginTop: 10, lineHeight: 1.55 }}>
+                  {t.pvAlerta.replace('{c}', cenarios.find(c => c.c === cenario)?.r || cenario)
+                    .replace('{v}', val(pvTotalPrevisto)).replace('{m}', val(mediaMensal))
+                    .replace('{p}', pvPctComData.toFixed(0))}
+                </div>
+              )}
+            </>
+          )}
+        </>
+      ), t.pvSub)}
+
+      {gavetaDe('pv:')}
+
+      {painel(t.pvCobertura, (
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 660 }}>
+            <thead><tr style={{ background: T.panelAlt }}>
+              {[t.pvVend, t.pvTotal, t.pvClass, t.pvComData, t.pvPrev].map((h, i) => (
+                <th key={h} style={{ padding: '7px 10px', fontSize: 10.5, fontWeight: 600, color: T.inkFaint,
+                  textAlign: i === 0 ? 'left' : 'right', whiteSpace: 'nowrap' }}>{h}</th>
+              ))}
+            </tr></thead>
+            <tbody>
+              {coberturaVend.map((v, i) => {
+                const pctC = v.n ? (v.classif / v.n) * 100 : 0;
+                const pctD = v.n ? (v.comData / v.n) * 100 : 0;
+                return (
+                  <tr key={v.k} className="g-linha g-clicavel"
+                    onClick={() => abrir(`cob:${v.k}`, `${t.pvCobertura} · ${v.k}`,
+                      t.pvRegraVend.replace('{v}', v.k), v.lista, v.total)}
+                    style={{ borderBottom: `1px solid ${T.lineSoft}`, animationDelay: `${i * 35}ms`,
+                      background: detalhe?.chave === `cob:${v.k}` ? T.panelAlt : 'transparent' }}>
+                    <td style={{ padding: '7px 10px', fontSize: 11.5, fontWeight: 600, maxWidth: 190,
+                      whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={v.k}>{v.k}</td>
+                    <td style={{ padding: '7px 10px', fontSize: 12, textAlign: 'right', fontWeight: 700,
+                      fontVariantNumeric: 'tabular-nums' }}>
+                      {val(v.total)}<span style={{ fontSize: 9.5, color: T.inkFaint, marginLeft: 4 }}>{v.n}</span>
+                    </td>
+                    {[[pctC, v.classif], [pctD, v.comData]].map(([pct, n], j) => (
+                      <td key={j} style={{ padding: '7px 10px', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6,
+                          justifyContent: 'flex-end' }}>
+                          <span style={{ width: 46, height: 6, borderRadius: 3, background: T.lineSoft,
+                            overflow: 'hidden', display: 'inline-block' }}>
+                            <span style={{ display: 'block', height: '100%', width: `${pct}%`, borderRadius: 3,
+                              background: pct >= 70 ? G.verde[0] : pct >= 30 ? G.ambar[0] : G.vermelho[0] }} />
+                          </span>
+                          <span style={{ fontSize: 10.5, width: 46, textAlign: 'right',
+                            color: pct >= 70 ? G.verde[1] : pct >= 30 ? G.ambar[1] : G.vermelho[1],
+                            fontWeight: 600 }}>{pct.toFixed(0)}% · {n}</span>
+                        </span>
+                      </td>
+                    ))}
+                    <td style={{ padding: '7px 10px', fontSize: 11.5, textAlign: 'right', fontWeight: 600,
+                      color: v.previsto > 0 ? G.roxo[1] : T.inkFaint, fontVariantNumeric: 'tabular-nums' }}>
+                      {v.previsto > 0 ? val(v.previsto) : '—'}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      ), t.pvCoberturaSub)}
+
+      {gavetaDe('cob:')}
 
       {painel(t.prevTitulo, (
         <>
