@@ -498,6 +498,22 @@ function PortalConteudo({ currentUser, session }) {
         @keyframes fadeUp { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
         @keyframes scaleIn { from { opacity: 0; transform: scale(.97); } to { opacity: 1; transform: scale(1); } }
         @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+        /* Abertura do detalhe do grafico: o painel desliza e as linhas entram
+           uma a uma, com atraso crescente. Movimento curto -- 260ms no painel,
+           22ms entre linhas -- porque animacao longa em tela de consulta cansa
+           depois do terceiro clique. */
+        @keyframes drawerIn { from { opacity: 0; transform: translateY(-10px) scaleY(.96); transform-origin: top; }
+                              to { opacity: 1; transform: translateY(0) scaleY(1); } }
+        @keyframes rowIn { from { opacity: 0; transform: translateX(-10px); }
+                           to { opacity: 1; transform: translateX(0); } }
+        @keyframes barGrow { from { transform: scaleX(0); transform-origin: left; }
+                             to { transform: scaleX(1); } }
+        @keyframes pulseRing { 0% { stroke-width: 30; } 50% { stroke-width: 34; } 100% { stroke-width: 30; } }
+        .g-clicavel { cursor: pointer; transition: opacity .18s, filter .18s; }
+        .g-clicavel:hover { opacity: .78; filter: brightness(1.08); }
+        .g-drawer { animation: drawerIn .26s cubic-bezier(.2,.8,.3,1) both; }
+        .g-linha { animation: rowIn .24s cubic-bezier(.2,.8,.3,1) both; }
+        .g-barra { animation: barGrow .4s cubic-bezier(.2,.8,.3,1) both; }
         .fade-up { animation: fadeUp .35s ease both; }
         .scale-in { animation: scaleIn .2s ease both; }
         .spin { animation: spin 1s linear infinite; }
@@ -3603,6 +3619,15 @@ const TXT = {
     cotacao: 'cotação de', semData: 'sem data',
     previsaoMes: 'Previsão de fechamento por mês',
     funilSituacao: 'Funil por situação', cenariosTitulo: 'Cenários de fechamento',
+    regra: 'Como este número é calculado', linhas: 'Linhas', somaTotal: 'Soma',
+    valorCol: 'Valor', clique: 'clique em qualquer fatia, coluna ou barra para abrir os BRs e a regra',
+    regraSituacao: 'BRs cuja situação é “{s}”. A situação vem do Sankhya: tem nota → faturado; tem pedido → pedido em carteira; marcado como Perdido pelo vendedor → perdido; o resto fica em aberto. O valor é o da proposta. Não entram BRV (duplicatas) nem projetos do cliente Kalenborn do Brasil (estoque).',
+    regraFaturado: 'BRs que já têm nota fiscal. Aqui o valor é a RECEITA das notas, não o da proposta — é o que entrou de fato. Só aparecem BRs com proposta no funil desde janeiro de 2026.',
+    regraEstagio: 'Propostas ainda em aberto classificadas como “{e}”. Vale o estágio que o VENDEDOR deu; quando ele ainda não classificou, o BR fica em “Sem classificação”. O valor é o cheio da proposta, sem multiplicar por chance de fechar.',
+    regraCiclo: 'Propostas abertas em {m}: {p} no total, {f} viraram pedido, conversão de {c}%. A coluna cheia é o valor proposto e a parte verde é o que virou pedido.',
+    regraVendedor: 'Todos os BRs de {v} desde janeiro de 2026. A barra cheia é o total e a parte verde é o que fechou. A conversão de {c} é BRs fechados sobre o total dele — inclui o que ainda está em aberto no denominador, porque ninguém marca proposta como perdida.',
+    regraCliente: 'BRs deste cliente, excluindo os perdidos. Soma o valor da proposta, em qualquer situação.',
+    regraCenario: 'Cada proposta em aberto multiplicada pelo fator do seu estágio neste cenário: {f}. Os fatores são editáveis — a regra definitiva ainda está com o comercial.',
     de: 'de', medio: 'média do ano',
     porEstagioCen: 'Funil por estágio, nos três cenários',
     porVendedor: 'Desempenho por vendedor',
@@ -3642,6 +3667,15 @@ const TXT = {
     cotacao: 'rate as of', semData: 'no date',
     previsaoMes: 'Forecast by expected closing month',
     funilSituacao: 'Pipeline by status', cenariosTitulo: 'Closing scenarios',
+    regra: 'How this number is calculated', linhas: 'Rows', somaTotal: 'Total',
+    valorCol: 'Value', clique: 'click any slice, column or bar to open the projects and the rule',
+    regraSituacao: 'Projects with status “{s}”. Status comes from the ERP: has an invoice → invoiced; has an order → won; marked Lost by the salesperson → lost; everything else stays open. Value is the proposal amount. BRV duplicates and Kalenborn do Brasil (stock) projects are excluded.',
+    regraFaturado: 'Projects that already have an invoice. Here the value is the invoiced REVENUE, not the proposal — what actually came in. Only projects with a proposal in the funnel since January 2026 appear.',
+    regraEstagio: 'Open proposals classified as “{e}”. Uses the stage set by the SALESPERSON; when not yet classified, the project shows as “Unclassified”. Value is the full proposal, not weighted by probability.',
+    regraCiclo: 'Proposals opened in {m}: {p} total, {f} became orders, {c}% conversion. The light column is the proposed value and the green part is what became an order.',
+    regraVendedor: 'All projects for {v} since January 2026. The light bar is the total and the green part is what closed. The {c} win rate is closed over total — open proposals stay in the denominator because nobody marks proposals as lost.',
+    regraCliente: 'Projects for this customer, excluding lost ones. Sums the proposal value in any status.',
+    regraCenario: 'Each open proposal multiplied by its stage factor in this scenario: {f}. Factors are editable — the final rule is still with the sales team.',
     de: 'of', medio: 'year average',
     porEstagioCen: 'Pipeline by stage, across scenarios',
     porVendedor: 'Performance by salesperson',
@@ -3681,7 +3715,7 @@ const TXT = {
 // ---------------------------------------------------------------------------
 
 // Rosca: fatias com furo no meio e o total no centro.
-function Rosca({ dados, tamanho = 190, espessura = 30, centro, subcentro }) {
+function Rosca({ dados, tamanho = 190, espessura = 30, centro, subcentro, aoClicar, ativo }) {
   const total = dados.reduce((s, d) => s + d.v, 0) || 1;
   const r = (tamanho - espessura) / 2;
   const c = tamanho / 2;
@@ -3700,7 +3734,11 @@ function Rosca({ dados, tamanho = 190, espessura = 30, centro, subcentro }) {
       <svg width={tamanho} height={tamanho} style={{ flexShrink: 0 }}>
         <circle cx={c} cy={c} r={r} fill="none" stroke={T.lineSoft} strokeWidth={espessura} />
         {arcos.map((a, i) => (
-          <path key={i} d={a.d} fill="none" stroke={a.cor} strokeWidth={espessura}>
+          <path key={i} d={a.d} fill="none" stroke={a.cor}
+            strokeWidth={ativo === a.k ? espessura + 6 : espessura}
+            className={aoClicar ? 'g-clicavel' : undefined}
+            onClick={aoClicar ? () => aoClicar(a) : undefined}
+            style={{ transition: 'stroke-width .2s' }}>
             <title>{`${a.k}: ${a.rot} (${a.pct.toFixed(1)}%)`}</title>
           </path>
         ))}
@@ -3717,7 +3755,10 @@ function Rosca({ dados, tamanho = 190, espessura = 30, centro, subcentro }) {
       </svg>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 7, flex: 1, minWidth: 170 }}>
         {arcos.map((a, i) => (
-          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div key={i} className={aoClicar ? 'g-clicavel' : undefined}
+            onClick={aoClicar ? () => aoClicar(a) : undefined}
+            style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '2px 5px', borderRadius: 4,
+              background: ativo === a.k ? T.panelAlt : 'transparent' }}>
             <span style={{ width: 10, height: 10, borderRadius: 2, background: a.cor, flexShrink: 0 }} />
             <span style={{ fontSize: 11.5, color: T.inkDim, flex: 1 }}>{a.k}</span>
             <span style={{ fontSize: 11.5, fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{a.rot}</span>
@@ -3732,7 +3773,7 @@ function Rosca({ dados, tamanho = 190, espessura = 30, centro, subcentro }) {
 }
 
 // Colunas, com uma parte destacada dentro de cada uma.
-function Colunas({ dados, altura = 170, cor, corBase, rotulo, dica }) {
+function Colunas({ dados, altura = 170, cor, corBase, rotulo, dica, aoClicar, ativo }) {
   const max = Math.max(1, ...dados.map(d => d.total));
   const largura = 100 / Math.max(dados.length, 1);
   return (
@@ -3747,7 +3788,11 @@ function Colunas({ dados, altura = 170, cor, corBase, rotulo, dica }) {
         const x = `${i * largura + largura * 0.18}%`;
         const w = `${largura * 0.64}%`;
         return (
-          <g key={d.k}>
+          <g key={d.k} className={aoClicar ? 'g-clicavel' : undefined}
+            onClick={aoClicar ? () => aoClicar(d) : undefined}>
+            {ativo === d.k && (
+              <rect x={x} y={0} width={w} height={altura} rx="3" fill={`${cor}14`} />
+            )}
             <rect x={x} y={altura - h} width={w} height={h} rx="3" fill={corBase || `${cor}33`}>
               <title>{dica ? dica(d) : `${d.k}: ${d.rot}`}</title>
             </rect>
@@ -3775,18 +3820,21 @@ function Colunas({ dados, altura = 170, cor, corBase, rotulo, dica }) {
 }
 
 // Barras deitadas, para ranking com nome comprido.
-function BarrasH({ dados, cor, altura = 22 }) {
+function BarrasH({ dados, cor, altura = 22, aoClicar, ativo }) {
   const max = Math.max(1, ...dados.map(d => d.v));
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-      {dados.map(d => (
-        <div key={d.k} style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+      {dados.map((d, i) => (
+        <div key={d.k} className={aoClicar ? 'g-clicavel' : undefined}
+          onClick={aoClicar ? () => aoClicar(d) : undefined}
+          style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '2px 4px', borderRadius: 4,
+            background: ativo === d.k ? T.panelAlt : 'transparent' }}>
           <span style={{ fontSize: 11.5, color: T.inkDim, width: 145, whiteSpace: 'nowrap',
             overflow: 'hidden', textOverflow: 'ellipsis' }} title={d.k}>{d.k}</span>
           <div style={{ flex: 1, height: altura, background: T.lineSoft, borderRadius: 3,
             position: 'relative', overflow: 'hidden' }}>
-            <div style={{ height: '100%', width: `${(d.v / max) * 100}%`,
-              background: d.cor || cor, borderRadius: 3, transition: 'width .3s' }} />
+            <div className="g-barra" style={{ height: '100%', width: `${(d.v / max) * 100}%`,
+              background: d.cor || cor, borderRadius: 3, animationDelay: `${i * 45}ms` }} />
             {d.dentro != null && (
               <div style={{ position: 'absolute', top: 0, left: 0, height: '100%',
                 width: `${(d.dentro / max) * 100}%`, background: T.oliveText, borderRadius: 3 }} />
@@ -3834,6 +3882,9 @@ function PainelDiretoria() {
   const [moeda, setMoeda] = useState('BRL');
   const [idioma, setIdioma] = useState('pt');
   const [cenario, setCenario] = useState('realista');
+  // DETALHE do grafico clicado: { titulo, regra, linhas }. Um so por vez --
+  // varios abertos ao mesmo tempo viram bagunca numa tela de consulta.
+  const [detalhe, setDetalhe] = useState(null);
   const t = TXT[idioma];
 
   useEffect(() => {
@@ -3965,6 +4016,72 @@ function PainelDiretoria() {
   const diasPedido = ciclo.length ? Math.round(ciclo.reduce((s, c) => s + (Number(c.dias_ate_pedido) || 0), 0) / ciclo.length) : null;
   const diasFat = ciclo.length ? Math.round(ciclo.reduce((s, c) => s + (Number(c.dias_ate_faturar) || 0), 0) / ciclo.length) : null;
 
+  // Abre o detalhe: o QUE esta ali e COMO foi calculado. Mostrar so a lista
+  // deixaria a pergunta 'de onde saiu esse numero' sem resposta -- e e ela que
+  // aparece na reuniao.
+  const abrir = (chave, titulo, regra, linhas, total) => {
+    if (detalhe?.chave === chave) { setDetalhe(null); return; }
+    setDetalhe({ chave, titulo, regra, total,
+      linhas: [...linhas].sort((a, b) => (Number(b.valor) || 0) - (Number(a.valor) || 0)) });
+  };
+
+  const gaveta = detalhe && (
+    <div className="g-drawer" style={{ background: T.panel, border: `1px solid ${T.terracotta}`,
+      borderRadius: 10, padding: 15, boxShadow: `0 4px 20px ${T.ink}12` }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 10 }}>
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 700, color: T.terracotta }}>{detalhe.titulo}</div>
+          <div style={{ fontSize: 11, color: T.inkDim, marginTop: 4, lineHeight: 1.5, maxWidth: 680 }}>
+            <strong style={{ color: T.ink }}>{t.regra}:</strong> {detalhe.regra}
+          </div>
+        </div>
+        <button onClick={() => setDetalhe(null)}
+          style={{ fontFamily: 'inherit', fontSize: 15, lineHeight: 1, padding: '3px 8px', borderRadius: 5,
+            cursor: 'pointer', border: `1px solid ${T.line}`, background: 'transparent', color: T.inkFaint }}>×</button>
+      </div>
+      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', padding: '8px 11px', background: T.panelAlt,
+        borderRadius: 6, marginBottom: 11 }}>
+        <span style={{ fontSize: 11.5 }}>
+          <span style={{ color: T.inkFaint }}>{t.linhas}: </span>
+          <strong>{detalhe.linhas.length}</strong>
+        </span>
+        <span style={{ fontSize: 11.5 }}>
+          <span style={{ color: T.inkFaint }}>{t.somaTotal}: </span>
+          <strong style={{ color: T.terracotta }}>{val(detalhe.total)}</strong>
+        </span>
+      </div>
+      <div style={{ maxHeight: 340, overflowY: 'auto' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead style={{ position: 'sticky', top: 0, zIndex: 1 }}><tr style={{ background: T.panelAlt }}>
+            {['BR', t.cliente, t.vendedor, t.estagio, t.valorCol].map((h, i) => (
+              <th key={h} style={{ padding: '7px 10px', fontSize: 10.5, fontWeight: 600, color: T.inkFaint,
+                textAlign: i === 4 ? 'right' : 'left', whiteSpace: 'nowrap' }}>{h}</th>
+            ))}
+          </tr></thead>
+          <tbody>
+            {detalhe.linhas.slice(0, 80).map((l, i) => (
+              <tr key={`${l.br}-${i}`} className="g-linha"
+                style={{ borderBottom: `1px solid ${T.lineSoft}`, animationDelay: `${Math.min(i, 22) * 22}ms` }}>
+                <td style={{ padding: '6px 10px', fontSize: 11.5, fontWeight: 600 }}>{l.br}</td>
+                <td style={{ padding: '6px 10px', fontSize: 11, color: T.inkDim, maxWidth: 220,
+                  whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={l.cliente}>{l.cliente}</td>
+                <td style={{ padding: '6px 10px', fontSize: 11, color: T.inkFaint }}>{l.vendedor}</td>
+                <td style={{ padding: '6px 10px', fontSize: 11, color: T.inkFaint }}>{l.estagio || l.estagio_rotulo || '—'}</td>
+                <td style={{ padding: '6px 10px', fontSize: 11.5, textAlign: 'right', fontWeight: 600,
+                  fontVariantNumeric: 'tabular-nums' }}>{val(l.valor)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {detalhe.linhas.length > 80 && (
+        <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 8 }}>
+          {t.mostrando.replace('{n}', '80').replace('{t}', String(detalhe.linhas.length))}
+        </div>
+      )}
+    </div>
+  );
+
   const painel = (titulo, conteudo, extra) => (
     <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: 15 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
@@ -3992,7 +4109,10 @@ function PainelDiretoria() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 13 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
-        <span style={{ fontFamily: FONT_DISPLAY, fontSize: 19, fontWeight: 700 }}>{t.titulo}</span>
+        <span>
+          <span style={{ fontFamily: FONT_DISPLAY, fontSize: 19, fontWeight: 700 }}>{t.titulo}</span>
+          <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 2 }}>↗ {t.clique}</div>
+        </span>
         <span style={{ display: 'inline-flex', gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>
           <span style={{ display: 'inline-flex', gap: 5, alignItems: 'center' }}>
             <span style={{ fontSize: 10.5, color: T.inkFaint }}>{t.moeda}</span>
@@ -4029,12 +4149,29 @@ function PainelDiretoria() {
         ))}
       </div>
 
+      {gaveta}
+
       <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))' }}>
         {painel(t.funilSituacao, (
-          <Rosca dados={roscaFunil} centro={val(soma(dados))} subcentro={`${dados.length} ${t.brs}`} />
+          <Rosca dados={roscaFunil} centro={val(soma(dados))} subcentro={`${dados.length} ${t.brs}`}
+            ativo={detalhe?.chave?.startsWith('sit:') ? detalhe.chave.slice(4) : null}
+            aoClicar={(fatia) => {
+              const mapa = { [t.emAberto]: abertos, [t.pedido]: pedidos,
+                             [t.faturado]: faturados, [t.perdido]: perdidos };
+              const lista = mapa[fatia.k] || [];
+              abrir(`sit:${fatia.k}`, `${t.funilSituacao} · ${fatia.k}`,
+                fatia.k === t.faturado ? t.regraFaturado : t.regraSituacao.replace('{s}', fatia.k),
+                lista, fatia.k === t.faturado ? soma(lista, 'receita_faturada') : soma(lista));
+            }} />
         ))}
         {painel(t.porEstagio, (
-          <Rosca dados={roscaEstagio} centro={val(soma(abertos))} subcentro={`${abertos.length} ${t.propostas}`} />
+          <Rosca dados={roscaEstagio} centro={val(soma(abertos))} subcentro={`${abertos.length} ${t.propostas}`}
+            ativo={detalhe?.chave?.startsWith('est:') ? detalhe.chave.slice(4) : null}
+            aoClicar={(fatia) => {
+              const lista = abertos.filter(d => d.estagio === fatia.k);
+              abrir(`est:${fatia.k}`, `${t.porEstagio} · ${fatia.k}`,
+                t.regraEstagio.replace('{e}', fatia.k), lista, soma(lista));
+            }} />
         ))}
       </div>
 
@@ -4056,7 +4193,17 @@ function PainelDiretoria() {
 
       {painel(t.cicloTitulo, (
         <Colunas dados={colCiclo} cor={T.oliveText} corBase={T.lineSoft}
-          dica={(d) => `${d.k} · ${d.rot} · ${d.sub}`} rotulo={t.explicaCiclo} />
+          dica={(d) => `${d.k} · ${d.rot} · ${d.sub}`} rotulo={t.explicaCiclo}
+          ativo={detalhe?.chave?.startsWith('ciclo:') ? detalhe.chave.slice(6) : null}
+          aoClicar={(col) => {
+            const mes = ciclo.find(c => rotMes(c.competencia) === col.k);
+            if (!mes) return;
+            const lista = dados.filter(d => d.competencia === mes.competencia);
+            abrir(`ciclo:${col.k}`, `${t.cicloTitulo} · ${col.k}`,
+              t.regraCiclo.replace('{m}', col.k).replace('{p}', String(mes.propostas))
+                .replace('{f}', String(mes.viraram_pedido)).replace('{c}', String(mes.conversao_pct)),
+              lista, soma(lista));
+          }} />
       ))}
 
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -4065,7 +4212,21 @@ function PainelDiretoria() {
       </div>
 
       <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))' }}>
-        {painel(t.cenariosTitulo, <BarrasH dados={barrasCen} altura={26} />, t.explicaCenario)}
+        {painel(t.cenariosTitulo, (
+          <BarrasH dados={barrasCen} altura={26}
+            ativo={detalhe?.chave?.startsWith('cen:') ? detalhe.chave.slice(4) : null}
+            aoClicar={(b2) => {
+              const c2 = cenarios.find(x => x.r === b2.k);
+              if (!c2) return;
+              const lista = previsao.filter(x => x.cenario === c2.c)
+                .map(x => ({ ...x, valor: x.valor_cenario, estagio: x.estagio_rotulo }));
+              const fatores = [...new Map(previsao.filter(x => x.cenario === c2.c)
+                .map(x => [x.estagio_rotulo, Math.round(Number(x.fator) * 100)])).entries()]
+                .map(([e, f]) => `${e} ${f}%`).join(', ');
+              abrir(`cen:${b2.k}`, `${t.cenariosTitulo} · ${b2.k}`,
+                t.regraCenario.replace('{f}', fatores), lista, soma(lista, 'valor_cenario'));
+            }} />
+        ), t.explicaCenario)}
         {painel(t.previsaoMes, (
           colPrev.length === 0 ? (
             <div style={{ fontSize: 11.5, color: T.amberText, background: T.amberSoft, padding: '11px 13px',
@@ -4079,8 +4240,23 @@ function PainelDiretoria() {
       </div>
 
       <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))' }}>
-        {painel(t.porVendedor, <BarrasH dados={barrasVend} cor={T.amberText} />, t.explicaVendedor)}
-        {painel(t.topClientes, <BarrasH dados={barrasCli} cor={T.terracotta} />)}
+        {painel(t.porVendedor, (
+          <BarrasH dados={barrasVend} cor={T.amberText}
+            ativo={detalhe?.chave?.startsWith('vend:') ? detalhe.chave.slice(5) : null}
+            aoClicar={(b2) => {
+              const lista = dados.filter(d => d.vendedor === b2.k);
+              abrir(`vend:${b2.k}`, `${t.porVendedor} · ${b2.k}`,
+                t.regraVendedor.replace('{v}', b2.k).replace('{c}', b2.extra), lista, soma(lista));
+            }} />
+        ), t.explicaVendedor)}
+        {painel(t.topClientes, (
+          <BarrasH dados={barrasCli} cor={T.terracotta}
+            ativo={detalhe?.chave?.startsWith('cli:') ? detalhe.chave.slice(4) : null}
+            aoClicar={(b2) => {
+              const lista = dados.filter(d => (d.cliente || '—') === b2.k && d.situacao !== 'perdido');
+              abrir(`cli:${b2.k}`, `${t.topClientes} · ${b2.k}`, t.regraCliente, lista, soma(lista));
+            }} />
+        ))}
       </div>
     </div>
   );
