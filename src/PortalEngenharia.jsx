@@ -3602,6 +3602,8 @@ const TXT = {
     bruto: 'Valor cheio', vendedor: 'Vendedor', dias: 'dias', ticket: 'Ticket médio',
     cotacao: 'cotação de', semData: 'sem data',
     previsaoMes: 'Previsão de fechamento por mês',
+    funilSituacao: 'Funil por situação', cenariosTitulo: 'Cenários de fechamento',
+    de: 'de', medio: 'média do ano',
     porEstagioCen: 'Funil por estágio, nos três cenários',
     porVendedor: 'Desempenho por vendedor',
     cicloTitulo: 'Propostas e fechamento, mês a mês',
@@ -3639,6 +3641,8 @@ const TXT = {
     bruto: 'Full value', vendedor: 'Salesperson', dias: 'days', ticket: 'Average deal',
     cotacao: 'rate as of', semData: 'no date',
     previsaoMes: 'Forecast by expected closing month',
+    funilSituacao: 'Pipeline by status', cenariosTitulo: 'Closing scenarios',
+    de: 'of', medio: 'year average',
     porEstagioCen: 'Pipeline by stage, across scenarios',
     porVendedor: 'Performance by salesperson',
     cicloTitulo: 'Proposals and closings, month by month',
@@ -3671,16 +3675,161 @@ const TXT = {
 };
 
 
+// ---------------------------------------------------------------------------
+// Graficos em SVG puro. O portal nao tem biblioteca de grafico, e trazer uma
+// so para esta tela custaria mais do que vale -- sao quatro formas simples.
+// ---------------------------------------------------------------------------
+
+// Rosca: fatias com furo no meio e o total no centro.
+function Rosca({ dados, tamanho = 190, espessura = 30, centro, subcentro }) {
+  const total = dados.reduce((s, d) => s + d.v, 0) || 1;
+  const r = (tamanho - espessura) / 2;
+  const c = tamanho / 2;
+  let ang = -Math.PI / 2;
+  const arcos = dados.filter(d => d.v > 0).map(d => {
+    const fatia = (d.v / total) * Math.PI * 2;
+    const x1 = c + r * Math.cos(ang), y1 = c + r * Math.sin(ang);
+    ang += fatia;
+    const x2 = c + r * Math.cos(ang), y2 = c + r * Math.sin(ang);
+    // fatia de quase 100% nao fecha com arco simples: o SVG precisa de dois
+    const grande = fatia > Math.PI ? 1 : 0;
+    return { ...d, d: `M ${x1} ${y1} A ${r} ${r} 0 ${grande} 1 ${x2} ${y2}`, pct: (d.v / total) * 100 };
+  });
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 18, flexWrap: 'wrap' }}>
+      <svg width={tamanho} height={tamanho} style={{ flexShrink: 0 }}>
+        <circle cx={c} cy={c} r={r} fill="none" stroke={T.lineSoft} strokeWidth={espessura} />
+        {arcos.map((a, i) => (
+          <path key={i} d={a.d} fill="none" stroke={a.cor} strokeWidth={espessura}>
+            <title>{`${a.k}: ${a.rot} (${a.pct.toFixed(1)}%)`}</title>
+          </path>
+        ))}
+        {centro && (
+          <text x={c} y={c - 2} textAnchor="middle" style={{ fontSize: 19, fontWeight: 700, fill: T.ink }}>
+            {centro}
+          </text>
+        )}
+        {subcentro && (
+          <text x={c} y={c + 16} textAnchor="middle" style={{ fontSize: 10.5, fill: T.inkFaint }}>
+            {subcentro}
+          </text>
+        )}
+      </svg>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 7, flex: 1, minWidth: 170 }}>
+        {arcos.map((a, i) => (
+          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ width: 10, height: 10, borderRadius: 2, background: a.cor, flexShrink: 0 }} />
+            <span style={{ fontSize: 11.5, color: T.inkDim, flex: 1 }}>{a.k}</span>
+            <span style={{ fontSize: 11.5, fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{a.rot}</span>
+            <span style={{ fontSize: 10.5, color: T.inkFaint, width: 40, textAlign: 'right' }}>
+              {a.pct.toFixed(0)}%
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// Colunas, com uma parte destacada dentro de cada uma.
+function Colunas({ dados, altura = 170, cor, corBase, rotulo, dica }) {
+  const max = Math.max(1, ...dados.map(d => d.total));
+  const largura = 100 / Math.max(dados.length, 1);
+  return (
+    <svg width="100%" height={altura + 34} style={{ display: 'block', overflow: 'visible' }}>
+      {[0.25, 0.5, 0.75, 1].map(g => (
+        <line key={g} x1="0" x2="100%" y1={altura * (1 - g)} y2={altura * (1 - g)}
+          stroke={T.lineSoft} strokeWidth="1" strokeDasharray="3 3" />
+      ))}
+      {dados.map((d, i) => {
+        const h = Math.max((d.total / max) * altura, 2);
+        const hDentro = d.dentro != null ? Math.max((d.dentro / max) * altura, 0) : 0;
+        const x = `${i * largura + largura * 0.18}%`;
+        const w = `${largura * 0.64}%`;
+        return (
+          <g key={d.k}>
+            <rect x={x} y={altura - h} width={w} height={h} rx="3" fill={corBase || `${cor}33`}>
+              <title>{dica ? dica(d) : `${d.k}: ${d.rot}`}</title>
+            </rect>
+            {d.dentro != null && (
+              <rect x={x} y={altura - hDentro} width={w} height={hDentro} rx="3" fill={cor}>
+                <title>{dica ? dica(d) : `${d.k}: ${d.rot}`}</title>
+              </rect>
+            )}
+            <text x={`${i * largura + largura / 2}%`} y={altura - h - 6} textAnchor="middle"
+              style={{ fontSize: 9.5, fill: T.inkDim, fontWeight: 600 }}>{d.rot}</text>
+            <text x={`${i * largura + largura / 2}%`} y={altura + 15} textAnchor="middle"
+              style={{ fontSize: 10, fill: T.inkFaint }}>{d.k}</text>
+            {d.sub && (
+              <text x={`${i * largura + largura / 2}%`} y={altura + 28} textAnchor="middle"
+                style={{ fontSize: 9, fill: T.inkFaint }}>{d.sub}</text>
+            )}
+          </g>
+        );
+      })}
+      {rotulo && (
+        <text x="0" y={altura + 30} style={{ fontSize: 9.5, fill: T.inkFaint }}>{rotulo}</text>
+      )}
+    </svg>
+  );
+}
+
+// Barras deitadas, para ranking com nome comprido.
+function BarrasH({ dados, cor, altura = 22 }) {
+  const max = Math.max(1, ...dados.map(d => d.v));
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      {dados.map(d => (
+        <div key={d.k} style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+          <span style={{ fontSize: 11.5, color: T.inkDim, width: 145, whiteSpace: 'nowrap',
+            overflow: 'hidden', textOverflow: 'ellipsis' }} title={d.k}>{d.k}</span>
+          <div style={{ flex: 1, height: altura, background: T.lineSoft, borderRadius: 3,
+            position: 'relative', overflow: 'hidden' }}>
+            <div style={{ height: '100%', width: `${(d.v / max) * 100}%`,
+              background: d.cor || cor, borderRadius: 3, transition: 'width .3s' }} />
+            {d.dentro != null && (
+              <div style={{ position: 'absolute', top: 0, left: 0, height: '100%',
+                width: `${(d.dentro / max) * 100}%`, background: T.oliveText, borderRadius: 3 }} />
+            )}
+          </div>
+          <span style={{ fontSize: 11.5, fontWeight: 600, width: 92, textAlign: 'right',
+            fontVariantNumeric: 'tabular-nums' }}>{d.rot}</span>
+          {d.extra && <span style={{ fontSize: 10.5, color: T.inkFaint, width: 48, textAlign: 'right' }}>{d.extra}</span>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// Medidor semicircular, para percentual.
+function Medidor({ pct, tamanho = 130, cor, rotulo }) {
+  const r = tamanho / 2 - 14;
+  const c = tamanho / 2;
+  const p = Math.max(0, Math.min(100, pct || 0));
+  const ang = Math.PI * (p / 100);
+  const x = c - r * Math.cos(ang), y = c - r * Math.sin(ang);
+  const arco = `M ${c - r} ${c} A ${r} ${r} 0 ${p > 50 ? 1 : 0} 1 ${x} ${y}`;
+  return (
+    <div style={{ textAlign: 'center' }}>
+      <svg width={tamanho} height={tamanho / 2 + 20}>
+        <path d={`M ${c - r} ${c} A ${r} ${r} 0 1 1 ${c + r} ${c}`}
+          fill="none" stroke={T.lineSoft} strokeWidth="13" strokeLinecap="round" />
+        <path d={arco} fill="none" stroke={cor} strokeWidth="13" strokeLinecap="round" />
+        <text x={c} y={c - 4} textAnchor="middle" style={{ fontSize: 22, fontWeight: 700, fill: cor }}>
+          {p.toFixed(0)}%
+        </text>
+      </svg>
+      <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: -4 }}>{rotulo}</div>
+    </div>
+  );
+}
+
 function PainelDiretoria() {
   const [dados, setDados] = useState([]);
   const [cambio, setCambio] = useState([]);
   const [previsao, setPrevisao] = useState([]);
   const [ciclo, setCiclo] = useState([]);
   const [fatOrigem, setFatOrigem] = useState([]);
-  const [candidatas, setCandidatas] = useState([]);
-  const [descPtos, setDescPtos] = useState(5);
-  const [minDias, setMinDias] = useState(15);
-  const [minMargem, setMinMargem] = useState(40);
   const [loading, setLoading] = useState(true);
   const [moeda, setMoeda] = useState('BRL');
   const [idioma, setIdioma] = useState('pt');
@@ -3689,18 +3838,16 @@ function PainelDiretoria() {
 
   useEffect(() => {
     (async () => {
-      const [d, c, pv, cc, fo, cd] = await Promise.all([
+      const [d, c, pv, cc, fo] = await Promise.all([
         supabase.from('v_comercial_diretoria').select('*'),
         supabase.from('comercial_cambio').select('*'),
         supabase.from('v_comercial_previsao').select('*'),
         supabase.from('v_comercial_ciclo_resumo').select('*').order('competencia'),
         supabase.from('v_comercial_faturamento_origem').select('*'),
-        supabase.from('v_comercial_candidata_desconto').select('*'),
       ]);
       setDados(d.data || []); setCambio(c.data || []);
       setPrevisao(pv.data || []); setCiclo(cc.data || []);
       setFatOrigem(fo.data || []);
-      setCandidatas(cd.data || []);
       setLoading(false);
     })();
   }, []);
@@ -3714,10 +3861,6 @@ function PainelDiretoria() {
     if (abs >= 1e3) return `${cx.simbolo} ${(n / 1e3).toLocaleString(loc, { maximumFractionDigits: 0 })} mil`;
     return `${cx.simbolo} ${n.toLocaleString(loc, { maximumFractionDigits: 0 })}`;
   };
-  // Na simulacao os numeros vao EXATOS: com o arredondamento acima, um
-  // desconto de 5% sobre R$ 3.240 aparecia como 'R$ 3 mil' nas duas colunas e
-  // parecia que nada tinha mudado.
-  const valExato = (v) => `${cx.simbolo} ${conv(v).toLocaleString(loc, { maximumFractionDigits: 0 })}`;
   const soma = (arr, campo = 'valor') => arr.reduce((s, r) => s + (Number(r[campo]) || 0), 0);
   const rotMes = (m) => {
     if (!m) return t.semData;
@@ -3736,62 +3879,96 @@ function PainelDiretoria() {
   const faturados = dados.filter(d => d.situacao === 'faturado');
   const perdidos = dados.filter(d => d.situacao === 'perdido');
   const ganhos = pedidos.length + faturados.length;
-  // CONVERSAO sobre o TOTAL, nao sobre 'ja decididos'. Ninguem marca proposta
-  // como perdida -- sao ZERO perdidos em todos os sete vendedores -- entao o
-  // denominador 'ganhos + perdidos' virava so os ganhos e dava 100% para todo
-  // mundo. Com o total, o numero mede o que de fato interessa: de tudo que
-  // entrou, quanto virou pedido.
   const convPct = dados.length > 0 ? (ganhos / dados.length) * 100 : null;
+  const receitaFat = soma(faturados, 'receita_faturada');
 
-  // ---- PREVISÃO no cenário escolhido, pelo MÊS ESPERADO de fechamento ------
   const doCenario = previsao.filter(p => p.cenario === cenario);
   const cenarios = [...new Map(previsao.map(p => [p.cenario, { c: p.cenario, r: p.cenario_rotulo, o: p.cenario_ordem }])).values()]
     .sort((a, b) => a.o - b.o);
+  const totalCenario = soma(doCenario, 'valor_cenario');
   const mesesPrev = [...new Set(doCenario.map(p => p.mes_previsto).filter(Boolean))].sort();
   const semData = doCenario.filter(p => !p.mes_previsto);
-  const porMesPrev = mesesPrev.map(m => {
-    const d = doCenario.filter(p => p.mes_previsto === m);
-    return { m, v: soma(d, 'valor_cenario'), bruto: soma(d, 'valor'), n: d.length };
-  });
-  const maxPrev = Math.max(1, ...porMesPrev.map(x => x.v));
-  const totalCenario = soma(doCenario, 'valor_cenario');
 
-  // por estágio, nos três cenários lado a lado
-  const estagios = [...new Set(previsao.map(p => p.estagio_rotulo))];
-  const porEstagioCen = estagios.map(e => {
-    const linha = { e, bruto: soma(previsao.filter(p => p.estagio_rotulo === e && p.cenario === cenario), 'valor'),
-                    n: previsao.filter(p => p.estagio_rotulo === e && p.cenario === cenario).length };
-    cenarios.forEach(c => {
-      linha[c.c] = soma(previsao.filter(p => p.estagio_rotulo === e && p.cenario === c.c), 'valor_cenario');
-    });
-    return linha;
-  }).sort((a, b) => b.bruto - a.bruto);
-  const maxEst = Math.max(1, ...porEstagioCen.map(x => x.bruto));
-
-  // por vendedor: propostas, fechadas e previsão
-  const vendedores = [...new Set(dados.map(d => d.vendedor).filter(Boolean))];
-  const porVend = vendedores.map(v => {
-    const meus = dados.filter(d => d.vendedor === v);
-    const meusAbertos = meus.filter(d => d.situacao === 'em aberto');
-    const meusGanhos = meus.filter(d => d.situacao === 'pedido confirmado' || d.situacao === 'faturado');
-    return {
-      v, propostas: meus.length,
-      aberto: soma(meusAbertos), nAberto: meusAbertos.length,
-      ganho: soma(meusGanhos), nGanho: meusGanhos.length,
-      conv: meus.length > 0 ? (meusGanhos.length / meus.length) * 100 : null,
-      prev: soma(doCenario.filter(p => p.vendedor === v), 'valor_cenario'),
-    };
-  }).sort((a, b) => b.ganho - a.ganho);
-  const maxVend = Math.max(1, ...porVend.map(x => Math.max(x.ganho, x.aberto)));
-
-  const maxCiclo = Math.max(1, ...ciclo.map(c => Number(c.valor_proposto) || 0));
   const CORES_E = { 'Avançado': T.oliveText, 'Alto': T.blueText, 'Médio': T.amberText,
-                    'Baixo': T.rustText, 'Perdido': T.inkFaint, 'Sem classificação': T.inkFaint };
+                    'Baixo': T.rustText, 'Perdido': T.inkFaint, 'Sem classificação': '#B5AFA6' };
+
+  // rosca do funil por situação
+  const roscaFunil = [
+    { k: t.emAberto, v: soma(abertos), cor: T.amberText, rot: val(soma(abertos)) },
+    { k: t.pedido, v: soma(pedidos), cor: T.blueText, rot: val(soma(pedidos)) },
+    { k: t.faturado, v: receitaFat, cor: T.oliveText, rot: val(receitaFat) },
+    { k: t.perdido, v: soma(perdidos), cor: T.rustText, rot: val(soma(perdidos)) },
+  ].filter(x => x.v > 0);
+
+  // rosca do funil em aberto por estágio
+  const estagiosSet = [...new Set(abertos.map(d => d.estagio))];
+  const roscaEstagio = estagiosSet.map(e => {
+    const v = soma(abertos.filter(d => d.estagio === e));
+    return { k: e, v, cor: CORES_E[e] || T.inkFaint, rot: val(v) };
+  }).filter(x => x.v > 0).sort((a, b) => b.v - a.v);
+
+  // rosca da origem do faturamento
+  const porOrigem = {};
+  fatOrigem.forEach(f => {
+    const k = f.origem;
+    if (!porOrigem[k]) porOrigem[k] = { rot: idioma === 'pt' ? f.rotulo : f.rotulo_en, v: 0, n: 0 };
+    porOrigem[k].v += Number(f.valor) || 0;
+    porOrigem[k].n += Number(f.brs) || 0;
+  });
+  const CORES_O = { funil: T.oliveText, anterior: T.blueText, sem_proposta: T.amberText, duplicata: T.inkFaint };
+  const roscaOrigem = Object.entries(porOrigem)
+    .map(([k, x]) => ({ k: x.rot, v: x.v, cor: CORES_O[k] || T.inkFaint, rot: val(x.v) }))
+    .sort((a, b) => b.v - a.v);
+  const totalFat = roscaOrigem.reduce((s, x) => s + x.v, 0);
+
+  // colunas: proposto x fechado por mês
+  const colCiclo = ciclo.map(c => ({
+    k: rotMes(c.competencia),
+    total: Number(c.valor_proposto) || 0,
+    dentro: Number(c.valor_pedido) || 0,
+    rot: val(c.valor_proposto),
+    sub: `${c.viraram_pedido}/${c.propostas}`,
+  }));
+
+  // colunas: previsão por mês no cenário
+  const colPrev = mesesPrev.map(m => {
+    const d = doCenario.filter(p => p.mes_previsto === m);
+    return { k: rotMes(m), total: soma(d, 'valor'), dentro: soma(d, 'valor_cenario'),
+             rot: val(soma(d, 'valor_cenario')), sub: `${d.length}` };
+  });
+
+  // ranking por vendedor
+  const vendedores = [...new Set(dados.map(d => d.vendedor).filter(Boolean))];
+  const barrasVend = vendedores.map(v => {
+    const meus = dados.filter(d => d.vendedor === v);
+    const meusGanhos = meus.filter(d => d.situacao === 'pedido confirmado' || d.situacao === 'faturado');
+    return { k: v, v: soma(meus), dentro: soma(meusGanhos), rot: val(soma(meus)),
+             extra: `${((meusGanhos.length / meus.length) * 100).toFixed(0)}%`, cor: T.amberText };
+  }).sort((a, b) => b.v - a.v);
+
+  // top clientes
+  const porCliente = {};
+  dados.filter(d => d.situacao !== 'perdido').forEach(d => {
+    const k = d.cliente || '—';
+    porCliente[k] = (porCliente[k] || 0) + (Number(d.valor) || 0);
+  });
+  const barrasCli = Object.entries(porCliente).map(([k, v]) => ({ k, v, rot: val(v), cor: T.terracotta }))
+    .sort((a, b) => b.v - a.v).slice(0, 8);
+
+  // cenários lado a lado
+  const barrasCen = cenarios.map(c => {
+    const v = soma(previsao.filter(p => p.cenario === c.c), 'valor_cenario');
+    return { k: c.r, v, rot: val(v),
+             cor: c.c === 'pessimista' ? T.rustText : c.c === 'realista' ? T.amberText : T.oliveText };
+  });
+
+  const diasPedido = ciclo.length ? Math.round(ciclo.reduce((s, c) => s + (Number(c.dias_ate_pedido) || 0), 0) / ciclo.length) : null;
+  const diasFat = ciclo.length ? Math.round(ciclo.reduce((s, c) => s + (Number(c.dias_ate_faturar) || 0), 0) / ciclo.length) : null;
 
   const painel = (titulo, conteudo, extra) => (
-    <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: 14 }}>
+    <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: 15 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
-        marginBottom: 12, gap: 10, flexWrap: 'wrap' }}>
+        marginBottom: 14, gap: 10, flexWrap: 'wrap' }}>
         <span style={{ fontSize: 12.5, fontWeight: 700 }}>{titulo}</span>
         {extra && <span style={{ fontSize: 10.5, color: T.inkFaint }}>{extra}</span>}
       </div>
@@ -3813,7 +3990,7 @@ function PainelDiretoria() {
   );
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 13 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
         <span style={{ fontFamily: FONT_DISPLAY, fontSize: 19, fontWeight: 700 }}>{t.titulo}</span>
         <span style={{ display: 'inline-flex', gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -3822,33 +3999,26 @@ function PainelDiretoria() {
             {botoes(cambio.map(c => [c.moeda, c.moeda]), moeda, setMoeda)}
           </span>
           <span style={{ display: 'inline-flex', gap: 5, alignItems: 'center' }}>
-            <span style={{ fontSize: 10.5, color: T.inkFaint }}>{t.idioma}</span>
             {botoes([['pt', 'PT'], ['en', 'EN']], idioma, setIdioma)}
           </span>
         </span>
       </div>
 
       {moeda !== 'BRL' && (
-        <div style={{ fontSize: 10.5, color: T.inkFaint }}>
+        <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: -6 }}>
           1 {moeda} = R$ {Number(cx.taxa).toFixed(4)} · {t.cotacao}{' '}
-          {new Date(cx.atualizado_em).toLocaleDateString(loc)} · {cx.fonte}
+          {new Date(cx.atualizado_em).toLocaleDateString(loc)}
         </div>
       )}
 
-      <div style={{ display: 'grid', gap: 9, gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))' }}>
+      <div style={{ display: 'grid', gap: 9, gridTemplateColumns: 'repeat(auto-fit, minmax(158px, 1fr))' }}>
         {[
           { t: t.emAberto, v: val(soma(abertos)), n: `${abertos.length} ${t.propostas}`, c: T.amberText },
           { t: t.pedido, v: val(soma(pedidos)), n: `${pedidos.length} ${t.brs}`, c: T.blueText },
-          // FATURADO usa a receita REAL, nao o valor da proposta. Somar a
-          // proposta dava R$ 14,4 mi onde o faturamento foi R$ 16,05 mi -- e
-          // proposta nao e receita: o que entrou no caixa e a nota.
-          { t: t.faturado, v: val(soma(faturados, 'receita_faturada')),
-            n: `${faturados.length} ${t.brs}`, c: T.oliveText, ajuda: t.explicaFaturado },
-          { t: t.perdido, v: val(soma(perdidos)), n: `${perdidos.length} ${t.brs}`, c: T.rustText },
-          { t: t.conversao, v: convPct == null ? '—' : `${convPct.toFixed(0)}%`,
-            n: `${ganhos} ${t.ganhou}`, c: T.terracotta, ajuda: t.explicaConv },
-          { t: t.previsto, v: val(totalCenario), n: cenarios.find(c => c.c === cenario)?.r || '', c: T.ink,
-            ajuda: t.explicaPrev },
+          { t: t.faturado, v: val(receitaFat), n: `${faturados.length} ${t.brs}`, c: T.oliveText, ajuda: t.explicaFaturado },
+          { t: t.previsto, v: val(totalCenario), n: cenarios.find(c => c.c === cenario)?.r || '', c: T.terracotta },
+          { t: t.diasAtePedido, v: diasPedido == null ? '—' : `${diasPedido} ${t.dias}`, n: t.medio, c: T.ink },
+          { t: t.diasAteFaturar, v: diasFat == null ? '—' : `${diasFat} ${t.dias}`, n: t.medio, c: T.ink },
         ].map(k => (
           <div key={k.t} title={k.ajuda || ''}
             style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 9, padding: '11px 13px' }}>
@@ -3859,359 +4029,59 @@ function PainelDiretoria() {
         ))}
       </div>
 
+      <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))' }}>
+        {painel(t.funilSituacao, (
+          <Rosca dados={roscaFunil} centro={val(soma(dados))} subcentro={`${dados.length} ${t.brs}`} />
+        ))}
+        {painel(t.porEstagio, (
+          <Rosca dados={roscaEstagio} centro={val(soma(abertos))} subcentro={`${abertos.length} ${t.propostas}`} />
+        ))}
+      </div>
+
+      <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))' }}>
+        {painel(t.conversao, (
+          <div style={{ display: 'flex', justifyContent: 'space-around', alignItems: 'center', flexWrap: 'wrap', gap: 14 }}>
+            <Medidor pct={convPct} cor={T.terracotta} rotulo={`${ganhos} ${t.de} ${dados.length}`} />
+            {ciclo.length > 0 && (
+              <Medidor pct={ciclo.reduce((s, c) => s + (Number(c.conversao_pct) || 0), 0) / ciclo.length}
+                cor={T.oliveText} rotulo={t.convMedia} />
+            )}
+          </div>
+        ), t.explicaConv)}
+        {painel(t.fatTitulo, (
+          <Rosca dados={roscaOrigem} tamanho={165} espessura={26}
+            centro={val(totalFat)} subcentro={t.fatTotal} />
+        ), t.fatSub)}
+      </div>
+
+      {painel(t.cicloTitulo, (
+        <Colunas dados={colCiclo} cor={T.oliveText} corBase={T.lineSoft}
+          dica={(d) => `${d.k} · ${d.rot} · ${d.sub}`} rotulo={t.explicaCiclo} />
+      ))}
+
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
         <span style={{ fontSize: 11.5, color: T.inkDim, fontWeight: 600 }}>{t.cenario}</span>
         {botoes(cenarios.map(c => [c.c, c.r]), cenario, setCenario)}
-        <span style={{ fontSize: 10.5, color: T.inkFaint }}>{t.explicaCenario}</span>
       </div>
 
-      {painel(t.previsaoMes, (
-        porMesPrev.length === 0 ? (
-          <div style={{ fontSize: 11.5, color: T.amberText, background: T.amberSoft, padding: '10px 12px',
-            borderRadius: 6, lineHeight: 1.55 }}>
-            <strong>{t.semPrevisaoTitulo}</strong> {t.semPrevisao}
-            {semData.length > 0 && <> {t.semDataValor.replace('{n}', String(semData.length)).replace('{v}', val(soma(semData, 'valor_cenario')))}</>}
-          </div>
-        ) : (
-          <>
-            <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8, height: 160 }}>
-              {porMesPrev.map(x => (
-                <div key={x.m} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}
-                  title={`${rotMes(x.m)} · ${x.n} ${t.propostas} · ${t.bruto}: ${val(x.bruto)} · ${t.previsto}: ${val(x.v)}`}>
-                  <div style={{ fontSize: 10, fontWeight: 600, color: T.ink, fontVariantNumeric: 'tabular-nums' }}>{val(x.v)}</div>
-                  <div style={{ width: '100%', position: 'relative',
-                    height: `${Math.max((x.bruto / Math.max(...porMesPrev.map(y => y.bruto))) * 112, 4)}px`,
-                    background: `${T.lineSoft}`, borderRadius: '3px 3px 0 0', display: 'flex', alignItems: 'flex-end' }}>
-                    <div style={{ width: '100%', height: `${(x.v / (x.bruto || 1)) * 100}%`,
-                      background: T.terracotta, borderRadius: '3px 3px 0 0' }} />
-                  </div>
-                  <div style={{ fontSize: 9.5, color: T.inkFaint }}>{rotMes(x.m)}</div>
-                  <div style={{ fontSize: 9, color: T.inkFaint }}>{x.n}</div>
-                </div>
-              ))}
+      <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))' }}>
+        {painel(t.cenariosTitulo, <BarrasH dados={barrasCen} altura={26} />, t.explicaCenario)}
+        {painel(t.previsaoMes, (
+          colPrev.length === 0 ? (
+            <div style={{ fontSize: 11.5, color: T.amberText, background: T.amberSoft, padding: '11px 13px',
+              borderRadius: 6, lineHeight: 1.55 }}>
+              <strong>{t.semPrevisaoTitulo}</strong> {t.semPrevisao}
+              {semData.length > 0 && <> {t.semDataValor.replace('{n}', String(semData.length)).replace('{v}', val(soma(semData, 'valor_cenario')))}</>}
             </div>
-            {semData.length > 0 && (
-              <div style={{ fontSize: 10.5, color: T.amberText, marginTop: 10, paddingTop: 8,
-                borderTop: `1px solid ${T.lineSoft}` }}>
-                {t.semDataValor.replace('{n}', String(semData.length)).replace('{v}', val(soma(semData, 'valor_cenario')))}
-              </div>
-            )}
-          </>
-        )
-      ), t.explicaPrevisaoMes)}
+          ) : <Colunas dados={colPrev} cor={T.terracotta} corBase={T.lineSoft}
+                dica={(d) => `${d.k} · ${d.rot}`} rotulo={t.explicaPrevisaoMes} />
+        ))}
+      </div>
 
-      {painel(t.porEstagioCen, (
-        <div style={{ overflowX: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 560 }}>
-            <thead><tr style={{ background: T.panelAlt }}>
-              <th style={{ padding: '8px 10px', fontSize: 11, fontWeight: 600, color: T.inkFaint, textAlign: 'left' }}>{t.estagio}</th>
-              <th style={{ padding: '8px 10px', fontSize: 11, fontWeight: 600, color: T.inkFaint, textAlign: 'right' }}>{t.propostas}</th>
-              <th style={{ padding: '8px 10px', fontSize: 11, fontWeight: 600, color: T.inkFaint, textAlign: 'right' }}>{t.bruto}</th>
-              {cenarios.map(c => (
-                <th key={c.c} style={{ padding: '8px 10px', fontSize: 11, fontWeight: 600,
-                  color: c.c === cenario ? T.ink : T.inkFaint, textAlign: 'right' }}>{c.r}</th>
-              ))}
-              <th style={{ padding: '8px 10px', minWidth: 130 }} />
-            </tr></thead>
-            <tbody>
-              {porEstagioCen.map(x => (
-                <tr key={x.e} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
-                  <td style={{ padding: '7px 10px', fontSize: 12 }}>
-                    <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 2,
-                      background: CORES_E[x.e] || T.inkFaint, marginRight: 7 }} />
-                    {x.e}
-                  </td>
-                  <td style={{ padding: '7px 10px', fontSize: 11.5, textAlign: 'right', color: T.inkFaint }}>{x.n}</td>
-                  <td style={{ padding: '7px 10px', fontSize: 12, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{val(x.bruto)}</td>
-                  {cenarios.map(c => (
-                    <td key={c.c} style={{ padding: '7px 10px', fontSize: 12, textAlign: 'right',
-                      fontWeight: c.c === cenario ? 700 : 400,
-                      color: c.c === cenario ? T.terracotta : T.inkDim, fontVariantNumeric: 'tabular-nums' }}>
-                      {val(x[c.c])}
-                    </td>
-                  ))}
-                  <td style={{ padding: '7px 10px' }}>
-                    <div style={{ height: 9, background: T.lineSoft, borderRadius: 2, position: 'relative' }}>
-                      <div style={{ position: 'absolute', inset: 0, width: `${(x.bruto / maxEst) * 100}%`,
-                        background: `${CORES_E[x.e] || T.inkFaint}33`, borderRadius: 2 }} />
-                      <div style={{ position: 'absolute', inset: 0, width: `${(x[cenario] / maxEst) * 100}%`,
-                        background: CORES_E[x.e] || T.inkFaint, borderRadius: 2 }} />
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      ), t.explicaEstagio)}
-
-      {painel(t.porVendedor, (
-        <div style={{ overflowX: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 620 }}>
-            <thead><tr style={{ background: T.panelAlt }}>
-              {[t.vendedor, t.propostas, t.emAberto, t.ganhou, t.conversao, t.previsto, ''].map((h, i) => (
-                <th key={h + i} style={{ padding: '8px 10px', fontSize: 11, fontWeight: 600, color: T.inkFaint,
-                  textAlign: i === 0 ? 'left' : i === 6 ? 'left' : 'right', minWidth: i === 6 ? 140 : undefined }}>{h}</th>
-              ))}
-            </tr></thead>
-            <tbody>
-              {porVend.map(x => (
-                <tr key={x.v} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
-                  <td style={{ padding: '7px 10px', fontSize: 12, fontWeight: 600 }}>{x.v}</td>
-                  <td style={{ padding: '7px 10px', fontSize: 11.5, textAlign: 'right', color: T.inkFaint }}>{x.propostas}</td>
-                  <td style={{ padding: '7px 10px', fontSize: 12, textAlign: 'right', color: T.amberText, fontVariantNumeric: 'tabular-nums' }}>
-                    {val(x.aberto)} <span style={{ fontSize: 10, color: T.inkFaint }}>({x.nAberto})</span>
-                  </td>
-                  <td style={{ padding: '7px 10px', fontSize: 12, textAlign: 'right', color: T.oliveText, fontVariantNumeric: 'tabular-nums' }}>
-                    {val(x.ganho)} <span style={{ fontSize: 10, color: T.inkFaint }}>({x.nGanho})</span>
-                  </td>
-                  <td style={{ padding: '7px 10px', fontSize: 12, textAlign: 'right', fontWeight: 600,
-                    color: x.conv == null ? T.inkFaint : x.conv >= 70 ? T.oliveText : x.conv >= 40 ? T.amberText : T.rustText }}>
-                    {x.conv == null ? '—' : `${x.conv.toFixed(0)}%`}
-                  </td>
-                  <td style={{ padding: '7px 10px', fontSize: 12, textAlign: 'right', color: T.terracotta,
-                    fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{val(x.prev)}</td>
-                  <td style={{ padding: '7px 10px' }}>
-                    <div style={{ display: 'flex', height: 9, borderRadius: 2, overflow: 'hidden', background: T.lineSoft }}>
-                      <div style={{ width: `${(x.ganho / maxVend) * 100}%`, background: T.oliveText }} title={t.ganhou} />
-                      <div style={{ width: `${(x.aberto / maxVend) * 100}%`, background: T.amberText }} title={t.emAberto} />
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      ), t.explicaVendedor)}
-
-      {candidatas.length > 0 && painel(t.simTitulo, (() => {
-        // SIMULACAO DE DESCONTO. Proposta parada com margem alta pode fechar
-        // com um desconto -- margem menor e melhor que pedido nenhum.
-        //
-        // O CUSTO E FIXO: o desconto sai inteiro da margem. Proposta de 100 com
-        // 50% de margem tem custo 50; dando 10 pontos, o preco vai a 90 e a
-        // margem a 44,4% -- NAO a 40%. Confundir ponto de margem com desconto
-        // no preco e o erro classico dessa conta.
-        const alvo = candidatas
-          .filter(c2 => c2.dias_aberto >= minDias && Number(c2.margin) >= minMargem)
-          .map(c2 => {
-            const valor = Number(c2.valor) || 0;
-            const custo = Number(c2.custo_estimado) || 0;
-            const novoValor = valor * (1 - descPtos / 100);
-            const novoLucro = novoValor - custo;
-            return { ...c2, valor, custo,
-              lucro: Number(c2.lucro_atual) || 0, novoValor, novoLucro,
-              novaMargem: novoValor > 0 ? (novoLucro / novoValor) * 100 : null,
-              abriuMao: valor - novoValor };
-          })
-          .sort((a2, b2) => b2.dias_aberto - a2.dias_aberto);
-
-        const tot = alvo.reduce((s2, x) => ({
-          valor: s2.valor + x.valor, lucro: s2.lucro + x.lucro,
-          novoValor: s2.novoValor + x.novoValor, novoLucro: s2.novoLucro + x.novoLucro,
-        }), { valor: 0, lucro: 0, novoValor: 0, novoLucro: 0 });
-        const noVermelho = alvo.filter(x => x.novoLucro < 0).length;
-
-        return (
-          <>
-            <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'flex-end',
-              background: T.panelAlt, padding: '11px 13px', borderRadius: 7, marginBottom: 13 }}>
-              {[
-                { l: t.desconto, v: descPtos, set: setDescPtos, min: 0, max: 40, suf: '%' },
-                { l: t.paradaHa, v: minDias, set: setMinDias, min: 0, max: 120, suf: ` ${t.dias}` },
-                { l: t.margemAcima, v: minMargem, set: setMinMargem, min: 0, max: 80, suf: '%' },
-              ].map(f => (
-                <div key={f.l} style={{ minWidth: 175 }}>
-                  <div style={{ fontSize: 10.5, color: T.inkFaint, marginBottom: 4 }}>
-                    {f.l}: <strong style={{ color: T.ink, fontSize: 12 }}>{f.v}{f.suf}</strong>
-                  </div>
-                  <input type="range" min={f.min} max={f.max} value={f.v}
-                    onChange={e => f.set(Number(e.target.value))}
-                    style={{ width: '100%', accentColor: T.terracotta }} />
-                </div>
-              ))}
-              <div style={{ fontSize: 11, color: T.inkDim, flex: 1, minWidth: 200, lineHeight: 1.5 }}>
-                {t.simExplica}
-              </div>
-            </div>
-
-            <div style={{ display: 'grid', gap: 9, marginBottom: 13,
-              gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))' }}>
-              {[
-                { t: t.propostasParadas, v: String(alvo.length), c: T.ink },
-                { t: t.valorHoje, v: val(tot.valor), c: T.inkDim },
-                { t: t.valorComDesconto, v: val(tot.novoValor), c: T.terracotta },
-                { t: t.abreMao, v: val(tot.valor - tot.novoValor), c: T.rustText },
-                { t: t.lucroDepois, v: val(tot.novoLucro), c: tot.novoLucro > 0 ? T.oliveText : T.rustText },
-                { t: t.margemDepois, v: tot.novoValor > 0 ? `${((tot.novoLucro / tot.novoValor) * 100).toFixed(1)}%` : '—',
-                  c: T.oliveText },
-              ].map(k => (
-                <div key={k.t} style={{ background: T.panel, border: `1px solid ${T.line}`,
-                  borderRadius: 8, padding: '9px 11px' }}>
-                  <div style={{ fontSize: 10, color: T.inkFaint, minHeight: 24 }}>{k.t}</div>
-                  <div style={{ fontSize: 16, fontWeight: 700, color: k.c, fontVariantNumeric: 'tabular-nums' }}>{k.v}</div>
-                </div>
-              ))}
-            </div>
-
-            {noVermelho > 0 && (
-              <div style={{ fontSize: 11, color: T.rustText, background: T.rustSoft,
-                border: `1px solid ${T.rustText}44`, borderRadius: 6, padding: '8px 11px', marginBottom: 11 }}>
-                {t.avisoVermelho.replace('{n}', String(noVermelho))}
-              </div>
-            )}
-
-            <div style={{ overflowX: 'auto', maxHeight: 420, overflowY: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 760 }}>
-                <thead style={{ position: 'sticky', top: 0, zIndex: 1 }}><tr style={{ background: T.panelAlt }}>
-                  {['BR', t.cliente, t.dias, t.margemAtual, t.valorHoje, t.valorComDesconto,
-                    t.margemDepois, t.lucroDepois].map((h, i) => (
-                    <th key={h + i} style={{ padding: '8px 10px', fontSize: 11, fontWeight: 600,
-                      color: T.inkFaint, textAlign: i <= 1 ? 'left' : 'right', whiteSpace: 'nowrap' }}>{h}</th>
-                  ))}
-                </tr></thead>
-                <tbody>
-                  {alvo.slice(0, 60).map(x => (
-                    <tr key={x.br} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
-                      <td style={{ padding: '6px 10px', fontSize: 12, fontWeight: 600 }}>{x.br}</td>
-                      <td style={{ padding: '6px 10px', fontSize: 11.5, color: T.inkDim, maxWidth: 200,
-                        whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={x.cliente}>{x.cliente}</td>
-                      <td style={{ padding: '6px 10px', fontSize: 11.5, textAlign: 'right',
-                        color: x.dias_aberto > 60 ? T.rustText : T.inkFaint, fontWeight: x.dias_aberto > 60 ? 600 : 400 }}>
-                        {x.dias_aberto}
-                      </td>
-                      <td style={{ padding: '6px 10px', fontSize: 11.5, textAlign: 'right', color: T.oliveText }}>
-                        {Number(x.margin).toFixed(0)}%
-                      </td>
-                      <td style={{ padding: '6px 10px', fontSize: 12, textAlign: 'right',
-                        fontVariantNumeric: 'tabular-nums' }}>{valExato(x.valor)}</td>
-                      <td style={{ padding: '6px 10px', fontSize: 12, textAlign: 'right', color: T.terracotta,
-                        fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{valExato(x.novoValor)}</td>
-                      <td style={{ padding: '6px 10px', fontSize: 11.5, textAlign: 'right', fontWeight: 600,
-                        color: x.novaMargem == null ? T.inkFaint : x.novaMargem < 10 ? T.rustText
-                          : x.novaMargem < 25 ? T.amberText : T.oliveText }}>
-                        {x.novaMargem == null ? '—' : `${x.novaMargem.toFixed(1)}%`}
-                      </td>
-                      <td style={{ padding: '6px 10px', fontSize: 12, textAlign: 'right',
-                        color: x.novoLucro < 0 ? T.rustText : T.inkDim, fontVariantNumeric: 'tabular-nums' }}
-                        title={`${t.abreMao}: ${valExato(x.abriuMao)}`}>
-                        {valExato(x.novoLucro)}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            {alvo.length > 60 && (
-              <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 8 }}>
-                {t.mostrando.replace('{n}', '60').replace('{t}', String(alvo.length))}
-              </div>
-            )}
-          </>
-        );
-      })(), t.simSub)}
-
-      {fatOrigem.length > 0 && painel(t.fatTitulo, (() => {
-        // DE ONDE VEM O FATURAMENTO DO ANO. Sem isso, o cartao 'Faturado' do
-        // painel (R$ 16,5 mi) nao bate com a tela de Faturamento (R$ 25 mi) e
-        // parece que uma das duas esta errada. A diferenca sao R$ 8,4 milhoes
-        // de projeto vendido em ano anterior e entregue agora -- em obra longa
-        // isso e o normal, e o funil do ano corrente nao tem como mostrar.
-        const porOrigem = {};
-        fatOrigem.forEach(f => {
-          const k = f.origem;
-          if (!porOrigem[k]) porOrigem[k] = { rot: idioma === 'pt' ? f.rotulo : f.rotulo_en, v: 0, n: 0 };
-          porOrigem[k].v += Number(f.valor) || 0;
-          porOrigem[k].n += Number(f.brs) || 0;
-        });
-        const linhas = Object.entries(porOrigem)
-          .map(([k, x]) => ({ k, ...x })).sort((a2, b2) => b2.v - a2.v);
-        const totalFat = linhas.reduce((s2, x) => s2 + x.v, 0);
-        const CORES_O = { funil: T.oliveText, anterior: T.blueText,
-                          sem_proposta: T.amberText, duplicata: T.inkFaint };
-        return (
-          <>
-            <div style={{ display: 'flex', height: 26, borderRadius: 4, overflow: 'hidden',
-              background: T.lineSoft, marginBottom: 12 }}>
-              {linhas.map(x => (
-                <div key={x.k} title={`${x.rot}: ${val(x.v)} (${x.n} ${t.brs})`}
-                  style={{ width: `${(x.v / totalFat) * 100}%`, background: CORES_O[x.k] || T.inkFaint,
-                    display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  {(x.v / totalFat) > 0.12 && (
-                    <span style={{ fontSize: 10.5, color: '#fff', fontWeight: 600 }}>
-                      {Math.round((x.v / totalFat) * 100)}%
-                    </span>
-                  )}
-                </div>
-              ))}
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
-              {linhas.map(x => (
-                <div key={x.k} style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-                  <span style={{ width: 9, height: 9, borderRadius: 2, background: CORES_O[x.k] || T.inkFaint }} />
-                  <span style={{ fontSize: 12, color: T.inkDim, flex: 1 }}>{x.rot}</span>
-                  <span style={{ fontSize: 10.5, color: T.inkFaint, width: 70, textAlign: 'right' }}>{x.n} {t.brs}</span>
-                  <span style={{ fontSize: 12.5, fontWeight: 600, width: 95, textAlign: 'right',
-                    fontVariantNumeric: 'tabular-nums' }}>{val(x.v)}</span>
-                </div>
-              ))}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 9, paddingTop: 8,
-                borderTop: `1px solid ${T.line}`, marginTop: 3 }}>
-                <span style={{ width: 9 }} />
-                <span style={{ fontSize: 12, fontWeight: 700, flex: 1 }}>{t.fatTotal}</span>
-                <span style={{ fontSize: 10.5, color: T.inkFaint, width: 70, textAlign: 'right' }}>
-                  {linhas.reduce((s2, x) => s2 + x.n, 0)} {t.brs}
-                </span>
-                <span style={{ fontSize: 13, fontWeight: 700, width: 95, textAlign: 'right',
-                  fontVariantNumeric: 'tabular-nums' }}>{val(totalFat)}</span>
-              </div>
-            </div>
-            <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 11, paddingTop: 9,
-              borderTop: `1px solid ${T.lineSoft}`, lineHeight: 1.55 }}>
-              {t.fatExplica}
-            </div>
-          </>
-        );
-      })(), t.fatSub)}
-
-      {ciclo.length > 0 && painel(t.cicloTitulo, (
-        <>
-          <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8, height: 150 }}>
-            {ciclo.map(c => {
-              const prop = Number(c.valor_proposto) || 0;
-              const ped = Number(c.valor_pedido) || 0;
-              return (
-                <div key={c.competencia} style={{ flex: 1, display: 'flex', flexDirection: 'column',
-                  alignItems: 'center', gap: 4 }}
-                  title={`${rotMes(c.competencia)} · ${c.propostas} ${t.propostas} · ${c.viraram_pedido} ${t.ganhou} · ${c.conversao_pct}%`}>
-                  <div style={{ fontSize: 9.5, color: T.oliveText, fontWeight: 600 }}>{c.conversao_pct}%</div>
-                  <div style={{ width: '100%', height: `${Math.max((prop / maxCiclo) * 100, 4)}px`,
-                    background: T.lineSoft, borderRadius: '3px 3px 0 0', display: 'flex', alignItems: 'flex-end' }}>
-                    <div style={{ width: '100%', height: `${(ped / (prop || 1)) * 100}%`,
-                      background: T.oliveText, borderRadius: '3px 3px 0 0' }} />
-                  </div>
-                  <div style={{ fontSize: 9.5, color: T.inkFaint }}>{rotMes(c.competencia)}</div>
-                  <div style={{ fontSize: 9, color: T.inkFaint }}>{c.propostas}/{c.viraram_pedido}</div>
-                </div>
-              );
-            })}
-          </div>
-          <div style={{ display: 'grid', gap: 8, marginTop: 14, paddingTop: 12,
-            borderTop: `1px solid ${T.lineSoft}`, gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))' }}>
-            {[
-              { t: t.diasAtePedido, v: `${Math.round(ciclo.reduce((s, c) => s + (Number(c.dias_ate_pedido) || 0), 0) / ciclo.length)} ${t.dias}` },
-              { t: t.diasAteFaturar, v: `${Math.round(ciclo.reduce((s, c) => s + (Number(c.dias_ate_faturar) || 0), 0) / ciclo.length)} ${t.dias}` },
-              { t: t.convMedia, v: `${(ciclo.reduce((s, c) => s + (Number(c.conversao_pct) || 0), 0) / ciclo.length).toFixed(0)}%` },
-              { t: t.ticket, v: val(soma(ciclo, 'valor_proposto') / Math.max(ciclo.reduce((s, c) => s + c.propostas, 0), 1)) },
-            ].map(k => (
-              <div key={k.t}>
-                <div style={{ fontSize: 10.5, color: T.inkFaint }}>{k.t}</div>
-                <div style={{ fontSize: 15, fontWeight: 700, color: T.ink, fontVariantNumeric: 'tabular-nums' }}>{k.v}</div>
-              </div>
-            ))}
-          </div>
-        </>
-      ), t.explicaCiclo)}
+      <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))' }}>
+        {painel(t.porVendedor, <BarrasH dados={barrasVend} cor={T.amberText} />, t.explicaVendedor)}
+        {painel(t.topClientes, <BarrasH dados={barrasCli} cor={T.terracotta} />)}
+      </div>
     </div>
   );
 }
@@ -4230,6 +4100,14 @@ function FollowUpComercial({ currentUser }) {
   const [disparando, setDisparando] = useState(null);
   const [avisoEnvio, setAvisoEnvio] = useState(null);
   const [verHistorico, setVerHistorico] = useState(false);
+  // SIMULACAO DE DESCONTO: fica aqui, no Follow Up, nao no painel da diretoria.
+  // E ferramenta de trabalho do Ricardo -- diretoria ve numero, quem negocia
+  // mexe em controle.
+  const [candidatas, setCandidatas] = useState([]);
+  const [verSim, setVerSim] = useState(false);
+  const [descPtos, setDescPtos] = useState(5);
+  const [minDias, setMinDias] = useState(15);
+  const [minMargem, setMinMargem] = useState(40);
   // Filtros por coluna, como no Excel. Texto para BR e Cliente, lista para
   // Vendedor e os dois estagios.
   const [filtros, setFiltros] = useState({ br: '', cliente: '', vendedor: '', estC: '', estV: '' });
@@ -4239,16 +4117,18 @@ function FollowUpComercial({ currentUser }) {
 
   const carregar = useCallback(async () => {
     setLoading(true);
-    const [p, e, h, c] = await Promise.all([
+    const [p, e, h, c, cd] = await Promise.all([
       supabase.from('v_comercial_pipeline').select('*'),
       supabase.from('comercial_estagio').select('*').order('ordem'),
       supabase.from('v_comercial_followup_historico').select('*').order('enviado_em', { ascending: false }).limit(60),
       supabase.from('comercial_followup_config').select('webhook_url').eq('id', 1).maybeSingle(),
+      supabase.from('v_comercial_candidata_desconto').select('*'),
     ]);
     setLinhas(p.data || []);
     setEstagios(e.data || []);
     setEnvioHist(h.data || []);
     setWebhook(c.data?.webhook_url || '');
+    setCandidatas(cd.data || []);
     setLoading(false);
   }, []);
   useEffect(() => { carregar(); }, [carregar]);
@@ -4803,6 +4683,139 @@ function FollowUpComercial({ currentUser }) {
                       ))}
                     </tbody>
                   </table>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
+      {candidatas.length > 0 && (() => {
+        // Proposta parada com margem alta pode fechar com desconto. O CUSTO NAO
+        // MUDA: o desconto sai inteiro da margem. Proposta de R$ 100 com 50% de
+        // margem tem R$ 50 de custo -- com 10% de desconto vai a R$ 90 e a
+        // margem cai para 44,4%, NAO para 40%.
+        const moedaEx = (v) => `R$ ${(Number(v) || 0).toLocaleString('pt-BR', { maximumFractionDigits: 0 })}`;
+        const alvo = candidatas
+          .filter(c2 => c2.dias_aberto >= minDias && Number(c2.margin) >= minMargem)
+          .map(c2 => {
+            const valor = Number(c2.valor) || 0;
+            const custo = Number(c2.custo_estimado) || 0;
+            const novoValor = valor * (1 - descPtos / 100);
+            const novoLucro = novoValor - custo;
+            return { ...c2, valor, custo, novoValor, novoLucro,
+              novaMargem: novoValor > 0 ? (novoLucro / novoValor) * 100 : null };
+          })
+          .sort((a2, b2) => b2.dias_aberto - a2.dias_aberto);
+        const tot = alvo.reduce((s2, x) => ({
+          valor: s2.valor + x.valor, novoValor: s2.novoValor + x.novoValor,
+          novoLucro: s2.novoLucro + x.novoLucro }), { valor: 0, novoValor: 0, novoLucro: 0 });
+        const noVermelho = alvo.filter(x => x.novoLucro < 0).length;
+
+        return (
+          <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: 13 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+              <span style={{ fontSize: 12, fontWeight: 700 }}>
+                Simulação de desconto
+                <span style={{ fontWeight: 400, color: T.inkFaint, fontSize: 10.5 }}>
+                  {' '}· proposta parada com margem alta pode fechar com desconto
+                </span>
+              </span>
+              <button onClick={() => setVerSim(v => !v)}
+                style={{ fontFamily: 'inherit', fontSize: 11, padding: '4px 10px', borderRadius: 5, cursor: 'pointer',
+                  border: `1px solid ${T.line}`, background: 'transparent', color: T.inkDim }}>
+                {verSim ? 'esconder' : `simular (${alvo.length})`}
+              </button>
+            </div>
+
+            {verSim && (
+              <div style={{ marginTop: 12 }}>
+                <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'flex-end',
+                  background: T.panelAlt, padding: '11px 13px', borderRadius: 7, marginBottom: 12 }}>
+                  {[
+                    { l: 'Desconto no preço', v: descPtos, set: setDescPtos, max: 40, suf: '%' },
+                    { l: 'Parada há mais de', v: minDias, set: setMinDias, max: 120, suf: ' dias' },
+                    { l: 'Margem acima de', v: minMargem, set: setMinMargem, max: 80, suf: '%' },
+                  ].map(f => (
+                    <div key={f.l} style={{ minWidth: 170 }}>
+                      <div style={{ fontSize: 10.5, color: T.inkFaint, marginBottom: 4 }}>
+                        {f.l}: <strong style={{ color: T.ink, fontSize: 12 }}>{f.v}{f.suf}</strong>
+                      </div>
+                      <input type="range" min={0} max={f.max} value={f.v}
+                        onChange={e => f.set(Number(e.target.value))}
+                        style={{ width: '100%', accentColor: T.terracotta }} />
+                    </div>
+                  ))}
+                  <div style={{ fontSize: 10.5, color: T.inkDim, flex: 1, minWidth: 210, lineHeight: 1.5 }}>
+                    O custo não muda: o desconto sai inteiro da margem. R$ 100 com 50% de margem
+                    tem R$ 50 de custo — com 10% de desconto vai a R$ 90 e a margem cai para 44,4%.
+                  </div>
+                </div>
+
+                <div style={{ display: 'grid', gap: 8, marginBottom: 12,
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))' }}>
+                  {[
+                    { t: 'Propostas', v: String(alvo.length), c: T.ink },
+                    { t: 'Preço de hoje', v: moeda(tot.valor), c: T.inkDim },
+                    { t: 'Novo preço', v: moeda(tot.novoValor), c: T.terracotta },
+                    { t: 'Abre mão de', v: moeda(tot.valor - tot.novoValor), c: T.rustText },
+                    { t: 'Lucro depois', v: moeda(tot.novoLucro), c: tot.novoLucro > 0 ? T.oliveText : T.rustText },
+                  ].map(k => (
+                    <div key={k.t} style={{ background: T.panelAlt, borderRadius: 7, padding: '8px 11px' }}>
+                      <div style={{ fontSize: 10, color: T.inkFaint }}>{k.t}</div>
+                      <div style={{ fontSize: 15, fontWeight: 700, color: k.c, fontVariantNumeric: 'tabular-nums' }}>{k.v}</div>
+                    </div>
+                  ))}
+                </div>
+
+                {noVermelho > 0 && (
+                  <div style={{ fontSize: 11, color: T.rustText, background: T.rustSoft,
+                    border: `1px solid ${T.rustText}44`, borderRadius: 6, padding: '8px 11px', marginBottom: 10 }}>
+                    {noVermelho} {noVermelho === 1 ? 'proposta fica' : 'propostas ficam'} com lucro
+                    NEGATIVO neste desconto — o preço cairia abaixo do custo orçado.
+                  </div>
+                )}
+
+                <div style={{ overflowX: 'auto', maxHeight: 380, overflowY: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 740 }}>
+                    <thead style={{ position: 'sticky', top: 0, zIndex: 1 }}><tr style={{ background: T.panelAlt }}>
+                      {['BR', 'Cliente', 'Dias', 'Margem hoje', 'Preço de hoje', 'Novo preço', 'Margem depois', 'Lucro depois'].map((h, i) => (
+                        <th key={h} style={{ padding: '8px 10px', fontSize: 11, fontWeight: 600,
+                          color: T.inkFaint, textAlign: i <= 1 ? 'left' : 'right', whiteSpace: 'nowrap' }}>{h}</th>
+                      ))}
+                    </tr></thead>
+                    <tbody>
+                      {alvo.slice(0, 60).map(x => (
+                        <tr key={x.br} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                          <td style={{ padding: '6px 10px', fontSize: 12, fontWeight: 600 }}>{x.br}</td>
+                          <td style={{ padding: '6px 10px', fontSize: 11.5, color: T.inkDim, maxWidth: 190,
+                            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={x.cliente}>{x.cliente}</td>
+                          <td style={{ padding: '6px 10px', fontSize: 11.5, textAlign: 'right',
+                            color: x.dias_aberto > 60 ? T.rustText : T.inkFaint }}>{x.dias_aberto}</td>
+                          <td style={{ padding: '6px 10px', fontSize: 11.5, textAlign: 'right', color: T.oliveText }}>
+                            {Number(x.margin).toFixed(0)}%
+                          </td>
+                          <td style={{ padding: '6px 10px', fontSize: 12, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{moedaEx(x.valor)}</td>
+                          <td style={{ padding: '6px 10px', fontSize: 12, textAlign: 'right', color: T.terracotta,
+                            fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{moedaEx(x.novoValor)}</td>
+                          <td style={{ padding: '6px 10px', fontSize: 11.5, textAlign: 'right', fontWeight: 600,
+                            color: x.novaMargem == null ? T.inkFaint : x.novaMargem < 10 ? T.rustText
+                              : x.novaMargem < 25 ? T.amberText : T.oliveText }}>
+                            {x.novaMargem == null ? '—' : `${x.novaMargem.toFixed(1)}%`}
+                          </td>
+                          <td style={{ padding: '6px 10px', fontSize: 12, textAlign: 'right',
+                            color: x.novoLucro < 0 ? T.rustText : T.inkDim, fontVariantNumeric: 'tabular-nums' }}>
+                            {moedaEx(x.novoLucro)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                {alvo.length > 60 && (
+                  <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 8 }}>
+                    mostrando 60 de {alvo.length}
+                  </div>
                 )}
               </div>
             )}
