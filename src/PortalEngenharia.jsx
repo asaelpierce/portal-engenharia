@@ -3653,7 +3653,7 @@ const TXT = {
     explicaCenario: 'os fatores por estágio são editáveis — a regra de vocês ainda está sendo definida',
     explicaPrevisaoMes: 'pelo mês que o vendedor espera fechar, não pelo mês da proposta · barra cheia = valor bruto, barra escura = cenário',
     explicaEstagio: 'valor cheio e o que sobra em cada cenário',
-    explicaVendedor: 'barra verde = fechado, âmbar = em aberto · conversão sobre o total de propostas',
+    explicaVendedor: 'barra clara = total proposto, barra intensa = o que fechou · % = conversão sobre o total',
     explicaCiclo: 'barra cheia = proposto, verde = virou pedido',
     explicaFaturado: 'Receita das notas dos BRs vendidos em 2026. O quadro abaixo abre a diferença para o faturamento total da empresa.',
     fatTitulo: 'De onde vem o faturamento de 2026', fatTotal: 'Faturamento total do ano',
@@ -3703,6 +3703,9 @@ const TXT = {
     regraSemVerde: 'Propostas em aberto com estágio Avançado ou Alto (classificação do vendedor). O lucro em jogo é valor × margem orçada de cada BR — {s} das propostas desta cor têm margem no Sankhya.',
     regraSemAmarelo: 'Propostas em aberto com estágio Médio, ou ainda sem classificação do vendedor (exceto as paradas há +180 dias, que caem no vermelho). É a pilha que o follow up destrava: classificar muda a cor. O lucro em jogo é valor × margem orçada.',
     regraSemVermelho: 'Propostas em aberto com estágio Baixo, ou sem classificação e paradas há mais de 180 dias. Não é lista de descarte — é lista de DECISÃO: ou alguém caça, ou desiste formalmente e limpa o funil. O lucro em jogo é valor × margem orçada.',
+    ponderado: 'Em aberto ponderado',
+    ponderadoSub: 'valor × peso do estágio',
+    explicaPonderado: 'Cada proposta em aberto multiplicada pelo peso do estágio dado pelo vendedor (pesos cadastrados na tabela de estágios). Proposta SEM classificação vale ZERO aqui — classificar é o que faz este número subir. É a leitura mais honesta do funil: o que ele vale pela régua do próprio time.',
   },
   en: {
     titulo: 'Executive dashboard', moeda: 'Currency', idioma: 'Language', cenario: 'Scenario',
@@ -3734,7 +3737,7 @@ const TXT = {
     explicaCenario: 'stage factors are editable — the final rule is still being defined',
     explicaPrevisaoMes: 'by the month the salesperson expects to close, not the proposal month · light bar = full value, dark bar = scenario',
     explicaEstagio: 'full value and what remains in each scenario',
-    explicaVendedor: 'green = closed, amber = open · win rate over all proposals',
+    explicaVendedor: 'light bar = total proposed, solid bar = closed · % = win rate over the total',
     explicaCiclo: 'light bar = proposed, green = became an order',
     explicaFaturado: 'Invoiced revenue for projects sold in 2026. The panel below breaks down the gap to company-wide revenue.',
     fatTitulo: 'Where 2026 revenue comes from', fatTotal: 'Total revenue for the year',
@@ -3784,6 +3787,9 @@ const TXT = {
     regraSemVerde: 'Open proposals staged Advanced or High (salesperson\'s call). Profit at stake is value × budgeted margin per BR — {s} of the proposals in this color have a margin in the ERP.',
     regraSemAmarelo: 'Open proposals staged Medium, or not yet classified (except those stuck for 180+ days, which fall into red). This is the pile the follow-up unlocks: classifying changes the color. Profit at stake is value × budgeted margin.',
     regraSemVermelho: 'Open proposals staged Low, or unclassified and stuck for over 180 days. Not a discard list — a DECISION list: either someone chases, or formally drops it and cleans the funnel. Profit at stake is value × budgeted margin.',
+    ponderado: 'Weighted open pipeline',
+    ponderadoSub: 'value × stage weight',
+    explicaPonderado: 'Each open proposal multiplied by the weight of the stage set by the salesperson (weights from the stage table). UNCLASSIFIED proposals count as ZERO here — classifying is what makes this number grow. The most honest read of the funnel: what it is worth by the team\'s own ruler.',
   },
 };
 
@@ -4021,7 +4027,10 @@ function BarrasH({ dados, altura = 24, aoClicar, ativo }) {
             <div style={{ flex: 1, height: altura, background: T.lineSoft, borderRadius: 5,
               position: 'relative', overflow: 'hidden' }}>
               <div className="g-barra" style={{ height: '100%', width: `${(d.v / max) * 100}%`,
-                background: `linear-gradient(90deg, ${d.par[0]}44, ${d.par[0]}88)`,
+                background: d.dentro != null
+                  ? `linear-gradient(90deg, ${d.par[0]}55, ${d.par[0]}99)`
+                  : `linear-gradient(90deg, ${d.par[0]}, ${d.par[1]})`,
+                boxShadow: d.dentro == null ? `0 1px 6px ${d.par[0]}55` : undefined,
                 borderRadius: 5, animationDelay: `${i * 55}ms` }} />
               {d.dentro != null && (
                 <div className="g-barra" style={{ position: 'absolute', top: 0, left: 0, height: '100%',
@@ -4139,6 +4148,8 @@ function PainelDiretoria() {
   const ganhos = pedidos.length + faturados.length;
   const convPct = dados.length > 0 ? (ganhos / dados.length) * 100 : null;
   const receitaFat = soma(faturados, 'receita_faturada');
+  // Regra oficial do pipeline: valor × peso do estágio; sem classificação = 0.
+  const somaPonderado = soma(abertos, 'valor_ponderado');
 
   const doCenario = previsao.filter(p => p.cenario === cenario);
   const cenarios = [...new Map(previsao.map(p => [p.cenario, { c: p.cenario, r: p.cenario_rotulo, o: p.cenario_ordem }])).values()]
@@ -4210,8 +4221,9 @@ function PainelDiretoria() {
     const k = d.cliente || '—';
     porCliente[k] = (porCliente[k] || 0) + (Number(d.valor) || 0);
   });
-  const PARES_CLI = [G.roxo, G.ciano, G.rosa, G.azul, G.verde, G.ambar, G.vermelho, G.cinza];
-  const barrasCli = Object.entries(porCliente).map(([k, v], i) => ({ k, v, rot: val(v), par: PARES_CLI[i % 8] }))
+  // Ranking em UMA cor: as barras diferem no comprimento, não no tom —
+  // paleta sortida aqui parecia festa, não diretoria.
+  const barrasCli = Object.entries(porCliente).map(([k, v]) => ({ k, v, rot: val(v), par: G.azul }))
     .sort((a, b) => b.v - a.v).slice(0, 8);
 
   // cenários lado a lado
@@ -4506,6 +4518,7 @@ function PainelDiretoria() {
       <div style={{ display: 'grid', gap: 9, gridTemplateColumns: 'repeat(auto-fit, minmax(158px, 1fr))' }}>
         {[
           { t: t.emAberto, bruto: soma(abertos), n: `${abertos.length} ${t.propostas}`, p: G.ambar },
+          { t: t.ponderado, bruto: somaPonderado, n: t.ponderadoSub, p: G.ciano, ajuda: t.explicaPonderado },
           { t: t.paradoMais90, bruto: valor90, n: `${abertos90.length} ${t.propostas}`, p: G.vermelho, ajuda: t.explicaAging },
           { t: t.pedido, bruto: soma(pedidos), n: `${pedidos.length} ${t.brs}`, p: G.azul },
           { t: t.faturado, bruto: receitaFat, n: `${faturados.length} ${t.brs}`, p: G.verde, ajuda: t.explicaFaturado },
@@ -4746,15 +4759,22 @@ function PainelDiretoria() {
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
         <span style={{ fontSize: 11.5, color: T.inkDim, fontWeight: 600 }}>{t.cenario}</span>
         {botoes(cenarios.map(c => [c.c, c.r]), cenario, setCenario)}
+        <span style={{ fontSize: 11.5, color: T.inkFaint, marginLeft: 4 }}>
+          {t.previsto}:{' '}
+          <strong style={{ color: T.ink, fontSize: 14.5, fontVariantNumeric: 'tabular-nums' }}>
+            <Contador valor={totalCenario} formata={val} />
+          </strong>
+        </span>
       </div>
 
       <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))' }}>
         {painel(t.cenariosTitulo, (
           <BarrasH dados={barrasCen} altura={28}
-            ativo={detalhe?.chave?.startsWith('cen:') ? detalhe.chave.slice(4) : null}
+            ativo={cenarios.find(c2 => c2.c === cenario)?.r || null}
             aoClicar={(b2) => {
               const c2 = cenarios.find(x => x.r === b2.k);
               if (!c2) return;
+              setCenario(c2.c);
               const lista = previsao.filter(x => x.cenario === c2.c)
                 .map(x => ({ ...x, valor: x.valor_cenario, estagio: x.estagio_rotulo }));
               const fatores = [...new Map(previsao.filter(x => x.cenario === c2.c)
