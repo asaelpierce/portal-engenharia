@@ -3671,6 +3671,28 @@ const TXT = {
     semPrevisaoTitulo: 'Nenhuma proposta tem expectativa de fechamento preenchida ainda.',
     semPrevisao: 'A coluna é nova e vai chegar quando os vendedores devolverem o follow up. Até lá, a previsão existe mas não tem como ser distribuída por mês.',
     semDataValor: '{n} propostas sem data de fechamento, somando {v} no cenário.',
+    porEstagio: 'Funil em aberto por estágio', topClientes: 'Top clientes',
+    paradoMais90: 'Parado há +90 dias',
+    atencao: 'O que pede atenção', atencaoSub: 'sinais calculados a partir dos dados — clique para abrir os BRs',
+    alertaAging: '{p}% do funil em aberto ({v}) está parado há mais de 90 dias',
+    alertaAgingSub: '{n} propostas sem decisão há um trimestre — vale caçar ou desistir formalmente',
+    alertaEntrada: 'Entrada de propostas caiu {p}% nos últimos 2 meses',
+    alertaEntradaSub: 'média de {a} propostas/mês no último bimestre contra {b} nos 4 meses anteriores — funil que seca hoje é receita que falta em seis meses',
+    alertaSemClass: '{p}% do funil aberto está sem classificação dos vendedores',
+    alertaSemClassSub: '{v} sem leitura de chance — a previsão por cenário fica cega nessa parte',
+    alertaConc: '{c} concentra {p}% do funil em aberto',
+    alertaConcSub: '{v} dependem de um único cliente decidir',
+    agingTitulo: 'Envelhecimento do funil em aberto',
+    explicaAging: 'idade da proposta desde a abertura · valor parado há +90 dias raramente fecha sozinho',
+    regraAging: 'Propostas em aberto com idade de {f}. Idade = dias desde a criação do BR. O valor é o cheio da proposta, sem ponderar por chance.',
+    d0_30: '0–30 dias', d31_60: '31–60 dias', d61_90: '61–90 dias', d91_180: '91–180 dias', d180: '+180 dias',
+    receitaMesTitulo: 'Receita faturada, mês a mês',
+    explicaReceitaMes: 'notas de venda com BR, sem duplicatas BRV — mesma base da rosca de origem, aberta no tempo · o mês corrente ainda está em curso',
+    acumAno: 'acumulado no ano', mediaMes: 'média/mês', projecaoAno: 'projeção do ano', parcial: 'parcial',
+    cobertura: 'O funil em aberto equivale a {x} meses da receita média. Convertendo os {c}% históricos, viram {m} meses — o resto precisa de caça ativa.',
+    topDealsTitulo: 'Maiores negócios em aberto',
+    explicaTopDeals: 'as {n} maiores propostas sem decisão — as que a diretoria deveria conhecer pelo nome',
+    idade: 'Idade',
   },
   en: {
     titulo: 'Executive dashboard', moeda: 'Currency', idioma: 'Language', cenario: 'Scenario',
@@ -3720,6 +3742,28 @@ const TXT = {
     semPrevisaoTitulo: 'No proposal has an expected closing date yet.',
     semPrevisao: 'The column is new and will arrive as salespeople return the follow-up. Until then the forecast exists but cannot be spread across months.',
     semDataValor: '{n} proposals with no closing date, totalling {v} in this scenario.',
+    porEstagio: 'Open pipeline by stage', topClientes: 'Top customers',
+    paradoMais90: 'Stuck 90+ days',
+    atencao: 'Needs attention', atencaoSub: 'signals computed from the data — click to open the projects',
+    alertaAging: '{p}% of the open pipeline ({v}) has been sitting for over 90 days',
+    alertaAgingSub: '{n} proposals undecided for a quarter — worth chasing or formally dropping',
+    alertaEntrada: 'Proposal inflow dropped {p}% over the last 2 months',
+    alertaEntradaSub: 'average of {a} proposals/month in the last two months vs {b} in the previous four — a funnel drying up today is revenue missing in six months',
+    alertaSemClass: '{p}% of the open pipeline is unclassified by the sales team',
+    alertaSemClassSub: '{v} with no probability read — scenario forecasting is blind on that part',
+    alertaConc: '{c} holds {p}% of the open pipeline',
+    alertaConcSub: '{v} depend on a single customer deciding',
+    agingTitulo: 'Open pipeline aging',
+    explicaAging: 'proposal age since opening · value stuck for 90+ days rarely closes by itself',
+    regraAging: 'Open proposals aged {f}. Age = days since the BR was created. Value is the full proposal, not weighted by probability.',
+    d0_30: '0–30 days', d31_60: '31–60 days', d61_90: '61–90 days', d91_180: '91–180 days', d180: '180+ days',
+    receitaMesTitulo: 'Invoiced revenue, month by month',
+    explicaReceitaMes: 'sales invoices with a BR, BRV duplicates excluded — same base as the origin donut, spread over time · the current month is still running',
+    acumAno: 'year to date', mediaMes: 'avg/month', projecaoAno: 'full-year projection', parcial: 'partial',
+    cobertura: 'The open pipeline equals {x} months of average revenue. At the historical {c}% win rate, that becomes {m} months — the rest needs active hunting.',
+    topDealsTitulo: 'Biggest open deals',
+    explicaTopDeals: 'the {n} largest undecided proposals — the ones the board should know by name',
+    idade: 'Age',
   },
 };
 
@@ -4160,6 +4204,70 @@ function PainelDiretoria() {
   const diasPedido = ciclo.length ? Math.round(ciclo.reduce((s, c) => s + (Number(c.dias_ate_pedido) || 0), 0) / ciclo.length) : null;
   const diasFat = ciclo.length ? Math.round(ciclo.reduce((s, c) => s + (Number(c.dias_ate_faturar) || 0), 0) / ciclo.length) : null;
 
+  // ---- LEITURAS DE DIRETORIA ----
+  // O funil "em aberto" mistura proposta viva com proposta esquecida. A idade
+  // separa uma da outra — e é a primeira pergunta de quem vê o total em aberto.
+  const FAIXAS_IDADE = [
+    { k: t.d0_30, de: 0, ate: 30, par: G.verde },
+    { k: t.d31_60, de: 31, ate: 60, par: G.ciano },
+    { k: t.d61_90, de: 61, ate: 90, par: G.ambar },
+    { k: t.d91_180, de: 91, ate: 180, par: G.rosa },
+    { k: t.d180, de: 181, ate: Infinity, par: G.vermelho },
+  ];
+  const agingListas = FAIXAS_IDADE.map(f => ({
+    ...f,
+    lista: abertos.filter(d => { const di = Number(d.dias_aberto) || 0; return di >= f.de && di <= f.ate; }),
+  }));
+  const barrasAging = agingListas.map(f => ({
+    k: f.k, v: soma(f.lista), rot: val(soma(f.lista)), par: f.par, extra: String(f.lista.length),
+  }));
+  const abertos90 = abertos.filter(d => (Number(d.dias_aberto) || 0) > 90);
+  const valor90 = soma(abertos90);
+  const pct90 = soma(abertos) > 0 ? (valor90 / soma(abertos)) * 100 : 0;
+
+  // Receita mensal REAL (notas com BR, sem duplicatas BRV) — a mesma base da
+  // rosca de origem, agora aberta no tempo, com acumulado, média e projeção
+  // de fim de ano pelo ritmo dos meses completos. O mês corrente é parcial e
+  // fica FORA da média — senão ele derruba a projeção toda vez.
+  const recPorMes = {};
+  fatOrigem.filter(f => f.origem !== 'duplicata' && f.competencia).forEach(f => {
+    recPorMes[f.competencia] = (recPorMes[f.competencia] || 0) + (Number(f.valor) || 0);
+  });
+  const mesesRec = Object.keys(recPorMes).sort();
+  const mesAtualISO = new Date().toISOString().slice(0, 7);
+  const colReceita = mesesRec.map(m => ({
+    k: rotMes(m), total: recPorMes[m], dentro: recPorMes[m], rot: fmtMoedaCompacta(conv(recPorMes[m])),
+    sub: m === mesAtualISO ? t.parcial : undefined,
+  }));
+  const mesesRecCompletos = mesesRec.filter(m => m < mesAtualISO);
+  const somaRecCompleta = mesesRecCompletos.reduce((s, m) => s + recPorMes[m], 0);
+  const mediaMensal = mesesRecCompletos.length ? somaRecCompleta / mesesRecCompletos.length : 0;
+  const acumAno = mesesRec.reduce((s, m) => s + recPorMes[m], 0);
+  const projecaoAno = somaRecCompleta + mediaMensal * Math.max(0, 12 - mesesRecCompletos.length);
+  const coberturaMeses = mediaMensal > 0 ? soma(abertos) / mediaMensal : null;
+  const coberturaConv = coberturaMeses != null && convPct != null ? coberturaMeses * (convPct / 100) : null;
+
+  // Entrada de propostas: média dos últimos 2 meses completos contra os 4
+  // anteriores — mede se a boca do funil está secando.
+  const entradaPorMes = {};
+  dados.forEach(d => { if (d.competencia) entradaPorMes[d.competencia] = (entradaPorMes[d.competencia] || 0) + 1; });
+  const mesesEntComp = Object.keys(entradaPorMes).sort().filter(m => m < mesAtualISO);
+  const ult2 = mesesEntComp.slice(-2), ant4 = mesesEntComp.slice(-6, -2);
+  const mediaUlt2 = ult2.length ? ult2.reduce((s, m) => s + entradaPorMes[m], 0) / ult2.length : null;
+  const mediaAnt4 = ant4.length ? ant4.reduce((s, m) => s + entradaPorMes[m], 0) / ant4.length : null;
+  const quedaEntrada = mediaUlt2 != null && mediaAnt4 ? (1 - mediaUlt2 / mediaAnt4) * 100 : null;
+
+  const abertoPorCliente = {};
+  abertos.forEach(d => { const k = d.cliente || '—'; abertoPorCliente[k] = (abertoPorCliente[k] || 0) + (Number(d.valor) || 0); });
+  const topCli = Object.entries(abertoPorCliente).sort((a, b) => b[1] - a[1])[0];
+  const pctTopCli = topCli && soma(abertos) > 0 ? (topCli[1] / soma(abertos)) * 100 : 0;
+
+  // A view grava 'Sem classificação' independente do idioma da tela.
+  const semClasse = abertos.filter(d => d.estagio === 'Sem classificação');
+  const pctSemClasse = soma(abertos) > 0 ? (soma(semClasse) / soma(abertos)) * 100 : 0;
+
+  const topDeals = [...abertos].sort((a, b) => (Number(b.valor) || 0) - (Number(a.valor) || 0)).slice(0, 8);
+
   // Abre o detalhe: o QUE esta ali e COMO foi calculado. Mostrar so a lista
   // deixaria a pergunta 'de onde saiu esse numero' sem resposta -- e e ela que
   // aparece na reuniao.
@@ -4174,6 +4282,37 @@ function PainelDiretoria() {
           linhas: [...linhas].sort((a, b) => (Number(b.valor) || 0) - (Number(a.valor) || 0)) }
       : d)), 520);
   };
+
+  // ---- SINAIS DE ATENÇÃO: calculados, não opinativos. Cada um diz o número,
+  // o porquê, e (quando há lista) abre os BRs no clique. Só aparecem quando
+  // cruzam o limiar — radar vazio é notícia boa, não painel quebrado. ----
+  const alertas = [];
+  if (pct90 >= 40) alertas.push({
+    cor: G.vermelho,
+    titulo: t.alertaAging.replace('{p}', pct90.toFixed(0)).replace('{v}', val(valor90)),
+    sub: t.alertaAgingSub.replace('{n}', String(abertos90.length)),
+    clique: () => abrir('alerta:aging', t.alertaAging.replace('{p}', pct90.toFixed(0)).replace('{v}', val(valor90)),
+      t.regraAging.replace('{f}', `+90 ${t.dias}`), abertos90, valor90),
+  });
+  if (quedaEntrada != null && quedaEntrada >= 20) alertas.push({
+    cor: G.ambar,
+    titulo: t.alertaEntrada.replace('{p}', quedaEntrada.toFixed(0)),
+    sub: t.alertaEntradaSub.replace('{a}', mediaUlt2.toFixed(0)).replace('{b}', mediaAnt4.toFixed(0)),
+  });
+  if (pctSemClasse >= 50) alertas.push({
+    cor: G.roxo,
+    titulo: t.alertaSemClass.replace('{p}', pctSemClasse.toFixed(0)),
+    sub: t.alertaSemClassSub.replace('{v}', val(soma(semClasse))),
+    clique: () => abrir('alerta:semclass', t.alertaSemClass.replace('{p}', pctSemClasse.toFixed(0)),
+      t.regraEstagio.replace('{e}', 'Sem classificação'), semClasse, soma(semClasse)),
+  });
+  if (topCli && pctTopCli >= 25) alertas.push({
+    cor: G.azul,
+    titulo: t.alertaConc.replace('{c}', topCli[0]).replace('{p}', pctTopCli.toFixed(0)),
+    sub: t.alertaConcSub.replace('{v}', val(topCli[1])),
+    clique: () => abrir('alerta:conc', topCli[0], t.regraCliente,
+      abertos.filter(d => (d.cliente || '—') === topCli[0]), topCli[1]),
+  });
 
   const gavetaConteudo = detalhe && (
     <div className="g-drawer" style={{ background: T.panel, border: `1px solid ${T.terracotta}`,
@@ -4324,6 +4463,7 @@ function PainelDiretoria() {
       <div style={{ display: 'grid', gap: 9, gridTemplateColumns: 'repeat(auto-fit, minmax(158px, 1fr))' }}>
         {[
           { t: t.emAberto, bruto: soma(abertos), n: `${abertos.length} ${t.propostas}`, p: G.ambar },
+          { t: t.paradoMais90, bruto: valor90, n: `${abertos90.length} ${t.propostas}`, p: G.vermelho, ajuda: t.explicaAging },
           { t: t.pedido, bruto: soma(pedidos), n: `${pedidos.length} ${t.brs}`, p: G.azul },
           { t: t.faturado, bruto: receitaFat, n: `${faturados.length} ${t.brs}`, p: G.verde, ajuda: t.explicaFaturado },
           { t: t.previsto, bruto: totalCenario, n: cenarios.find(c => c.c === cenario)?.r || '', p: G.roxo },
@@ -4347,6 +4487,32 @@ function PainelDiretoria() {
           </div>
         ))}
       </div>
+
+      {alertas.length > 0 && (
+        <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 11, padding: 15 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
+            marginBottom: 11, gap: 10, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 12.5, fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              <AlertTriangle size={14} style={{ color: T.terracotta }} /> {t.atencao}
+            </span>
+            <span style={{ fontSize: 10.5, color: T.inkFaint }}>{t.atencaoSub}</span>
+          </div>
+          <div style={{ display: 'grid', gap: 8, gridTemplateColumns: 'repeat(auto-fit, minmax(290px, 1fr))' }}>
+            {alertas.map((a, i) => (
+              <div key={i} className={`g-linha ${a.clique ? 'g-clicavel' : ''}`}
+                onClick={a.clique || undefined}
+                style={{ padding: '10px 13px', borderRadius: 8, animationDelay: `${i * 70}ms`,
+                  background: `linear-gradient(90deg, ${a.cor[0]}14, transparent)`,
+                  borderLeft: `3px solid ${a.cor[0]}` }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: T.ink, lineHeight: 1.45 }}>{a.titulo}</div>
+                <div style={{ fontSize: 10.5, color: T.inkDim, marginTop: 3, lineHeight: 1.5 }}>{a.sub}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {gavetaDe('alerta:')}
 
       <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))' }}>
         {painel(t.funilSituacao, (
@@ -4387,6 +4553,42 @@ function PainelDiretoria() {
 
       {gavetaDe('sit:', 'est:')}
 
+      <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))' }}>
+        {painel(t.agingTitulo, (
+          <BarrasH dados={barrasAging}
+            ativo={detalhe?.chave?.startsWith('aging:') ? detalhe.chave.slice(6) : null}
+            aoClicar={(b2) => {
+              const fx = agingListas.find(f => f.k === b2.k);
+              if (!fx) return;
+              abrir(`aging:${b2.k}`, `${t.agingTitulo} · ${b2.k}`,
+                t.regraAging.replace('{f}', b2.k), fx.lista, soma(fx.lista));
+            }} />
+        ), t.explicaAging)}
+        {painel(t.receitaMesTitulo, (
+          <>
+            <Colunas dados={colReceita} par={G.verde} altura={150} dica={(d) => `${d.k} · ${val(d.total)}`} />
+            <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', marginTop: 10, paddingTop: 10,
+              borderTop: `1px solid ${T.lineSoft}` }}>
+              {[[t.acumAno, acumAno, G.verde], [t.mediaMes, mediaMensal, G.ciano], [t.projecaoAno, projecaoAno, G.roxo]].map(([r, v, p]) => (
+                <span key={r} style={{ fontSize: 11 }}>
+                  <span style={{ color: T.inkFaint }}>{r}: </span>
+                  <strong style={{ color: p[1], fontSize: 13, fontVariantNumeric: 'tabular-nums' }}>{val(v)}</strong>
+                </span>
+              ))}
+            </div>
+            {coberturaMeses != null && (
+              <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 8, lineHeight: 1.55 }}>
+                {t.cobertura.replace('{x}', coberturaMeses.toFixed(0))
+                  .replace('{c}', (convPct || 0).toFixed(0))
+                  .replace('{m}', (coberturaConv || 0).toFixed(0))}
+              </div>
+            )}
+          </>
+        ), t.explicaReceitaMes)}
+      </div>
+
+      {gavetaDe('aging:')}
+
       <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))' }}>
         {painel(t.conversao, (
           <div style={{ display: 'flex', justifyContent: 'space-around', alignItems: 'flex-start',
@@ -4420,6 +4622,38 @@ function PainelDiretoria() {
       ))}
 
       {gavetaDe('ciclo:')}
+
+      {painel(t.topDealsTitulo, (
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead><tr style={{ background: T.panelAlt }}>
+              {['BR', t.cliente, t.vendedor, t.estagio, t.idade, t.valorCol].map((h, i) => (
+                <th key={h} style={{ padding: '7px 10px', fontSize: 10.5, fontWeight: 600, color: T.inkFaint,
+                  textAlign: i >= 4 ? 'right' : 'left', whiteSpace: 'nowrap' }}>{h}</th>
+              ))}
+            </tr></thead>
+            <tbody>
+              {topDeals.map((d, i) => {
+                const dd = Number(d.dias_aberto) || 0;
+                return (
+                  <tr key={`${d.br}-${i}`} className="g-linha"
+                    style={{ borderBottom: `1px solid ${T.lineSoft}`, animationDelay: `${i * 45}ms` }}>
+                    <td style={{ padding: '7px 10px', fontSize: 11.5, fontWeight: 700, whiteSpace: 'nowrap' }}>{d.br}</td>
+                    <td style={{ padding: '7px 10px', fontSize: 11, color: T.inkDim, maxWidth: 230,
+                      whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={d.cliente}>{d.cliente}</td>
+                    <td style={{ padding: '7px 10px', fontSize: 11, color: T.inkFaint, whiteSpace: 'nowrap' }}>{d.vendedor}</td>
+                    <td style={{ padding: '7px 10px', fontSize: 11, color: T.inkFaint, whiteSpace: 'nowrap' }}>{d.estagio || '—'}</td>
+                    <td style={{ padding: '7px 10px', fontSize: 11, textAlign: 'right', fontWeight: 600,
+                      whiteSpace: 'nowrap', color: dd > 90 ? T.rustText : T.inkDim }}>{dd} {t.dias}</td>
+                    <td style={{ padding: '7px 10px', fontSize: 12, textAlign: 'right', fontWeight: 700,
+                      fontVariantNumeric: 'tabular-nums' }}>{val(d.valor)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      ), t.explicaTopDeals.replace('{n}', String(topDeals.length)))}
 
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
         <span style={{ fontSize: 11.5, color: T.inkDim, fontWeight: 600 }}>{t.cenario}</span>
