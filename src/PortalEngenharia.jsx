@@ -3614,6 +3614,7 @@ const TXT = {
     explicaEstagio: 'valor cheio e o que sobra em cada cenário',
     explicaVendedor: 'barra verde = fechado, âmbar = em aberto · conversão sobre o total de propostas',
     explicaCiclo: 'barra cheia = proposto, verde = virou pedido',
+    explicaFaturado: 'Receita das notas destes BRs. Não é o faturamento total da empresa: só entram BRs que têm proposta no funil desde janeiro. O faturamento completo de 2026 está na tela de Faturamento.',
     semPrevisaoTitulo: 'Nenhuma proposta tem expectativa de fechamento preenchida ainda.',
     semPrevisao: 'A coluna é nova e vai chegar quando os vendedores devolverem o follow up. Até lá, a previsão existe mas não tem como ser distribuída por mês.',
     semDataValor: '{n} propostas sem data de fechamento, somando {v} no cenário.',
@@ -3638,6 +3639,7 @@ const TXT = {
     explicaEstagio: 'full value and what remains in each scenario',
     explicaVendedor: 'green = closed, amber = open · win rate over all proposals',
     explicaCiclo: 'light bar = proposed, green = became an order',
+    explicaFaturado: 'Invoiced revenue for these projects only. Not company-wide: it covers projects that have a proposal in the funnel since January. Full 2026 revenue is on the Invoicing screen.',
     semPrevisaoTitulo: 'No proposal has an expected closing date yet.',
     semPrevisao: 'The column is new and will arrive as salespeople return the follow-up. Until then the forecast exists but cannot be spread across months.',
     semDataValor: '{n} proposals with no closing date, totalling {v} in this scenario.',
@@ -3800,7 +3802,11 @@ function PainelDiretoria() {
         {[
           { t: t.emAberto, v: val(soma(abertos)), n: `${abertos.length} ${t.propostas}`, c: T.amberText },
           { t: t.pedido, v: val(soma(pedidos)), n: `${pedidos.length} ${t.brs}`, c: T.blueText },
-          { t: t.faturado, v: val(soma(faturados)), n: `${faturados.length} ${t.brs}`, c: T.oliveText },
+          // FATURADO usa a receita REAL, nao o valor da proposta. Somar a
+          // proposta dava R$ 14,4 mi onde o faturamento foi R$ 16,05 mi -- e
+          // proposta nao e receita: o que entrou no caixa e a nota.
+          { t: t.faturado, v: val(soma(faturados, 'receita_faturada')),
+            n: `${faturados.length} ${t.brs}`, c: T.oliveText, ajuda: t.explicaFaturado },
           { t: t.perdido, v: val(soma(perdidos)), n: `${perdidos.length} ${t.brs}`, c: T.rustText },
           { t: t.conversao, v: convPct == null ? '—' : `${convPct.toFixed(0)}%`,
             n: `${ganhos} ${t.ganhou}`, c: T.terracotta, ajuda: t.explicaConv },
