@@ -3785,21 +3785,36 @@ function Rosca({ dados, tamanho = 200, espessura = 32, centro, subcentro, aoClic
   // com 1% sumiam: o arco ficava fino demais para ser visto. Cada fatia recebe
   // um tamanho MINIMO no desenho, e as grandes cedem o espaco proporcional --
   // o percentual escrito ao lado continua sendo o real.
+  // FATIA PEQUENA PRECISA APARECER, e cada uma e desenhada como um ARCO
+  // PROPRIO, nao por strokeDasharray sobre o circulo inteiro.
+  //
+  // Com dasharray, as fatias se desenham uma por cima da outra na mesma
+  // circunferencia, e a menor fica escondida atras da vizinha desenhada
+  // depois -- foi o que sumiu com 'Pedido em carteira' de 5%. Com arco
+  // proprio (path A), cada uma ocupa o seu pedaco e ninguem cobre ninguem.
+  //
+  // O tamanho MINIMO garante que 1% ainda seja visto; as grandes cedem o
+  // espaco proporcionalmente. O percentual ao lado continua sendo o REAL.
   const visiveis = dados.filter(d => d.v > 0);
-  const MIN = 0.022;                       // 2,2% da volta
+  const MIN = 0.03;
   const fracReal = visiveis.map(d => d.v / total);
-  const precisam = fracReal.filter(f => f < MIN).length;
   const sobra = fracReal.filter(f => f >= MIN).reduce((a, b2) => a + b2, 0);
   const aTirar = fracReal.filter(f => f < MIN).reduce((a, f) => a + (MIN - f), 0);
+  const VAO = 0.012;                        // respiro entre fatias
   let acumulado = 0;
   const fatias = visiveis.map((d, i) => {
     const real = fracReal[i];
-    const frac = real < MIN ? MIN
-      : (precisam && sobra > 0 ? real - aTirar * (real / sobra) : real);
-    const dash = Math.max(frac * circ, 2);
-    const offset = -acumulado * circ;
+    const frac = real < MIN ? MIN : (sobra > 0 ? real - aTirar * (real / sobra) : real);
+    const de = acumulado;
     acumulado += frac;
-    return { ...d, dash, offset, pct: real * 100, i };
+    const ate = acumulado - (visiveis.length > 1 ? VAO : 0);
+    const a0 = -Math.PI / 2 + de * 2 * Math.PI;
+    const a1 = -Math.PI / 2 + Math.max(ate, de + 0.004) * 2 * Math.PI;
+    const x0 = c + r * Math.cos(a0), y0 = c + r * Math.sin(a0);
+    const x1 = c + r * Math.cos(a1), y1 = c + r * Math.sin(a1);
+    const grande = (a1 - a0) > Math.PI ? 1 : 0;
+    return { ...d, path: `M ${x0} ${y0} A ${r} ${r} 0 ${grande} 1 ${x1} ${y1}`,
+             pct: real * 100, i };
   });
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 20, flexWrap: 'wrap' }}>
@@ -3816,24 +3831,20 @@ function Rosca({ dados, tamanho = 200, espessura = 32, centro, subcentro, aoClic
             <feMerge><feMergeNode in="b" /><feMergeNode in="SourceGraphic" /></feMerge>
           </filter>
         </defs>
-        <circle cx={c} cy={c} r={r} fill="none" stroke={T.lineSoft} strokeWidth={espessura} />
-        <g transform={`rotate(-90 ${c} ${c})`}>
-          {fatias.map((f, i) => (
-            <circle key={i} cx={c} cy={c} r={r} fill="none"
-              className={`g-arco ${aoClicar ? 'g-clicavel' : ''}`}
-              stroke={`url(#${id}-${i})`}
-              strokeWidth={ativo === f.k ? espessura + 8 : espessura}
-              strokeDasharray={`${f.dash} ${circ}`}
-              strokeDashoffset={f.offset}
-              strokeLinecap={fatias.length > 1 ? 'butt' : 'round'}
-              filter={ativo === f.k ? `url(#${id}-glow)` : undefined}
-              onClick={aoClicar ? () => aoClicar(f) : undefined}
-              style={{ '--len': circ, animationDelay: `${i * 130}ms`,
-                transition: 'stroke-width .25s cubic-bezier(.34,1.3,.5,1)' }}>
-              <title>{`${f.k}: ${f.rot} (${f.pct.toFixed(1)}%)`}</title>
-            </circle>
-          ))}
-        </g>
+        <circle cx={c} cy={c} r={r} fill="none" stroke={T.lineSoft} strokeWidth={espessura * 0.4} />
+        {fatias.map((f, i) => (
+          <path key={i} d={f.path} fill="none"
+            className={aoClicar ? 'g-clicavel' : undefined}
+            stroke={`url(#${id}-${i})`}
+            strokeWidth={ativo === f.k ? espessura + 7 : espessura}
+            strokeLinecap="round"
+            filter={ativo === f.k ? `url(#${id}-glow)` : undefined}
+            onClick={aoClicar ? () => aoClicar(f) : undefined}
+            style={{ transition: 'stroke-width .25s cubic-bezier(.34,1.3,.5,1)',
+              opacity: 0, animation: `fadeUp .5s cubic-bezier(.16,1,.3,1) ${i * 110}ms forwards` }}>
+            <title>{`${f.k}: ${f.rot} (${f.pct.toFixed(1)}%)`}</title>
+          </path>
+        ))}
         {centro && (
           <text x={c} y={c - 1} textAnchor="middle"
             style={{ fontSize: 21, fontWeight: 800, fill: T.ink, letterSpacing: '-.02em' }}>
