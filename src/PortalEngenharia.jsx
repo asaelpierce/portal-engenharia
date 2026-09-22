@@ -3578,6 +3578,233 @@ function ModeloPreditivo() {
 // A probabilidade fica SO NO PORTAL -- nao vai para o Sankhya. O padrao la
 // continua o que sempre foi. E leitura comercial, nao dado do ERP.
 // ============================================================================
+// ===========================================================================
+// PAINEL DA DIRETORIA
+//
+// Visao de cima do funil comercial: nao repete a tabela do Follow Up, mostra
+// o que uma diretoria pergunta -- quanto ha, onde esta, quem traz, para quem
+// vendemos e se estamos melhorando.
+//
+// MOEDA: converte para USD e EUR pela taxa em comercial_cambio, e mostra a
+// DATA da cotacao ao lado. Numero chumbado no codigo envelhece em silencio; com
+// a data visivel, quem olha sabe o quanto confiar.
+//
+// IDIOMA: portugues e ingles. O dicionario fica num objeto so, no topo -- nao
+// e i18n de verdade, mas resolve uma tela para socio estrangeiro sem arrastar
+// biblioteca nova para dentro do portal.
+// ===========================================================================
+const TXT = {
+  pt: {
+    titulo: 'Painel da diretoria', funil: 'Funil comercial', moeda: 'Moeda',
+    emAberto: 'Em aberto', pedido: 'Pedido em carteira', faturado: 'Faturado',
+    perdido: 'Perdido', total: 'Total do funil', conversao: 'Conversão',
+    porEstagio: 'Proposta em aberto por estágio', porVendedor: 'Por vendedor',
+    porMes: 'Propostas por mês', topClientes: 'Maiores clientes',
+    propostas: 'propostas', brs: 'BRs', ticket: 'Ticket médio',
+    cotacao: 'cotação de', semClass: 'Sem classificação',
+    ganhou: 'virou pedido', explicaConv: 'BRs que viraram pedido ou faturamento, sobre o total',
+    explicaFunil: 'Valor da proposta, sem multiplicar pela chance de fechar.',
+    aberto: 'em aberto', idioma: 'Idioma',
+  },
+  en: {
+    titulo: 'Executive dashboard', funil: 'Sales funnel', moeda: 'Currency',
+    emAberto: 'Open', pedido: 'Won — in backlog', faturado: 'Invoiced',
+    perdido: 'Lost', total: 'Total pipeline', conversao: 'Conversion',
+    porEstagio: 'Open proposals by stage', porVendedor: 'By salesperson',
+    porMes: 'Proposals by month', topClientes: 'Top customers',
+    propostas: 'proposals', brs: 'projects', ticket: 'Average deal',
+    cotacao: 'rate as of', semClass: 'Unclassified',
+    ganhou: 'won', explicaConv: 'Projects that became an order or invoice, over the total',
+    explicaFunil: 'Proposal value, not weighted by probability.',
+    aberto: 'open', idioma: 'Language',
+  },
+};
+
+function PainelDiretoria() {
+  const [dados, setDados] = useState([]);
+  const [cambio, setCambio] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [moeda, setMoeda] = useState('BRL');
+  const [idioma, setIdioma] = useState('pt');
+  const t = TXT[idioma];
+
+  useEffect(() => {
+    (async () => {
+      const [d, c] = await Promise.all([
+        supabase.from('v_comercial_diretoria').select('*'),
+        supabase.from('comercial_cambio').select('*'),
+      ]);
+      setDados(d.data || []);
+      setCambio(c.data || []);
+      setLoading(false);
+    })();
+  }, []);
+
+  const cx = cambio.find(c => c.moeda === moeda) || { taxa: 1, simbolo: 'R$' };
+  const conv = (v) => (Number(v) || 0) / (Number(cx.taxa) || 1);
+  const val = (v) => {
+    const n = conv(v);
+    const abs = Math.abs(n);
+    const loc = idioma === 'pt' ? 'pt-BR' : 'en-US';
+    if (abs >= 1e6) return `${cx.simbolo} ${(n / 1e6).toLocaleString(loc, { maximumFractionDigits: 1 })} mi`;
+    if (abs >= 1e3) return `${cx.simbolo} ${(n / 1e3).toLocaleString(loc, { maximumFractionDigits: 0 })} mil`;
+    return `${cx.simbolo} ${n.toLocaleString(loc, { maximumFractionDigits: 0 })}`;
+  };
+  const soma = (arr) => arr.reduce((s, r) => s + (Number(r.valor) || 0), 0);
+
+  if (loading) return <div style={{ padding: 40, color: T.inkFaint }}>carregando…</div>;
+  if (!dados.length) return <div style={{ padding: 40, color: T.inkFaint }}>Sem dados no período.</div>;
+
+  const abertos = dados.filter(d => d.situacao === 'em aberto');
+  const pedidos = dados.filter(d => d.situacao === 'pedido confirmado');
+  const faturados = dados.filter(d => d.situacao === 'faturado');
+  const perdidos = dados.filter(d => d.situacao === 'perdido');
+  const ganhos = pedidos.length + faturados.length;
+  const decididos = ganhos + perdidos.length;
+  const convPct = decididos > 0 ? (ganhos / decididos) * 100 : null;
+
+  const agrupa = (arr, campo) => {
+    const m = {};
+    arr.forEach(d => {
+      const k = d[campo] || '—';
+      if (!m[k]) m[k] = { n: 0, v: 0 };
+      m[k].n += 1; m[k].v += Number(d.valor) || 0;
+    });
+    return Object.entries(m).map(([k, x]) => ({ k, ...x })).sort((a, b) => b.v - a.v);
+  };
+
+  const porEstagio = agrupa(abertos, 'estagio');
+  const porVendedor = agrupa(dados.filter(d => d.situacao !== 'perdido'), 'vendedor').slice(0, 8);
+  const porCliente = agrupa(dados.filter(d => d.situacao !== 'perdido'), 'cliente').slice(0, 8);
+  const meses = [...new Set(dados.map(d => d.competencia))].sort();
+  const porMes = meses.map(m => ({
+    m, v: soma(dados.filter(d => d.competencia === m)),
+    ganho: soma(dados.filter(d => d.competencia === m && d.situacao !== 'em aberto' && d.situacao !== 'perdido')),
+  }));
+  const maxMes = Math.max(1, ...porMes.map(x => x.v));
+
+  const CORES = { 'Avançado': T.oliveText, 'Alto': T.blueText, 'Médio': T.amberText,
+                  'Baixo': T.rustText, 'Perdido': T.inkFaint };
+
+  const barras = (itens, cor) => {
+    const max = Math.max(1, ...itens.map(i => i.v));
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+        {itens.map(i => (
+          <div key={i.k} style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+            <span style={{ fontSize: 11.5, color: T.inkDim, width: 150, whiteSpace: 'nowrap',
+              overflow: 'hidden', textOverflow: 'ellipsis' }} title={i.k}>{i.k}</span>
+            <div style={{ flex: 1, height: 13, background: T.lineSoft, borderRadius: 3, overflow: 'hidden' }}>
+              <div style={{ height: '100%', width: `${(i.v / max) * 100}%`,
+                background: cor || CORES[i.k] || T.terracotta }} />
+            </div>
+            <span style={{ fontSize: 11.5, fontWeight: 600, width: 88, textAlign: 'right',
+              fontVariantNumeric: 'tabular-nums' }}>{val(i.v)}</span>
+            <span style={{ fontSize: 10.5, color: T.inkFaint, width: 40, textAlign: 'right' }}>{i.n}</span>
+          </div>
+        ))}
+      </div>
+    );
+  };
+
+  const painel = (titulo, conteudo, extra) => (
+    <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: 14 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 12 }}>
+        <span style={{ fontSize: 12.5, fontWeight: 700 }}>{titulo}</span>
+        {extra && <span style={{ fontSize: 10.5, color: T.inkFaint }}>{extra}</span>}
+      </div>
+      {conteudo}
+    </div>
+  );
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
+        <span style={{ fontFamily: FONT_DISPLAY, fontSize: 19, fontWeight: 700 }}>{t.titulo}</span>
+        <span style={{ display: 'inline-flex', gap: 14, alignItems: 'center', flexWrap: 'wrap' }}>
+          <span style={{ display: 'inline-flex', gap: 3, alignItems: 'center' }}>
+            <span style={{ fontSize: 10.5, color: T.inkFaint, marginRight: 4 }}>{t.moeda}</span>
+            {cambio.map(c => (
+              <button key={c.moeda} onClick={() => setMoeda(c.moeda)}
+                title={c.moeda === 'BRL' ? '' :
+                  `1 ${c.moeda} = R$ ${Number(c.taxa).toFixed(2)} · ${t.cotacao} ${new Date(c.atualizado_em).toLocaleDateString(idioma === 'pt' ? 'pt-BR' : 'en-US')}`}
+                style={{ fontFamily: 'inherit', fontSize: 11.5, fontWeight: moeda === c.moeda ? 700 : 400,
+                  padding: '4px 11px', borderRadius: 5, cursor: 'pointer',
+                  border: `1px solid ${moeda === c.moeda ? T.ink : T.line}`,
+                  background: moeda === c.moeda ? T.ink : T.panel,
+                  color: moeda === c.moeda ? T.panel : T.inkDim }}>{c.moeda}</button>
+            ))}
+          </span>
+          <span style={{ display: 'inline-flex', gap: 3, alignItems: 'center' }}>
+            <span style={{ fontSize: 10.5, color: T.inkFaint, marginRight: 4 }}>{t.idioma}</span>
+            {[['pt', 'PT'], ['en', 'EN']].map(([k, r]) => (
+              <button key={k} onClick={() => setIdioma(k)}
+                style={{ fontFamily: 'inherit', fontSize: 11.5, fontWeight: idioma === k ? 700 : 400,
+                  padding: '4px 11px', borderRadius: 5, cursor: 'pointer',
+                  border: `1px solid ${idioma === k ? T.ink : T.line}`,
+                  background: idioma === k ? T.ink : T.panel,
+                  color: idioma === k ? T.panel : T.inkDim }}>{r}</button>
+            ))}
+          </span>
+        </span>
+      </div>
+
+      {moeda !== 'BRL' && (
+        <div style={{ fontSize: 10.5, color: T.inkFaint }}>
+          1 {moeda} = R$ {Number(cx.taxa).toFixed(2)} · {t.cotacao}{' '}
+          {new Date(cx.atualizado_em).toLocaleDateString(idioma === 'pt' ? 'pt-BR' : 'en-US')}
+        </div>
+      )}
+
+      <div style={{ display: 'grid', gap: 9, gridTemplateColumns: 'repeat(auto-fit, minmax(165px, 1fr))' }}>
+        {[
+          { t: t.emAberto, v: val(soma(abertos)), n: `${abertos.length} ${t.propostas}`, c: T.amberText },
+          { t: t.pedido, v: val(soma(pedidos)), n: `${pedidos.length} ${t.brs}`, c: T.blueText },
+          { t: t.faturado, v: val(soma(faturados)), n: `${faturados.length} ${t.brs}`, c: T.oliveText },
+          { t: t.perdido, v: val(soma(perdidos)), n: `${perdidos.length} ${t.brs}`, c: T.rustText },
+          { t: t.total, v: val(soma(dados)), n: `${dados.length} ${t.brs}`, c: T.ink },
+          { t: t.conversao, v: convPct == null ? '—' : `${convPct.toFixed(0)}%`,
+            n: `${ganhos} ${t.ganhou}`, c: T.terracotta, ajuda: t.explicaConv },
+        ].map(k => (
+          <div key={k.t} title={k.ajuda || ''}
+            style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 9, padding: '11px 13px' }}>
+            <div style={{ fontSize: 10.5, color: T.inkFaint, minHeight: 26 }}>{k.t}</div>
+            <div style={{ fontSize: 19, fontWeight: 700, color: k.c, fontVariantNumeric: 'tabular-nums' }}>{k.v}</div>
+            <div style={{ fontSize: 10, color: T.inkFaint, marginTop: 2 }}>{k.n}</div>
+          </div>
+        ))}
+      </div>
+
+      {painel(t.porMes, (
+        <div style={{ display: 'flex', alignItems: 'flex-end', gap: 7, height: 150 }}>
+          {porMes.map(x => (
+            <div key={x.m} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}
+              title={`${x.m}: ${val(x.v)}`}>
+              <div style={{ fontSize: 9.5, color: T.inkFaint, fontVariantNumeric: 'tabular-nums' }}>
+                {(conv(x.v) / 1e6).toFixed(1)}
+              </div>
+              <div style={{ width: '100%', display: 'flex', flexDirection: 'column-reverse',
+                height: `${Math.max((x.v / maxMes) * 108, 3)}px` }}>
+                <div style={{ height: `${(x.ganho / (x.v || 1)) * 100}%`, background: T.oliveText }}
+                  title={`${t.ganhou}: ${val(x.ganho)}`} />
+                <div style={{ flex: 1, background: T.terracotta, borderRadius: '3px 3px 0 0' }} />
+              </div>
+              <div style={{ fontSize: 9.5, color: T.inkFaint }}>{x.m.slice(5)}</div>
+            </div>
+          ))}
+        </div>
+      ), `${cx.simbolo} mi · ${t.ganhou} = ${idioma === 'pt' ? 'verde' : 'green'}`)}
+
+      <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))' }}>
+        {painel(t.porEstagio, barras(porEstagio), t.explicaFunil)}
+        {painel(t.porVendedor, barras(porVendedor, T.blueText))}
+      </div>
+
+      {painel(t.topClientes, barras(porCliente, T.terracotta))}
+    </div>
+  );
+}
+
 function FollowUpComercial({ currentUser }) {
   const [linhas, setLinhas] = useState([]);
   const [estagios, setEstagios] = useState([]);
@@ -4702,6 +4929,7 @@ function PainelComercial({ currentUser }) {
       <div style={{ display: 'flex', gap: 2, borderBottom: `1px solid ${T.line}` }}>
         {[{ id: 'faturamento', label: 'Faturado x Previsto' },
           { id: 'followup', label: 'Follow Up' },
+          { id: 'diretoria', label: 'Diretoria' },
           { id: 'modelo', label: 'Modelo Preditivo' }].map(ab => (
           <button key={ab.id} onClick={() => setSubAba(ab.id)} style={{
             background: 'none', border: 'none', cursor: 'pointer', padding: '9px 16px',
@@ -4714,7 +4942,7 @@ function PainelComercial({ currentUser }) {
         ))}
       </div>
 
-      {subAba === 'modelo' ? <ModeloPreditivo /> : subAba === 'followup' ? <FollowUpComercial currentUser={currentUser} /> : <>
+      {subAba === 'modelo' ? <ModeloPreditivo /> : subAba === 'followup' ? <FollowUpComercial currentUser={currentUser} /> : subAba === 'diretoria' ? <PainelDiretoria /> : <>
 
       {/* Filtro de período — de/até */}
       <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '14px 18px' }}>
