@@ -3766,7 +3766,9 @@ const TXT = {
     mixPedidos: 'pedidos', mixClientes: 'clientes', mixPerfil: 'Perfil',
     perfilContrato: 'contrato', perfilSpot: 'spot', perfilMisto: 'misto',
     mixRegra: 'Pedidos do ano em {g}, classificados no Painel KdB. O valor é o líquido do pedido; a margem vem da margem orçada do BR no portal.',
-    mixSemVinculo: '{n} pedidos ({v}) vieram só com a sigla do vendedor e não casaram com um BR do portal — aparecem como "Sigla".',
+    mixSemVinculo: '{n} pedido(s), somando {v}, ficaram sem vendedor: o BR não existe no portal e a sigla "{s}" não bateu com ninguém do cadastro.',
+    origemNome: 'Nome resolvido por', origFunil: 'funil', origCadastro: 'cadastro do BR', origSigla: 'sigla do KdB',
+    mixNomeNota: 'Pedido de BR antigo ou fora da janela do funil tem o vendedor buscado no cadastro do BR e, em último caso, pela sigla do KdB (AWS = William Schreck, por exemplo).',
     mixInsight: 'Spot rende {s}% de margem contra {c}% do contrato, mas depende de {sc} clientes diferentes; o contrato se apoia em {cc}.',
     compTitulo: 'Proposto, ponderado e realizado — mês a mês',
     explicaComp: 'três colunas por mês: o que foi proposto, o que a régua dos estágios prevê do que ainda está em aberto, e o que já virou pedido ou nota · a coluna do meio é empilhada por nível · Perdido fica de fora (não é previsão)',
@@ -3924,7 +3926,9 @@ const TXT = {
     mixPedidos: 'orders', mixClientes: 'customers', mixPerfil: 'Profile',
     perfilContrato: 'contract', perfilSpot: 'spot', perfilMisto: 'mixed',
     mixRegra: 'Orders of the year in {g}, classified in the KdB panel. Value is the net order; margin comes from the BR budgeted margin in the portal.',
-    mixSemVinculo: '{n} orders ({v}) came with only the salesperson initials and did not match a portal project — shown as "Sigla".',
+    mixSemVinculo: '{n} order(s), totalling {v}, ended up with no salesperson: the project is not in the portal and the initials "{s}" matched nobody in the register.',
+    origemNome: 'Name resolved by', origFunil: 'pipeline', origCadastro: 'project register', origSigla: 'KdB initials',
+    mixNomeNota: 'Orders from older projects, outside the pipeline window, have the salesperson looked up in the project register and, as a last resort, by the KdB initials (AWS = William Schreck, for instance).',
     mixInsight: 'Spot yields {s}% margin against {c}% on contract, but relies on {sc} different customers; contract leans on {cc}.',
     compTitulo: 'Proposed, weighted and won — month by month',
     explicaComp: 'three columns per month: what was proposed, what the stage ruler forecasts from what is still open, and what already became an order or invoice · the middle column is stacked by stage · Lost is excluded (it forecasts nothing)',
@@ -4838,7 +4842,12 @@ function PainelDiretoria() {
     const c = l.filter(x => x.margem_pct != null);
     return c.length ? c.reduce((s, x) => s + Number(x.margem_pct), 0) / c.length : 0;
   };
-  const mixSemVinculo = mix.filter(m => String(m.vendedor || '').startsWith('Sigla '));
+  const mixSemVinculo = mix.filter(m => m.origem_vendedor === 'sem vínculo');
+  const mixSiglasOrfas = [...new Set(mixSemVinculo.map(m => m.sigla_vendedor).filter(Boolean))];
+  // Quantos nomes precisaram de fallback: mostra que o número não é do funil puro.
+  const mixResolvidos = ['cadastro do BR', 'sigla do KdB']
+    .map(o => ({ o, n: mix.filter(m => m.origem_vendedor === o).length }))
+    .filter(x => x.n > 0);
 
   // ---- ONDE CABE DESCONTO ----
   // Margem alta parada num estágio fraco: o cliente não decide, e há margem
@@ -5852,10 +5861,20 @@ function PainelDiretoria() {
               </span>
             ))}
           </div>
-          {mixSemVinculo.length > 0 && (
+          {mixResolvidos.length > 0 && (
             <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 9, lineHeight: 1.5 }}>
+              {t.mixNomeNota}{' '}
+              <span style={{ color: T.inkDim }}>
+                ({t.origemNome}: {mixResolvidos.map(x =>
+                  `${x.n} ${x.o === 'cadastro do BR' ? t.origCadastro : t.origSigla}`).join(', ')})
+              </span>
+            </div>
+          )}
+          {mixSemVinculo.length > 0 && (
+            <div style={{ fontSize: 10.5, color: T.amberText, marginTop: 6, lineHeight: 1.5 }}>
               {t.mixSemVinculo.replace('{n}', String(mixSemVinculo.length))
-                .replace('{v}', val(soma(mixSemVinculo)))}
+                .replace('{v}', val(soma(mixSemVinculo)))
+                .replace('{s}', mixSiglasOrfas.join(', ') || '—')}
             </div>
           )}
         </>
