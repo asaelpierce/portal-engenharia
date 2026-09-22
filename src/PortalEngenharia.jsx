@@ -3607,12 +3607,12 @@ const TXT = {
     cicloTitulo: 'Propostas e fechamento, mês a mês',
     diasAtePedido: 'Da proposta ao pedido', diasAteFaturar: 'Do pedido ao faturamento',
     convMedia: 'Conversão média',
-    explicaConv: 'BRs que viraram pedido ou faturamento, sobre os que já se decidiram. Proposta ainda em aberto fica fora.',
+    explicaConv: 'BRs que viraram pedido ou faturamento, sobre o TOTAL de propostas. Ninguém marca proposta como perdida hoje, então contar só os "decididos" daria 100% para todos.',
     explicaPrev: 'Soma das propostas em aberto, cada uma multiplicada pelo fator do seu estágio no cenário escolhido.',
     explicaCenario: 'os fatores por estágio são editáveis — a regra de vocês ainda está sendo definida',
     explicaPrevisaoMes: 'pelo mês que o vendedor espera fechar, não pelo mês da proposta · barra cheia = valor bruto, barra escura = cenário',
     explicaEstagio: 'valor cheio e o que sobra em cada cenário',
-    explicaVendedor: 'barra verde = fechado, âmbar = em aberto',
+    explicaVendedor: 'barra verde = fechado, âmbar = em aberto · conversão sobre o total de propostas',
     explicaCiclo: 'barra cheia = proposto, verde = virou pedido',
     semPrevisaoTitulo: 'Nenhuma proposta tem expectativa de fechamento preenchida ainda.',
     semPrevisao: 'A coluna é nova e vai chegar quando os vendedores devolverem o follow up. Até lá, a previsão existe mas não tem como ser distribuída por mês.',
@@ -3631,12 +3631,12 @@ const TXT = {
     cicloTitulo: 'Proposals and closings, month by month',
     diasAtePedido: 'Proposal to order', diasAteFaturar: 'Order to invoice',
     convMedia: 'Average win rate',
-    explicaConv: 'Projects that became an order or invoice, over those already decided. Still-open proposals are excluded.',
+    explicaConv: 'Projects that became an order or invoice, over ALL proposals. Nobody marks proposals as lost today, so counting only "decided" ones would show 100% for everyone.',
     explicaPrev: 'Open proposals, each multiplied by its stage factor in the chosen scenario.',
     explicaCenario: 'stage factors are editable — the final rule is still being defined',
     explicaPrevisaoMes: 'by the month the salesperson expects to close, not the proposal month · light bar = full value, dark bar = scenario',
     explicaEstagio: 'full value and what remains in each scenario',
-    explicaVendedor: 'green = closed, amber = open',
+    explicaVendedor: 'green = closed, amber = open · win rate over all proposals',
     explicaCiclo: 'light bar = proposed, green = became an order',
     semPrevisaoTitulo: 'No proposal has an expected closing date yet.',
     semPrevisao: 'The column is new and will arrive as salespeople return the follow-up. Until then the forecast exists but cannot be spread across months.',
@@ -3697,8 +3697,12 @@ function PainelDiretoria() {
   const faturados = dados.filter(d => d.situacao === 'faturado');
   const perdidos = dados.filter(d => d.situacao === 'perdido');
   const ganhos = pedidos.length + faturados.length;
-  const decididos = ganhos + perdidos.length;
-  const convPct = decididos > 0 ? (ganhos / decididos) * 100 : null;
+  // CONVERSAO sobre o TOTAL, nao sobre 'ja decididos'. Ninguem marca proposta
+  // como perdida -- sao ZERO perdidos em todos os sete vendedores -- entao o
+  // denominador 'ganhos + perdidos' virava so os ganhos e dava 100% para todo
+  // mundo. Com o total, o numero mede o que de fato interessa: de tudo que
+  // entrou, quanto virou pedido.
+  const convPct = dados.length > 0 ? (ganhos / dados.length) * 100 : null;
 
   // ---- PREVISÃO no cenário escolhido, pelo MÊS ESPERADO de fechamento ------
   const doCenario = previsao.filter(p => p.cenario === cenario);
@@ -3731,13 +3735,11 @@ function PainelDiretoria() {
     const meus = dados.filter(d => d.vendedor === v);
     const meusAbertos = meus.filter(d => d.situacao === 'em aberto');
     const meusGanhos = meus.filter(d => d.situacao === 'pedido confirmado' || d.situacao === 'faturado');
-    const meusPerd = meus.filter(d => d.situacao === 'perdido');
-    const dec = meusGanhos.length + meusPerd.length;
     return {
       v, propostas: meus.length,
       aberto: soma(meusAbertos), nAberto: meusAbertos.length,
       ganho: soma(meusGanhos), nGanho: meusGanhos.length,
-      conv: dec > 0 ? (meusGanhos.length / dec) * 100 : null,
+      conv: meus.length > 0 ? (meusGanhos.length / meus.length) * 100 : null,
       prev: soma(doCenario.filter(p => p.vendedor === v), 'valor_cenario'),
     };
   }).sort((a, b) => b.ganho - a.ganho);
