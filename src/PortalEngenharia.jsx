@@ -3781,13 +3781,25 @@ function Rosca({ dados, tamanho = 200, espessura = 32, centro, subcentro, aoClic
   const c = tamanho / 2;
   const circ = 2 * Math.PI * r;
   const id = useRef(`g${Math.random().toString(36).slice(2, 8)}`).current;
+  // FATIA PEQUENA PRECISA APARECER. 'Pedido em carteira' com 5% e 'Perdido'
+  // com 1% sumiam: o arco ficava fino demais para ser visto. Cada fatia recebe
+  // um tamanho MINIMO no desenho, e as grandes cedem o espaco proporcional --
+  // o percentual escrito ao lado continua sendo o real.
+  const visiveis = dados.filter(d => d.v > 0);
+  const MIN = 0.022;                       // 2,2% da volta
+  const fracReal = visiveis.map(d => d.v / total);
+  const precisam = fracReal.filter(f => f < MIN).length;
+  const sobra = fracReal.filter(f => f >= MIN).reduce((a, b2) => a + b2, 0);
+  const aTirar = fracReal.filter(f => f < MIN).reduce((a, f) => a + (MIN - f), 0);
   let acumulado = 0;
-  const fatias = dados.filter(d => d.v > 0).map((d, i) => {
-    const frac = d.v / total;
-    const dash = frac * circ;
+  const fatias = visiveis.map((d, i) => {
+    const real = fracReal[i];
+    const frac = real < MIN ? MIN
+      : (precisam && sobra > 0 ? real - aTirar * (real / sobra) : real);
+    const dash = Math.max(frac * circ, 2);
     const offset = -acumulado * circ;
     acumulado += frac;
-    return { ...d, dash, offset, pct: frac * 100, i };
+    return { ...d, dash, offset, pct: real * 100, i };
   });
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 20, flexWrap: 'wrap' }}>
@@ -3958,49 +3970,36 @@ function BarrasH({ dados, altura = 24, aoClicar, ativo }) {
   );
 }
 
-// Medidor semicircular.
+// Medidor: ANEL COMPLETO, nao semicirculo.
 //
-// O SVG usa viewBox e altura FIXA igual a do semicirculo. Nas duas tentativas
-// anteriores eu calculava a altura a partir do raio e sobrava desenho para
-// fora da caixa -- o arco subia e cobria o titulo do painel. Com viewBox de
-// 100x58 e o arco desenhado dentro dela, nada escapa.
-function Medidor({ pct, largura = 168, par, rotulo }) {
+// Tentei o semicirculo tres vezes e ele sempre sobrava para fora da caixa ou
+// cobria o titulo. Um anel fechado ocupa um quadrado previsivel -- nao ha
+// metade que sobre nem altura para calcular. O problema some em vez de ser
+// contornado.
+function Medidor({ pct, largura = 150, par, rotulo }) {
   const alvo = Math.max(0, Math.min(100, pct || 0));
   const p = useContador(alvo, 1100);
   const id = useRef(`m${Math.random().toString(36).slice(2, 8)}`).current;
-
-  // viewBox 100 x 58: centro em (50,50), raio 42, traco 9
-  const R = 42, CX = 50, CY = 50;
-  const ponto = (frac) => {
-    const a = Math.PI * (1 - frac);
-    return [CX + R * Math.cos(a), CY - R * Math.sin(a)];
-  };
-  const [x0, y0] = ponto(0);
-  const [x1, y1] = ponto(1);
-  const [xp, yp] = ponto(p / 100);
-
+  const R = 40, C = 50, circ = 2 * Math.PI * R;
   return (
     <div style={{ textAlign: 'center', width: largura }}>
-      <svg viewBox="0 0 100 58" width={largura} height={largura * 0.58} style={{ display: 'block' }}>
+      <svg viewBox="0 0 100 100" width={largura} height={largura} style={{ display: 'block' }}>
         <defs>
-          <linearGradient id={id} x1="0" y1="0" x2="1" y2="0">
+          <linearGradient id={id} x1="0" y1="0" x2="1" y2="1">
             <stop offset="0%" stopColor={par[0]} />
             <stop offset="100%" stopColor={par[1]} />
           </linearGradient>
         </defs>
-        <path d={`M ${x0} ${y0} A ${R} ${R} 0 0 1 ${x1} ${y1}`}
-          fill="none" stroke={T.lineSoft} strokeWidth="9" strokeLinecap="round" />
-        {p > 0.5 && (
-          <path d={`M ${x0} ${y0} A ${R} ${R} 0 ${p > 50 ? 1 : 0} 1 ${xp} ${yp}`}
-            fill="none" stroke={`url(#${id})`} strokeWidth="9" strokeLinecap="round" />
-        )}
-        <circle cx={xp} cy={yp} r="4" fill="#fff" stroke={par[1]} strokeWidth="2.2" />
-        <text x={CX} y={CY - 2} textAnchor="middle"
-          style={{ fontSize: 17, fontWeight: 800, fill: par[1], letterSpacing: '-.02em' }}>
+        <circle cx={C} cy={C} r={R} fill="none" stroke={T.lineSoft} strokeWidth="11" />
+        <circle cx={C} cy={C} r={R} fill="none" stroke={`url(#${id})`} strokeWidth="11"
+          strokeLinecap="round" transform={`rotate(-90 ${C} ${C})`}
+          strokeDasharray={`${(p / 100) * circ} ${circ}`} />
+        <text x={C} y={C + 3} textAnchor="middle"
+          style={{ fontSize: 24, fontWeight: 800, fill: par[1], letterSpacing: '-.03em' }}>
           {p.toFixed(0)}%
         </text>
       </svg>
-      <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 6 }}>{rotulo}</div>
+      <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 4 }}>{rotulo}</div>
     </div>
   );
 }
@@ -4165,7 +4164,7 @@ function PainelDiretoria() {
       : d)), 520);
   };
 
-  const gaveta = detalhe && (
+  const gavetaConteudo = detalhe && (
     <div className="g-drawer" style={{ background: T.panel, border: `1px solid ${T.terracotta}`,
       borderRadius: 10, padding: 15, boxShadow: `0 4px 20px ${T.ink}12` }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 10 }}>
@@ -4242,6 +4241,14 @@ function PainelDiretoria() {
         </div>
       )}
     </div>
+  );
+
+  // A GAVETA ABRE ONDE SE CLICOU. Antes ela ficava fixa no topo da tela, e
+  // quem clicava num grafico la embaixo nao via nada acontecer -- a informacao
+  // aparecia fora do campo de visao. Agora cada bloco desenha a sua, e so
+  // quando o detalhe pertence a ele.
+  const gavetaDe = (...prefixos) => (
+    detalhe && prefixos.some(px => detalhe.chave.startsWith(px)) ? gavetaConteudo : null
   );
 
   // Texto explicativo CURTO fica na mesma linha do titulo; LONGO vai para
@@ -4330,8 +4337,6 @@ function PainelDiretoria() {
         ))}
       </div>
 
-      {gaveta}
-
       <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))' }}>
         {painel(t.funilSituacao, (
           <Rosca dados={roscaFunil} centro={val(soma(dados))} subcentro={`${dados.length} ${t.brs}`}
@@ -4369,6 +4374,8 @@ function PainelDiretoria() {
         ))}
       </div>
 
+      {gavetaDe('sit:', 'est:')}
+
       <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))' }}>
         {painel(t.conversao, (
           <div style={{ display: 'flex', justifyContent: 'space-around', alignItems: 'flex-start',
@@ -4400,6 +4407,8 @@ function PainelDiretoria() {
               lista, soma(lista));
           }} />
       ))}
+
+      {gavetaDe('ciclo:')}
 
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
         <span style={{ fontSize: 11.5, color: T.inkDim, fontWeight: 600 }}>{t.cenario}</span>
@@ -4434,6 +4443,8 @@ function PainelDiretoria() {
         ))}
       </div>
 
+      {gavetaDe('cen:')}
+
       <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))' }}>
         {painel(t.porVendedor, (
           <BarrasH dados={barrasVend}
@@ -4453,6 +4464,8 @@ function PainelDiretoria() {
             }} />
         ))}
       </div>
+
+      {gavetaDe('vend:', 'cli:')}
     </div>
   );
 }
