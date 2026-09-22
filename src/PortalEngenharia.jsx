@@ -3722,6 +3722,23 @@ const TXT = {
     deQualMes: 'De qual mês veio a proposta', propostaDe: 'Proposta de',
     propostaAno: 'Proposta de {a}', semRef: 'BR sem ano no número',
     notaAnterior: 'Proposta anterior a 2026 não entra no funil do portal (a janela começa em jan/26), por isso aparece só com o ano — que vem do próprio número do BR.',
+    prevTitulo: 'Previsibilidade — o funil em aberto, mês a mês',
+    prevSub: 'pelo mês que o vendedor espera fechar · a barra é o valor cheio, a parte escura é o ponderado pelo estágio',
+    prevPor: 'Abrir por', porVendedor2: 'Vendedor', porPG: 'Tipo (PG)', porEstagio2: 'Estágio', porCliente: 'Cliente',
+    prevSemExp: '{n} propostas ({v}) ainda não têm mês de fechamento preenchido e ficam fora das colunas. A lista suspensa de meses foi para a planilha do follow up justamente para destravar isso.',
+    prevMatriz: 'Quem tem o quê, e quanto vale',
+    prevMatrizSub: 'linha a linha: valor em aberto, o que a régua prevê e o lucro que cada um carrega',
+    colQtd: 'Propostas', colValor: 'Em aberto', colPond: 'Ponderado', colLucro: 'Lucro previsto',
+    colMargem: 'Margem média', colComExp: 'Com data',
+    regraPrev: 'Propostas em aberto de {g}. O ponderado é valor × peso do estágio; o lucro previsto é valor × margem orçada do BR.',
+    pgDeduzido: 'PG deduzido do grupo do produto para {n} propostas — o tipo só é gravado quando o item vira pedido, então na proposta ele é inferido pelo histórico.',
+    rankTitulo: 'Ranking de clientes — faturamento dos últimos anos',
+    rankSub: 'notas de venda desde 2023 · o ano corrente é parcial, então a variação é ritmo, não fechamento',
+    rankCliente: 'Cliente', rankTotal: 'Total', rankTend: 'Tendência', rankUltima: 'Última compra',
+    rankAberto: 'Em aberto hoje', rankDias: 'dias', rankHoje: 'hoje',
+    tendCrescendo: 'crescendo', tendCaindo: 'caindo', tendParou: 'parou de comprar', tendNovo: 'cliente novo',
+    rankAlerta: '{n} clientes do top 20 pararam de comprar ou estão caindo mais de 30% — somam {v} de faturamento histórico.',
+    verMais: 'ver mais', verMenos: 'ver menos',
     compTitulo: 'Proposto, ponderado e realizado — mês a mês',
     explicaComp: 'três colunas por mês: o que foi proposto, o que a régua dos estágios prevê do que ainda está em aberto, e o que já virou pedido ou nota · a coluna do meio é empilhada por nível · Perdido fica de fora (não é previsão)',
     serieCheio: 'Proposto', seriePond: 'Ponderado', serieReal: 'Realizado',
@@ -3834,6 +3851,23 @@ const TXT = {
     deQualMes: 'Which month the proposal came from', propostaDe: 'Proposal from',
     propostaAno: 'Proposal from {a}', semRef: 'BR with no year in its number',
     notaAnterior: 'Proposals before 2026 are outside the portal funnel (the window starts in Jan/26), so they show only the year — taken from the BR number itself.',
+    prevTitulo: 'Predictability — the open pipeline, month by month',
+    prevSub: 'by the month the salesperson expects to close · the bar is the full value, the solid part is weighted by stage',
+    prevPor: 'Break down by', porVendedor2: 'Salesperson', porPG: 'Type (PG)', porEstagio2: 'Stage', porCliente: 'Customer',
+    prevSemExp: '{n} proposals ({v}) still have no expected closing month and stay out of the columns. The month drop-down was added to the follow-up sheet exactly to unlock this.',
+    prevMatriz: 'Who holds what, and what it is worth',
+    prevMatrizSub: 'row by row: open value, what the ruler forecasts and the profit each one carries',
+    colQtd: 'Proposals', colValor: 'Open', colPond: 'Weighted', colLucro: 'Forecast profit',
+    colMargem: 'Avg margin', colComExp: 'With date',
+    regraPrev: 'Open proposals for {g}. Weighted is value × stage weight; forecast profit is value × the BR budgeted margin.',
+    pgDeduzido: 'PG inferred from the product group for {n} proposals — the type is only recorded once the item becomes an order, so on a proposal it is inferred from history.',
+    rankTitulo: 'Customer ranking — revenue over recent years',
+    rankSub: 'sales invoices since 2023 · the current year is partial, so the change is pace, not a close',
+    rankCliente: 'Customer', rankTotal: 'Total', rankTend: 'Trend', rankUltima: 'Last purchase',
+    rankAberto: 'Open today', rankDias: 'days', rankHoje: 'today',
+    tendCrescendo: 'growing', tendCaindo: 'declining', tendParou: 'stopped buying', tendNovo: 'new customer',
+    rankAlerta: '{n} customers in the top 20 stopped buying or are down more than 30% — they add up to {v} in historical revenue.',
+    verMais: 'show more', verMenos: 'show less',
     compTitulo: 'Proposed, weighted and won — month by month',
     explicaComp: 'three columns per month: what was proposed, what the stage ruler forecasts from what is still open, and what already became an order or invoice · the middle column is stacked by stage · Lost is excluded (it forecasts nothing)',
     serieCheio: 'Proposed', seriePond: 'Weighted', serieReal: 'Won',
@@ -4281,6 +4315,10 @@ function PainelDiretoria() {
   const [fatDet, setFatDet] = useState([]);
   const [estagiosCfg, setEstagiosCfg] = useState([]);
   const [estagioIsolado, setEstagioIsolado] = useState(null);
+  const [prev, setPrev] = useState([]);           // previsibilidade
+  const [rank, setRank] = useState([]);           // ranking de clientes
+  const [prevPor, setPrevPor] = useState('vendedor');
+  const [rankTudo, setRankTudo] = useState(false);
   // ITENS POR BR: busca sob demanda no clique da linha e guarda em cache —
   // carregar item de 750 BRs de uma vez não se justifica para uma consulta
   // que abre um de cada vez.
@@ -4316,6 +4354,11 @@ function PainelDiretoria() {
       supabase.from('v_comercial_faturado_detalhe').select('*'),
       supabase.from('comercial_estagio').select('*').order('ordem'),
     ]);
+    const [pv2, rk] = await Promise.all([
+      supabase.from('v_comercial_previsibilidade').select('*'),
+      supabase.from('v_comercial_ranking_cliente_3anos').select('*').limit(60),
+    ]);
+    setPrev(pv2.data || []); setRank(rk.data || []);
     setDados(d.data || []); setCambio(c.data || []);
     setPrevisao(pv.data || []); setCiclo(cc.data || []);
     setFatOrigem(fo.data || []); setFatDet(fd.data || []);
@@ -4524,6 +4567,52 @@ function PainelDiretoria() {
   const pctSemClasse = soma(abertos) > 0 ? (soma(semClasse) / soma(abertos)) * 100 : 0;
 
   const topDeals = [...abertos].sort((a, b) => (Number(b.valor) || 0) - (Number(a.valor) || 0)).slice(0, 8);
+
+  // ---- PREVISIBILIDADE ----
+  // O funil em aberto lido pelo mês que o vendedor espera fechar, e aberto
+  // pelo eixo que a pergunta pedir: vendedor, tipo de produto, estágio ou
+  // cliente. É a mesma base vista de quatro ângulos, não quatro relatórios.
+  const EIXOS = {
+    vendedor: { rot: t.porVendedor2, campo: 'vendedor' },
+    pg:       { rot: t.porPG,        campo: 'pg' },
+    estagio:  { rot: t.porEstagio2,  campo: 'estagio' },
+    cliente:  { rot: t.porCliente,   campo: 'cliente' },
+  };
+  const eixo = EIXOS[prevPor] || EIXOS.vendedor;
+  const prevSemExp = prev.filter(p => !p.mes_previsto);
+  const prevComExp = prev.filter(p => p.mes_previsto);
+  const mesesPrev2 = [...new Set(prevComExp.map(p => p.mes_previsto))].sort();
+  const colPrevisib = mesesPrev2.map(m => {
+    const d = prevComExp.filter(p => p.mes_previsto === m);
+    return { k: rotMes(m), total: soma(d), dentro: soma(d, 'valor_ponderado'),
+             rot: fmtMoedaCompacta(conv(soma(d))), sub: `${d.length}`, iso: m };
+  });
+  // Matriz: uma linha por grupo do eixo escolhido.
+  const grupos = [...new Set(prev.map(p => p[eixo.campo] || '—'))];
+  const matriz = grupos.map(g => {
+    const d = prev.filter(p => (p[eixo.campo] || '—') === g);
+    const v = soma(d);
+    return {
+      k: g, n: d.length, v, pond: soma(d, 'valor_ponderado'),
+      lucro: soma(d, 'lucro_previsto'),
+      margem: d.length ? d.reduce((s, x) => s + (Number(x.margem_pct) || 0), 0) / d.length : 0,
+      comExp: d.filter(x => x.mes_previsto).length,
+      rot: val(v), par: G.azul, lista: d,
+    };
+  }).sort((a, b) => b.v - a.v);
+  const pgDeduzidos = prev.filter(p => p.pg_origem === 'grupo').length;
+
+  // ---- RANKING DE CLIENTES ----
+  const rankVis = rankTudo ? rank : rank.slice(0, 20);
+  const anosRank = [3, 2, 1, 0].map(i => new Date().getFullYear() - i);
+  const rankRisco = rank.slice(0, 20).filter(r =>
+    r.tendencia === 'parou de comprar' || (Number(r.var_pct) || 0) < -30);
+  const TEND = {
+    'crescendo': { rot: t.tendCrescendo, cor: G.verde },
+    'caindo': { rot: t.tendCaindo, cor: G.ambar },
+    'parou de comprar': { rot: t.tendParou, cor: G.vermelho },
+    'cliente novo': { rot: t.tendNovo, cor: G.azul },
+  };
 
   // ---- ONDE ESTÃO OS R$ EM ABERTO, MÊS A MÊS ----
   // O cartão diz 71 mi; esta coluna diz de que meses esse dinheiro é. Cheio
@@ -5301,6 +5390,147 @@ function PainelDiretoria() {
       ), t.cardsSub)}
 
       {gavetaDe('nivel:')}
+
+      {painel(t.prevTitulo, (
+        <>
+          {prevSemExp.length > 0 && (
+            <div style={{ fontSize: 11, color: T.amberText, background: T.amberSoft,
+              border: `1px solid ${T.amberText}33`, borderRadius: 7, padding: '9px 12px',
+              marginBottom: 12, lineHeight: 1.5 }}>
+              {t.prevSemExp.replace('{n}', String(prevSemExp.length)).replace('{v}', val(soma(prevSemExp)))}
+            </div>
+          )}
+          {colPrevisib.length > 0 && (
+            <Colunas dados={colPrevisib} par={G.roxo} altura={165}
+              dica={(d) => `${d.k} · ${val(d.total)} · ${d.sub} ${t.propostas}`}
+              ativo={detalhe?.chave?.startsWith('prev:') ? detalhe.chave.slice(5) : null}
+              aoClicar={(col) => {
+                const lst = prevComExp.filter(p => rotMes(p.mes_previsto) === col.k);
+                abrir(`prev:${col.k}`, `${t.prevTitulo} · ${col.k}`,
+                  t.regraPrev.replace('{g}', col.k), lst, soma(lst));
+              }} />
+          )}
+
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap',
+            marginTop: 14, paddingTop: 12, borderTop: `1px solid ${T.lineSoft}` }}>
+            <span style={{ fontSize: 11.5, color: T.inkDim, fontWeight: 600 }}>{t.prevPor}</span>
+            {botoes(Object.entries(EIXOS).map(([k, x]) => [k, x.rot]), prevPor, setPrevPor)}
+          </div>
+
+          <div style={{ overflowX: 'auto', marginTop: 10 }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 720 }}>
+              <thead><tr style={{ background: T.panelAlt }}>
+                {[eixo.rot, t.colQtd, t.colValor, t.colPond, t.colLucro, t.colMargem, t.colComExp].map((h, i) => (
+                  <th key={h} style={{ padding: '7px 10px', fontSize: 10.5, fontWeight: 600, color: T.inkFaint,
+                    textAlign: i === 0 ? 'left' : 'right', whiteSpace: 'nowrap' }}>{h}</th>
+                ))}
+              </tr></thead>
+              <tbody>
+                {matriz.slice(0, 15).map((g, i) => (
+                  <tr key={g.k} className="g-linha g-clicavel"
+                    onClick={() => abrir(`mtz:${g.k}`, `${eixo.rot} · ${g.k}`,
+                      t.regraPrev.replace('{g}', g.k), g.lista, g.v)}
+                    style={{ borderBottom: `1px solid ${T.lineSoft}`, animationDelay: `${i * 35}ms`,
+                      background: detalhe?.chave === `mtz:${g.k}` ? T.panelAlt : 'transparent' }}>
+                    <td style={{ padding: '7px 10px', fontSize: 11.5, fontWeight: 600, maxWidth: 210,
+                      whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={g.k}>{g.k}</td>
+                    <td style={{ padding: '7px 10px', fontSize: 11, textAlign: 'right', color: T.inkFaint }}>{g.n}</td>
+                    <td style={{ padding: '7px 10px', fontSize: 12, textAlign: 'right', fontWeight: 700,
+                      fontVariantNumeric: 'tabular-nums' }}>{val(g.v)}</td>
+                    <td style={{ padding: '7px 10px', fontSize: 11.5, textAlign: 'right', color: G.ciano[1],
+                      fontVariantNumeric: 'tabular-nums' }}>{val(g.pond)}</td>
+                    <td style={{ padding: '7px 10px', fontSize: 11.5, textAlign: 'right', color: G.verde[1],
+                      fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{val(g.lucro)}</td>
+                    <td style={{ padding: '7px 10px', fontSize: 11, textAlign: 'right', color: T.inkDim }}>
+                      {g.margem > 0 ? `${g.margem.toFixed(0)}%` : '—'}
+                    </td>
+                    <td style={{ padding: '7px 10px', fontSize: 11, textAlign: 'right',
+                      color: g.comExp === 0 ? T.rustText : T.inkDim }}>{g.comExp}/{g.n}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {prevPor === 'pg' && pgDeduzidos > 0 && (
+            <div style={{ fontSize: 10, color: T.inkFaint, marginTop: 8, lineHeight: 1.5 }}>
+              {t.pgDeduzido.replace('{n}', String(pgDeduzidos))}
+            </div>
+          )}
+        </>
+      ), t.prevSub)}
+
+      {gavetaDe('prev:', 'mtz:')}
+
+      {rank.length > 0 && painel(t.rankTitulo, (
+        <>
+          {rankRisco.length > 0 && (
+            <div style={{ fontSize: 11, color: T.rustText, background: T.rustSoft,
+              border: `1px solid ${T.rustText}33`, borderRadius: 7, padding: '9px 12px',
+              marginBottom: 12, lineHeight: 1.5 }}>
+              {t.rankAlerta.replace('{n}', String(rankRisco.length))
+                .replace('{v}', val(rankRisco.reduce((s, r) => s + (Number(r.total_periodo) || 0), 0)))}
+            </div>
+          )}
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 860 }}>
+              <thead><tr style={{ background: T.panelAlt }}>
+                {[t.rankCliente, ...anosRank.map(String), t.rankTotal, t.rankTend, t.rankUltima, t.rankAberto]
+                  .map((h, i) => (
+                  <th key={h} style={{ padding: '7px 10px', fontSize: 10.5, fontWeight: 600, color: T.inkFaint,
+                    textAlign: i === 0 || i === 6 ? 'left' : 'right', whiteSpace: 'nowrap' }}>{h}</th>
+                ))}
+              </tr></thead>
+              <tbody>
+                {rankVis.map((r, i) => {
+                  const td = TEND[r.tendencia] || { rot: r.tendencia, cor: G.cinza };
+                  const dias = Number(r.dias_sem_comprar);
+                  return (
+                    <tr key={r.cliente} className="g-linha"
+                      style={{ borderBottom: `1px solid ${T.lineSoft}`, animationDelay: `${Math.min(i, 20) * 30}ms` }}>
+                      <td style={{ padding: '7px 10px', fontSize: 11.5, fontWeight: 600, maxWidth: 230,
+                        whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={r.cliente}>
+                        <span style={{ color: T.inkFaint, marginRight: 6 }}>{i + 1}</span>{r.cliente}
+                      </td>
+                      {['ano_3', 'ano_2', 'ano_1', 'ano_0'].map(a => (
+                        <td key={a} style={{ padding: '7px 10px', fontSize: 11, textAlign: 'right',
+                          color: r[a] ? T.inkDim : T.inkFaint, fontVariantNumeric: 'tabular-nums' }}>
+                          {r[a] ? val(r[a]) : '—'}
+                        </td>
+                      ))}
+                      <td style={{ padding: '7px 10px', fontSize: 12, textAlign: 'right', fontWeight: 700,
+                        fontVariantNumeric: 'tabular-nums' }}>{val(r.total_periodo)}</td>
+                      <td style={{ padding: '7px 10px', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                        <span style={{ fontSize: 10, fontWeight: 700, color: td.cor[1], background: `${td.cor[0]}1F`,
+                          padding: '2px 7px', borderRadius: 4 }}>
+                          {td.rot}{r.var_pct != null && ` ${Number(r.var_pct) > 0 ? '+' : ''}${Number(r.var_pct).toFixed(0)}%`}
+                        </span>
+                      </td>
+                      <td style={{ padding: '7px 10px', fontSize: 10.5, textAlign: 'left', whiteSpace: 'nowrap',
+                        color: dias > 180 ? T.rustText : dias > 90 ? T.amberText : T.inkFaint }}>
+                        {dias === 0 ? t.rankHoje : `${dias} ${t.rankDias}`}
+                      </td>
+                      <td style={{ padding: '7px 10px', fontSize: 11, textAlign: 'right',
+                        color: Number(r.em_aberto_hoje) > 0 ? G.azul[1] : T.inkFaint,
+                        fontWeight: Number(r.em_aberto_hoje) > 0 ? 600 : 400,
+                        fontVariantNumeric: 'tabular-nums' }}>
+                        {Number(r.em_aberto_hoje) > 0 ? val(r.em_aberto_hoje) : '—'}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          {rank.length > 20 && (
+            <button onClick={() => setRankTudo(!rankTudo)}
+              style={{ fontFamily: 'inherit', fontSize: 11.5, fontWeight: 600, padding: '6px 13px',
+                borderRadius: 6, cursor: 'pointer', border: `1px solid ${T.line}`, background: T.panel,
+                color: T.inkDim, marginTop: 10 }}>
+              {rankTudo ? `↑ ${t.verMenos}` : `↓ ${t.verMais} (${rank.length - 20})`}
+            </button>
+          )}
+        </>
+      ), t.rankSub)}
 
       {painel(t.topDealsTitulo, (
         <div style={{ overflowX: 'auto' }}>
