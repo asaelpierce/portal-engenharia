@@ -3715,11 +3715,17 @@ const TXT = {
     deQualMes: 'De qual mês veio a proposta', propostaDe: 'Proposta de',
     propostaAno: 'Proposta de {a}', semRef: 'BR sem ano no número',
     notaAnterior: 'Proposta anterior a 2026 não entra no funil do portal (a janela começa em jan/26), por isso aparece só com o ano — que vem do próprio número do BR.',
-    compTitulo: 'Cheio × ponderado, por estágio',
-    explicaComp: 'barra clara = valor cheio da proposta · barra intensa = o que sobra ao multiplicar pelo peso do estágio · clique para isolar um estágio',
-    totalCheio: 'Total cheio', totalPond: 'Total ponderado', encolhe: 'o funil encolhe',
-    verTodos: 'Ver todos', isolado: 'isolando',
-    regraComp: 'Propostas em aberto no estágio {e}, peso {p}. O cheio é o valor da proposta; o ponderado é valor × peso. Sem classificação tem peso zero — por isso some do ponderado.',
+    compTitulo: 'Proposto, ponderado e realizado — mês a mês',
+    explicaComp: 'três colunas por mês: o que foi proposto, o que a régua dos estágios prevê do que ainda está em aberto, e o que já virou pedido ou nota · a coluna do meio é empilhada por nível · Perdido fica de fora (não é previsão)',
+    serieCheio: 'Proposto', seriePond: 'Ponderado', serieReal: 'Realizado',
+    totalCheio: 'Total proposto', totalPond: 'Total ponderado', totalReal: 'Total realizado',
+    encolhe: 'o funil encolhe', verTodos: 'Ver todos', isolado: 'isolando',
+    taxaReal: 'do proposto virou pedido', aindaEmAberto: 'ainda em aberto',
+    regraComp: 'Propostas abertas em {m}: {c} proposto no total, {r} já virou pedido ou nota, e do que segue em aberto a régua dos estágios prevê {p}. O ponderado é valor × peso do estágio; sem classificação pesa zero.',
+    regraNivel: 'Propostas em aberto no estágio {e}, peso {p}. O ponderado é valor da proposta × peso.',
+    cardsTitulo: 'Previsão por nível, hoje', cardsSub: 'o que há em aberto em cada estágio e quanto a régua prevê dele',
+    nivelCheio: 'em aberto', nivelPond: 'prevê',
+    avisoPondVazio: 'A coluna do meio só aparece em {m} de {tot} meses: nos demais, nenhuma proposta em aberto foi classificada pelo vendedor, e sem estágio o peso é zero. Não é falha do gráfico — é o follow up que ainda não voltou desses meses.',
     syncOk: '✓ {n} BRs atualizados do Sankhya — novos orçamentos, vendedores e margens. Pedidos e faturamento já sincronizam sozinhos a cada 15 min.',
   },
   en: {
@@ -3814,11 +3820,17 @@ const TXT = {
     deQualMes: 'Which month the proposal came from', propostaDe: 'Proposal from',
     propostaAno: 'Proposal from {a}', semRef: 'BR with no year in its number',
     notaAnterior: 'Proposals before 2026 are outside the portal funnel (the window starts in Jan/26), so they show only the year — taken from the BR number itself.',
-    compTitulo: 'Full vs weighted, by stage',
-    explicaComp: 'light bar = full proposal value · solid bar = what remains after the stage weight · click to isolate a stage',
-    totalCheio: 'Full total', totalPond: 'Weighted total', encolhe: 'the funnel shrinks',
-    verTodos: 'Show all', isolado: 'isolating',
-    regraComp: 'Open proposals at stage {e}, weight {p}. Full is the proposal value; weighted is value × weight. Unclassified has zero weight — which is why it disappears from the weighted total.',
+    compTitulo: 'Proposed, weighted and won — month by month',
+    explicaComp: 'three columns per month: what was proposed, what the stage ruler forecasts from what is still open, and what already became an order or invoice · the middle column is stacked by stage · Lost is excluded (it forecasts nothing)',
+    serieCheio: 'Proposed', seriePond: 'Weighted', serieReal: 'Won',
+    totalCheio: 'Total proposed', totalPond: 'Total weighted', totalReal: 'Total won',
+    encolhe: 'the funnel shrinks', verTodos: 'Show all', isolado: 'isolating',
+    taxaReal: 'of proposals became orders', aindaEmAberto: 'still open',
+    regraComp: 'Proposals opened in {m}: {c} proposed in total, {r} already became an order or invoice, and from what is still open the stage ruler forecasts {p}. Weighted is value × stage weight; unclassified weighs zero.',
+    regraNivel: 'Open proposals at stage {e}, weight {p}. Weighted is proposal value × weight.',
+    cardsTitulo: 'Forecast by stage, today', cardsSub: 'what is open at each stage and how much the ruler forecasts from it',
+    nivelCheio: 'open', nivelPond: 'forecast',
+    avisoPondVazio: 'The middle column only shows up in {m} of {tot} months: in the others no open proposal has been classified by the salesperson, and with no stage the weight is zero. Not a chart glitch — the follow-up has not come back for those months.',
     syncOk: '✓ {n} projects refreshed from the ERP — new quotes, salespeople and margins. Orders and invoicing already sync on their own every 15 min.',
   },
 };
@@ -4050,6 +4062,98 @@ function Colunas({ dados, altura = 180, par, rotulo, dica, aoClicar, ativo }) {
         );
       })}
       {rotulo && <text x="0" y={altura + 38} style={{ fontSize: 9.5, fill: T.inkFaint }}>{rotulo}</text>}
+    </svg>
+  );
+}
+
+// TRIO DE COLUNAS: cheio, ponderado e realizado lado a lado, mês a mês.
+//
+// A do meio é EMPILHADA por estágio (avançado, alto, médio, baixo) -- é onde
+// se enxerga de que qualidade é a expectativa daquele mês. Perdido fica fora:
+// não é previsão de nada.
+//
+// Escala única para as três: comparar altura entre elas é o ponto do gráfico,
+// e isso só vale se dividirem o mesmo eixo.
+function ColunasTrio({ dados, altura = 200, niveis, aoClicar, ativo, fmt }) {
+  const max = Math.max(1, ...dados.map(d => Math.max(d.cheio, d.realizado,
+    d.pond.reduce((s, p) => s + p.v, 0))));
+  const largura = 100 / Math.max(dados.length, 1);
+  const id = useRef(`tr${Math.random().toString(36).slice(2, 8)}`).current;
+  const SERIES = [
+    { chave: 'cheio', off: 0.08, par: G.cinza },
+    { chave: 'pond', off: 0.36, par: null },
+    { chave: 'realizado', off: 0.64, par: G.verde },
+  ];
+  const bw = largura * 0.24;
+  return (
+    <svg width="100%" height={altura + 42} style={{ display: 'block', overflow: 'visible' }}>
+      <defs>
+        {[G.cinza, G.verde, ...niveis.map(n => n.par)].map((p, i) => (
+          <linearGradient key={i} id={`${id}-g${i}`} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={p[0]} />
+            <stop offset="100%" stopColor={p[1]} />
+          </linearGradient>
+        ))}
+      </defs>
+      {[0.25, 0.5, 0.75, 1].map(g => (
+        <line key={g} x1="0" x2="100%" y1={altura * (1 - g)} y2={altura * (1 - g)}
+          stroke={T.lineSoft} strokeWidth="1" />
+      ))}
+      {dados.map((d, i) => {
+        const on = ativo === d.k;
+        const totalPond = d.pond.reduce((s, p) => s + p.v, 0);
+        let acc = 0;
+        return (
+          <g key={d.k} className={aoClicar ? 'g-clicavel' : undefined}
+            onClick={aoClicar ? () => aoClicar(d) : undefined}>
+            {on && <rect x={`${i * largura + largura * 0.02}%`} y={-6} width={`${largura * 0.96}%`}
+              height={altura + 36} rx="6" fill={`${T.ink}0A`} stroke={T.inkFaint} strokeWidth="1" />}
+            {SERIES.map((s) => {
+              if (s.chave === 'pond') {
+                return (
+                  <g key={s.chave} className="g-col" style={{ animationDelay: `${i * 50}ms` }}>
+                    {d.pond.map((p, j) => {
+                      const h = Math.max((p.v / max) * altura, p.v > 0 ? 2 : 0);
+                      const y = altura - ((acc + p.v) / max) * altura;
+                      acc += p.v;
+                      if (h <= 0) return null;
+                      const gi = 2 + niveis.findIndex(n => n.cod === p.cod);
+                      return (
+                        <rect key={j} x={`${i * largura + largura * s.off}%`} y={y}
+                          width={`${bw}%`} height={h} rx={j === d.pond.length - 1 ? 3 : 0}
+                          fill={`url(#${id}-g${gi})`}>
+                          <title>{`${d.k} · ${p.rot}: ${fmt(p.v)}`}</title>
+                        </rect>
+                      );
+                    })}
+                    <rect x={`${i * largura + largura * s.off}%`} y={0} width={`${bw}%`} height={altura}
+                      fill="transparent">
+                      <title>{`${d.k} · ponderado: ${fmt(totalPond)}`}</title>
+                    </rect>
+                  </g>
+                );
+              }
+              const v = d[s.chave];
+              const h = Math.max((v / max) * altura, v > 0 ? 2 : 0);
+              return (
+                <g key={s.chave} className="g-col" style={{ animationDelay: `${i * 50}ms` }}>
+                  <rect x={`${i * largura + largura * s.off}%`} y={altura - h} width={`${bw}%`}
+                    height={h} rx="3" fill={`url(#${id}-g${s.chave === 'cheio' ? 0 : 1})`}>
+                    <title>{`${d.k} · ${s.chave}: ${fmt(v)}`}</title>
+                  </rect>
+                </g>
+              );
+            })}
+            <text x={`${i * largura + largura * 0.08 + bw / 2}%`}
+              y={altura - Math.max((d.cheio / max) * altura, 2) - 5} textAnchor="middle"
+              style={{ fontSize: 9, fill: T.inkFaint, fontWeight: 600 }}>{d.rotCheio}</text>
+            <text x={`${i * largura + largura / 2}%`} y={altura + 16} textAnchor="middle"
+              style={{ fontSize: 10.5, fill: on ? T.ink : T.inkFaint, fontWeight: on ? 700 : 400 }}>{d.k}</text>
+            <text x={`${i * largura + largura / 2}%`} y={altura + 29} textAnchor="middle"
+              style={{ fontSize: 9, fill: T.inkFaint }}>{d.sub}</text>
+          </g>
+        );
+      })}
     </svg>
   );
 }
@@ -4402,24 +4506,40 @@ function PainelDiretoria() {
   // Responde "o que está proposto e o que sobra quando aplico a régua do
   // time". Sem classificação entra com peso zero e some do ponderado —
   // é justamente o que dá a dimensão do problema.
-  const pesoDe = (cod) => {
-    const e = estagiosCfg.find(x => x.estagio === cod);
-    return e ? Number(e.peso) : 0;
-  };
-  const gruposEst = [...estagiosCfg.map(e => ({ cod: e.estagio, rot: e.rotulo, peso: Number(e.peso) })),
-                     { cod: null, rot: 'Sem classificação', peso: 0 }];
   const CORES_EST_COMP = { avancado: G.verde, alto: G.azul, medio: G.ambar,
                            baixo: G.rosa, perdido: G.cinza };
-  const barrasComp = gruposEst.map(g => {
-    const lst = abertos.filter(d => (d.estagio_codigo || null) === g.cod);
-    return { k: g.rot, v: soma(lst), dentro: soma(lst, 'valor_ponderado'),
-             rot: val(soma(lst)), par: CORES_EST_COMP[g.cod] || G.roxo,
-             extra: `${(g.peso * 100).toFixed(0)}%`, cod: g.cod, peso: g.peso, lista: lst };
-  }).filter(b => b.v > 0);
-  const compVisivel = estagioIsolado != null
-    ? barrasComp.filter(b => b.cod === estagioIsolado) : barrasComp;
-  const compCheio = compVisivel.reduce((s, b) => s + b.v, 0);
-  const compPond = compVisivel.reduce((s, b) => s + b.dentro, 0);
+  // Níveis que entram na PREVISÃO: perdido não prevê nada e sem classificação
+  // pesa zero — ambos fora do empilhado, mas o cheio deles continua no total.
+  const niveisPrev = estagiosCfg
+    .filter(e => e.estagio !== 'perdido' && Number(e.peso) > 0)
+    .map(e => ({ cod: e.estagio, rot: e.rotulo, peso: Number(e.peso),
+                 par: CORES_EST_COMP[e.estagio] || G.roxo }));
+
+  // TRIO MÊS A MÊS: proposto (tudo que nasceu no mês), realizado (o que já
+  // virou pedido/nota) e ponderado (a régua aplicada ao que segue em aberto).
+  const mesesTrio = [...new Set(dados.map(d => d.competencia).filter(Boolean))].sort();
+  const trio = mesesTrio.map(m => {
+    const doMes = dados.filter(d => d.competencia === m);
+    const abertosMes = doMes.filter(d => d.situacao === 'em aberto');
+    const ganhosMes = doMes.filter(d => d.situacao === 'pedido confirmado' || d.situacao === 'faturado');
+    const pond = niveisPrev
+      .filter(n => estagioIsolado == null || n.cod === estagioIsolado)
+      .map(n => ({ cod: n.cod, rot: n.rot,
+                   v: soma(abertosMes.filter(d => d.estagio_codigo === n.cod), 'valor_ponderado') }));
+    return { k: rotMes(m), iso: m, cheio: soma(doMes), realizado: soma(ganhosMes), pond,
+             rotCheio: fmtMoedaCompacta(conv(soma(doMes))), sub: `${doMes.length}`,
+             listaMes: doMes, abertosMes, ganhosMes };
+  });
+  const trioCheio = trio.reduce((s, d) => s + d.cheio, 0);
+  const trioReal = trio.reduce((s, d) => s + d.realizado, 0);
+  const trioPond = trio.reduce((s, d) => s + d.pond.reduce((a, p) => a + p.v, 0), 0);
+
+  // Cards simultâneos: quanto há em aberto em cada nível e quanto a régua
+  // prevê dali. Lado a lado, sem precisar clicar em nada.
+  const cardsNivel = niveisPrev.map(n => {
+    const lst = abertos.filter(d => d.estagio_codigo === n.cod);
+    return { ...n, n: lst.length, cheio: soma(lst), pond: soma(lst, 'valor_ponderado'), lista: lst };
+  });
 
   // ---- SEMÁFORO DE INVESTIMENTO ----
   // Traduz a classificação dos próprios vendedores em três pilhas de AÇÃO:
@@ -4912,63 +5032,150 @@ function PainelDiretoria() {
 
       {gavetaDe('ciclo:')}
 
-      <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))' }}>
-        {painel(t.abertoPorMesTitulo, (
-          <Colunas dados={colAberto} par={G.ambar} altura={155}
-            dica={(d) => `${d.k} · ${val(d.total)} · ${d.sub} ${t.propostas}`}
-            ativo={detalhe?.chave?.startsWith('abm:') ? detalhe.chave.slice(4) : null}
-            aoClicar={(col) => {
-              const lst = abertos.filter(d => rotMes(d.competencia) === col.k);
-              abrir(`abm:${col.k}`, `${t.abertoPorMesTitulo} · ${col.k}`,
-                t.regraAbertoPorMes.replace('{m}', col.k), lst, soma(lst));
-            }} />
-        ), t.explicaAbertoPorMes.replace('{v}', val(soma(abertos))))}
+      {painel(t.abertoPorMesTitulo, (
+        <Colunas dados={colAberto} par={G.ambar} altura={155}
+          dica={(d) => `${d.k} · ${val(d.total)} · ${d.sub} ${t.propostas}`}
+          ativo={detalhe?.chave?.startsWith('abm:') ? detalhe.chave.slice(4) : null}
+          aoClicar={(col) => {
+            const lst = abertos.filter(d => rotMes(d.competencia) === col.k);
+            abrir(`abm:${col.k}`, `${t.abertoPorMesTitulo} · ${col.k}`,
+              t.regraAbertoPorMes.replace('{m}', col.k), lst, soma(lst));
+          }} />
+      ), t.explicaAbertoPorMes.replace('{v}', val(soma(abertos))))}
 
-        {painel(t.compTitulo, (
-          <>
-            <BarrasH dados={compVisivel} altura={26}
-              ativo={estagioIsolado != null ? (compVisivel[0]?.k || null) : null}
-              aoClicar={(b2) => {
-                // Clique isola o estágio no gráfico E abre os BRs: ver só o
-                // Avançado é a pergunta "o que está mesmo para fechar".
-                const novo = estagioIsolado === b2.cod ? null : b2.cod;
-                setEstagioIsolado(novo);
-                if (novo === null) { setDetalhe(null); return; }
-                abrir(`comp:${b2.k}`, `${t.compTitulo} · ${b2.k}`,
-                  t.regraComp.replace('{e}', b2.k).replace('{p}', `${(b2.peso * 100).toFixed(0)}%`),
-                  b2.lista, soma(b2.lista));
-              }} />
-            <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', alignItems: 'baseline',
-              marginTop: 11, paddingTop: 10, borderTop: `1px solid ${T.lineSoft}` }}>
-              <span style={{ fontSize: 11 }}>
-                <span style={{ color: T.inkFaint }}>{t.totalCheio}: </span>
-                <strong style={{ fontSize: 14, fontVariantNumeric: 'tabular-nums' }}>{val(compCheio)}</strong>
+      {gavetaDe('abm:')}
+
+      {painel(t.compTitulo, (
+        <>
+          {/* Legenda: três séries + os níveis que compõem a coluna do meio.
+              Clicar num nível isola ele no empilhado — ver só o Avançado
+              responde "o que está mesmo para fechar". */}
+          <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'center',
+            marginBottom: 12, fontSize: 10.5 }}>
+            {[[t.serieCheio, G.cinza], [t.seriePond, null], [t.serieReal, G.verde]].map(([r, p]) => (
+              <span key={r} style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                <span style={{ width: 10, height: 10, borderRadius: 2,
+                  background: p ? `linear-gradient(135deg, ${p[0]}, ${p[1]})`
+                    : `linear-gradient(135deg, ${G.verde[0]}, ${G.azul[0]}, ${G.ambar[0]})` }} />
+                <span style={{ color: T.inkDim, fontWeight: 600 }}>{r}</span>
               </span>
-              <span style={{ fontSize: 11 }}>
-                <span style={{ color: T.inkFaint }}>{t.totalPond}: </span>
-                <strong style={{ fontSize: 14, color: G.ciano[1], fontVariantNumeric: 'tabular-nums' }}>
-                  {val(compPond)}
+            ))}
+            <span style={{ color: T.line }}>│</span>
+            {niveisPrev.map(n => {
+              const on = estagioIsolado === n.cod;
+              return (
+                <span key={n.cod} className="g-clicavel"
+                  onClick={() => setEstagioIsolado(on ? null : n.cod)}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 8px',
+                    borderRadius: 5, border: `1px solid ${on ? n.par[0] : 'transparent'}`,
+                    background: on ? `${n.par[0]}16` : 'transparent',
+                    opacity: estagioIsolado == null || on ? 1 : 0.4 }}>
+                  <span style={{ width: 9, height: 9, borderRadius: 2,
+                    background: `linear-gradient(135deg, ${n.par[0]}, ${n.par[1]})` }} />
+                  <span style={{ color: T.inkDim }}>{n.rot}</span>
+                  <span style={{ color: n.par[1], fontWeight: 700 }}>{(n.peso * 100).toFixed(0)}%</span>
+                </span>
+              );
+            })}
+            {estagioIsolado != null && (
+              <button onClick={() => { setEstagioIsolado(null); setDetalhe(null); }}
+                style={{ fontFamily: 'inherit', fontSize: 10.5, fontWeight: 600, padding: '4px 10px',
+                  borderRadius: 5, cursor: 'pointer', border: `1px solid ${T.line}`,
+                  background: T.panel, color: T.inkDim, marginLeft: 'auto' }}>↺ {t.verTodos}</button>
+            )}
+          </div>
+
+          {(() => {
+            // Coluna do meio vazia na maioria dos meses NÃO é bug: é proposta
+            // sem classificação, que pesa zero. Dizer isso no gráfico evita a
+            // conclusão errada de que o dado sumiu.
+            const comPond = trio.filter(d => d.pond.some(p => p.v > 0)).length;
+            return comPond < trio.length && estagioIsolado == null ? (
+              <div style={{ fontSize: 11, color: T.amberText, background: T.amberSoft,
+                border: `1px solid ${T.amberText}33`, borderRadius: 7, padding: '9px 12px',
+                marginBottom: 12, lineHeight: 1.5 }}>
+                {t.avisoPondVazio.replace('{m}', String(comPond)).replace('{tot}', String(trio.length))}
+              </div>
+            ) : null;
+          })()}
+
+          <ColunasTrio dados={trio} niveis={niveisPrev} fmt={val} altura={205}
+            ativo={detalhe?.chave?.startsWith('trio:') ? detalhe.chave.slice(5) : null}
+            aoClicar={(d) => {
+              const p = d.pond.reduce((s, x) => s + x.v, 0);
+              abrir(`trio:${d.k}`, `${t.compTitulo} · ${d.k}`,
+                t.regraComp.replace('{m}', d.k).replace('{c}', val(d.cheio))
+                  .replace('{r}', val(d.realizado)).replace('{p}', val(p)),
+                d.listaMes, d.cheio);
+            }} />
+
+          <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', alignItems: 'baseline',
+            marginTop: 12, paddingTop: 10, borderTop: `1px solid ${T.lineSoft}` }}>
+            {[[t.totalCheio, trioCheio, G.cinza], [t.totalPond, trioPond, G.azul],
+              [t.totalReal, trioReal, G.verde]].map(([r, v, p]) => (
+              <span key={r} style={{ fontSize: 11 }}>
+                <span style={{ color: T.inkFaint }}>{r}: </span>
+                <strong style={{ fontSize: 14.5, color: p[1], fontVariantNumeric: 'tabular-nums' }}>
+                  {val(v)}
                 </strong>
               </span>
-              {compCheio > 0 && (
-                <span style={{ fontSize: 11, color: T.rustText }}>
-                  {t.encolhe} {((1 - compPond / compCheio) * 100).toFixed(0)}%
-                </span>
-              )}
-              {estagioIsolado != null && (
-                <button onClick={() => { setEstagioIsolado(null); setDetalhe(null); }}
-                  style={{ fontFamily: 'inherit', fontSize: 11, fontWeight: 600, padding: '4px 11px',
-                    borderRadius: 5, cursor: 'pointer', border: `1px solid ${T.line}`,
-                    background: T.panel, color: T.inkDim, marginLeft: 'auto' }}>
-                  ↺ {t.verTodos}
-                </button>
-              )}
-            </div>
-          </>
-        ), t.explicaComp)}
-      </div>
+            ))}
+            {trioCheio > 0 && (
+              <span style={{ fontSize: 11, color: T.inkFaint }}>
+                <strong style={{ color: G.verde[1] }}>{((trioReal / trioCheio) * 100).toFixed(0)}%</strong>{' '}
+                {t.taxaReal}
+              </span>
+            )}
+          </div>
+        </>
+      ), t.explicaComp)}
 
-      {gavetaDe('abm:', 'comp:')}
+      {gavetaDe('trio:')}
+
+      {painel(t.cardsTitulo, (
+        <div style={{ display: 'grid', gap: 9, gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))' }}>
+          {cardsNivel.map((c, i) => {
+            const on = estagioIsolado === c.cod;
+            return (
+              <div key={c.cod} className="g-card g-linha g-clicavel"
+                onClick={() => {
+                  const novo = on ? null : c.cod;
+                  setEstagioIsolado(novo);
+                  if (novo === null) { setDetalhe(null); return; }
+                  abrir(`nivel:${c.cod}`, `${c.rot}`,
+                    t.regraNivel.replace('{e}', c.rot).replace('{p}', `${(c.peso * 100).toFixed(0)}%`),
+                    c.lista, soma(c.lista));
+                }}
+                style={{ position: 'relative', overflow: 'hidden', borderRadius: 10, padding: '12px 14px',
+                  border: `1px solid ${on ? c.par[0] : T.line}`, animationDelay: `${i * 60}ms`,
+                  background: on ? `linear-gradient(180deg, ${c.par[0]}12, transparent)` : T.panelAlt }}>
+                <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 3,
+                  background: `linear-gradient(90deg, ${c.par[0]}, ${c.par[1]})` }} />
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8 }}>
+                  <span style={{ fontSize: 11.5, fontWeight: 800, color: c.par[1] }}>{c.rot}</span>
+                  <span style={{ fontSize: 10, fontWeight: 700, color: c.par[1] }}>
+                    {(c.peso * 100).toFixed(0)}%
+                  </span>
+                </div>
+                <div style={{ fontSize: 10, color: T.inkFaint, marginTop: 7 }}>
+                  {c.n} {t.propostas} · {t.nivelCheio}
+                </div>
+                <div style={{ fontSize: 15, fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>
+                  {val(c.cheio)}
+                </div>
+                <div style={{ fontSize: 10, color: T.inkFaint, marginTop: 6, paddingTop: 6,
+                  borderTop: `1px solid ${T.lineSoft}` }}>{t.nivelPond}</div>
+                <div style={{ fontSize: 17, fontWeight: 800, color: c.par[1],
+                  fontVariantNumeric: 'tabular-nums' }}>
+                  <Contador valor={c.pond} formata={val} />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ), t.cardsSub)}
+
+      {gavetaDe('nivel:')}
 
       {painel(t.topDealsTitulo, (
         <div style={{ overflowX: 'auto' }}>
