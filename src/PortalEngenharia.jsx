@@ -3958,36 +3958,49 @@ function BarrasH({ dados, altura = 24, aoClicar, ativo }) {
   );
 }
 
-// Medidor semicircular, com gradiente e o ponteiro na ponta.
-function Medidor({ pct, tamanho = 150, par, rotulo }) {
-  const r = tamanho / 2 - 16;
+// Medidor semicircular. O arco vai da ESQUERDA para a direita, como um
+// velocimetro -- na versao anterior ele crescia ao contrario e invadia o
+// titulo do painel.
+function Medidor({ pct, tamanho = 165, par, rotulo }) {
+  const r = tamanho / 2 - 20;
   const c = tamanho / 2;
+  const base = c + r * 0.22;            // linha de base do semicirculo
   const alvo = Math.max(0, Math.min(100, pct || 0));
   const p = useContador(alvo, 1100);
-  const ang = Math.PI * (p / 100);
-  const x = c - r * Math.cos(ang), y = c - r * Math.sin(ang);
   const id = useRef(`m${Math.random().toString(36).slice(2, 8)}`).current;
+
+  // 180 graus, comecando na esquerda (PI) e indo ate a direita (0)
+  const ponto = (frac) => {
+    const a = Math.PI * (1 - frac);
+    return [c + r * Math.cos(a), base - r * Math.sin(a)];
+  };
+  const [x0, y0] = ponto(0);
+  const [x1, y1] = ponto(1);
+  const [xp, yp] = ponto(p / 100);
+
   return (
-    <div style={{ textAlign: 'center' }}>
-      <svg width={tamanho} height={tamanho / 2 + 26} style={{ overflow: 'visible' }}>
+    <div style={{ textAlign: 'center', padding: '4px 2px' }}>
+      <svg width={tamanho} height={base + 12} style={{ overflow: 'visible', display: 'block' }}>
         <defs>
           <linearGradient id={id} x1="0" y1="0" x2="1" y2="0">
             <stop offset="0%" stopColor={par[0]} />
             <stop offset="100%" stopColor={par[1]} />
           </linearGradient>
         </defs>
-        <path d={`M ${c - r} ${c} A ${r} ${r} 0 1 1 ${c + r} ${c}`}
-          fill="none" stroke={T.lineSoft} strokeWidth="14" strokeLinecap="round" />
-        <path d={`M ${c - r} ${c} A ${r} ${r} 0 ${p > 50 ? 1 : 0} 1 ${x} ${y}`}
-          fill="none" stroke={`url(#${id})`} strokeWidth="14" strokeLinecap="round"
-          style={{ filter: `drop-shadow(0 0 6px ${par[0]}66)` }} />
-        <circle cx={x} cy={y} r="6" fill="#fff" stroke={par[1]} strokeWidth="3" />
-        <text x={c} y={c - 6} textAnchor="middle"
-          style={{ fontSize: 25, fontWeight: 800, fill: par[1], letterSpacing: '-.02em' }}>
+        <path d={`M ${x0} ${y0} A ${r} ${r} 0 0 1 ${x1} ${y1}`}
+          fill="none" stroke={T.lineSoft} strokeWidth="15" strokeLinecap="round" />
+        {p > 0.5 && (
+          <path d={`M ${x0} ${y0} A ${r} ${r} 0 ${p > 50 ? 1 : 0} 1 ${xp} ${yp}`}
+            fill="none" stroke={`url(#${id})`} strokeWidth="15" strokeLinecap="round"
+            style={{ filter: `drop-shadow(0 1px 5px ${par[0]}55)` }} />
+        )}
+        <circle cx={xp} cy={yp} r="6.5" fill="#fff" stroke={par[1]} strokeWidth="3" />
+        <text x={c} y={base - 6} textAnchor="middle"
+          style={{ fontSize: 27, fontWeight: 800, fill: par[1], letterSpacing: '-.02em' }}>
           {p.toFixed(0)}%
         </text>
       </svg>
-      <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: -2 }}>{rotulo}</div>
+      <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 4 }}>{rotulo}</div>
     </div>
   );
 }
@@ -4358,7 +4371,8 @@ function PainelDiretoria() {
 
       <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))' }}>
         {painel(t.conversao, (
-          <div style={{ display: 'flex', justifyContent: 'space-around', alignItems: 'center', flexWrap: 'wrap', gap: 14 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-around', alignItems: 'flex-start',
+            flexWrap: 'wrap', gap: 18, paddingTop: 6 }}>
             <Medidor pct={convPct} par={G.roxo} rotulo={`${ganhos} ${t.de} ${dados.length}`} />
             {ciclo.length > 0 && (
               <Medidor pct={ciclo.reduce((s, c) => s + (Number(c.conversao_pct) || 0), 0) / ciclo.length}
