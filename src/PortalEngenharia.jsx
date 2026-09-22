@@ -19352,6 +19352,9 @@ function Custeio() {
   const [opInput, setOpInput] = useState({});
   const [filtroAn, setFiltroAn] = useState('todos');
   const [anoAn, setAnoAn] = useState(2026);
+  const [mesAn, setMesAn] = useState('todos');   // quebra a análise por mês
+  const [projAberto, setProjAberto] = useState(null); // composição do custo do projeto
+  const [mpFora, setMpFora] = useState([]);      // MP apontada que não entrou no custo
   const [brOrc, setBrOrc] = useState('');
   const [fatFiltro, setFatFiltro] = useState('todos'); // todos | faturados | nao_faturados
   const [caixaAberta, setCaixaAberta] = useState(null); // material | servicos | frete | outros
@@ -19421,6 +19424,7 @@ function Custeio() {
       setResMensal(await lerTudo('v_custeio_resultado_mensal'));
       setAnalise(await lerTudo('v_custeio_analise'));
       setSuspeitos(await lerTudo('v_custeio_custo_suspeito'));
+      setMpFora(await lerTudo('v_custeio_mp_apontada_fora'));
       // Historico do verificador. 60 dias bastam para ver tendencia sem
       // arrastar a tabela inteira, que cresce ~17 linhas por dia.
       const desdeVerif = new Date(Date.now() - 60 * 864e5).toISOString();
@@ -19769,8 +19773,16 @@ function Custeio() {
         // aba de Faturamento. Projeto faturado em parcelas aparece em cada mes,
         // com o custo rateado na proporcao da receita daquele mes: sem isso um
         // projeto entregue em tres meses distorceria o mes em que fechou.
-        const doAno = analise.filter(a => a.ano === anoAn);
+        // QUEBRA POR MÊS: a lista inteira do ano é grande demais para varrer
+        // com o olho. O mês vira o recorte padrão de leitura.
+        const doAnoTudo = analise.filter(a => a.ano === anoAn);
+        const mesesDoAno = [...new Set(doAnoTudo.map(a => a.competencia))].sort();
+        const doAno = mesAn === 'todos' ? doAnoTudo : doAnoTudo.filter(a => a.competencia === mesAn);
         const anos = [...new Set(analise.map(a => a.ano))].sort().reverse();
+        const rotuloMes = (m) => {
+          const [, mm] = m.split('-');
+          return ['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'][Number(mm) - 1];
+        };
 
         // Filtros rapidos: cada um responde uma pergunta que alguem de fato faz.
         const FILTROS = [
@@ -19792,6 +19804,9 @@ function Custeio() {
         const rec = soma(lista, 'receita_liquida'), cus = soma(lista, 'custo');
         const marg = rec - cus;
         const cifT = soma(lista, 'cif_rateado');
+        const moT = soma(lista, 'custo_mao_obra');
+        const margDireta = marg - moT;
+        const margAbs = margDireta - cifT;
 
         // Evolucao mensal
         const meses = [...new Set(doAno.map(r => r.competencia))].sort();
@@ -19828,27 +19843,47 @@ function Custeio() {
 
         const kpis = [
           { t: 'Receita líquida', v: moeda(rec), c: T.ink },
-          { t: 'Custo de material', v: moeda(cus), c: T.inkDim },
-          { t: 'Margem de contribuição', v: moeda(marg), c: marg >= 0 ? T.oliveText : T.rustText },
-          { t: '% sobre receita', v: rec > 0 ? `${(marg / rec * 100).toFixed(1)}%` : '—', c: T.terracotta },
+          { t: 'Material, serviço e frete', v: moeda(cus), c: T.inkDim },
+          { t: 'Mão de obra', v: moeda(moT), c: T.blueText },
+          { t: 'CIF rateado', v: moeda(cifT), c: T.amberText },
+          { t: 'Margem direta', v: moeda(margDireta), c: margDireta >= 0 ? T.oliveText : T.rustText,
+            sub: rec > 0 ? `${(margDireta / rec * 100).toFixed(1)}% da receita` : null },
+          { t: 'Margem por absorção', v: moeda(margAbs), c: margAbs >= 0 ? T.oliveText : T.rustText,
+            sub: rec > 0 ? `${(margAbs / rec * 100).toFixed(1)}% da receita` : null },
           { t: 'Projetos faturados', v: String(lista.length), c: T.inkDim },
         ];
 
         return (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-            <div style={{ fontSize: 11.5, color: T.inkDim, background: `${T.amberSoft}66`, border: `1px solid ${T.amberText}`, padding: '9px 12px', borderRadius: 6 }}>
-              <strong style={{ color: T.ink }}>Leia como margem de contribuição, não como lucro.</strong> O custo aqui é
-              material, serviço de terceiro e frete. <strong>Mão de obra não entra</strong> — está parada no pendente do
-              RH, na aba Despesa fixa. Por isso os percentuais parecem altos para uma fábrica. O CIF rateado aparece em
-              coluna separada e já dá uma ideia do que falta.
+            <div style={{ fontSize: 11.5, color: T.inkDim, background: T.panelAlt, border: `1px solid ${T.line}`, padding: '9px 12px', borderRadius: 6, lineHeight: 1.55 }}>
+              <strong style={{ color: T.ink }}>Três leituras, da mais simples à mais completa.</strong>{' '}
+              <strong>Contribuição</strong> = receita − material, serviço e frete.{' '}
+              <strong>Direta</strong> = também desconta a <strong>mão de obra</strong> (folha rateada pelas horas
+              apontadas, já com FGTS 8%, INSS 20%, RAT 3%, Terceiros 5,8% e as provisões de 13º e férias — 56,2% sobre
+              o salário). <strong>Absorção</strong> = ainda desconta o CIF (aluguel, energia, manutenção).{' '}
+              Clique em qualquer projeto para ver de onde sai cada centavo.
             </div>
 
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
               {anos.map(a => (
-                <button key={a} onClick={() => setAnoAn(a)} style={{
+                <button key={a} onClick={() => { setAnoAn(a); setMesAn('todos'); }} style={{
                   fontFamily: 'inherit', fontSize: 12.5, fontWeight: anoAn === a ? 700 : 400, cursor: 'pointer',
                   padding: '6px 14px', borderRadius: 6, border: `1px solid ${anoAn === a ? T.ink : T.line}`,
                   background: anoAn === a ? T.ink : T.panel, color: anoAn === a ? T.panel : T.inkDim }}>{a}</button>
+              ))}
+              <span style={{ color: T.line }}>│</span>
+              {/* MÊS: cada botão já mostra quantos projetos tem, para saber
+                  onde vale entrar antes de clicar. */}
+              {[{ m: 'todos', l: 'Ano todo', n: doAnoTudo.length },
+                ...mesesDoAno.map(m => ({ m, l: rotuloMes(m), n: doAnoTudo.filter(a => a.competencia === m).length }))]
+                .map(x => (
+                <button key={x.m} onClick={() => { setMesAn(x.m); setProjAberto(null); }} style={{
+                  fontFamily: 'inherit', fontSize: 12, fontWeight: mesAn === x.m ? 700 : 400, cursor: 'pointer',
+                  padding: '6px 11px', borderRadius: 6, border: `1px solid ${mesAn === x.m ? T.terracotta : T.line}`,
+                  background: mesAn === x.m ? T.terracottaSoft : T.panel,
+                  color: mesAn === x.m ? T.terracottaText : T.inkDim }}>
+                  {x.l} <span style={{ fontSize: 10, color: T.inkFaint }}>{x.n}</span>
+                </button>
               ))}
             </div>
 
@@ -19857,6 +19892,7 @@ function Custeio() {
                 <div key={k.t} style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 8, padding: '9px 12px' }}>
                   <div style={{ fontSize: 10.5, color: T.inkFaint }}>{k.t}</div>
                   <div style={{ fontSize: 18, fontWeight: 700, color: k.c, fontVariantNumeric: 'tabular-nums' }}>{k.v}</div>
+                  {k.sub && <div style={{ fontSize: 10, color: T.inkFaint, marginTop: 2 }}>{k.sub}</div>}
                 </div>
               ))}
             </div>
@@ -19940,6 +19976,55 @@ function Custeio() {
                 })}
               </div>
             </div>
+
+            {mpFora.length > 0 && (() => {
+              // FILA DE CONFERÊNCIA DA PRODUÇÃO. A MP está apontada no chão de
+              // fábrica com custo do ERP, mas não chegou ao custeio — quase
+              // sempre a OP não está amarrada ao projeto. NÃO somamos isso ao
+              // custo por conta própria: o material já entra por várias portas
+              // (compra, estoque, OP extra, PI) e somar aqui poderia contar
+              // duas vezes. Quem produziu confere e diz o que é.
+              const total = mpFora.reduce((s2, x) => s2 + (Number(x.diferenca) || 0), 0);
+              return (
+                <div style={{ background: T.panel, border: `1px solid ${T.amberText}`, borderRadius: 10, overflow: 'hidden' }}>
+                  <div style={{ padding: '10px 12px', borderBottom: `1px solid ${T.line}`, background: `${T.amberSoft}55` }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: T.amberText }}>
+                      Conferir com a produção — {mpFora.length} projetos com matéria-prima apontada fora do custo
+                    </div>
+                    <div style={{ fontSize: 10.5, color: T.inkDim, marginTop: 3, lineHeight: 1.5 }}>
+                      Somam <strong>{moeda(total)}</strong> de MP apontada na OP que não aparece no custo do projeto —
+                      é o que faz essas margens ficarem em 90%+. Não foi somado automaticamente porque o material
+                      entra por várias portas e poderia contar em dobro. Confirme a OP e o custo entra pelo caminho certo.
+                    </div>
+                  </div>
+                  <div style={{ maxHeight: 260, overflowY: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                      <thead style={{ position: 'sticky', top: 0 }}><tr style={{ background: T.panelAlt }}>
+                        {['BR', 'Receita', 'Custo hoje', 'MP apontada', 'Falta', 'Margem hoje', 'Se somar', 'OPs'].map((h, i) => (
+                          <th key={h} style={{ padding: '7px 10px', fontSize: 10.5, fontWeight: 600, color: T.inkFaint,
+                            textAlign: i === 0 || i === 7 ? 'left' : 'right', whiteSpace: 'nowrap' }}>{h}</th>
+                        ))}
+                      </tr></thead>
+                      <tbody>
+                        {mpFora.slice(0, 60).map(x => (
+                          <tr key={x.br} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                            <td style={{ padding: '6px 10px', fontSize: 11.5, fontWeight: 600 }}>{x.br}</td>
+                            <td style={{ padding: '6px 10px', fontSize: 11, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{moeda(x.receita)}</td>
+                            <td style={{ padding: '6px 10px', fontSize: 11, textAlign: 'right', color: T.inkFaint, fontVariantNumeric: 'tabular-nums' }}>{moeda(x.custo_hoje)}</td>
+                            <td style={{ padding: '6px 10px', fontSize: 11, textAlign: 'right', color: T.blueText, fontVariantNumeric: 'tabular-nums' }}>{moeda(x.mp_apontada)}</td>
+                            <td style={{ padding: '6px 10px', fontSize: 11.5, textAlign: 'right', fontWeight: 700, color: T.amberText, fontVariantNumeric: 'tabular-nums' }}>{moeda(x.diferenca)}</td>
+                            <td style={{ padding: '6px 10px', fontSize: 11, textAlign: 'right', color: T.oliveText, fontVariantNumeric: 'tabular-nums' }}>{Number(x.margem_pct).toFixed(0)}%</td>
+                            <td style={{ padding: '6px 10px', fontSize: 11, textAlign: 'right', fontWeight: 600, color: Number(x.margem_se_somar) < 0 ? T.rustText : T.inkDim, fontVariantNumeric: 'tabular-nums' }}>{Number(x.margem_se_somar).toFixed(0)}%</td>
+                            <td style={{ padding: '6px 10px', fontSize: 10.5, color: T.inkFaint, maxWidth: 150,
+                              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={x.ops_lista}>{x.ops_lista}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              );
+            })()}
 
             {suspeitos.filter(x => x.ano === anoAn || !x.ano).length > 0 && (() => {
               // Projeto faturado cujo custo nao fecha. Quase sempre material que
@@ -20084,34 +20169,52 @@ function Custeio() {
               <div style={{ overflowX: 'auto' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 900 }}>
                   <thead><tr style={{ background: T.panelAlt }}>
-                    {['BR', 'Mês', 'Receita líq.', 'Custo', 'Margem', '%', 'Margin orçada', 'Desvio', 'CIF', 'Margem c/ CIF', 'Composição'].map((h, i) => (
+                    {['BR', 'Mês', 'Receita líq.', 'Material', 'Mão de obra', 'CIF', 'Margem direta', '%', 'Margem c/ CIF', 'Orçada', 'Desvio', 'Composição'].map((h, i) => (
                       <th key={h} style={{ padding: '9px 12px', fontSize: 11, fontWeight: 600, color: T.inkFaint,
-                        textAlign: i === 0 || i === 1 || i === 10 ? 'left' : 'right', whiteSpace: 'nowrap' }}>{h}</th>
+                        textAlign: i === 0 || i === 1 || i === 11 ? 'left' : 'right', whiteSpace: 'nowrap' }}>{h}</th>
                     ))}
                   </tr></thead>
                   <tbody>
                     {lista.length === 0 ? (
-                      <tr><td colSpan={11} style={{ padding: 24, textAlign: 'center', color: T.inkFaint }}>Nada nesse filtro.</td></tr>
+                      <tr><td colSpan={12} style={{ padding: 24, textAlign: 'center', color: T.inkFaint }}>Nada nesse filtro.</td></tr>
                     ) : lista.slice(0, 150).map(r => {
-                      const m = Number(r.margem) || 0;
+                      const md = Number(r.margem_direta) || 0;
                       const ma = Number(r.margem_absorcao);
-                      const tot = Math.max(1, Number(r.custo) || 0);
+                      const mo = Number(r.custo_mao_obra) || 0;
+                      const chave = `${r.codproj}-${r.competencia}`;
+                      const on = projAberto === chave;
+                      const tot = Math.max(1, (Number(r.custo) || 0) + mo + (Number(r.cif_rateado) || 0));
                       const partes = [
-                        { v: Number(r.custo_material) || 0, c: T.ink },
-                        { v: Number(r.custo_servicos) || 0, c: T.terracotta },
-                        { v: Number(r.custo_frete) || 0, c: T.amberText },
-                        { v: Number(r.custo_outros) || 0, c: T.inkFaint },
+                        { l: 'Material', v: Number(r.custo_material) || 0, c: T.ink },
+                        { l: 'Serviços', v: Number(r.custo_servicos) || 0, c: T.terracotta },
+                        { l: 'Frete', v: Number(r.custo_frete) || 0, c: T.amberText },
+                        { l: 'Outros', v: Number(r.custo_outros) || 0, c: T.inkFaint },
+                        { l: 'Mão de obra', v: mo, c: T.blueText },
+                        { l: 'CIF', v: Number(r.cif_rateado) || 0, c: T.gold },
                       ];
+                      const divergencia = mpFora.find(x => x.br === r.br);
                       return (
-                        <tr key={`${r.codproj}-${r.competencia}`} style={{ borderBottom: `1px solid ${T.lineSoft}`,
-                          background: m < 0 ? `${T.rustSoft}33` : 'transparent' }}>
-                          <td style={{ padding: '8px 12px', fontSize: 12.5, fontWeight: 600 }}>{r.br}</td>
+                        <React.Fragment key={chave}>
+                        <tr onClick={() => setProjAberto(on ? null : chave)}
+                          style={{ borderBottom: `1px solid ${T.lineSoft}`, cursor: 'pointer',
+                          background: on ? T.panelAlt : md < 0 ? `${T.rustSoft}33` : 'transparent' }}>
+                          <td style={{ padding: '8px 12px', fontSize: 12.5, fontWeight: 600, whiteSpace: 'nowrap' }}>
+                            <span style={{ display: 'inline-block', width: 11, color: T.inkFaint,
+                              transform: on ? 'rotate(90deg)' : 'none', transition: 'transform .18s' }}>›</span>
+                            {r.br}
+                            {divergencia && <span title={`Tem ${moeda(divergencia.mp_apontada)} de matéria-prima apontada na produção que não está neste custo`} style={{ marginLeft: 5, color: T.amberText }}>⚠</span>}
+                          </td>
                           <td style={{ padding: '8px 12px', fontSize: 11.5, color: T.inkDim }}>{r.competencia}</td>
                           <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{moeda(r.receita_liquida)}</td>
                           <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', color: T.inkDim, fontVariantNumeric: 'tabular-nums' }}>{moeda(r.custo)}</td>
-                          <td style={{ padding: '8px 12px', fontSize: 12.5, textAlign: 'right', fontWeight: 700, color: m >= 0 ? T.oliveText : T.rustText, fontVariantNumeric: 'tabular-nums' }}>{moeda(m)}</td>
-                          <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', color: m >= 0 ? T.oliveText : T.rustText, fontVariantNumeric: 'tabular-nums' }}>
-                            {r.margem_pct == null ? '—' : `${Number(r.margem_pct).toFixed(1)}%`}
+                          <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', color: mo > 0 ? T.blueText : T.inkFaint, fontVariantNumeric: 'tabular-nums' }}>{mo > 0 ? moeda(mo) : '—'}</td>
+                          <td style={{ padding: '8px 12px', fontSize: 11.5, textAlign: 'right', color: T.amberText, fontVariantNumeric: 'tabular-nums' }}>{r.cif_rateado ? moeda(r.cif_rateado) : '—'}</td>
+                          <td style={{ padding: '8px 12px', fontSize: 12.5, textAlign: 'right', fontWeight: 700, color: md >= 0 ? T.oliveText : T.rustText, fontVariantNumeric: 'tabular-nums' }}>{moeda(md)}</td>
+                          <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', color: md >= 0 ? T.oliveText : T.rustText, fontVariantNumeric: 'tabular-nums' }}>
+                            {r.margem_direta_pct == null ? '—' : `${Number(r.margem_direta_pct).toFixed(1)}%`}
+                          </td>
+                          <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', fontWeight: 600, color: ma >= 0 ? T.oliveText : T.rustText, fontVariantNumeric: 'tabular-nums' }}>
+                            {isNaN(ma) ? '—' : moeda(ma)}
                           </td>
                           <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', color: T.inkDim, fontVariantNumeric: 'tabular-nums' }}
                               title="Margem prevista no orçamento (Margin do Sankhya)">
@@ -20125,18 +20228,69 @@ function Custeio() {
                               title="Realizada menos prevista. Negativo é margem que se perdeu entre orçar e entregar.">
                             {r.desvio_margem == null ? '—' : `${Number(r.desvio_margem) > 0 ? '+' : ''}${Number(r.desvio_margem).toFixed(1)}`}
                           </td>
-                          <td style={{ padding: '8px 12px', fontSize: 11.5, textAlign: 'right', color: T.blueText, fontVariantNumeric: 'tabular-nums' }}>{r.cif_rateado ? moeda(r.cif_rateado) : '—'}</td>
-                          <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', fontWeight: 600, color: ma >= 0 ? T.oliveText : T.rustText, fontVariantNumeric: 'tabular-nums' }}>
-                            {isNaN(ma) ? '—' : moeda(ma)}
-                          </td>
                           <td style={{ padding: '8px 12px', minWidth: 110 }}>
                             <div style={{ display: 'flex', height: 8, borderRadius: 2, overflow: 'hidden', background: T.lineSoft }}>
                               {partes.map((x, i) => x.v > 0 && (
-                                <div key={i} style={{ width: `${(x.v / tot) * 100}%`, background: x.c }} />
+                                <div key={i} style={{ width: `${(x.v / tot) * 100}%`, background: x.c }} title={`${x.l}: ${moeda(x.v)}`} />
                               ))}
                             </div>
                           </td>
                         </tr>
+                        {on && (
+                          <tr>
+                            <td colSpan={12} style={{ padding: 0, background: T.panelAlt }}>
+                              <div style={{ padding: '12px 16px 14px 28px', borderLeft: `3px solid ${T.terracotta}` }}>
+                                <div style={{ fontSize: 11, color: T.inkFaint, marginBottom: 8 }}>
+                                  De onde sai cada centavo — <strong style={{ color: T.ink }}>{r.br}</strong>, {r.competencia}
+                                  {Number(r.fatia_do_mes) < 1 && ` · este mês pegou ${(Number(r.fatia_do_mes) * 100).toFixed(1)}% do projeto (faturado em parcelas)`}
+                                </div>
+                                <table style={{ width: '100%', maxWidth: 560, borderCollapse: 'collapse' }}>
+                                  <tbody>
+                                    {[
+                                      { l: 'Receita líquida', v: Number(r.receita_liquida), forte: true },
+                                      { l: '− Material', v: -(Number(r.custo_material) || 0) },
+                                      { l: '− Serviços de terceiro', v: -(Number(r.custo_servicos) || 0) },
+                                      { l: '− Frete', v: -(Number(r.custo_frete) || 0) },
+                                      { l: '− Outros', v: -(Number(r.custo_outros) || 0) },
+                                      { l: '= Margem de contribuição', v: Number(r.margem), forte: true },
+                                      { l: `− Mão de obra${Number(r.horas_projeto) > 0 ? ` (${Number(r.horas_projeto).toFixed(0)} h apontadas no projeto)` : ''}`, v: -mo },
+                                      { l: '= Margem direta', v: md, forte: true },
+                                      { l: '− CIF rateado', v: -(Number(r.cif_rateado) || 0) },
+                                      { l: '= Margem por absorção', v: ma, forte: true },
+                                    ].filter(x => x.forte || x.v !== 0).map((x, i) => (
+                                      <tr key={i} style={{ borderBottom: x.forte ? `1px solid ${T.line}` : 'none' }}>
+                                        <td style={{ padding: '5px 8px', fontSize: 11.5,
+                                          fontWeight: x.forte ? 700 : 400, color: x.forte ? T.ink : T.inkDim }}>{x.l}</td>
+                                        <td style={{ padding: '5px 8px', fontSize: 12, textAlign: 'right',
+                                          fontWeight: x.forte ? 700 : 400, fontVariantNumeric: 'tabular-nums',
+                                          color: x.forte ? (x.v >= 0 ? T.oliveText : T.rustText) : T.inkDim }}>
+                                          {moeda(x.v)}
+                                        </td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                                <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: 9, fontSize: 10.5, color: T.inkFaint }}>
+                                  <span>Comprado: <strong style={{ color: T.inkDim }}>{moeda(r.comprado)}</strong></span>
+                                  <span>Do estoque: <strong style={{ color: T.inkDim }}>{moeda(r.do_estoque)}</strong></span>
+                                  <span>De OP: <strong style={{ color: T.inkDim }}>{moeda(r.de_op)}</strong></span>
+                                  {r.sem_apontamento_hora && <span style={{ color: T.amberText }}>⚠ sem hora apontada — mão de obra não pôde ser rateada</span>}
+                                </div>
+                                {divergencia && (
+                                  <div style={{ fontSize: 11, color: T.amberText, background: T.amberSoft,
+                                    border: `1px solid ${T.amberText}44`, borderRadius: 6, padding: '8px 11px',
+                                    marginTop: 10, lineHeight: 1.5 }}>
+                                    <strong>Conferir:</strong> a produção apontou {moeda(divergencia.mp_apontada)} de
+                                    matéria-prima neste BR (OP {divergencia.ops_lista}), acima dos {moeda(divergencia.custo_hoje)}{' '}
+                                    que estão no custo. Se esse consumo for mesmo deste projeto, a margem cai para{' '}
+                                    <strong>{Number(divergencia.margem_se_somar).toFixed(1)}%</strong>.
+                                  </div>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                        </React.Fragment>
                       );
                     })}
                   </tbody>
