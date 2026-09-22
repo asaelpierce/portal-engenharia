@@ -3758,6 +3758,16 @@ const TXT = {
     dscAvisoSemClass: 'Com estágio Médio ou Baixo só aparecem {n} projetos ({v}), porque {p}% do funil ainda está sem classificação. Os {ns} projetos sem classificação com margem acima do filtro somam {vs} — inclua "Sem classificação" acima para vê-los.',
     dscRegra: 'Propostas em aberto com margem orçada acima de {m}% no estágio {e}. O preço novo é o valor menos o desconto; a margem depois considera que o custo não muda.',
     dscIncluir: 'Incluir sem classificação',
+    mixTitulo: 'Mix de vendas — contrato, spot e categoria de produto',
+    mixSub: 'pedidos do ano classificados no Painel KdB · SPOT é venda avulsa, CONTRATO é fornecimento recorrente · atualiza sozinho a cada 6 h',
+    mixPor: 'Ver por', mixTipo: 'Tipo', mixPG: 'Categoria (PG)', mixFamilia: 'Família', mixSegmento: 'Segmento',
+    mixVendTitulo: 'Perfil de cada vendedor', mixVendSub: 'quem puxa contrato, quem puxa spot e com que margem',
+    mixContrato: 'Contrato', mixSpot: 'Spot', mixTotal: 'Total', mixMargem: 'Margem média',
+    mixPedidos: 'pedidos', mixClientes: 'clientes', mixPerfil: 'Perfil',
+    perfilContrato: 'contrato', perfilSpot: 'spot', perfilMisto: 'misto',
+    mixRegra: 'Pedidos do ano em {g}, classificados no Painel KdB. O valor é o líquido do pedido; a margem vem da margem orçada do BR no portal.',
+    mixSemVinculo: '{n} pedidos ({v}) vieram só com a sigla do vendedor e não casaram com um BR do portal — aparecem como "Sigla".',
+    mixInsight: 'Spot rende {s}% de margem contra {c}% do contrato, mas depende de {sc} clientes diferentes; o contrato se apoia em {cc}.',
     compTitulo: 'Proposto, ponderado e realizado — mês a mês',
     explicaComp: 'três colunas por mês: o que foi proposto, o que a régua dos estágios prevê do que ainda está em aberto, e o que já virou pedido ou nota · a coluna do meio é empilhada por nível · Perdido fica de fora (não é previsão)',
     serieCheio: 'Proposto', seriePond: 'Ponderado', serieReal: 'Realizado',
@@ -3906,6 +3916,16 @@ const TXT = {
     dscAvisoSemClass: 'With stage Medium or Low only {n} proposals show up ({v}), because {p}% of the pipeline is still unclassified. The {ns} unclassified proposals above the margin filter add up to {vs} — tick "Unclassified" above to see them.',
     dscRegra: 'Open proposals with budgeted margin above {m}% at stage {e}. The new price is the value minus the discount; the margin after assumes cost does not change.',
     dscIncluir: 'Include unclassified',
+    mixTitulo: 'Sales mix — contract, spot and product category',
+    mixSub: 'orders classified in the KdB panel · SPOT is one-off, CONTRATO is recurring supply · refreshes on its own every 6 h',
+    mixPor: 'View by', mixTipo: 'Type', mixPG: 'Category (PG)', mixFamilia: 'Family', mixSegmento: 'Segment',
+    mixVendTitulo: 'Each salesperson profile', mixVendSub: 'who brings contract, who brings spot, and at what margin',
+    mixContrato: 'Contract', mixSpot: 'Spot', mixTotal: 'Total', mixMargem: 'Avg margin',
+    mixPedidos: 'orders', mixClientes: 'customers', mixPerfil: 'Profile',
+    perfilContrato: 'contract', perfilSpot: 'spot', perfilMisto: 'mixed',
+    mixRegra: 'Orders of the year in {g}, classified in the KdB panel. Value is the net order; margin comes from the BR budgeted margin in the portal.',
+    mixSemVinculo: '{n} orders ({v}) came with only the salesperson initials and did not match a portal project — shown as "Sigla".',
+    mixInsight: 'Spot yields {s}% margin against {c}% on contract, but relies on {sc} different customers; contract leans on {cc}.',
     compTitulo: 'Proposed, weighted and won — month by month',
     explicaComp: 'three columns per month: what was proposed, what the stage ruler forecasts from what is still open, and what already became an order or invoice · the middle column is stacked by stage · Lost is excluded (it forecasts nothing)',
     serieCheio: 'Proposed', seriePond: 'Weighted', serieReal: 'Won',
@@ -4438,6 +4458,8 @@ function PainelDiretoria() {
   const [dscMargem, setDscMargem] = useState(50);
   const [dscPct, setDscPct] = useState(10);
   const [dscEst, setDscEst] = useState(['medio', 'baixo']);
+  const [mix, setMix] = useState([]);
+  const [mixPor, setMixPor] = useState('tipo');
   // ITENS POR BR: busca sob demanda no clique da linha e guarda em cache —
   // carregar item de 750 BRs de uma vez não se justifica para uma consulta
   // que abre um de cada vez.
@@ -4473,11 +4495,12 @@ function PainelDiretoria() {
       supabase.from('v_comercial_faturado_detalhe').select('*'),
       supabase.from('comercial_estagio').select('*').order('ordem'),
     ]);
-    const [pv2, rk] = await Promise.all([
+    const [pv2, rk, mx] = await Promise.all([
       supabase.from('v_comercial_previsibilidade').select('*'),
       supabase.from('v_comercial_ranking_cliente_3anos').select('*').limit(60),
+      supabase.from('v_comercial_mix_vendedor').select('*'),
     ]);
-    setPrev(pv2.data || []); setRank(rk.data || []);
+    setPrev(pv2.data || []); setRank(rk.data || []); setMix(mx.data || []);
     setDados(d.data || []); setCambio(c.data || []);
     setPrevisao(pv.data || []); setCiclo(cc.data || []);
     setFatOrigem(fo.data || []); setFatDet(fd.data || []);
@@ -4770,6 +4793,52 @@ function PainelDiretoria() {
       lista: d,
     };
   }).sort((a, b) => b.total - a.total);
+
+  // ---- MIX DE VENDAS (Painel KdB) ----
+  // Só o KdB sabe se o pedido é SPOT ou CONTRATO e qual a categoria real
+  // (PG1/2/3/SERVIÇO). Aqui isso vira leitura de mix e perfil de vendedor.
+  const EIXOS_MIX = {
+    tipo:     { rot: t.mixTipo,     campo: 'tipo' },
+    pg:       { rot: t.mixPG,       campo: 'pg' },
+    familia:  { rot: t.mixFamilia,  campo: 'familia' },
+    segmento: { rot: t.mixSegmento, campo: 'segmento' },
+  };
+  const eixoMix = EIXOS_MIX[mixPor] || EIXOS_MIX.tipo;
+  const CORES_MIX = [G.azul, G.verde, G.ambar, G.roxo, G.ciano, G.rosa, G.vermelho, G.cinza];
+  const grupoMix = [...new Set(mix.map(m => m[eixoMix.campo] || '—'))]
+    .map((g, i) => {
+      const d = mix.filter(m => (m[eixoMix.campo] || '—') === g);
+      const v = soma(d);
+      return { k: g, v, n: d.length, rot: val(v), par: CORES_MIX[i % CORES_MIX.length],
+               clientes: new Set(d.map(x => x.cliente)).size,
+               margem: d.filter(x => x.margem_pct != null).length
+                 ? d.reduce((s, x) => s + (Number(x.margem_pct) || 0), 0) /
+                   d.filter(x => x.margem_pct != null).length : 0,
+               lucro: soma(d, 'lucro_estimado'), lista: d };
+    }).sort((a, b) => b.v - a.v);
+
+  // Perfil por vendedor: a divisão contrato/spot de cada um, lado a lado.
+  const mixVend = [...new Set(mix.map(m => m.vendedor))].map(v => {
+    const d = mix.filter(m => m.vendedor === v);
+    const ctr = soma(d.filter(x => x.tipo === 'CONTRATO'));
+    const spt = soma(d.filter(x => x.tipo === 'SPOT'));
+    const tot = soma(d);
+    const comMargem = d.filter(x => x.margem_pct != null);
+    return { k: v, n: d.length, total: tot, contrato: ctr, spot: spt,
+             pctCtr: tot > 0 ? (ctr / tot) * 100 : 0,
+             clientes: new Set(d.map(x => x.cliente)).size,
+             margem: comMargem.length
+               ? comMargem.reduce((s, x) => s + Number(x.margem_pct), 0) / comMargem.length : null,
+             lista: d };
+  }).sort((a, b) => b.total - a.total);
+
+  const mixCtr = mix.filter(m => m.tipo === 'CONTRATO');
+  const mixSpt = mix.filter(m => m.tipo === 'SPOT');
+  const margemDe = (l) => {
+    const c = l.filter(x => x.margem_pct != null);
+    return c.length ? c.reduce((s, x) => s + Number(x.margem_pct), 0) / c.length : 0;
+  };
+  const mixSemVinculo = mix.filter(m => String(m.vendedor || '').startsWith('Sigla '));
 
   // ---- ONDE CABE DESCONTO ----
   // Margem alta parada num estágio fraco: o cliente não decide, e há margem
@@ -5646,6 +5715,153 @@ function PainelDiretoria() {
       ), t.pvSub)}
 
       {gavetaDe('pv:')}
+
+      {mix.length > 0 && painel(t.mixTitulo, (
+        <>
+          {mixCtr.length > 0 && mixSpt.length > 0 && (
+            <div style={{ fontSize: 11.5, color: T.inkDim, background: T.panelAlt, borderRadius: 7,
+              padding: '9px 12px', marginBottom: 12, lineHeight: 1.55 }}>
+              {t.mixInsight.replace('{s}', margemDe(mixSpt).toFixed(0))
+                .replace('{c}', margemDe(mixCtr).toFixed(0))
+                .replace('{sc}', String(new Set(mixSpt.map(x => x.cliente)).size))
+                .replace('{cc}', String(new Set(mixCtr.map(x => x.cliente)).size))}
+            </div>
+          )}
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 11 }}>
+            <span style={{ fontSize: 11.5, color: T.inkDim, fontWeight: 600 }}>{t.mixPor}</span>
+            {botoes(Object.entries(EIXOS_MIX).map(([k, x]) => [k, x.rot]), mixPor, setMixPor)}
+          </div>
+          <BarrasH dados={grupoMix} altura={26}
+            ativo={detalhe?.chave?.startsWith('mix:') ? detalhe.chave.slice(4) : null}
+            aoClicar={(b2) => {
+              const g = grupoMix.find(x => x.k === b2.k);
+              if (!g) return;
+              abrir(`mix:${b2.k}`, `${eixoMix.rot} · ${b2.k}`,
+                t.mixRegra.replace('{g}', b2.k),
+                g.lista.map(l => ({ br: l.br, cliente: l.cliente, vendedor: l.vendedor,
+                  estagio: `${l.tipo} · ${l.pg}`, valor: l.valor })), g.v);
+            }} />
+          <div style={{ overflowX: 'auto', marginTop: 11 }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 560 }}>
+              <thead><tr style={{ background: T.panelAlt }}>
+                {[eixoMix.rot, t.mixPedidos, t.mixClientes, t.mixTotal, t.mixMargem, t.colLucro].map((h, i) => (
+                  <th key={h} style={{ padding: '7px 10px', fontSize: 10.5, fontWeight: 600,
+                    color: T.inkFaint, textAlign: i === 0 ? 'left' : 'right', whiteSpace: 'nowrap' }}>{h}</th>
+                ))}
+              </tr></thead>
+              <tbody>
+                {grupoMix.map(g => (
+                  <tr key={g.k} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
+                    <td style={{ padding: '6px 10px', fontSize: 11.5, fontWeight: 600, maxWidth: 230,
+                      whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={g.k}>{g.k}</td>
+                    <td style={{ padding: '6px 10px', fontSize: 11, textAlign: 'right', color: T.inkFaint }}>{g.n}</td>
+                    <td style={{ padding: '6px 10px', fontSize: 11, textAlign: 'right', color: T.inkFaint }}>{g.clientes}</td>
+                    <td style={{ padding: '6px 10px', fontSize: 12, textAlign: 'right', fontWeight: 700,
+                      fontVariantNumeric: 'tabular-nums' }}>{val(g.v)}</td>
+                    <td style={{ padding: '6px 10px', fontSize: 11, textAlign: 'right',
+                      color: T.oliveText, fontWeight: 600 }}>{g.margem > 0 ? `${g.margem.toFixed(1)}%` : '—'}</td>
+                    <td style={{ padding: '6px 10px', fontSize: 11.5, textAlign: 'right', color: G.verde[1],
+                      fontVariantNumeric: 'tabular-nums' }}>{val(g.lucro)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      ), t.mixSub)}
+
+      {gavetaDe('mix:')}
+
+      {mixVend.length > 0 && painel(t.mixVendTitulo, (
+        <>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 760 }}>
+              <thead><tr style={{ background: T.panelAlt }}>
+                {[t.pvVend, t.mixTotal, `${t.mixContrato} × ${t.mixSpot}`, t.mixPerfil,
+                  t.mixClientes, t.mixMargem].map((h, i) => (
+                  <th key={h} style={{ padding: '7px 10px', fontSize: 10.5, fontWeight: 600,
+                    color: T.inkFaint, textAlign: i === 0 || i === 2 ? 'left' : 'right',
+                    whiteSpace: 'nowrap' }}>{h}</th>
+                ))}
+              </tr></thead>
+              <tbody>
+                {mixVend.map((v, i) => {
+                  // A barra dividida mostra o perfil de relance: quem é azul
+                  // vive de contrato, quem é verde caça spot.
+                  const perfil = v.pctCtr >= 70 ? t.perfilContrato
+                               : v.pctCtr <= 30 ? t.perfilSpot : t.perfilMisto;
+                  const corP = v.pctCtr >= 70 ? G.azul : v.pctCtr <= 30 ? G.verde : G.ambar;
+                  return (
+                    <tr key={v.k} className="g-linha g-clicavel"
+                      onClick={() => abrir(`mxv:${v.k}`, `${t.mixVendTitulo} · ${v.k}`,
+                        t.mixRegra.replace('{g}', v.k),
+                        v.lista.map(l => ({ br: l.br, cliente: l.cliente, vendedor: l.vendedor,
+                          estagio: `${l.tipo} · ${l.pg}`, valor: l.valor })), v.total)}
+                      style={{ borderBottom: `1px solid ${T.lineSoft}`, animationDelay: `${i * 35}ms`,
+                        background: detalhe?.chave === `mxv:${v.k}` ? T.panelAlt : 'transparent' }}>
+                      <td style={{ padding: '7px 10px', fontSize: 11.5, fontWeight: 600, maxWidth: 180,
+                        whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={v.k}>
+                        {v.k}<span style={{ fontSize: 9.5, color: T.inkFaint, marginLeft: 5 }}>{v.n}</span>
+                      </td>
+                      <td style={{ padding: '7px 10px', fontSize: 12, textAlign: 'right', fontWeight: 700,
+                        fontVariantNumeric: 'tabular-nums' }}>{val(v.total)}</td>
+                      <td style={{ padding: '7px 10px', minWidth: 170 }}>
+                        <div style={{ display: 'flex', height: 15, borderRadius: 3, overflow: 'hidden',
+                          background: T.lineSoft }}>
+                          {v.contrato > 0 && (
+                            <div style={{ width: `${v.pctCtr}%`,
+                              background: `linear-gradient(90deg, ${G.azul[0]}, ${G.azul[1]})`,
+                              display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                              title={`${t.mixContrato}: ${val(v.contrato)}`}>
+                              {v.pctCtr >= 22 && <span style={{ fontSize: 8.5, color: '#fff', fontWeight: 700 }}>
+                                {v.pctCtr.toFixed(0)}%</span>}
+                            </div>
+                          )}
+                          {v.spot > 0 && (
+                            <div style={{ width: `${100 - v.pctCtr}%`,
+                              background: `linear-gradient(90deg, ${G.verde[0]}, ${G.verde[1]})`,
+                              display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                              title={`${t.mixSpot}: ${val(v.spot)}`}>
+                              {(100 - v.pctCtr) >= 22 && <span style={{ fontSize: 8.5, color: '#fff', fontWeight: 700 }}>
+                                {(100 - v.pctCtr).toFixed(0)}%</span>}
+                            </div>
+                          )}
+                        </div>
+                      </td>
+                      <td style={{ padding: '7px 10px', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                        <span style={{ fontSize: 10, fontWeight: 700, color: corP[1],
+                          background: `${corP[0]}1F`, padding: '2px 7px', borderRadius: 4 }}>{perfil}</span>
+                      </td>
+                      <td style={{ padding: '7px 10px', fontSize: 11, textAlign: 'right', color: T.inkFaint }}>{v.clientes}</td>
+                      <td style={{ padding: '7px 10px', fontSize: 11, textAlign: 'right', fontWeight: 600,
+                        color: v.margem == null ? T.inkFaint : T.oliveText }}>
+                        {v.margem == null ? '—' : `${v.margem.toFixed(1)}%`}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: 10, fontSize: 10.5 }}>
+            {[[t.mixContrato, G.azul], [t.mixSpot, G.verde]].map(([r, p]) => (
+              <span key={r} style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                <span style={{ width: 10, height: 10, borderRadius: 2,
+                  background: `linear-gradient(135deg, ${p[0]}, ${p[1]})` }} />
+                <span style={{ color: T.inkDim }}>{r}</span>
+              </span>
+            ))}
+          </div>
+          {mixSemVinculo.length > 0 && (
+            <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 9, lineHeight: 1.5 }}>
+              {t.mixSemVinculo.replace('{n}', String(mixSemVinculo.length))
+                .replace('{v}', val(soma(mixSemVinculo)))}
+            </div>
+          )}
+        </>
+      ), t.mixVendSub)}
+
+      {gavetaDe('mxv:')}
 
       {painel(t.dscTitulo, (
         <>
