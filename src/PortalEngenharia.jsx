@@ -3633,6 +3633,7 @@ const TXT = {
     previsaoMes: 'Previsão de fechamento por mês',
     funilSituacao: 'Funil por situação', cenariosTitulo: 'Cenários de fechamento',
     regra: 'Como este número é calculado', linhas: 'Linhas', somaTotal: 'Soma', carregando: 'abrindo os dados',
+    avisoSemClass: '{p}% do funil em aberto ({v}) ainda não foi classificado pelos vendedores. Enquanto o follow up não voltar, este gráfico diz mais sobre o que falta preencher do que sobre a chance de fechar.',
     valorCol: 'Valor', clique: 'clique em qualquer fatia, coluna ou barra para abrir os BRs e a regra',
     regraSituacao: 'BRs cuja situação é “{s}”. A situação vem do Sankhya: tem nota → faturado; tem pedido → pedido em carteira; marcado como Perdido pelo vendedor → perdido; o resto fica em aberto. O valor é o da proposta. Não entram BRV (duplicatas) nem projetos do cliente Kalenborn do Brasil (estoque).',
     regraFaturado: 'BRs que já têm nota fiscal. Aqui o valor é a RECEITA das notas, não o da proposta — é o que entrou de fato. Só aparecem BRs com proposta no funil desde janeiro de 2026.',
@@ -3681,6 +3682,7 @@ const TXT = {
     previsaoMes: 'Forecast by expected closing month',
     funilSituacao: 'Pipeline by status', cenariosTitulo: 'Closing scenarios',
     regra: 'How this number is calculated', linhas: 'Rows', somaTotal: 'Total', carregando: 'loading data',
+    avisoSemClass: '{p}% of the open pipeline ({v}) has not been classified by the sales team yet. Until the follow-up comes back, this chart says more about what is missing than about closing odds.',
     valorCol: 'Value', clique: 'click any slice, column or bar to open the projects and the rule',
     regraSituacao: 'Projects with status “{s}”. Status comes from the ERP: has an invoice → invoiced; has an order → won; marked Lost by the salesperson → lost; everything else stays open. Value is the proposal amount. BRV duplicates and Kalenborn do Brasil (stock) projects are excluded.',
     regraFaturado: 'Projects that already have an invoice. Here the value is the invoiced REVENUE, not the proposal — what actually came in. Only projects with a proposal in the funnel since January 2026 appear.',
@@ -4229,16 +4231,26 @@ function PainelDiretoria() {
     </div>
   );
 
-  const painel = (titulo, conteudo, extra) => (
-    <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: 15 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
-        marginBottom: 14, gap: 10, flexWrap: 'wrap' }}>
-        <span style={{ fontSize: 12.5, fontWeight: 700 }}>{titulo}</span>
-        {extra && <span style={{ fontSize: 10.5, color: T.inkFaint }}>{extra}</span>}
+  // Texto explicativo CURTO fica na mesma linha do titulo; LONGO vai para
+  // baixo do grafico. No print do Asael, a explicacao da Conversao (200
+  // caracteres) tinha caido por cima do medidor e ficou ilegivel.
+  const painel = (titulo, conteudo, extra) => {
+    const longo = extra && String(extra).length > 60;
+    return (
+      <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 11, padding: 15 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
+          marginBottom: 14, gap: 10, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 12.5, fontWeight: 700 }}>{titulo}</span>
+          {extra && !longo && <span style={{ fontSize: 10.5, color: T.inkFaint }}>{extra}</span>}
+        </div>
+        {conteudo}
+        {longo && (
+          <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 13, paddingTop: 10,
+            borderTop: `1px solid ${T.lineSoft}`, lineHeight: 1.55 }}>{extra}</div>
+        )}
       </div>
-      {conteudo}
-    </div>
-  );
+    );
+  };
 
   const botoes = (lista, atual, troca) => (
     <span style={{ display: 'inline-flex', gap: 3 }}>
@@ -4321,6 +4333,18 @@ function PainelDiretoria() {
             }} />
         ))}
         {painel(t.porEstagio, (
+          <>
+          {(() => {
+            const semCl = roscaEstagio.find(x => x.k === 'Sem classificação' || x.k === 'Unclassified');
+            const pct = semCl ? (semCl.v / soma(abertos)) * 100 : 0;
+            return pct > 50 ? (
+              <div style={{ fontSize: 11, color: T.amberText, background: T.amberSoft,
+                border: `1px solid ${T.amberText}33`, borderRadius: 7, padding: '9px 12px',
+                marginBottom: 13, lineHeight: 1.5 }}>
+                {t.avisoSemClass.replace('{p}', pct.toFixed(0)).replace('{v}', val(semCl.v))}
+              </div>
+            ) : null;
+          })()}
           <Rosca dados={roscaEstagio} centro={val(soma(abertos))} subcentro={`${abertos.length} ${t.propostas}`}
             ativo={detalhe?.chave?.startsWith('est:') ? detalhe.chave.slice(4) : null}
             aoClicar={(fatia) => {
@@ -4328,6 +4352,7 @@ function PainelDiretoria() {
               abrir(`est:${fatia.k}`, `${t.porEstagio} · ${fatia.k}`,
                 t.regraEstagio.replace('{e}', fatia.k), lista, soma(lista));
             }} />
+          </>
         ))}
       </div>
 
