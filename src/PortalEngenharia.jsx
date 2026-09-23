@@ -7212,11 +7212,11 @@ function FollowUpComercial({ currentUser }) {
 
       <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
         <div style={{ overflowX: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 940 }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 1060 }}>
             <thead style={{ position: 'sticky', top: 0, zIndex: 1 }}><tr style={{ background: T.panelAlt }}>
-              {['BR', 'Cliente', 'Vendedor', 'Dias', 'Valor da proposta', 'Margin', 'Estágio comercial', 'Estágio vendedor', 'Observação'].map((h, i) => (
+              {['BR', 'Cliente', 'Vendedor', 'Dias', 'Valor da proposta', 'Margin', 'Estágio comercial', 'Estágio vendedor', 'Expectativa', 'Observação'].map((h, i) => (
                 <th key={h + i} style={{ padding: '9px 12px', fontSize: 11, fontWeight: 600, color: T.inkFaint,
-                  textAlign: [3,4,5,8].includes(i) ? 'right' : 'left', whiteSpace: 'nowrap' }}>{h}</th>
+                  textAlign: [3,4,5,9].includes(i) ? 'right' : 'left', whiteSpace: 'nowrap' }}>{h}</th>
               ))}
             </tr>
             {/* Linha de filtro por coluna, como no Excel. Texto onde a busca e
@@ -7230,6 +7230,7 @@ function FollowUpComercial({ currentUser }) {
                 null, null, null,
                 { k: 'estC', tipo: 'lista', estagio: true },
                 { k: 'estV', tipo: 'lista', estagio: true },
+                null,
                 null,
               ].map((f, i) => (
                 <th key={i} style={{ padding: '4px 8px 8px', borderBottom: `1px solid ${T.line}` }}>
@@ -7343,7 +7344,10 @@ function FollowUpComercial({ currentUser }) {
                           <span style={{ fontSize: 11, color: T.inkFaint }}>—</span>
                         )}
                       </td>
-                      
+                      <td style={{ padding: '8px 12px', fontSize: 11.5, whiteSpace: 'nowrap',
+                        color: l.expectativa_fechamento ? T.ink : T.inkFaint }}>
+                        {l.expectativa_fechamento || '—'}
+                      </td>
                       <td style={{ padding: '8px 12px', maxWidth: 260 }}>
                         <div onClick={() => setObsAberta(obsAberta === l.br ? null : l.br)}
                           title={l.observacao || 'Clique para escrever'}
