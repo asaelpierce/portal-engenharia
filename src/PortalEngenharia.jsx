@@ -11178,8 +11178,11 @@ function PlaquinhaEquipamento({ currentUser }) {
   };
 
   const refazerGrupo = async (items) => {
-    if (!confirm(`Reabrir ${items.length > 1 ? 'os ' + items.length + ' itens' : 'esse item'} pra edição?`)) return;
-    await supabase.from('plaquinhas_equipamento').update({ status: 'pendente', preenchido_por: null, preenchido_em: null }).in('id', items.map(i => i.id));
+    if (!confirm(`Reabrir ${items.length > 1 ? 'os ' + items.length + ' itens' : 'esse item'} pra edição? Volta para pendente e limpa o preenchimento.`)) return;
+    await supabase.from('plaquinhas_equipamento').update({
+      status: 'pendente', preenchido_por: null, preenchido_em: null,
+      desenho_preenchido_por: null, desenho_preenchido_em: null
+    }).in('id', items.map(i => i.id));
     await carregar();
   };
 
@@ -11404,8 +11407,8 @@ function PlaquinhaEquipamento({ currentUser }) {
                           Preenchido por {item.preenchido_por || '?'} em {new Date(item.preenchido_em).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' })}
                           {' · '}<span style={{ color: T.amberText, fontWeight: 700 }}>⏳ Aguardando a Engenharia preencher o Desenho</span>
                         </span>
-                        {items.length === 1 && (
-                          <button onClick={() => refazerGrupo(items)}
+                        {(
+                          <button onClick={() => refazerGrupo([item])}
                             style={{ fontSize: 11.5, fontWeight: 600, color: T.amberText, background: 'transparent', border: `1px solid ${T.amber}66`, borderRadius: 5, padding: '5px 10px', cursor: 'pointer' }}>
                             ↺ Refazer
                           </button>
@@ -11417,13 +11420,13 @@ function PlaquinhaEquipamento({ currentUser }) {
                           Preenchido por {item.preenchido_por || '?'} · Desenho por {item.desenho_preenchido_por || '?'} em {item.desenho_preenchido_em ? new Date(item.desenho_preenchido_em).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' }) : '?'}
                           {' · '}<span style={{ color: T.oliveText, fontWeight: 700 }}>✓ Completo</span>
                         </span>
-                        {items.length === 1 && (
+                        {(
                           <div style={{ display: 'flex', gap: 8 }}>
                             <a href={`https://sieztnpchjjmrwrmrhoa.supabase.co/functions/v1/gerar-plaquinha-docx?id=${item.id}`}
                               style={{ fontSize: 11.5, fontWeight: 700, color: '#fff', background: T.blueText, borderRadius: 5, padding: '5px 12px', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 5 }}>
                               ⬇ Baixar Word
                             </a>
-                            <button onClick={() => refazerGrupo(items)}
+                            <button onClick={() => refazerGrupo([item])}
                               style={{ fontSize: 11.5, fontWeight: 600, color: T.amberText, background: 'transparent', border: `1px solid ${T.amber}66`, borderRadius: 5, padding: '5px 10px', cursor: 'pointer' }}>
                               ↺ Refazer
                             </button>
