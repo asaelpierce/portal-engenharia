@@ -5047,6 +5047,38 @@ function PainelDiretoria() {
           </strong>
         </span>
       </div>
+      {/* ── RESUMO POR ESTÁGIO ── */}
+      {!detalhe.carregando && (() => {
+        const CORES_EST = { 'Avançado': G.verde, 'Alto': G.azul, 'Médio': G.ambar,
+          'Baixo': G.rosa, 'Sem classificação': G.cinza, 'Pedido em carteira': G.verde,
+          'Perdido': G.vermelho };
+        const porEst = [...new Set(detalhe.linhas.map(l => l.estagio || l.estagio_rotulo || '—'))]
+          .map(e => {
+            const d = detalhe.linhas.filter(l => (l.estagio || l.estagio_rotulo || '—') === e);
+            return { k: e, n: d.length, v: soma(d), cor: CORES_EST[e] || G.cinza };
+          }).sort((a, b) => b.v - a.v);
+        const maxV = Math.max(1, ...porEst.map(x => x.v));
+        return porEst.length > 1 ? (
+          <div style={{ marginBottom: 12, paddingBottom: 12, borderBottom: `1px solid ${T.lineSoft}` }}>
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+              {porEst.map(e => (
+                <div key={e.k} style={{ flex: `${Math.max(e.v/maxV*100, 12)}%`, minWidth: 90 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 3 }}>
+                    <span style={{ fontSize: 10.5, fontWeight: 600, color: (e.cor||G.cinza)[1] || T.inkDim }}>{e.k}</span>
+                    <span style={{ fontSize: 10, color: T.inkFaint }}>{e.n}</span>
+                  </div>
+                  <div style={{ height: 6, borderRadius: 3, background: T.lineSoft, overflow: 'hidden' }}>
+                    <div style={{ width: `${Math.max(e.v/maxV*100, 4)}%`, height: '100%', borderRadius: 3,
+                      background: `linear-gradient(90deg, ${(e.cor||G.cinza)[0]}, ${(e.cor||G.cinza)[1]})` }} />
+                  </div>
+                  <div style={{ fontSize: 11, fontWeight: 700, marginTop: 3, fontVariantNumeric: 'tabular-nums',
+                    color: T.ink }}>{val(e.v)}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null;
+      })()}
       {!detalhe.carregando && detalhe.grafico?.length > 0 && (
         <div style={{ marginBottom: 12, paddingBottom: 12, borderBottom: `1px solid ${T.lineSoft}` }}>
           <div style={{ fontSize: 11, color: T.inkFaint, marginBottom: 7 }}>{detalhe.graficoTitulo}</div>
@@ -5070,23 +5102,57 @@ function PainelDiretoria() {
           <span className="g-brilho" style={{ fontSize: 11, color: T.inkFaint, letterSpacing: '.06em',
             textTransform: 'uppercase' }}>{t.carregando}</span>
         </div>
-      ) : (
-      <div style={{ maxHeight: 340, overflowY: 'auto' }}>
+      ) : (() => {
+      // ── TABELA AGRUPADA POR ESTÁGIO ──
+      // Em vez de listar tudo plano, separa por estágio com cabeçalho colorido
+      // e subtotal. O efeito visual e o de uma planilha com linhas de grupo —
+      // ve-se de relance quanto vale cada classificacao.
+      const CORES_EST = { 'Avançado': G.verde, 'Alto': G.azul, 'Médio': G.ambar,
+        'Baixo': G.rosa, 'Sem classificação': G.cinza, 'Pedido em carteira': G.verde,
+        'Perdido': G.vermelho };
+      const ORDEM_EST = ['Avançado','Alto','Médio','Baixo','Sem classificação','Pedido em carteira','Perdido'];
+      const grupos = [...new Set(detalhe.linhas.map(l => l.estagio || l.estagio_rotulo || '—'))]
+        .sort((a, b) => {
+          const ia = ORDEM_EST.indexOf(a), ib = ORDEM_EST.indexOf(b);
+          return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
+        });
+      const temGrupos = grupos.length > 1;
+      let idx = 0;
+      return (
+      <div style={{ maxHeight: 420, overflowY: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-          <thead style={{ position: 'sticky', top: 0, zIndex: 1 }}><tr style={{ background: T.panelAlt }}>
+          <thead style={{ position: 'sticky', top: 0, zIndex: 2 }}><tr style={{ background: T.panelAlt }}>
             {['BR', t.cliente, t.vendedor, detalhe.col4 || t.estagio, t.valorCol].map((h, i) => (
               <th key={h} style={{ padding: '7px 10px', fontSize: 10.5, fontWeight: 600, color: T.inkFaint,
                 textAlign: i === 4 ? 'right' : 'left', whiteSpace: 'nowrap' }}>{h}</th>
             ))}
           </tr></thead>
           <tbody>
-            {detalhe.linhas.slice(0, 80).map((l, i) => {
-              const on = brAberto === l.br;
-              const it = itensCache[l.br];
+            {grupos.map(g => {
+              const gLinhas = detalhe.linhas
+                .filter(l => (l.estagio || l.estagio_rotulo || '—') === g)
+                .sort((a, b) => (Number(b.valor)||0) - (Number(a.valor)||0));
+              const gValor = soma(gLinhas);
+              const cor = CORES_EST[g] || G.cinza;
               return (
-                <React.Fragment key={`${l.br}-${i}`}>
+                <React.Fragment key={g}>
+                  {temGrupos && (
+                    <tr style={{ position: 'sticky', top: 30, zIndex: 1 }}>
+                      <td colSpan={5} style={{ padding: '8px 10px', fontSize: 11.5, fontWeight: 700,
+                        background: `${(cor[0]||T.panelAlt)}18`, borderBottom: `2px solid ${cor[1]||T.line}`,
+                        color: cor[1]||T.inkDim }}>
+                        {g} <span style={{ fontWeight: 400, fontSize: 10.5, color: T.inkFaint, marginLeft: 6 }}>
+                          {gLinhas.length} {gLinhas.length === 1 ? 'projeto' : 'projetos'}</span>
+                        <span style={{ float: 'right', fontVariantNumeric: 'tabular-nums' }}>{val(gValor)}</span>
+                      </td>
+                    </tr>
+                  )}
+                  {gLinhas.slice(0, 40).map((l) => {
+              const i2 = idx++; const on = brAberto === l.br; const it = itensCache[l.br];
+              return (
+                <React.Fragment key={`${l.br}-${i2}`}>
                   <tr className="g-linha g-clicavel" onClick={() => verItens(l.br)}
-                    style={{ borderBottom: `1px solid ${T.lineSoft}`, animationDelay: `${Math.min(i, 22) * 22}ms`,
+                    style={{ borderBottom: `1px solid ${T.lineSoft}`, animationDelay: `${Math.min(i2, 22) * 22}ms`,
                       background: on ? `${T.terracotta}0A` : 'transparent' }}>
                     <td style={{ padding: '6px 10px', fontSize: 11.5, fontWeight: 600, whiteSpace: 'nowrap' }}>
                       <span style={{ display: 'inline-block', width: 11, color: T.inkFaint,
@@ -5160,13 +5226,16 @@ function PainelDiretoria() {
                 </React.Fragment>
               );
             })}
+                </React.Fragment>
+              );
+            })}
           </tbody>
         </table>
       </div>
-      )}
-      {!detalhe.carregando && detalhe.linhas.length > 80 && (
+      );})()}
+      {!detalhe.carregando && detalhe.linhas.length > 120 && (
         <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 8 }}>
-          {t.mostrando.replace('{n}', '80').replace('{t}', String(detalhe.linhas.length))}
+          {t.mostrando.replace('{n}', '120').replace('{t}', String(detalhe.linhas.length))}
         </div>
       )}
     </div>
