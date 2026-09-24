@@ -4973,20 +4973,20 @@ RANKING CLIENTES (últimos anos):
 ${rank.slice(0, 20).map(r => `${r.cliente}: ${r.tendencia || '?'}, ${r.dias_sem_comprar || '?'} dias sem comprar`).join('\n')}`;
 
     try {
-      const resp = await fetch('https://api.anthropic.com/v1/messages', {
+      // Chama a edge function que usa a mesma chave OpenAI da prospecção.
+      // A chave fica no secret OPENAI_API_KEY do Supabase, nunca no front.
+      const resp = await fetch(`${SUPABASE_URL}/functions/v1/insights-comercial`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: 'claude-sonnet-4-6',
-          max_tokens: 1000,
-          system: 'Você é o analista comercial da Kalenborn do Brasil. Responda em português, de forma direta e objetiva, com números concretos dos dados fornecidos. Use parágrafos curtos. Não invente dados que não estejam no contexto. Se não souber, diga. Formate valores em R$ com "mi" para milhões e "mil" para milhares.',
-          messages: [
-            { role: 'user', content: contexto + '\n\nPERGUNTA DO USUÁRIO: ' + q }
-          ]
-        })
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+          'apikey': SUPABASE_ANON_KEY,
+        },
+        body: JSON.stringify({ pergunta: q, contexto }),
       });
       const data = await resp.json();
-      const texto = data.content?.map(c => c.text || '').join('\n') || 'Não consegui gerar resposta.';
+      if (!data.ok) throw new Error(data.erro || 'Erro na edge function');
+      const texto = data.resposta || 'Não consegui gerar resposta.';
       setIaResposta(texto);
       setIaHistorico(prev => [...prev, { q, r: texto, ts: new Date() }]);
     } catch (err) {
