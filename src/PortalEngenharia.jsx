@@ -4949,6 +4949,9 @@ function PainelDiretoria() {
       const mg = d.filter(x => x.margem_pct).reduce((s, x) => s + Number(x.margem_pct), 0) / Math.max(1, d.filter(x => x.margem_pct).length);
       return `${v}: contrato ${val(ctr)}, spot ${val(spt)}, margem média ${mg.toFixed(1)}%`;
     }).join('\n') : '(sem dados do KdB)';
+    // Contexto rico: quanto mais informação organizada a IA receber, mais
+    // assertiva é a resposta. Incluir regras do negócio e definições evita
+    // que a IA invente ou interprete mal.
     const contexto = `DADOS COMERCIAIS DA KALENBORN DO BRASIL (${new Date().toLocaleDateString('pt-BR')})
 
 FUNIL:
@@ -4969,8 +4972,21 @@ ${topClientes}
 MIX CONTRATO × SPOT (pedidos do ano, fonte Painel KdB):
 ${mixResumo}
 
-RANKING CLIENTES (últimos anos):
-${rank.slice(0, 20).map(r => `${r.cliente}: ${r.tendencia || '?'}, ${r.dias_sem_comprar || '?'} dias sem comprar`).join('\n')}`;
+RANKING CLIENTES (últimos anos, faturamento real por notas fiscais):
+${rank.slice(0, 20).map(r => `${r.cliente}: ${r.tendencia || '?'}, ${r.dias_sem_comprar || '?'} dias sem comprar, total R$ ${Math.round((Number(r.total_periodo)||0)/1000)}mil, em aberto agora: ${r.propostas_abertas || 0} propostas R$ ${Math.round((Number(r.valor_aberto)||0)/1000)}mil`).join('\n')}
+
+REGRAS DO NEGÓCIO (use para fundamentar as respostas):
+- Kalenborn fabrica e aplica revestimentos cerâmicos e metálicos anti-desgaste (Kalimpact, Kalocer, Abresist) para mineração, cimento, siderurgia, papel e celulose.
+- CONTRATO = fornecimento recorrente (receita previsível, margem média 33%). SPOT = venda avulsa (margem alta ~41%, mas volátil e depende de mais clientes).
+- O funil PONDERADO multiplica cada proposta pelo peso do estágio: Avançado 90%, Alto 80%, Médio 50%, Baixo 30%, Sem classificação 0%.
+- Proposta parada há +90 dias quase sempre é perdida que ninguém marcou — infla o funil sem chance real.
+- "Sem classificação" = vendedor não devolveu o follow up. Essas propostas pesam zero no ponderado.
+- A margem do custeio tem 3 níveis: contribuição (receita - material), direta (- mão de obra), absorção (- CIF rateado). A margem citada aqui é a orçada (do orçamento original do BR).
+- Faturamento de setembro/2026 está sem apontamento de horas no Sankhya — projetos do mês aparecem sem custo de mão de obra.
+- PG1 = revestimentos cerâmicos, PG2 = revestimentos metálicos, PG3 = equipamentos completos, SERVIÇO = aplicação em campo.
+- O follow up é enviado por planilha Excel: o vendedor classifica o estágio e informa a expectativa de fechamento (mês/ano).
+
+IMPORTANTE: Responda SOMENTE com base nos dados acima. Se a pergunta pede algo que não está aqui (lucro líquido, DRE, fluxo de caixa, dados de RH), diga que essa informação não está disponível no painel comercial.`;
 
     try {
       // Chama a edge function que usa a mesma chave OpenAI da prospecção.
