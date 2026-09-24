@@ -6312,7 +6312,8 @@ function FollowUpComercial({ currentUser }) {
   const [loading, setLoading] = useState(true);
   const [salvando, setSalvando] = useState(null);
   const [vend, setVend] = useState('Todos');
-  const [verPerdidos, setVerPerdidos] = useState(false);
+  // Perdidos sempre visíveis — a tabela mostra tudo, e quem quiser filtrar
+  // usa o seletor de estágio do vendedor (que já tem "perdido" na lista).
   const [obsAberta, setObsAberta] = useState(null);
   const [obsVendAberta, setObsVendAberta] = useState(null);
   const [envioHist, setEnvioHist] = useState([]);
@@ -6426,7 +6427,7 @@ function FollowUpComercial({ currentUser }) {
 
   const lista = base
     .filter(l => vend === 'Todos' || l.vendedor === vend)
-    .filter(l => verPerdidos || l.situacao !== 'perdido')
+    // Perdidos sempre visíveis (antes havia um checkbox que os escondia)
     .filter(l => contem(l.br, filtros.br))
     .filter(l => contem(l.cliente, filtros.cliente))
     .filter(l => !filtros.vendedor || l.vendedor === filtros.vendedor)
@@ -7140,7 +7141,7 @@ function FollowUpComercial({ currentUser }) {
               onClick={() => montarPlanilha(x.v, base.filter(l => l.vendedor === x.v && ['em aberto','pedido confirmado'].includes(l.situacao)))}
               style={{ fontFamily: 'inherit', fontSize: 11.5, padding: '5px 11px', borderRadius: 14, cursor: 'pointer',
                 border: `1px solid ${T.line}`, background: 'transparent', color: T.inkDim }}>
-              {x.v} <span style={{ color: T.inkFaint }}>{x.n}</span>
+              {x.v} <span style={{ color: T.inkFaint }} title={`${x.emAberto} em aberto + ${x.n - x.emAberto} com pedido = ${x.n} BRs na planilha · ${x.semClass} sem classificar`}>{x.n} BRs</span>
             </button>
           ))}
           <div style={{ width: 1, height: 22, background: T.line, margin: '0 4px' }} />
@@ -7194,10 +7195,9 @@ function FollowUpComercial({ currentUser }) {
             border: `1px solid ${T.line}`, background: T.panel, color: T.ink }}>
           {vendedores.map(v => <option key={v} value={v}>{v === 'Todos' ? 'Todos os vendedores' : v}</option>)}
         </select>
-        <label style={{ fontSize: 11.5, color: T.inkDim, display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer' }}>
-          <input type="checkbox" checked={verPerdidos} onChange={e => setVerPerdidos(e.target.checked)} />
-          mostrar perdidos
-        </label>
+        <span style={{ fontSize: 11.5, color: T.inkFaint }}>
+          {base.filter(l => l.situacao === 'perdido').length} perdido(s) incluído(s) na lista
+        </span>
         {Object.values(filtros).some(Boolean) && (
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 11.5, color: T.terracotta }}>
             {lista.length} {lista.length === 1 ? 'linha' : 'linhas'} no filtro
