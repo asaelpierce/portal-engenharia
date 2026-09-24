@@ -6902,32 +6902,41 @@ function FollowUpComercial({ currentUser }) {
               </div>
             )}
 
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
               {vendedores.map(v => {
                 const u = ultimoDe[v];
-                const cor = !u ? T.inkFaint
-                  : u.status === 'respondeu' ? T.oliveText
-                  : u.status === 'aguardando' ? T.amberText : T.rustText;
+                // Cores com fundo visível, não só uma bolinha de 7px que ninguém enxerga
+                const st = !u ? { bg: T.panelAlt, bor: T.line, txt: T.inkFaint, rot: 'nunca enviado' }
+                  : u.status === 'respondeu' ? { bg: T.oliveSoft, bor: T.oliveText, txt: T.oliveText, rot: '✓ respondeu' }
+                  : u.status === 'aguardando' ? { bg: T.amberSoft, bor: T.amberText, txt: T.amberText, rot: '⏳ aguardando' }
+                  : { bg: T.rustSoft, bor: T.rustText, txt: T.rustText, rot: '✕ sem resposta' };
                 return (
                   <button key={v} onClick={() => dispararEnvio(v)} disabled={disparando != null || !webhook}
                     title={u
-                      ? `Último envio em ${new Date(u.enviado_em).toLocaleDateString('pt-BR')} — ${u.status}${u.respondido_em ? ` (${u.horas_para_responder}h para responder)` : ''}`
-                      : 'Nunca enviado'}
-                    style={{ fontFamily: 'inherit', fontSize: 11, padding: '5px 11px', borderRadius: 14,
+                      ? `${st.rot} · Enviado em ${new Date(u.enviado_em).toLocaleDateString('pt-BR')}${u.respondido_em ? ` · respondeu em ${u.horas_para_responder}h` : ''}`
+                      : 'Nunca enviado — clique para enviar'}
+                    style={{ fontFamily: 'inherit', fontSize: 11.5, padding: '6px 13px', borderRadius: 8,
                       cursor: webhook && disparando == null ? 'pointer' : 'default',
-                      border: `1px solid ${cor}55`, background: 'transparent', color: T.inkDim,
-                      display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                    <span style={{ width: 7, height: 7, borderRadius: '50%', background: cor }} />
+                      border: `1.5px solid ${st.bor}`, background: st.bg, color: st.txt,
+                      fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 7 }}>
                     {disparando === v ? 'enviando…' : v}
-                    {u && <span style={{ fontSize: 9.5, color: T.inkFaint }}>
+                    {u && <span style={{ fontSize: 10, fontWeight: 400, opacity: 0.8 }}>
                       {new Date(u.enviado_em).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })}
                     </span>}
                   </button>
                 );
               })}
             </div>
-            <div style={{ fontSize: 10, color: T.inkFaint, marginTop: 8 }}>
-              Verde: respondeu · Âmbar: aguardando · Vermelho: sem resposta há mais de 7 dias · Cinza: nunca enviado
+            <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: 9, fontSize: 10.5, color: T.inkFaint }}>
+              {[['✓ respondeu', T.oliveText, T.oliveSoft], ['⏳ aguardando', T.amberText, T.amberSoft],
+                ['✕ sem resposta (+7d)', T.rustText, T.rustSoft], ['nunca enviado', T.inkFaint, T.panelAlt]
+              ].map(([r, c, bg]) => (
+                <span key={r} style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                  <span style={{ display: 'inline-block', width: 22, height: 14, borderRadius: 4,
+                    background: bg, border: `1.5px solid ${c}` }} />
+                  {r}
+                </span>
+              ))}
             </div>
 
             {verHistorico && (
