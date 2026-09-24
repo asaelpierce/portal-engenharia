@@ -3769,6 +3769,26 @@ const TXT = {
     mixSemVinculo: '{n} pedido(s), somando {v}, ficaram sem vendedor: o BR não existe no portal e a sigla "{s}" não bateu com ninguém do cadastro.',
     origemNome: 'Nome resolvido por', origFunil: 'funil', origCadastro: 'cadastro do BR', origSigla: 'sigla do KdB',
     mixNomeNota: 'Pedido de BR antigo ou fora da janela do funil tem o vendedor buscado no cadastro do BR e, em último caso, pela sigla do KdB (AWS = William Schreck, por exemplo).',
+    ajFunil: 'Mostra quantas propostas estão em cada situação (em aberto, pedido, faturado, perdido) e o valor total de cada fatia. Serve para ver de relance o tamanho do funil e se ele está evoluindo — se a fatia de "em aberto" cresce mas "faturado" não acompanha, tem gargalo.',
+    ajEstagio: 'Divide as propostas em aberto pelo estágio de classificação (Avançado, Alto, Médio, Baixo). O estágio vem do follow up do vendedor. Quanto mais peso em Avançado e Alto, mais previsível é o faturamento dos próximos meses.',
+    ajAging: 'Mostra há quanto tempo cada proposta está aberta, em faixas (30, 60, 90, 180 dias). Proposta velha parada quase sempre é proposta perdida que ninguém marcou — e infla o funil sem chance real de fechar.',
+    ajReceita: 'Receita faturada mês a mês no ano. Cada coluna abre as notas do mês. Serve para acompanhar ritmo: se a média dos últimos 3 meses está abaixo da meta, a bandeira sobe cedo.',
+    ajConversao: 'Taxa de conversão = quantas propostas viraram pedido (contagem, não valor). Mede a eficácia comercial. Conversão caindo com funil crescendo = equipe abrindo proposta sem qualificar o lead.',
+    ajFaturado: 'Faturamento realizado dividido por vendedor e por cliente. Mostra quem está entregando resultado e onde está concentrada a receita.',
+    ajCiclo: 'Quantos dias leva entre abrir a proposta e o pedido entrar. Ciclo curto é sinal de relacionamento maduro com o cliente; ciclo longo pode ser preço, burocracia ou proposta que deveria ter sido descartada.',
+    ajAbertoPorMes: 'Volume de propostas novas que entram no funil a cada mês. Se cai dois meses seguidos, a prospecção está fraca — o faturamento vai sentir 3 a 6 meses depois.',
+    ajComp: 'Compara o mesmo período do ano passado com o atual: propostas abertas, pedidos, faturamento. Responde "estamos melhor ou pior que ano passado?" sem precisar abrir duas planilhas.',
+    ajCards: 'Cartões dos KPIs (Em aberto, Ponderado, Faturado, Parado +90d, Sem classificação). Cada um é clicável — abre a lista de propostas que o compõe. São os números que a diretoria cita na reunião.',
+    ajPrev: 'Soma o valor × peso do estágio no mês em que o vendedor espera fechar. A linha tracejada é a média mensal faturada. Coluna acima = crescimento previsto, abaixo = queda. Depende de o vendedor preencher a expectativa de fechamento no follow up.',
+    ajDsc: 'Lista propostas com margem alta paradas em estágio fraco — gordura para ceder e destravar a venda. A simulação mostra o preço com desconto, o quanto se abre mão e a margem que sobra. Linha vermelha = ficaria abaixo do custo.',
+    ajCobertura: 'Mostra por vendedor: quantos BRs já têm estágio e quantos têm data de fechamento preenchida. Quanto maior a cobertura, mais confiável é a previsão de vendas.',
+    ajMix: 'Classificação dos pedidos do ano pelo Painel KdB: se é contrato (fornecimento recorrente) ou spot (venda avulsa), e qual a categoria de produto (PG1, PG2, PG3 ou Serviço). Contrato é receita previsível; spot é margem alta mas volátil.',
+    ajMixVend: 'Perfil de cada vendedor na divisão contrato × spot. Vendedor pesado em contrato traz estabilidade; pesado em spot traz margem. Saber o perfil ajuda a distribuir metas e territórios.',
+    ajTopDeals: 'As maiores propostas em aberto no funil. São as que mais impactam o resultado se fecharem (ou se forem perdidas). Merecem acompanhamento individual.',
+    ajCenarios: 'Três cenários de receita futura: otimista (todo mundo fecha), ponderado (peso do estágio) e conservador (só os avançados e pedidos). A faixa entre eles mostra o risco — quanto mais larga, mais incerto.',
+    ajRanking: 'Faturamento por cliente ano a ano desde 2023, com tendência calculada, dias sem comprar e propostas em aberto. Identifica quem está crescendo, quem parou e quem está em risco de perder.',
+    ajVendedor: 'Desempenho de cada vendedor: funil, ponderado, faturado, conversão. Serve para a reunião individual — os números são os mesmos que o vendedor vê no follow up dele.',
+    ajTopClientes: 'Os clientes com maior valor em aberto no funil. Mostra onde está o dinheiro parado e o potencial de faturamento de curto prazo.',
     mixInsight: 'Spot rende {s}% de margem contra {c}% do contrato, mas depende de {sc} clientes diferentes; o contrato se apoia em {cc}.',
     compTitulo: 'Proposto, ponderado e realizado — mês a mês',
     explicaComp: 'três colunas por mês: o que foi proposto, o que a régua dos estágios prevê do que ainda está em aberto, e o que já virou pedido ou nota · a coluna do meio é empilhada por nível · Perdido fica de fora (não é previsão)',
@@ -3929,6 +3949,26 @@ const TXT = {
     mixSemVinculo: '{n} order(s), totalling {v}, ended up with no salesperson: the project is not in the portal and the initials "{s}" matched nobody in the register.',
     origemNome: 'Name resolved by', origFunil: 'pipeline', origCadastro: 'project register', origSigla: 'KdB initials',
     mixNomeNota: 'Orders from older projects, outside the pipeline window, have the salesperson looked up in the project register and, as a last resort, by the KdB initials (AWS = William Schreck, for instance).',
+    ajFunil: 'Shows how many proposals are in each status (open, order, invoiced, lost) and total value per slice. Gives a quick read on funnel size and whether it is progressing.',
+    ajEstagio: 'Breaks open proposals down by classification stage. Stages come from the salesperson follow up. More weight in Advanced/High means more predictable revenue.',
+    ajAging: 'Shows how long each proposal has been open, in bands. Old stuck proposals are almost always lost deals nobody marked — they inflate the funnel without real closing chance.',
+    ajReceita: 'Monthly invoiced revenue for the year. Each column opens the month\'s invoices. Tracks pace against target.',
+    ajConversao: 'Win rate = how many proposals became orders (count, not value). Measures sales effectiveness.',
+    ajFaturado: 'Invoiced revenue split by salesperson and customer. Shows who is delivering and where revenue concentrates.',
+    ajCiclo: 'Days from proposal to order. Short cycle = mature customer relationship; long cycle may be pricing, red tape, or a proposal that should have been discarded.',
+    ajAbertoPorMes: 'New proposals entering the funnel each month. Two consecutive drops mean prospecting is weak — revenue will feel it 3–6 months later.',
+    ajComp: 'Compares the same period last year vs current: proposals, orders, revenue. Answers "are we better or worse than last year?".',
+    ajCards: 'KPI cards (Open, Weighted, Invoiced, Stalled 90d+, Unclassified). Each is clickable. These are the numbers the board cites in meetings.',
+    ajPrev: 'Sums value × stage weight in the month the salesperson expects to close. The dashed line is the average monthly invoiced. Depends on salespeople filling the expected close date.',
+    ajDsc: 'Lists high-margin proposals stuck at weak stages — room to give a discount and unlock the sale. Red line = price would drop below cost.',
+    ajCobertura: 'Shows per salesperson how many proposals have a stage and a close date. Higher coverage = more reliable forecast.',
+    ajMix: 'Year\'s orders classified by KdB: contract (recurring) vs spot (one-off), and product category (PG1–3 or Service). Contract is predictable; spot is higher margin but volatile.',
+    ajMixVend: 'Each salesperson\'s contract vs spot profile. Heavy contract = stability; heavy spot = margin. Knowing the profile helps set targets.',
+    ajTopDeals: 'Largest open proposals. They impact results the most if won or lost. Deserve individual tracking.',
+    ajCenarios: 'Three revenue scenarios: optimistic, weighted, conservative. The wider the range, the more uncertain the forecast.',
+    ajRanking: 'Revenue per customer year by year since 2023, with trend, days without purchase, and open proposals. Identifies growth, stall, and churn risk.',
+    ajVendedor: 'Each salesperson\'s performance: funnel, weighted, invoiced, conversion. Same numbers they see in their follow up.',
+    ajTopClientes: 'Customers with the most open value in the funnel. Shows where money is waiting and short-term revenue potential.',
     mixInsight: 'Spot yields {s}% margin against {c}% on contract, but relies on {sc} different customers; contract leans on {cc}.',
     compTitulo: 'Proposed, weighted and won — month by month',
     explicaComp: 'three columns per month: what was proposed, what the stage ruler forecasts from what is still open, and what already became an order or invoice · the middle column is stacked by stage · Lost is excluded (it forecasts nothing)',
@@ -4464,6 +4504,7 @@ function PainelDiretoria() {
   const [dscEst, setDscEst] = useState(['medio', 'baixo']);
   const [mix, setMix] = useState([]);
   const [mixPor, setMixPor] = useState('tipo');
+  const [ajudaAberta, setAjudaAberta] = useState(null);
   // ITENS POR BR: busca sob demanda no clique da linha e guarda em cache —
   // carregar item de 750 BRs de uma vez não se justifica para uma consulta
   // que abre um de cada vez.
@@ -5252,15 +5293,53 @@ function PainelDiretoria() {
   // Texto explicativo CURTO fica na mesma linha do titulo; LONGO vai para
   // baixo do grafico. No print do Asael, a explicacao da Conversao (200
   // caracteres) tinha caido por cima do medidor e ficou ilegivel.
-  const painel = (titulo, conteudo, extra) => {
+  // Dicionário de ajuda: cada título de painel tem uma explicação que
+  // aparece num balão ao clicar no "?". O texto diz o que o gráfico
+  // mostra, que informação ele traz e por que importa para a empresa.
+  const AJUDAS = {
+    [t.funilSituacao]: t.ajFunil, [t.porEstagio]: t.ajEstagio,
+    [t.agingTitulo]: t.ajAging, [t.receitaMesTitulo]: t.ajReceita,
+    [t.conversao]: t.ajConversao, [t.fatTitulo]: t.ajFaturado,
+    [t.cicloTitulo]: t.ajCiclo, [t.abertoPorMesTitulo]: t.ajAbertoPorMes,
+    [t.compTitulo]: t.ajComp, [t.cardsTitulo]: t.ajCards,
+    [t.pvTitulo]: t.ajPrev, [t.dscTitulo]: t.ajDsc,
+    [t.pvCobertura]: t.ajCobertura, [t.prevTitulo]: t.ajPrev,
+    [t.topDealsTitulo]: t.ajTopDeals, [t.cenariosTitulo]: t.ajCenarios,
+    [t.previsaoMes]: t.ajPrev, [t.porVendedor]: t.ajVendedor,
+    [t.topClientes]: t.ajTopClientes, [t.mixTitulo]: t.ajMix,
+    [t.mixVendTitulo]: t.ajMixVend,
+  };
+  const painel = (titulo, conteudo, extra, ajudaExplicita) => {
     const longo = extra && String(extra).length > 60;
+    const chaveAjuda = typeof titulo === 'string' ? titulo : '';
+    const ajuda = ajudaExplicita || AJUDAS[chaveAjuda];
+    const aberta = ajudaAberta === chaveAjuda;
     return (
       <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 11, padding: 15 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
           marginBottom: 14, gap: 10, flexWrap: 'wrap' }}>
-          <span style={{ fontSize: 12.5, fontWeight: 700 }}>{titulo}</span>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
+            <span style={{ fontSize: 12.5, fontWeight: 700 }}>{titulo}</span>
+            {ajuda && (
+              <span onClick={() => setAjudaAberta(aberta ? null : chaveAjuda)}
+                title="O que é este painel?"
+                style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                  width: 18, height: 18, borderRadius: '50%', fontSize: 11, fontWeight: 700,
+                  cursor: 'pointer', userSelect: 'none', transition: 'all .2s',
+                  border: `1.5px solid ${aberta ? T.terracotta : T.line}`,
+                  background: aberta ? `${T.terracotta}12` : 'transparent',
+                  color: aberta ? T.terracotta : T.inkFaint }}>?</span>
+            )}
+          </span>
           {extra && !longo && <span style={{ fontSize: 10.5, color: T.inkFaint }}>{extra}</span>}
         </div>
+        {aberta && ajuda && (
+          <div style={{ fontSize: 11.5, color: T.inkDim, lineHeight: 1.65, padding: '10px 13px',
+            background: `${T.terracotta}08`, border: `1px solid ${T.terracotta}22`,
+            borderRadius: 8, marginBottom: 13 }}>
+            {ajuda}
+          </div>
+        )}
         {conteudo}
         {longo && (
           <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 13, paddingTop: 10,
