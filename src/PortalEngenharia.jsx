@@ -3789,6 +3789,19 @@ const TXT = {
     ajRanking: 'Faturamento por cliente ano a ano desde 2023, com tendência calculada, dias sem comprar e propostas em aberto. Identifica quem está crescendo, quem parou e quem está em risco de perder.',
     ajVendedor: 'Desempenho de cada vendedor: funil, ponderado, faturado, conversão. Serve para a reunião individual — os números são os mesmos que o vendedor vê no follow up dele.',
     ajTopClientes: 'Os clientes com maior valor em aberto no funil. Mostra onde está o dinheiro parado e o potencial de faturamento de curto prazo.',
+    iaTitulo: 'Pergunte à IA',
+    iaSub: 'faça perguntas sobre os dados comerciais — a IA analisa o funil, o mix, o custeio e responde na hora',
+    iaPlaceholder: 'Ex: qual vendedor tem mais propostas paradas? quais clientes pararam de comprar?',
+    iaEnviar: 'Perguntar',
+    iaPensandoTxt: 'Analisando os dados...',
+    iaLimpar: 'Limpar',
+    iaSugestoes: 'Sugestões rápidas:',
+    iaS1: 'Resumo executivo do funil',
+    iaS2: 'Qual vendedor precisa de atenção?',
+    iaS3: 'Clientes em risco de perder',
+    iaS4: 'Onde cabe desconto para destravar?',
+    iaS5: 'Compare contrato vs spot por vendedor',
+    iaS6: 'Propostas paradas há mais de 90 dias',
     mixInsight: 'Spot rende {s}% de margem contra {c}% do contrato, mas depende de {sc} clientes diferentes; o contrato se apoia em {cc}.',
     compTitulo: 'Proposto, ponderado e realizado — mês a mês',
     explicaComp: 'três colunas por mês: o que foi proposto, o que a régua dos estágios prevê do que ainda está em aberto, e o que já virou pedido ou nota · a coluna do meio é empilhada por nível · Perdido fica de fora (não é previsão)',
@@ -3969,6 +3982,19 @@ const TXT = {
     ajRanking: 'Revenue per customer year by year since 2023, with trend, days without purchase, and open proposals. Identifies growth, stall, and churn risk.',
     ajVendedor: 'Each salesperson\'s performance: funnel, weighted, invoiced, conversion. Same numbers they see in their follow up.',
     ajTopClientes: 'Customers with the most open value in the funnel. Shows where money is waiting and short-term revenue potential.',
+    iaTitulo: 'Ask AI',
+    iaSub: 'ask questions about the commercial data — AI analyzes the funnel, mix, costing and answers on the spot',
+    iaPlaceholder: 'E.g.: which salesperson has the most stalled proposals? which customers stopped buying?',
+    iaEnviar: 'Ask',
+    iaPensandoTxt: 'Analyzing the data...',
+    iaLimpar: 'Clear',
+    iaSugestoes: 'Quick suggestions:',
+    iaS1: 'Executive funnel summary',
+    iaS2: 'Which salesperson needs attention?',
+    iaS3: 'Customers at risk of churning',
+    iaS4: 'Where can we offer a discount to unlock?',
+    iaS5: 'Compare contract vs spot by salesperson',
+    iaS6: 'Proposals stalled over 90 days',
     mixInsight: 'Spot yields {s}% margin against {c}% on contract, but relies on {sc} different customers; contract leans on {cc}.',
     compTitulo: 'Proposed, weighted and won — month by month',
     explicaComp: 'three columns per month: what was proposed, what the stage ruler forecasts from what is still open, and what already became an order or invoice · the middle column is stacked by stage · Lost is excluded (it forecasts nothing)',
@@ -4505,6 +4531,11 @@ function PainelDiretoria() {
   const [mix, setMix] = useState([]);
   const [mixPor, setMixPor] = useState('tipo');
   const [ajudaAberta, setAjudaAberta] = useState(null);
+  const [iaAberta, setIaAberta] = useState(false);
+  const [iaPergunta, setIaPergunta] = useState('');
+  const [iaResposta, setIaResposta] = useState('');
+  const [iaPensando, setIaPensando] = useState(false);
+  const [iaHistorico, setIaHistorico] = useState([]);
   // ITENS POR BR: busca sob demanda no clique da linha e guarda em cache —
   // carregar item de 750 BRs de uma vez não se justifica para uma consulta
   // que abre um de cada vez.
@@ -4889,6 +4920,80 @@ function PainelDiretoria() {
   const mixResolvidos = ['cadastro do BR', 'sigla do KdB']
     .map(o => ({ o, n: mix.filter(m => m.origem_vendedor === o).length }))
     .filter(x => x.n > 0);
+
+  // ---- PERGUNTE À IA ----
+  // Monta um resumo compacto dos dados carregados na tela e envia junto
+  // com a pergunta do usuário para a API do Claude. A resposta chega em
+  // texto corrido, direto na tela — o Ricardo pediu exatamente isso.
+  const perguntarIA = async (q) => {
+    if (!q.trim()) return;
+    setIaPensando(true); setIaResposta('');
+    // Resumo dos dados: compacto mas suficiente para a IA responder bem
+    const abertos = pipeline.filter(p => p.situacao === 'em aberto');
+    const faturados = pipeline.filter(p => p.situacao === 'faturado');
+    const pedidos = pipeline.filter(p => p.situacao === 'pedido confirmado');
+    const perdidos = pipeline.filter(p => p.situacao === 'perdido');
+    const porVendedor = [...new Set(abertos.map(p => p.vendedor))].map(v => {
+      const d = abertos.filter(p => p.vendedor === v);
+      const fv = faturados.filter(p => p.vendedor === v);
+      return `${v}: ${d.length} em aberto (${val(soma(d))}), ${fv.length} faturados (${val(soma(fv, 'receita_faturada'))}), ${d.filter(x => x.dias_aberto > 90).length} parados +90d, ${d.filter(x => !x.estagio_vendedor && !x.estagio_comercial).length} sem classificar`;
+    }).join('\n');
+    const topClientes = [...new Set(abertos.map(p => p.cliente))].map(c => {
+      const d = abertos.filter(p => p.cliente === c);
+      return { c, v: soma(d), n: d.length };
+    }).sort((a, b) => b.v - a.v).slice(0, 15).map(x => `${x.c}: ${x.n} propostas, ${val(x.v)}`).join('\n');
+    const mixResumo = mix.length > 0 ? [...new Set(mix.map(m => m.vendedor))].map(v => {
+      const d = mix.filter(m => m.vendedor === v);
+      const ctr = soma(d.filter(x => x.tipo === 'CONTRATO'));
+      const spt = soma(d.filter(x => x.tipo === 'SPOT'));
+      const mg = d.filter(x => x.margem_pct).reduce((s, x) => s + Number(x.margem_pct), 0) / Math.max(1, d.filter(x => x.margem_pct).length);
+      return `${v}: contrato ${val(ctr)}, spot ${val(spt)}, margem média ${mg.toFixed(1)}%`;
+    }).join('\n') : '(sem dados do KdB)';
+    const contexto = `DADOS COMERCIAIS DA KALENBORN DO BRASIL (${new Date().toLocaleDateString('pt-BR')})
+
+FUNIL:
+- Em aberto: ${abertos.length} propostas, ${val(soma(abertos))}
+- Ponderado (valor × peso do estágio): ${val(soma(abertos, 'valor_ponderado'))}
+- Pedido confirmado: ${pedidos.length}, ${val(soma(pedidos))}
+- Faturado no ano: ${faturados.length}, ${val(soma(faturados, 'receita_faturada'))}
+- Perdidos: ${perdidos.length}, ${val(soma(perdidos))}
+- Parados +90 dias: ${abertos.filter(x => x.dias_aberto > 90).length}, ${val(soma(abertos.filter(x => x.dias_aberto > 90)))}
+- Sem classificação: ${abertos.filter(x => !x.estagio_vendedor && !x.estagio_comercial).length}
+
+POR VENDEDOR:
+${porVendedor}
+
+TOP CLIENTES EM ABERTO:
+${topClientes}
+
+MIX CONTRATO × SPOT (pedidos do ano, fonte Painel KdB):
+${mixResumo}
+
+RANKING CLIENTES (últimos anos):
+${rank.slice(0, 20).map(r => `${r.cliente}: ${r.tendencia || '?'}, ${r.dias_sem_comprar || '?'} dias sem comprar`).join('\n')}`;
+
+    try {
+      const resp = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-6',
+          max_tokens: 1000,
+          system: 'Você é o analista comercial da Kalenborn do Brasil. Responda em português, de forma direta e objetiva, com números concretos dos dados fornecidos. Use parágrafos curtos. Não invente dados que não estejam no contexto. Se não souber, diga. Formate valores em R$ com "mi" para milhões e "mil" para milhares.',
+          messages: [
+            { role: 'user', content: contexto + '\n\nPERGUNTA DO USUÁRIO: ' + q }
+          ]
+        })
+      });
+      const data = await resp.json();
+      const texto = data.content?.map(c => c.text || '').join('\n') || 'Não consegui gerar resposta.';
+      setIaResposta(texto);
+      setIaHistorico(prev => [...prev, { q, r: texto, ts: new Date() }]);
+    } catch (err) {
+      setIaResposta('Erro ao consultar a IA: ' + (err.message || err));
+    }
+    setIaPensando(false);
+  };
 
   // ---- ONDE CABE DESCONTO ----
   // Margem alta parada num estágio fraco: o cliente não decide, e há margem
@@ -5502,7 +5607,93 @@ function PainelDiretoria() {
       {gavetaDe('sem:')}
 
       <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))' }}>
-        {painel(t.funilSituacao, (
+        {/* ── PERGUNTE À IA ── */}
+      <div style={{ background: T.panel, border: `1.5px solid ${iaAberta ? T.terracotta + '66' : T.line}`,
+        borderRadius: 11, overflow: 'hidden', transition: 'border-color .3s' }}>
+        <div onClick={() => setIaAberta(!iaAberta)}
+          style={{ padding: '12px 15px', display: 'flex', justifyContent: 'space-between',
+            alignItems: 'center', cursor: 'pointer', userSelect: 'none' }}>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontSize: 16 }}>✦</span>
+            <span style={{ fontSize: 12.5, fontWeight: 700 }}>{t.iaTitulo}</span>
+            <span style={{ fontSize: 10.5, color: T.inkFaint }}>{t.iaSub}</span>
+          </span>
+          <span style={{ fontSize: 14, color: T.inkFaint, transform: iaAberta ? 'rotate(180deg)' : 'none',
+            transition: 'transform .2s' }}>▾</span>
+        </div>
+        {iaAberta && (
+          <div style={{ padding: '0 15px 15px' }}>
+            <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap', marginBottom: 10 }}>
+              <span style={{ fontSize: 10.5, color: T.inkFaint, alignSelf: 'center' }}>{t.iaSugestoes}</span>
+              {[t.iaS1, t.iaS2, t.iaS3, t.iaS4, t.iaS5, t.iaS6].map(s => (
+                <button key={s} onClick={() => { setIaPergunta(s); perguntarIA(s); }}
+                  disabled={iaPensando}
+                  style={{ fontFamily: 'inherit', fontSize: 10.5, padding: '4px 10px', borderRadius: 6,
+                    border: `1px solid ${T.line}`, background: T.panelAlt, color: T.inkDim,
+                    cursor: iaPensando ? 'default' : 'pointer', whiteSpace: 'nowrap' }}>{s}</button>
+              ))}
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <input value={iaPergunta} onChange={e => setIaPergunta(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && !iaPensando && perguntarIA(iaPergunta)}
+                placeholder={t.iaPlaceholder} disabled={iaPensando}
+                style={{ flex: 1, fontFamily: 'inherit', fontSize: 12, padding: '9px 12px',
+                  borderRadius: 7, border: `1px solid ${T.line}`, background: T.panelAlt,
+                  color: T.ink, outline: 'none' }} />
+              <button onClick={() => perguntarIA(iaPergunta)} disabled={iaPensando || !iaPergunta.trim()}
+                style={{ fontFamily: 'inherit', fontSize: 12, fontWeight: 700, padding: '9px 16px',
+                  borderRadius: 7, border: 'none', cursor: iaPensando ? 'default' : 'pointer',
+                  background: iaPensando ? T.line : T.terracotta, color: '#fff' }}>
+                {iaPensando ? t.iaPensandoTxt : t.iaEnviar}
+              </button>
+            </div>
+            {iaPensando && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, color: T.inkFaint }}>
+                <svg width="18" height="18" viewBox="0 0 46 46" className="g-spin">
+                  <circle cx="23" cy="23" r="18" fill="none" stroke={T.lineSoft} strokeWidth="4" />
+                  <circle cx="23" cy="23" r="18" fill="none" stroke={T.terracotta} strokeWidth="4"
+                    strokeLinecap="round" strokeDasharray="60 113" />
+                </svg>
+                <span style={{ fontSize: 11.5 }}>{t.iaPensandoTxt}</span>
+              </div>
+            )}
+            {iaResposta && !iaPensando && (
+              <div style={{ marginTop: 12, padding: '12px 14px', background: `${T.terracotta}08`,
+                border: `1px solid ${T.terracotta}22`, borderRadius: 8, fontSize: 12,
+                lineHeight: 1.7, color: T.ink, whiteSpace: 'pre-wrap' }}>
+                {iaResposta}
+              </div>
+            )}
+            {iaHistorico.length > 1 && !iaPensando && (
+              <details style={{ marginTop: 10 }}>
+                <summary style={{ fontSize: 10.5, color: T.inkFaint, cursor: 'pointer' }}>
+                  Histórico ({iaHistorico.length} perguntas)
+                </summary>
+                <div style={{ maxHeight: 300, overflowY: 'auto', marginTop: 6 }}>
+                  {iaHistorico.slice(0, -1).reverse().map((h, i) => (
+                    <div key={i} style={{ padding: '8px 0', borderBottom: `1px solid ${T.lineSoft}` }}>
+                      <div style={{ fontSize: 11, fontWeight: 600, color: T.inkDim, marginBottom: 4 }}>
+                        {h.q} <span style={{ fontWeight: 400, color: T.inkFaint }}>{h.ts.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</span>
+                      </div>
+                      <div style={{ fontSize: 11.5, color: T.inkDim, lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>
+                        {h.r.slice(0, 400)}{h.r.length > 400 ? '…' : ''}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </details>
+            )}
+            {(iaResposta || iaHistorico.length > 0) && !iaPensando && (
+              <button onClick={() => { setIaResposta(''); setIaHistorico([]); setIaPergunta(''); }}
+                style={{ fontFamily: 'inherit', fontSize: 10.5, marginTop: 8, padding: '4px 10px',
+                  borderRadius: 5, border: `1px solid ${T.line}`, background: 'transparent',
+                  color: T.inkFaint, cursor: 'pointer' }}>{t.iaLimpar}</button>
+            )}
+          </div>
+        )}
+      </div>
+
+      {painel(t.funilSituacao, (
           <Rosca dados={roscaFunil} centro={val(soma(dados))} subcentro={`${dados.length} ${t.brs}`}
             ativo={detalhe?.chave?.startsWith('sit:') ? detalhe.chave.slice(4) : null}
             aoClicar={(fatia) => {
