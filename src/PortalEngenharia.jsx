@@ -4991,11 +4991,15 @@ IMPORTANTE: Responda SOMENTE com base nos dados acima. Se a pergunta pede algo q
     try {
       // Chama a edge function que usa a mesma chave OpenAI da prospecção.
       // A chave fica no secret OPENAI_API_KEY do Supabase, nunca no front.
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 30000);
       const resp = await fetch(`${SUPABASE_URL}/functions/v1/insights-comercial`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ pergunta: q, contexto }),
+        signal: ctrl.signal,
       });
+      clearTimeout(timer);
       if (!resp.ok) throw new Error(`Erro ${resp.status}`);
       const data = await resp.json();
       if (!data.ok) throw new Error(data.erro || 'Erro na edge function');
@@ -5003,7 +5007,7 @@ IMPORTANTE: Responda SOMENTE com base nos dados acima. Se a pergunta pede algo q
       setIaResposta(texto);
       setIaHistorico(prev => [...prev, { q, r: texto, ts: new Date() }]);
     } catch (err) {
-      setIaResposta('Erro ao consultar a IA: ' + (err.message || err));
+      setIaResposta('⚠ Erro: ' + (err.message || String(err)) + '\n\nSe este erro persistir, recarregue a página com Ctrl+Shift+R.');
     }
     setIaPensando(false);
   };
