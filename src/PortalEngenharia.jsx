@@ -4949,31 +4949,75 @@ function PainelDiretoria() {
       const mg = d.filter(x => x.margem_pct).reduce((s, x) => s + Number(x.margem_pct), 0) / Math.max(1, d.filter(x => x.margem_pct).length);
       return `${v}: contrato ${val(ctr)}, spot ${val(spt)}, margem média ${mg.toFixed(1)}%`;
     }).join('\n') : '(sem dados do KdB)';
-    // Contexto rico: quanto mais informação organizada a IA receber, mais
-    // assertiva é a resposta. Incluir regras do negócio e definições evita
-    // que a IA invente ou interprete mal.
+    // Contexto COMPLETO: a IA precisa de granularidade para responder perguntas
+    // sobre clientes específicos, meses específicos, BRs específicos. Resumo
+    // demais = "não tenho essa informação" quando o dado está na tela.
+    const abertoPorCli = {};
+    abertos.forEach(d => {
+      const k = d.cliente || '—';
+      if (!abertoPorCli[k]) abertoPorCli[k] = { n: 0, v: 0, brs: [] };
+      abertoPorCli[k].n++;
+      abertoPorCli[k].v += Number(d.valor) || 0;
+      abertoPorCli[k].brs.push(`${d.br} ${d.estagio||'sem class.'} ${val(d.valor)}`);
+    });
+    const clientesAberto = Object.entries(abertoPorCli)
+      .sort((a, b) => b[1].v - a[1].v)
+      .slice(0, 40)
+      .map(([c, x]) => `${c}: ${x.n} propostas ${val(x.v)} [${x.brs.slice(0,5).join('; ')}${x.brs.length>5 ? '...' : ''}]`)
+      .join('\n');
+
+    const fatPorCli = {};
+    faturados.forEach(d => {
+      const k = d.cliente || '—';
+      fatPorCli[k] = (fatPorCli[k] || 0) + (Number(d.receita_faturada) || 0);
+    });
+    const clientesFat = Object.entries(fatPorCli)
+      .sort((a, b) => b[1] - a[1]).slice(0, 25)
+      .map(([c, v]) => `${c}: ${val(v)}`).join('\n');
+
+    const fatPorMes = {};
+    fatDet.forEach(f => {
+      if (f.mes_faturamento) fatPorMes[f.mes_faturamento] = (fatPorMes[f.mes_faturamento] || 0) + (Number(f.valor) || 0);
+    });
+    const mesesFat = Object.entries(fatPorMes).sort().map(([m, v]) => `${m}: ${val(v)}`).join(', ');
+
+    const pedidosMes = {};
+    mix.forEach(m => {
+      if (m.competencia) pedidosMes[m.competencia] = (pedidosMes[m.competencia] || 0) + (Number(m.valor) || 0);
+    });
+    const mesesPed = Object.entries(pedidosMes).sort().map(([m, v]) => `${m}: ${val(v)}`).join(', ');
+
     const contexto = `DADOS COMERCIAIS DA KALENBORN DO BRASIL (${new Date().toLocaleDateString('pt-BR')})
 
-FUNIL:
+FUNIL GERAL:
 - Em aberto: ${abertos.length} propostas, ${val(soma(abertos))}
 - Ponderado (valor × peso do estágio): ${val(soma(abertos, 'valor_ponderado'))}
 - Pedido confirmado: ${pedidos.length}, ${val(soma(pedidos))}
-- Faturado no ano: ${faturados.length}, ${val(soma(faturados, 'receita_faturada'))}
+- Faturado no ano: ${faturados.length} projetos, ${val(soma(faturados, 'receita_faturada'))}
 - Perdidos: ${perdidos.length}, ${val(soma(perdidos))}
-- Parados +90 dias: ${abertos.filter(x => x.dias_aberto > 90).length}, ${val(soma(abertos.filter(x => x.dias_aberto > 90)))}
+- Parados +90 dias: ${abertos.filter(x => x.dias_aberto > 90).length} propostas, ${val(soma(abertos.filter(x => x.dias_aberto > 90)))}
 - Sem classificação: ${abertos.filter(x => !x.estagio_vendedor && !x.estagio_comercial).length}
 
-POR VENDEDOR:
+POR VENDEDOR (funil completo):
 ${porVendedor}
 
-TOP CLIENTES EM ABERTO:
-${topClientes}
+PROPOSTAS EM ABERTO POR CLIENTE (top 40 com BRs):
+${clientesAberto}
 
-MIX CONTRATO × SPOT (pedidos do ano, fonte Painel KdB):
+FATURADO NO ANO POR CLIENTE (top 25):
+${clientesFat}
+
+FATURADO POR MÊS (2026):
+${mesesFat}
+
+PEDIDOS DO ANO POR MÊS (fonte KdB):
+${mesesPed}
+
+MIX CONTRATO × SPOT POR VENDEDOR (pedidos do ano):
 ${mixResumo}
 
-RANKING CLIENTES (últimos anos, faturamento real por notas fiscais):
-${rank.slice(0, 20).map(r => `${r.cliente}: ${r.tendencia || '?'}, ${r.dias_sem_comprar || '?'} dias sem comprar, total R$ ${Math.round((Number(r.total_periodo)||0)/1000)}mil, em aberto agora: ${r.propostas_abertas || 0} propostas R$ ${Math.round((Number(r.valor_aberto)||0)/1000)}mil`).join('\n')}
+RANKING CLIENTES (faturamento ano a ano desde 2023):
+${rank.slice(0, 30).map(r => `${r.cliente}: 2023 R$ ${Math.round((Number(r.ano_0)||0)/1000)}mil, 2024 R$ ${Math.round((Number(r.ano_1)||0)/1000)}mil, 2025 R$ ${Math.round((Number(r.ano_2)||0)/1000)}mil, 2026 R$ ${Math.round((Number(r.ano_3)||0)/1000)}mil | ${r.tendencia || '?'} | ${r.dias_sem_comprar || '?'} dias sem comprar | em aberto: ${r.propostas_abertas || 0} propostas R$ ${Math.round((Number(r.valor_aberto)||0)/1000)}mil`).join('\n')}
 
 REGRAS DO NEGÓCIO (use para fundamentar as respostas):
 - Kalenborn fabrica e aplica revestimentos cerâmicos e metálicos anti-desgaste (Kalimpact, Kalocer, Abresist) para mineração, cimento, siderurgia, papel e celulose.
