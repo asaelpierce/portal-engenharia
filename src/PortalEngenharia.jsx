@@ -4929,10 +4929,10 @@ function PainelDiretoria() {
     if (!q.trim()) return;
     setIaPensando(true); setIaResposta('');
     // Resumo dos dados: compacto mas suficiente para a IA responder bem
-    const abertos = pipeline.filter(p => p.situacao === 'em aberto');
-    const faturados = pipeline.filter(p => p.situacao === 'faturado');
-    const pedidos = pipeline.filter(p => p.situacao === 'pedido confirmado');
-    const perdidos = pipeline.filter(p => p.situacao === 'perdido');
+    const abertos = dados.filter(p => p.situacao === 'em aberto');
+    const faturados = dados.filter(p => p.situacao === 'faturado');
+    const pedidos = dados.filter(p => p.situacao === 'pedido confirmado');
+    const perdidos = dados.filter(p => p.situacao === 'perdido');
     const porVendedor = [...new Set(abertos.map(p => p.vendedor))].map(v => {
       const d = abertos.filter(p => p.vendedor === v);
       const fv = faturados.filter(p => p.vendedor === v);
