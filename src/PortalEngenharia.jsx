@@ -4993,13 +4993,10 @@ IMPORTANTE: Responda SOMENTE com base nos dados acima. Se a pergunta pede algo q
       // A chave fica no secret OPENAI_API_KEY do Supabase, nunca no front.
       const resp = await fetch(`${SUPABASE_URL}/functions/v1/insights-comercial`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
-          'apikey': SUPABASE_ANON_KEY,
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ pergunta: q, contexto }),
       });
+      if (!resp.ok) throw new Error(`Erro ${resp.status}`);
       const data = await resp.json();
       if (!data.ok) throw new Error(data.erro || 'Erro na edge function');
       const texto = data.resposta || 'Não consegui gerar resposta.';
