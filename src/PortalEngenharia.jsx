@@ -4991,19 +4991,30 @@ IMPORTANTE: Responda SOMENTE com base nos dados acima. Se a pergunta pede algo q
     try {
       // Chama a edge function que usa a mesma chave OpenAI da prospecção.
       // A chave fica no secret OPENAI_API_KEY do Supabase, nunca no front.
-      const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 30000);
-      const resp = await fetch(`${SUPABASE_URL}/functions/v1/insights-comercial`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pergunta: q, contexto }),
-        signal: ctrl.signal,
-      });
-      clearTimeout(timer);
-      if (!resp.ok) throw new Error(`Erro ${resp.status}`);
-      const data = await resp.json();
-      if (!data.ok) throw new Error(data.erro || 'Erro na edge function');
-      const texto = data.resposta || 'Não consegui gerar resposta.';
+      let texto = '';
+      try {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 30000);
+        const url = SUPABASE_URL + '/functions/v1/insights-comercial';
+        console.log('[IA] chamando', url);
+        const resp = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pergunta: q, contexto }),
+          signal: ctrl.signal,
+        });
+        clearTimeout(timer);
+        console.log('[IA] status', resp.status);
+        const raw = await resp.text();
+        console.log('[IA] resposta bruta', raw.slice(0, 200));
+        const data = JSON.parse(raw);
+        if (!data.ok) throw new Error(data.erro || 'Edge function retornou erro');
+        texto = data.resposta || 'Sem resposta.';
+      } catch (fetchErr) {
+        throw new Error(fetchErr.name === 'AbortError'
+          ? 'Timeout: a IA não respondeu em 30 segundos. Tente uma pergunta mais curta.'
+          : String(fetchErr.message || fetchErr));
+      }
       setIaResposta(texto);
       setIaHistorico(prev => [...prev, { q, r: texto, ts: new Date() }]);
     } catch (err) {
@@ -5634,6 +5645,7 @@ IMPORTANTE: Responda SOMENTE com base nos dados acima. Se a pergunta pede algo q
             <span style={{ fontSize: 16 }}>✦</span>
             <span style={{ fontSize: 12.5, fontWeight: 700 }}>{t.iaTitulo}</span>
             <span style={{ fontSize: 10.5, color: T.inkFaint }}>{t.iaSub}</span>
+            <span style={{ fontSize: 8, color: T.inkFaint, opacity: 0.5 }}>v3</span>
           </span>
           <span style={{ fontSize: 14, color: T.inkFaint, transform: iaAberta ? 'rotate(180deg)' : 'none',
             transition: 'transform .2s' }}>▾</span>
