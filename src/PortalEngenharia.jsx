@@ -8025,6 +8025,14 @@ function PainelComercial({ currentUser }) {
       pendentesValor: pendentes.reduce((s,r) => s + r.valor, 0),
       pendentesAtrasadosQtd: pendentesAtrasados.length,
       pendentesAtrasadosValor: pendentesAtrasados.reduce((s,r) => s + r.valor, 0),
+      // Vendido e faturado no mesmo mês: pedido_criado e nf_emitida no mesmo YYYY-MM
+      vendidoFaturadoMes: (() => {
+        const mesmos = faturados.filter(r => {
+          if (!r.pedido_criado || !r.nf_emitida) return false;
+          return r.pedido_criado.slice(0,7) === r.nf_emitida.slice(0,7);
+        });
+        return { qtd: mesmos.length, valor: mesmos.reduce((s,r) => s + r.valor, 0) };
+      })(),
     };
   }, [filtrados]);
 
@@ -8142,6 +8150,9 @@ function PainelComercial({ currentUser }) {
           { label: '⏳ Pendente de faturar',  value: `${kpis.pendentesQtd} (${fmtMoedaCompacta(kpis.pendentesValor)})`, color: T.amberText },
           { label: '⚠ Pendente e atrasado', value: `${kpis.pendentesAtrasadosQtd} (${fmtMoedaCompacta(kpis.pendentesAtrasadosValor)})`,
             color: kpis.pendentesAtrasadosQtd > 0 ? T.rustText : T.oliveText },
+          { label: '🔄 Vendido e faturado no mês', value: `${kpis.vendidoFaturadoMes.qtd} (${fmtMoedaCompacta(kpis.vendidoFaturadoMes.valor)})`,
+            color: T.blueText,
+            tooltip: 'Projetos cujo pedido foi criado e a nota emitida no mesmo mês. Mede a agilidade entre venda e entrega.' },
           { label: 'Atraso médio (dias)', value: kpis.mediaAtraso !== null ? `${kpis.mediaAtraso}d` : '—',
             color: kpis.mediaAtraso > 14 ? T.rustText : kpis.mediaAtraso > 7 ? T.amberText : T.oliveText },
         ].map(k => (
