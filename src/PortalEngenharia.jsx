@@ -21203,6 +21203,11 @@ function Custeio() {
         const rec = soma(lista, 'receita_liquida'), cus = soma(lista, 'custo');
         const marg = rec - cus;
         const cifT = soma(lista, 'cif_rateado');
+        // Composição do overhead (out/2026): CIF das regras + insumos de fábrica
+        // + benefícios da equipe de produção, todos pela mesma base de rateio.
+        const cifRegT = soma(lista, 'cif_regras_rateado');
+        const insT = soma(lista, 'insumos_rateado');
+        const benT = soma(lista, 'beneficios_rateado');
         const moT = soma(lista, 'custo_mao_obra');
         const margDireta = marg - moT;
         const margAbs = margDireta - cifT;
@@ -21244,7 +21249,8 @@ function Custeio() {
           { t: 'Receita líquida', v: moeda(rec), c: T.ink },
           { t: 'Material, serviço e frete', v: moeda(cus), c: T.inkDim },
           { t: 'Mão de obra', v: moeda(moT), c: T.blueText },
-          { t: 'CIF rateado', v: moeda(cifT), c: T.amberText },
+          { t: 'Overhead da fábrica', v: moeda(cifT), c: T.amberText,
+            sub: cifT > 0 ? `CIF ${moeda(cifRegT)} · insumos ${moeda(insT)} · benefícios ${moeda(benT)}` : null },
           { t: 'Margem direta', v: moeda(margDireta), c: margDireta >= 0 ? T.oliveText : T.rustText,
             sub: rec > 0 ? `${(margDireta / rec * 100).toFixed(1)}% da receita` : null },
           { t: 'Margem por absorção', v: moeda(margAbs), c: margAbs >= 0 ? T.oliveText : T.rustText,
@@ -21562,7 +21568,7 @@ function Custeio() {
               <div style={{ padding: '10px 12px', fontSize: 12, fontWeight: 700, borderBottom: `1px solid ${T.line}`, display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
                 <span>{filtro.l} — {lista.length} {lista.length === 1 ? 'projeto' : 'projetos'}, da menor margem para a maior</span>
                 <span style={{ fontWeight: 400, color: T.inkFaint, fontSize: 11 }}>
-                  {cifT > 0 ? `CIF rateado no período: ${moeda(cifT)}` : ''}
+                  {cifT > 0 ? `Overhead rateado no período: ${moeda(cifT)} (CIF ${moeda(cifRegT)} · insumos ${moeda(insT)} · benefícios ${moeda(benT)})` : ''}
                 </span>
               </div>
               <div style={{ overflowX: 'auto' }}>
@@ -21589,7 +21595,7 @@ function Custeio() {
                         { l: 'Frete', v: Number(r.custo_frete) || 0, c: T.amberText },
                         { l: 'Outros', v: Number(r.custo_outros) || 0, c: T.inkFaint },
                         { l: 'Mão de obra', v: mo, c: T.blueText },
-                        { l: 'CIF', v: Number(r.cif_rateado) || 0, c: T.gold },
+                        { l: 'Overhead', v: Number(r.cif_rateado) || 0, c: T.gold },
                       ];
                       const divergencia = mpFora.find(x => x.br === r.br);
                       return (
@@ -21654,7 +21660,9 @@ function Custeio() {
                                       { l: '= Margem de contribuição', v: Number(r.margem), forte: true },
                                       { l: `− Mão de obra${Number(r.horas_projeto) > 0 ? ` (${Number(r.horas_projeto).toFixed(0)} h apontadas no projeto)` : ''}`, v: -mo },
                                       { l: '= Margem direta', v: md, forte: true },
-                                      { l: '− CIF rateado', v: -(Number(r.cif_rateado) || 0) },
+                                      { l: '− CIF (aluguel, energia, manutenção…)', v: -(Number(r.cif_regras_rateado) || 0) },
+                                      { l: '− Insumos de fábrica (massa, Chemitac, gases, discos…)', v: -(Number(r.insumos_rateado) || 0) },
+                                      { l: '− Benefícios da produção (transporte, alimentação, saúde)', v: -(Number(r.beneficios_rateado) || 0) },
                                       { l: '= Margem por absorção', v: ma, forte: true },
                                     ].filter(x => x.forte || x.v !== 0).map((x, i) => (
                                       <tr key={i} style={{ borderBottom: x.forte ? `1px solid ${T.line}` : 'none' }}>
