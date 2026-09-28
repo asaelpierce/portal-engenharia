@@ -6859,6 +6859,7 @@ function FollowUpComercial({ currentUser }) {
   const emAberto = lista.filter(l => l.situacao === 'em aberto');
   const confirmados = lista.filter(l => l.situacao === 'pedido confirmado');
   const faturados = lista.filter(l => l.situacao === 'faturado');
+  const perdidos = lista.filter(l => l.situacao === 'perdido');
   const semClass = emAberto.filter(l => !l.estagio_comercial && !l.estagio_vendedor).length;
 
   // Funil por vendedor pelo VALOR CHEIO, nao pelo ponderado. O peso do estagio
@@ -7189,6 +7190,8 @@ function FollowUpComercial({ currentUser }) {
             dica: 'Tem pedido de venda e ainda não tem nota fiscal. Valor da proposta.' },
           { t: `Já faturado · ${faturados.length} BRs`, v: moeda(soma(faturados, 'receita_faturada')), c: T.blueText,
             dica: 'Já tem nota fiscal de venda. Valor faturado líquido (o que saiu em nota), não o da proposta.' },
+          { t: `Perdido · ${perdidos.length} BRs`, v: moeda(soma(perdidos, 'valor_proposta')), c: T.rustText,
+            dica: 'Marcado como Perdido pelo vendedor. Valor da proposta.' },
           { t: 'Em aberto', v: String(emAberto.length), c: T.ink },
           { t: 'Valor em aberto', v: moeda(soma(emAberto, 'valor_proposta')), c: T.inkDim },
           { t: 'Sem classificação', v: String(semClass), c: semClass ? T.amberText : T.inkFaint },
