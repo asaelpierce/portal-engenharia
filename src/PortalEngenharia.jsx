@@ -21356,7 +21356,11 @@ function Custeio() {
       }
       {
         const SEM_PROBLEMA = ['bate', 'coberto por PI/OP', 'revenda (vendido como veio)'];
-        const cx = await lerTudo('v_custeio_compra_x_apontado_sinal');
+        // só o que o selo e o painel usam: o que não bate e passa de R$ 500
+        // (eram 17 mil linhas, baixadas de mil em mil -- estourava o tempo)
+        const cx = await lerTudo('v_custeio_compra_x_apontado_sinal', q => q
+          .not('sinal', 'in', '("bate","coberto por PI/OP","revenda (vendido como veio)")')
+          .or('valor_divergente.gte.500,valor_divergente.lte.-500'));
         const m2 = {};
         (cx || []).filter(x => !SEM_PROBLEMA.includes(x.sinal) && Math.abs(Number(x.valor_divergente) || 0) >= 500)
           .forEach(x => { (m2[x.br] = m2[x.br] || []).push(x); });
