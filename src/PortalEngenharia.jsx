@@ -26296,15 +26296,16 @@ function CriarBR({ currentUser }) {
   const [sucesso, setSucesso] = useState(null);
   const [historico, setHistorico] = useState([]);
   const [atualizandoHist, setAtualizandoHist] = useState(false);
+  const [resultadoSync, setResultadoSync] = useState(null);
   const atualizarDoSankhya = async () => {
-    setAtualizandoHist(true);
+    setAtualizandoHist(true); setResultadoSync(null);
     try {
       const { data, error } = await supabase.rpc('fn_atualizar_brs_criados_portal');
       if (error) throw error;
-      alert(data?.mensagem || 'Atualizado.');
+      setResultadoSync(data);
       const { data: novo } = await supabase.from('brs_criados_portal').select('*').order('criado_em', { ascending: false }).limit(100);
       setHistorico(novo || []);
-    } catch (err) { alert('Erro: ' + (err.message || err)); }
+    } catch (err) { setResultadoSync({ mensagem: 'Erro: ' + (err.message || err), atualizados: -1 }); }
     setAtualizandoHist(false);
   };
 
@@ -26560,6 +26561,48 @@ function CriarBR({ currentUser }) {
             {atualizandoHist ? 'Atualizando...' : 'Atualizar do Sankhya'}
           </button>
         </div>
+        {resultadoSync && (
+          <div style={{ marginBottom: 12, padding: '10px 14px', borderRadius: 8, fontSize: 12,
+            background: resultadoSync.atualizados > 0 ? T.oliveSoft : resultadoSync.atualizados === 0 ? T.panelAlt : T.rustSoft,
+            border: '1px solid ' + (resultadoSync.atualizados > 0 ? T.oliveText : resultadoSync.atualizados === 0 ? T.line : T.rustText),
+            color: resultadoSync.atualizados > 0 ? T.oliveText : resultadoSync.atualizados === 0 ? T.inkDim : T.rustText }}>
+            <div style={{ fontWeight: 700, marginBottom: resultadoSync.detalhes?.length > 0 ? 8 : 0 }}>
+              {resultadoSync.mensagem}
+            </div>
+            {resultadoSync.detalhes?.length > 0 && (
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11.5 }}>
+                <thead><tr>
+                  <th style={{ textAlign: 'left', padding: '4px 8px', fontWeight: 600 }}>BR</th>
+                  <th style={{ textAlign: 'left', padding: '4px 8px', fontWeight: 600 }}>O que mudou</th>
+                  <th style={{ textAlign: 'left', padding: '4px 8px', fontWeight: 600 }}>Antes</th>
+                  <th style={{ textAlign: 'left', padding: '4px 8px', fontWeight: 600 }}>Agora</th>
+                </tr></thead>
+                <tbody>
+                  {resultadoSync.detalhes.map((d, i) => (
+                    <React.Fragment key={i}>
+                      {d.mudou_cliente && (
+                        <tr style={{ borderTop: '1px solid ' + T.line }}>
+                          <td style={{ padding: '4px 8px', fontWeight: 600 }}>{d.br}</td>
+                          <td style={{ padding: '4px 8px' }}>Cliente</td>
+                          <td style={{ padding: '4px 8px', color: T.rustText }}>{d.cliente_antes || '(vazio)'}</td>
+                          <td style={{ padding: '4px 8px', color: T.oliveText }}>{d.cliente_depois}</td>
+                        </tr>
+                      )}
+                      {d.mudou_vendedor && (
+                        <tr style={{ borderTop: d.mudou_cliente ? 'none' : '1px solid ' + T.line }}>
+                          <td style={{ padding: '4px 8px', fontWeight: 600 }}>{d.mudou_cliente ? '' : d.br}</td>
+                          <td style={{ padding: '4px 8px' }}>Vendedor</td>
+                          <td style={{ padding: '4px 8px', color: T.rustText }}>{d.vendedor_antes || '(vazio)'}</td>
+                          <td style={{ padding: '4px 8px', color: T.oliveText }}>{d.vendedor_depois}</td>
+                        </tr>
+                      )}
+                    </React.Fragment>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        )}
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
           <thead>
             <tr style={{ background: T.panelAlt, borderBottom: `1px solid ${T.line}` }}>
