@@ -7693,9 +7693,11 @@ function FollowUpComercial({ currentUser }) {
                 <tr><td colSpan={11} style={{ padding: 28, textAlign: 'center', color: T.inkFaint }}>
                   Nenhum BR aqui ainda. Eles aparecem assim que forem criados na tela Criar BR.
                 </td></tr>
-              ) : lista.map(l => {
+              ) : lista.map((l, iLinha) => {
                 return (
-                  <React.Fragment key={l.br}>
+                  // chave com a posição: BR repetido na base não pode deixar linha
+                  // "fantasma" de um filtro anterior na tela
+                  <React.Fragment key={`${l.br}-${iLinha}`}>
                     <tr style={{ borderBottom: `1px solid ${T.lineSoft}`,
                       background: ['faturado','pedido confirmado'].includes(l.situacao) ? `${T.oliveSoft}44`
                                : l.situacao === 'perdido' ? T.panelAlt : 'transparent',
