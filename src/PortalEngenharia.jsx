@@ -20702,7 +20702,7 @@ function ApontarHoras({ setores, apontamentos, onSalvo }) {
 }
 
 function Custeio() {
-  const [aba, setAba] = useState('produto');
+  const [aba, setAba] = useState('analise');
   const [produtos, setProdutos] = useState([]);
   const [brs, setBrs] = useState([]);
   const [lotes, setLotes] = useState([]);
@@ -21020,7 +21020,10 @@ function Custeio() {
 
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', gap: 2 }}>
-          {[{ id: 'produto', l: 'Por produto' }, { id: 'br', l: 'Por projeto (BR)' }, { id: 'margem', l: 'Margem por venda' }, { id: 'orcado', l: 'Custo por projeto' }, { id: 'cif', l: 'Despesa fixa (CIF)' }, { id: 'insumo', l: 'Insumos' }, { id: 'rateado', l: 'Rateado' }, { id: 'folha', l: 'Folha da produção' }, { id: 'horas', l: 'Horas apontadas' }, { id: 'consolidado', l: 'Consolidação' }, { id: 'absorcao', l: 'Custo por absorção' }, { id: 'analise', l: 'Análise' }, { id: 'qualidade', l: (() => {
+          {/* 13 abas viraram 6 (out/2026). Consolidação, Custo por absorção, Margem por venda e
+              Por projeto (BR) davam margens diferentes para o mesmo projeto (31%, 56%, 59%) —
+              a Análise é a conta completa. O código delas continua abaixo, só saiu do menu. */}
+          {[{ id: 'analise', l: 'Análise' }, { id: 'orcado', l: 'Custo por projeto' }, { id: 'produto', l: 'Custo por produto' }, { id: 'cif', l: 'Despesa fixa (CIF)' }, { id: 'maodeobra', l: 'Mão de obra' }, { id: 'qualidade', l: (() => {
             const ult = verif.length ? verif.reduce((m, v) => v.executado_em > m ? v.executado_em : m, '') : null;
             const falhas = ult ? verif.filter(v => v.executado_em === ult && !v.passou).length : 0;
             return falhas ? `Qualidade dos dados (${falhas})` : 'Qualidade dos dados';
@@ -21919,7 +21922,7 @@ function Custeio() {
         );
       })()}
 
-      {aba === 'insumo' && (() => {
+      {aba === 'cif' && (() => {
         const anos = [...new Set(cifMes.map(m => m.ano))].sort().reverse();
         const doAno = cifMes.filter(m => m.ano === anoCif);
         const meses = [...new Set(doAno.map(m => m.competencia))].sort();
@@ -22007,7 +22010,7 @@ function Custeio() {
         );
       })()}
 
-      {aba === 'rateado' && (() => {
+      {aba === 'cif' && (() => {
         const anos = [...new Set(cifMes.map(m => m.ano))].sort().reverse();
         const doAno = cifMes.filter(m => m.ano === anoCif);
         const meses = [...new Set(doAno.map(m => m.competencia))].sort();
@@ -22162,7 +22165,7 @@ function Custeio() {
         );
       })()}
 
-      {aba === 'folha' && (() => {
+      {aba === 'maodeobra' && (() => {
         const anos = [...new Set(cifMes.map(m => m.ano))].sort().reverse();
         const doAno = cifMes.filter(m => m.ano === anoCif);
         const meses = [...new Set(doAno.map(m => m.competencia))].sort();
@@ -22268,7 +22271,7 @@ function Custeio() {
         );
       })()}
 
-      {aba === 'horas' && (() => {
+      {aba === 'maodeobra' && (() => {
         // HORAS APONTADAS. A hora vem de DHFINAL - DHINICIAL (o campo HRSTRAB
         // esta nulo em quase tudo) e e RATEADA entre as OPs simultaneas: a
         // equipe trabalha em varios projetos ao mesmo tempo, entao somar as
