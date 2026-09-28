@@ -6843,8 +6843,13 @@ function FollowUpComercial({ currentUser }) {
     .filter(l => contem(l.br, filtros.br))
     .filter(l => contem(l.cliente, filtros.cliente))
     .filter(l => !filtros.vendedor || l.vendedor === filtros.vendedor)
-    .filter(l => !filtros.estC || (filtros.estC === '(vazio)'
-      ? !l.estagio_comercial : l.estagio_comercial === filtros.estC))
+    // No estágio comercial, "pedido em carteira" e "já faturado" filtram pela
+    // situação do Sankhya: tem pedido e ainda sem nota × já tem nota.
+    .filter(l => !filtros.estC
+      || (filtros.estC === '(carteira)' ? l.situacao === 'pedido confirmado'
+        : filtros.estC === '(faturado)' ? l.situacao === 'faturado'
+        : filtros.estC === '(vazio)' ? !l.estagio_comercial
+        : l.estagio_comercial === filtros.estC))
     .filter(l => !filtros.estV || (filtros.estV === '(vazio)'
       ? !l.estagio_vendedor : l.estagio_vendedor === filtros.estV))
     .sort((a, b) => (Number(b.valor_proposta) || 0) - (Number(a.valor_proposta) || 0)
@@ -6853,6 +6858,7 @@ function FollowUpComercial({ currentUser }) {
   const soma = (arr, c) => arr.reduce((s, r) => s + (Number(r[c]) || 0), 0);
   const emAberto = lista.filter(l => l.situacao === 'em aberto');
   const confirmados = lista.filter(l => l.situacao === 'pedido confirmado');
+  const faturados = lista.filter(l => l.situacao === 'faturado');
   const semClass = emAberto.filter(l => !l.estagio_comercial && !l.estagio_vendedor).length;
 
   // Funil por vendedor pelo VALOR CHEIO, nao pelo ponderado. O peso do estagio
@@ -7167,12 +7173,15 @@ function FollowUpComercial({ currentUser }) {
 
       <div style={{ display: 'grid', gap: 8, gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))' }}>
         {[
-          { t: 'Pedido em carteira', v: moeda(soma(confirmados, 'valor_proposta')), c: T.oliveText },
+          { t: `Pedido em carteira · ${confirmados.length} BRs`, v: moeda(soma(confirmados, 'valor_proposta')), c: T.oliveText,
+            dica: 'Tem pedido de venda e ainda não tem nota fiscal. Valor da proposta.' },
+          { t: `Já faturado · ${faturados.length} BRs`, v: moeda(soma(faturados, 'receita_faturada')), c: T.blueText,
+            dica: 'Já tem nota fiscal de venda. Valor faturado líquido (o que saiu em nota), não o da proposta.' },
           { t: 'Em aberto', v: String(emAberto.length), c: T.ink },
           { t: 'Valor em aberto', v: moeda(soma(emAberto, 'valor_proposta')), c: T.inkDim },
           { t: 'Sem classificação', v: String(semClass), c: semClass ? T.amberText : T.inkFaint },
         ].map(k => (
-          <div key={k.t} title={k.ajuda || ''}
+          <div key={k.t} title={k.ajuda || k.dica || ''}
             style={{ background: T.panel, border: `1px solid ${k.ajuda ? T.amberText : T.line}`, borderRadius: 8,
               padding: '9px 12px', cursor: k.ajuda ? 'help' : 'default' }}>
             <div style={{ fontSize: 10.5, color: k.ajuda ? T.amberText : T.inkFaint }}>{k.t}</div>
@@ -7670,7 +7679,8 @@ function FollowUpComercial({ currentUser }) {
                       <option value="">todos</option>
                       {f.estagio
                         ? [...estagios.map(e2 => ({ v: e2.estagio, r: e2.rotulo })),
-                           { v: '(vazio)', r: 'sem classificação' }].map(o => (
+                           { v: '(vazio)', r: 'sem classificação' },
+                           ...(f.k === 'estC' ? [{ v: '(carteira)', r: 'pedido em carteira' }, { v: '(faturado)', r: 'já faturado' }] : [])].map(o => (
                             <option key={o.v} value={o.v}>{o.r}</option>))
                         : (f.ops || []).map(o => <option key={o} value={o}>{o}</option>)}
                     </select>
@@ -7711,7 +7721,13 @@ function FollowUpComercial({ currentUser }) {
                         {l.margin == null ? '—' : `${Number(l.margin).toFixed(1)}%`}
                       </td>
                       <td style={{ padding: '8px 12px' }}>
-                        {l.tem_pedido ? (
+                        {l.situacao === 'faturado' ? (
+                          <span style={{ fontSize: 11, color: T.blueText, background: T.blueSoft,
+                            padding: '3px 8px', borderRadius: 4, whiteSpace: 'nowrap' }}
+                            title="Já tem nota fiscal de venda">
+                            Faturado{Number(l.receita_faturada) > 0 ? ` · ${moeda(Number(l.receita_faturada))}` : ''}
+                          </span>
+                        ) : l.tem_pedido ? (
                           <span style={{ fontSize: 11, color: T.oliveText, background: T.oliveSoft,
                             padding: '3px 8px', borderRadius: 4, whiteSpace: 'nowrap' }}
                             title={l.primeiro_pedido ? `Pedido de venda em ${new Date(l.primeiro_pedido + 'T00:00:00').toLocaleDateString('pt-BR')}${l.valor_pedido ? ` — ${moeda(l.valor_pedido)}` : ''}` : 'Pedido de venda em carteira'}>
