@@ -20761,6 +20761,8 @@ function Custeio() {
   // saiu para a OP = apontado na OP + sobra que voltou da OP. Busca sob demanda.
   const [opMov, setOpMov] = useState({ chave: '', linhas: [] });
   const [opMovTodas, setOpMovTodas] = useState(false);
+  // Conferência consumo real das OPs (nota 1600) × material do custeio
+  const [consumoXCusteio, setConsumoXCusteio] = useState([]);
   const [brOrc, setBrOrc] = useState('');
   const [fatFiltro, setFatFiltro] = useState('todos'); // todos | faturados | nao_faturados
   const [caixaAberta, setCaixaAberta] = useState(null); // material | servicos | frete | outros
@@ -20870,6 +20872,9 @@ function Custeio() {
       const { data } = await supabase.from('v_custeio_op_movimento_x_apontado')
         .select('*').ilike('br', `%${termo}%`).limit(800);
       if (vivo) setOpMov({ chave: termo, linhas: data || [] });
+      const { data: cx } = await supabase.from('v_custeio_consumo_x_custeio')
+        .select('*').ilike('br', `%${termo}%`).limit(20);
+      if (vivo) setConsumoXCusteio(cx || []);
     })();
     return () => { vivo = false; };
   }, [brOrc]);
@@ -23478,7 +23483,8 @@ function Custeio() {
               const opsProblema = opsDoBr.filter(o => o.situacao !== 'fecha');
               const itensD = (cxa[brSel] || []).slice().sort((a, b) => Math.abs(Number(b.valor_divergente)) - Math.abs(Number(a.valor_divergente)));
               const cruz = cxaCruz.filter(c => c.br_sobra === brSel || c.br_falta === brSel);
-              if (!itensD.length && !cruz.length && !opsDoBr.length) return null;
+              const cxp = consumoXCusteio.find(c => c.br === brSel);
+              if (!itensD.length && !cruz.length && !opsDoBr.length && !cxp) return null;
               // Regra (28/09/2026): o que entrou (compra, ou saída MP -> Processamento)
               // tem que ser igual ao apontado + o que voltou ao estoque.
               const EXPL = {
@@ -23495,6 +23501,21 @@ function Custeio() {
                     <span>⚠ Compra × apontado — {brSel}</span>
                     <span style={{ fontSize: 11, fontWeight: 400, color: T.inkFaint }}>tem que fechar: entrou (compra ou saída do estoque) = apontado nas OPs + voltou ao estoque</span>
                   </div>
+                  {cxp && Number(cxp.consumo_op) > 0 && (() => {
+                    const usa = cxp.metodo === 'consumo real das OPs';
+                    const cor = usa ? T.blueText : cxp.diverge ? T.rustText : T.oliveText;
+                    return (
+                      <div style={{ padding: '10px 14px', borderBottom: `1px solid ${T.line}`, display: 'flex', gap: 18, flexWrap: 'wrap', alignItems: 'baseline', fontSize: 11.5 }}>
+                        <div><span style={{ color: T.inkFaint }}>Material no custeio: </span><strong>{moeda(Number(cxp.material_custeio) || 0)}</strong></div>
+                        <div><span style={{ color: T.inkFaint }}>Consumo real das OPs (nota de apontamento): </span><strong>{moeda(Number(cxp.consumo_op) || 0)}</strong>
+                          <span style={{ color: T.inkFaint }}> · {cxp.ops} OP(s)</span></div>
+                        <span style={{ fontSize: 10.5, fontWeight: 700, color: cor, background: usa ? T.blueSoft : cxp.diverge ? T.rustSoft : T.oliveSoft, padding: '2px 8px', borderRadius: 4 }}>
+                          {usa ? `usa o consumo real (antes: ${moeda(Number(cxp.material_antes) || 0)})`
+                               : cxp.diverge ? `diverge ${cxp.divergencia_pct}% do consumo — conferir` : 'bate com o consumo'}
+                        </span>
+                      </div>
+                    );
+                  })()}
                   {itensD.length > 0 && (
                     <div style={{ overflowX: 'auto' }}>
                       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11.5 }}>
