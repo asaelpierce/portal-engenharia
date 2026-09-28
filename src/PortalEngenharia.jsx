@@ -27106,6 +27106,35 @@ function CriarBR({ currentUser }) {
                 </tbody>
               </table>
             )}
+            {resultadoSync.sem_orcamento?.length > 0 && (
+              <div style={{ marginTop: 10, padding: '8px 10px', borderRadius: 6, background: T.amberSoft, color: T.amberText }}>
+                <div style={{ fontWeight: 700, marginBottom: 4 }}>
+                  {resultadoSync.sem_orcamento.length} BR(s) ainda sem orçamento no Sankhya
+                </div>
+                <div style={{ fontSize: 11, marginBottom: 6 }}>
+                  O projeto existe, mas nenhum orçamento foi lançado para ele. Vendedor e cliente vêm do orçamento —
+                  enquanto ele não existir, não há o que atualizar, e o BR não tem proposta no Follow Up.
+                </div>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11.5 }}>
+                  <thead><tr>
+                    {['BR', 'Cliente', 'Vendedor', 'Criado por', 'Criado em'].map(h => (
+                      <th key={h} style={{ textAlign: 'left', padding: '3px 8px', fontWeight: 600 }}>{h}</th>
+                    ))}
+                  </tr></thead>
+                  <tbody>
+                    {resultadoSync.sem_orcamento.map((s, i) => (
+                      <tr key={i} style={{ borderTop: '1px solid ' + T.line }}>
+                        <td style={{ padding: '3px 8px', fontWeight: 600, whiteSpace: 'nowrap' }}>{s.br}</td>
+                        <td style={{ padding: '3px 8px' }}>{s.cliente}</td>
+                        <td style={{ padding: '3px 8px', whiteSpace: 'nowrap' }}>{s.vendedor}</td>
+                        <td style={{ padding: '3px 8px', whiteSpace: 'nowrap' }}>{s.criado_por}</td>
+                        <td style={{ padding: '3px 8px', whiteSpace: 'nowrap' }}>{s.criado_em ? new Date(s.criado_em).toLocaleDateString('pt-BR') : ''}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         )}
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
