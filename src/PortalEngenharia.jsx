@@ -606,6 +606,7 @@ function PortalConteudo({ currentUser, session }) {
           {renderTab('carteira_estoque', <TabErrorBoundary tab="Carteira x Estoque"><CarteiraEstoque /></TabErrorBoundary>)}
           {renderTab('preco_compra', <TabErrorBoundary tab="Preço de Compra"><PrecoCompra /></TabErrorBoundary>)}
           {renderTab('custeio', <TabErrorBoundary tab="Custeio"><Custeio /></TabErrorBoundary>)}
+          {renderTab('custeio_op', <TabErrorBoundary tab="Custeio por OP"><CusteioPorOP /></TabErrorBoundary>)}
           {renderTab('custeio_plano', <TabErrorBoundary tab="Custeio - Plano"><CusteioPlano /></TabErrorBoundary>)}
           {renderTab('estoque_ocs', <TabErrorBoundary tab="Estoque x OCs"><RelatorioEstoqueOCs /></TabErrorBoundary>)}
           {renderTab('almoxarifado', <TabErrorBoundary tab="Almoxarifado"><Almoxarifado currentUser={currentUser} /></TabErrorBoundary>)}
@@ -671,6 +672,7 @@ function Sidebar({ view, setView, pendCount, papel, telasPermitidas }) {
     { id: 'carteira_estoque', label: 'Carteira x Estoque',  icon: Package },
     { id: 'preco_compra',  label: 'Preço de Compra',        icon: DollarSign },
     { id: 'custeio',       label: 'Custeio',                icon: DollarSign },
+    { id: 'custeio_op',    label: 'Custeio por OP (teste)', icon: DollarSign },
     { id: 'custeio_plano', label: 'Custeio — Plano',      icon: ClipboardList },
     { id: 'estoque_ocs',  label: 'Estoque x OCs',        icon: Package },
     { id: 'almoxarifado', label: 'Almoxarifado',           icon: Package },
@@ -695,7 +697,10 @@ function Sidebar({ view, setView, pendCount, papel, telasPermitidas }) {
     { id: 'auditoria',    label: 'Auditoria',              icon: History },
     { id: 'integracao',   label: 'Integrações',            icon: Workflow },
   ];
-  const permitidos = telasPermitidas || ACESSO_LEGADO[papel];
+  const permitidos0 = telasPermitidas || ACESSO_LEGADO[papel];
+  // Custeio por OP (modelo de teste) acompanha a permissão do Custeio
+  const permitidos = permitidos0 && permitidos0.includes('custeio') && !permitidos0.includes('custeio_op')
+    ? [...permitidos0, 'custeio_op'] : permitidos0;
   const items = permitidos ? todosItems.filter(i => permitidos.includes(i.id)) : todosItems;
   return (
     // O menu tem 20+ itens e crescia junto com a pagina: quem estava no fim da
@@ -20943,6 +20948,275 @@ function ApontarHoras({ setores, apontamentos, onSalvo }) {
   );
 }
 
+/* ============================================================================
+   CUSTEIO POR OP — MODELO DE TESTE (28/09/2026)
+   Tela separada do Custeio por projeto, para não mexer na lógica dele.
+   Cada linha é uma OP:
+     material    = baixa real da OP (notas de apontamento TOP 1600, custo médio)
+     mão de obra = horas apontadas na OP × custo da hora do mês
+     overhead    = CIF + benefícios + insumos do mês, rateado pelas OPs do mês
+     receita     = quantidade produzida × preço do produto no pedido do projeto
+   Fontes: v_custeio_op_analise, v_custeio_op_itens, v_custeio_mao_de_obra,
+   v_custeio_op_movimento_x_apontado.
+============================================================================ */
+function CusteioPorOP() {
+  const [linhas, setLinhas] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [erro, setErro] = useState(null);
+  const [comp, setComp] = useState('todas');
+  const [tipo, setTipo] = useState('final');
+  const [busca, setBusca] = useState('');
+  const [ordem, setOrdem] = useState({ c: 'custo_total', asc: false });
+  const [aberta, setAberta] = useState(null);
+  const [det, setDet] = useState(null);
+  const moeda = (v) => fmtMoedaCompacta(v);
+  const num = (v, d = 1) => (Number(v) || 0).toLocaleString('pt-BR', { maximumFractionDigits: d });
+  const fmtD = (d) => d ? String(d).slice(0, 10).split('-').reverse().join('/') : '—';
+
+  useEffect(() => {
+    (async () => {
+      try {
+        let todas = [];
+        for (let de = 0; ; de += 1000) {
+          const { data, error } = await supabase.from('v_custeio_op_analise').select('*')
+            .gte('competencia', '2026-01').range(de, de + 999);
+          if (error) throw error;
+          todas = todas.concat(data || []);
+          if (!data || data.length < 1000) break;
+        }
+        setLinhas(todas);
+      } catch (e) { setErro(e.message || String(e)); }
+      setLoading(false);
+    })();
+  }, []);
+
+  const abrir = async (op) => {
+    if (aberta === op) { setAberta(null); setDet(null); return; }
+    setAberta(op); setDet(null);
+    const [it, mo, mv] = await Promise.all([
+      supabase.from('v_custeio_op_itens').select('*').eq('op', op).order('dtneg'),
+      supabase.from('v_custeio_mao_de_obra').select('competencia,setor_nome,horas,pessoas,custo_mao_obra,custo_hora').eq('idiproc', op),
+      supabase.from('v_custeio_op_movimento_x_apontado').select('*').eq('op', op),
+    ]);
+    setDet({ itens: it.data || [], mo: mo.data || [], mov: mv.data || [] });
+  };
+
+  const comps = [...new Set(linhas.map(l => l.competencia).filter(Boolean))].sort().reverse();
+  const termo = busca.trim().toLowerCase();
+  const lista = linhas
+    .filter(l => comp === 'todas' || l.competencia === comp)
+    .filter(l => tipo === 'todos' || (tipo === 'final' ? l.tipo === 'final' : l.tipo !== 'final'))
+    .filter(l => !termo || [l.op, l.br, l.cliente, l.produto, l.vendedor].some(x => String(x ?? '').toLowerCase().includes(termo)))
+    .sort((a, b) => {
+      const va = a[ordem.c], vb = b[ordem.c];
+      const r = (typeof va === 'number' || !isNaN(Number(va))) && va !== null && vb !== null
+        ? Number(va) - Number(vb) : String(va ?? '').localeCompare(String(vb ?? ''));
+      return ordem.asc ? r : -r;
+    });
+  const soma = (c) => lista.reduce((s, l) => s + (Number(l[c]) || 0), 0);
+  const rec = soma('receita_estimada'), custo = soma('custo_total');
+
+  if (loading) return <div style={{ padding: 40, textAlign: 'center', color: T.inkFaint }}>Carregando as OPs…</div>;
+  if (erro) return <div style={{ padding: 20, color: T.rustText }}>Erro ao carregar: {erro}</div>;
+
+  const COLS = [
+    { c: 'op', t: 'OP' }, { c: 'br', t: 'BR' }, { c: 'cliente', t: 'Cliente' }, { c: 'produto', t: 'Produto' },
+    { c: 'qtd_produzida', t: 'Qtd', r: true }, { c: 'ultimo_apontamento', t: 'Apontado' },
+    { c: 'material', t: 'Material', r: true }, { c: 'mao_obra', t: 'Mão de obra', r: true },
+    { c: 'overhead', t: 'Overhead', r: true }, { c: 'custo_total', t: 'Custo total', r: true },
+    { c: 'custo_unitario', t: 'Custo/un.', r: true }, { c: 'receita_estimada', t: 'Receita', r: true },
+    { c: 'margem_pct', t: 'Margem', r: true },
+  ];
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14, paddingTop: 14 }}>
+      <div style={{ background: T.amberSoft, color: T.amberText, borderRadius: 8, padding: '10px 14px', fontSize: 12, lineHeight: 1.5 }}>
+        <strong>Modelo de teste — custeio por OP.</strong> Não altera o Custeio por projeto. Cada linha é uma OP de 2026:
+        <strong> material</strong> = baixa real da nota de apontamento (custo médio) ·
+        <strong> mão de obra</strong> = horas apontadas × custo da hora do mês ·
+        <strong> overhead</strong> = o do mês, rateado pelas OPs pela base material + mão de obra ·
+        <strong> receita</strong> = quantidade produzida × preço do produto no pedido. É o valor do que a OP produziu, não o que já faturou.
+      </div>
+
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+        <select value={comp} onChange={e => setComp(e.target.value)}
+          style={{ fontFamily: 'inherit', fontSize: 12.5, padding: '6px 10px', borderRadius: 6, border: `1px solid ${T.line}`, background: T.panel }}>
+          <option value="todas">2026 inteiro</option>
+          {comps.map(c => <option key={c} value={c}>{c.slice(5)}/{c.slice(0, 4)}</option>)}
+        </select>
+        <select value={tipo} onChange={e => setTipo(e.target.value)}
+          style={{ fontFamily: 'inherit', fontSize: 12.5, padding: '6px 10px', borderRadius: 6, border: `1px solid ${T.line}`, background: T.panel }}>
+          <option value="final">OPs de produto final</option>
+          <option value="outras">Intermediárias e sem apontamento de produção</option>
+          <option value="todos">Todas as OPs</option>
+        </select>
+        <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="buscar OP, BR, cliente, produto, vendedor"
+          style={{ fontFamily: 'inherit', fontSize: 12.5, padding: '6px 10px', borderRadius: 6, border: `1px solid ${T.line}`, minWidth: 280 }} />
+        <span style={{ fontSize: 11.5, color: T.inkFaint }}>{lista.length} OPs</span>
+      </div>
+
+      <div style={{ display: 'grid', gap: 8, gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))' }}>
+        {[
+          { t: 'Receita estimada', v: moeda(rec), c: T.ink },
+          { t: 'Material', v: moeda(soma('material')), c: T.inkDim },
+          { t: 'Mão de obra', v: moeda(soma('mao_obra')), c: T.inkDim, s: `${num(soma('horas'), 0)} h` },
+          { t: 'Overhead', v: moeda(soma('overhead')), c: T.inkDim },
+          { t: 'Custo total', v: moeda(custo), c: T.ink },
+          { t: 'Margem', v: rec ? `${num(100 * (rec - custo) / rec)}%` : '—', c: rec - custo >= 0 ? T.oliveText : T.rustText, s: rec ? moeda(rec - custo) : '' },
+        ].map(k => (
+          <div key={k.t} style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 8, padding: '9px 12px' }}>
+            <div style={{ fontSize: 10.5, color: T.inkFaint }}>{k.t}</div>
+            <div style={{ fontSize: 18, fontWeight: 700, color: k.c, fontVariantNumeric: 'tabular-nums' }}>{k.v}</div>
+            {k.s && <div style={{ fontSize: 10.5, color: T.inkFaint }}>{k.s}</div>}
+          </div>
+        ))}
+      </div>
+
+      <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11.5 }}>
+            <thead><tr style={{ background: T.panelAlt }}>
+              {COLS.map(col => (
+                <th key={col.c} onClick={() => setOrdem(o => ({ c: col.c, asc: o.c === col.c ? !o.asc : false }))}
+                  style={{ padding: '8px 10px', fontSize: 10.5, fontWeight: 600, color: ordem.c === col.c ? T.ink : T.inkFaint,
+                    textAlign: col.r ? 'right' : 'left', whiteSpace: 'nowrap', cursor: 'pointer', userSelect: 'none' }}>
+                  {col.t}{ordem.c === col.c ? (ordem.asc ? ' ▲' : ' ▼') : ''}
+                </th>
+              ))}
+            </tr></thead>
+            <tbody>
+              {lista.slice(0, 400).map((l, i) => (
+                <React.Fragment key={`${l.op}-${i}`}>
+                  <tr onClick={() => abrir(l.op)}
+                    style={{ borderTop: `1px solid ${T.lineSoft}`, cursor: 'pointer', background: aberta === l.op ? T.panelAlt : 'transparent' }}>
+                    <td style={{ padding: '7px 10px', fontWeight: 700, whiteSpace: 'nowrap' }}>{l.op}</td>
+                    <td style={{ padding: '7px 10px', whiteSpace: 'nowrap' }}>{l.br || '—'}</td>
+                    <td style={{ padding: '7px 10px', maxWidth: 170, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={l.cliente}>{l.cliente || '—'}</td>
+                    <td style={{ padding: '7px 10px', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={l.produto}>
+                      {l.produto || '—'}
+                      {l.tipo !== 'final' && <span style={{ marginLeft: 6, fontSize: 9.5, color: T.amberText }}>{l.tipo}</span>}
+                    </td>
+                    <td style={{ padding: '7px 10px', textAlign: 'right' }}>{num(l.qtd_produzida)}</td>
+                    <td style={{ padding: '7px 10px', whiteSpace: 'nowrap', color: T.inkDim }}>{fmtD(l.ultimo_apontamento)}</td>
+                    <td style={{ padding: '7px 10px', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{moeda(Number(l.material) || 0)}</td>
+                    <td style={{ padding: '7px 10px', textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: l.sem_horas ? T.amberText : T.ink }}
+                      title={l.sem_horas ? 'Nenhuma hora apontada nesta OP' : `${num(l.horas)} h`}>
+                      {l.sem_horas ? 'sem horas' : moeda(Number(l.mao_obra) || 0)}
+                    </td>
+                    <td style={{ padding: '7px 10px', textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: T.inkDim }}>{moeda(Number(l.overhead) || 0)}</td>
+                    <td style={{ padding: '7px 10px', textAlign: 'right', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{moeda(Number(l.custo_total) || 0)}</td>
+                    <td style={{ padding: '7px 10px', textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: T.inkDim }}>{l.custo_unitario != null ? moeda(Number(l.custo_unitario)) : '—'}</td>
+                    <td style={{ padding: '7px 10px', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{l.receita_estimada != null ? moeda(Number(l.receita_estimada)) : '—'}</td>
+                    <td style={{ padding: '7px 10px', textAlign: 'right', fontWeight: 700,
+                      color: l.margem_pct == null ? T.inkFaint : Number(l.margem_pct) < 0 ? T.rustText : Number(l.margem_pct) < 25 ? T.amberText : T.oliveText }}>
+                      {l.margem_pct == null ? '—' : `${num(l.margem_pct)}%`}
+                    </td>
+                  </tr>
+                  {aberta === l.op && (
+                    <tr><td colSpan={COLS.length} style={{ padding: 0, background: T.panelAlt }}>
+                      {!det ? <div style={{ padding: 14, fontSize: 12, color: T.inkFaint }}>Carregando a OP…</div> : (() => {
+                        const prod = det.itens.filter(x => x.papel === 'produzido');
+                        const cons = det.itens.filter(x => x.papel === 'consumo').sort((a, b) => (Number(b.valor) || 0) - (Number(a.valor) || 0));
+                        const tot = (Number(l.custo_total) || 0) || 1;
+                        const partes = [
+                          { r: 'Material', v: Number(l.material) || 0, c: T.gold },
+                          { r: 'Mão de obra', v: Number(l.mao_obra) || 0, c: T.blue },
+                          { r: 'Overhead', v: Number(l.overhead) || 0, c: T.inkFaint },
+                        ];
+                        const bloco = { background: T.panel, border: `1px solid ${T.line}`, borderRadius: 8, padding: 10 };
+                        return (
+                          <div style={{ padding: 14, display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))' }}>
+                            <div style={bloco}>
+                              <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}>Conta da OP {l.op}</div>
+                              <div style={{ display: 'flex', height: 10, borderRadius: 5, overflow: 'hidden', marginBottom: 8 }}>
+                                {partes.map(p => <div key={p.r} style={{ width: `${100 * p.v / tot}%`, background: p.c }} title={`${p.r}: ${moeda(p.v)}`} />)}
+                              </div>
+                              {[
+                                ['Receita estimada', l.receita_estimada != null ? `${num(l.qtd_produzida)} × ${moeda(Number(l.preco_unitario))} = ${moeda(Number(l.receita_estimada))}` : 'produto sem preço no pedido do projeto'],
+                                ['− Material consumido', moeda(Number(l.material) || 0)],
+                                ['− Mão de obra', l.sem_horas ? 'nenhuma hora apontada' : `${num(l.horas)} h = ${moeda(Number(l.mao_obra) || 0)}`],
+                                ['− Overhead do mês', moeda(Number(l.overhead) || 0)],
+                                ['= Margem', l.margem != null ? `${moeda(Number(l.margem))} (${num(l.margem_pct)}%)` : '—'],
+                              ].map(([a, b]) => (
+                                <div key={a} style={{ display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 11.5, padding: '3px 0',
+                                  fontWeight: a.startsWith('=') ? 700 : 400, borderTop: a.startsWith('=') ? `1px solid ${T.line}` : 'none' }}>
+                                  <span style={{ color: T.inkDim }}>{a}</span><span>{b}</span>
+                                </div>
+                              ))}
+                              <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 6 }}>
+                                Projeto {l.br || '—'} · {l.vendedor || ''} · apontada de {fmtD(l.primeiro_apontamento)} a {fmtD(l.ultimo_apontamento)}
+                                {l.qtd_produzir ? ` · OP para ${num(l.qtd_produzir)} un.` : ''}
+                              </div>
+                            </div>
+
+                            <div style={bloco}>
+                              <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}>Material consumido ({cons.length} itens)</div>
+                              <div style={{ maxHeight: 220, overflowY: 'auto' }}>
+                                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+                                  <tbody>
+                                    {cons.map((x, j) => (
+                                      <tr key={j} style={{ borderTop: `1px solid ${T.lineSoft}` }}>
+                                        <td style={{ padding: '3px 4px', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={x.descr}>
+                                          {x.descr || x.cod_prod}{x.rateado && <span style={{ fontSize: 9.5, color: T.amberText }}> · insumo</span>}
+                                        </td>
+                                        <td style={{ padding: '3px 4px', textAlign: 'right', whiteSpace: 'nowrap' }}>{num(x.quantidade, 2)}</td>
+                                        <td style={{ padding: '3px 4px', textAlign: 'right', whiteSpace: 'nowrap', fontWeight: 600 }}>{moeda(Number(x.valor) || 0)}</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                              {prod.length > 0 && (
+                                <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 6 }}>
+                                  Produziu: {prod.map(p => `${num(p.quantidade)} × ${p.descr || p.cod_prod}`).join(' · ')}
+                                </div>
+                              )}
+                            </div>
+
+                            <div style={bloco}>
+                              <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}>Horas por setor</div>
+                              {det.mo.length === 0 ? <div style={{ fontSize: 11.5, color: T.amberText }}>Nenhuma hora apontada nesta OP.</div> : (
+                                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+                                  <tbody>
+                                    {det.mo.map((h, j) => (
+                                      <tr key={j} style={{ borderTop: `1px solid ${T.lineSoft}` }}>
+                                        <td style={{ padding: '3px 4px' }}>{h.setor_nome || '—'} <span style={{ color: T.inkFaint }}>· {h.competencia}</span></td>
+                                        <td style={{ padding: '3px 4px', textAlign: 'right' }}>{num(h.horas)} h · {h.pessoas} pess.</td>
+                                        <td style={{ padding: '3px 4px', textAlign: 'right', fontWeight: 600 }}>{moeda(Number(h.custo_mao_obra) || 0)}</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              )}
+                              <div style={{ fontSize: 12, fontWeight: 700, margin: '10px 0 6px' }}>Saída × apontado × sobra</div>
+                              {det.mov.filter(m => m.situacao !== 'fecha').length === 0
+                                ? <div style={{ fontSize: 11.5, color: T.oliveText }}>Tudo o que saiu para esta OP foi apontado ou voltou ao estoque.</div>
+                                : det.mov.filter(m => m.situacao !== 'fecha').slice(0, 8).map((m, j) => (
+                                  <div key={j} style={{ fontSize: 11, padding: '2px 0', color: T.inkDim }}>
+                                    <strong style={{ color: T.ink }}>{m.descr_prod || m.cod_prod}</strong>: saiu {num(m.qtd_saida)}, apontou {num(m.qtd_apontada)}, voltou {num(m.qtd_sobra)} — {m.situacao}
+                                  </div>
+                                ))}
+                            </div>
+                          </div>
+                        );
+                      })()}
+                    </td></tr>
+                  )}
+                </React.Fragment>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {lista.length > 400 && (
+          <div style={{ padding: '8px 12px', fontSize: 11, color: T.inkFaint, borderTop: `1px solid ${T.line}` }}>
+            Mostrando 400 de {lista.length} OPs — use a busca ou o mês para refinar. Os totais acima consideram todas.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function Custeio() {
   const [aba, setAba] = useState('analise');
   const [produtos, setProdutos] = useState([]);
@@ -27468,6 +27742,7 @@ const TELAS_CATALOGO = [
   { id: 'carteira_estoque', label: 'Carteira x Estoque' },
   { id: 'preco_compra', label: 'Preço de Compra' },
   { id: 'custeio', label: 'Custeio' },
+  { id: 'custeio_op', label: 'Custeio por OP (teste)' },
   { id: 'custeio_plano', label: 'Custeio — Plano' },
   { id: 'estoque_ocs', label: 'Estoque x OCs' },
   { id: 'almoxarifado', label: 'Almoxarifado' },
