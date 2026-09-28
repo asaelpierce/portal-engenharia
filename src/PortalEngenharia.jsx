@@ -20751,6 +20751,8 @@ function Custeio() {
   const [mesAn, setMesAn] = useState('todos');   // quebra a análise por mês
   const [projAberto, setProjAberto] = useState(null); // composição do custo do projeto
   const [mpFora, setMpFora] = useState([]);      // MP apontada que não entrou no custo
+  // Serviço/material contratado que ainda não faturou, por BR (v_custeio_pendente_faturar)
+  const [pendFat, setPendFat] = useState({});
   const [brOrc, setBrOrc] = useState('');
   const [fatFiltro, setFatFiltro] = useState('todos'); // todos | faturados | nao_faturados
   const [caixaAberta, setCaixaAberta] = useState(null); // material | servicos | frete | outros
@@ -20821,6 +20823,11 @@ function Custeio() {
       setAnalise(await lerTudo('v_custeio_analise'));
       setSuspeitos(await lerTudo('v_custeio_custo_suspeito'));
       setMpFora(await lerTudo('v_custeio_mp_apontada_fora'));
+      {
+        const pf = await lerTudo('v_custeio_pendente_faturar');
+        const m = {}; (pf || []).forEach(x => { m[x.br] = x; });
+        setPendFat(m);
+      }
       // Historico do verificador. 60 dias bastam para ver tendencia sem
       // arrastar a tabela inteira, que cresce ~17 linhas por dia.
       const desdeVerif = new Date(Date.now() - 60 * 864e5).toISOString();
@@ -21664,13 +21671,17 @@ function Custeio() {
                                       { l: '− Insumos de fábrica (massa, Chemitac, gases, discos…)', v: -(Number(r.insumos_rateado) || 0) },
                                       { l: '− Benefícios da produção (transporte, alimentação, saúde)', v: -(Number(r.beneficios_rateado) || 0) },
                                       { l: '= Margem por absorção', v: ma, forte: true },
+                                      ...(Number(pendFat[r.br]?.servico_pendente) > 100 ? [{
+                                        l: `⏳ Serviço contratado ainda não faturado (pedido ${pendFat[r.br].pedidos_servico}) — a margem acima é só do que já faturou; quando a nota de serviço sair, a receita sobe nesse valor`,
+                                        v: Number(pendFat[r.br].servico_pendente), info: true }] : []),
                                     ].filter(x => x.forte || x.v !== 0).map((x, i) => (
                                       <tr key={i} style={{ borderBottom: x.forte ? `1px solid ${T.line}` : 'none' }}>
                                         <td style={{ padding: '5px 8px', fontSize: 11.5,
-                                          fontWeight: x.forte ? 700 : 400, color: x.forte ? T.ink : T.inkDim }}>{x.l}</td>
+                                          fontWeight: x.forte ? 700 : 400, color: x.info ? T.blueText : x.forte ? T.ink : T.inkDim,
+                                          fontStyle: x.info ? 'italic' : 'normal' }}>{x.l}</td>
                                         <td style={{ padding: '5px 8px', fontSize: 12, textAlign: 'right',
                                           fontWeight: x.forte ? 700 : 400, fontVariantNumeric: 'tabular-nums',
-                                          color: x.forte ? (x.v >= 0 ? T.oliveText : T.rustText) : T.inkDim }}>
+                                          color: x.info ? T.blueText : x.forte ? (x.v >= 0 ? T.oliveText : T.rustText) : T.inkDim }}>
                                           {moeda(x.v)}
                                         </td>
                                       </tr>
@@ -23354,6 +23365,12 @@ function Custeio() {
                         <td style={{ padding: '9px 12px', fontSize: 12.5, fontWeight: 600 }}>
                           {b.br}
                           {!b.faturado && <span style={{ marginLeft: 6, fontSize: 10, color: T.amberText, background: T.amberSoft, padding: '2px 6px', borderRadius: 4 }}>⏳ não faturado</span>}
+                          {b.faturado && Number(pendFat[b.br]?.servico_pendente) > 100 && (
+                            <span style={{ marginLeft: 6, fontSize: 10, color: T.blueText, background: T.blueSoft, padding: '2px 6px', borderRadius: 4, whiteSpace: 'nowrap' }}
+                              title={`Pedido de serviço ${pendFat[b.br].pedidos_servico} ainda não faturado: ${moeda(Number(pendFat[b.br].servico_pendente))}. A margem desta linha é só do que já faturou (material) — quando a nota de serviço sair, a receita sobe e a margem melhora.`}>
+                              ⏳ serviço a faturar {moeda(Number(pendFat[b.br].servico_pendente))}
+                            </span>
+                          )}
                           {b.nuregs && b.nuregs.size > 1 && <span style={{ marginLeft: 6, fontSize: 10, color: T.inkDim, background: T.panelAlt, border: `1px solid ${T.line}`, padding: '2px 6px', borderRadius: 4 }}
                             title={`Projeto com ${b.nuregs.size} orçamentos (revisão ou escopo adicional). O custo soma todos.`}>{b.nuregs.size} orçamentos</span>}
                           {b.calculado && <span style={{ marginLeft: 6, fontSize: 10, color: T.inkDim, background: T.panelAlt, border: `1px solid ${T.line}`, padding: '2px 6px', borderRadius: 4 }}
@@ -23591,6 +23608,11 @@ function Custeio() {
                       }))
                       .concat(itensOp.filter(e => e.caixa === caixaAberta))
                       .map(r => ({ ...r, _custo: r._com + r._est + (r._op || 0) }))
+                      // Mesma nota pendurada em dois orçamentos do projeto: o custo conta
+                      // uma vez (v_custeio_oc_dedup) e a segunda linha vem zerada. Ela
+                      // não diz nada -- sai da lista para o item não parecer duplicado.
+                      .filter((r, _i, arr) => !(r._custo === 0 && r._orc === 0 &&
+                        arr.some(o => o !== r && o.cod_prod === r.cod_prod && o._custo > 0)))
                       .sort((a, b) => Math.max(b._orc, b._custo) - Math.max(a._orc, a._custo));
                      // Lista vazia PRECISA dizer por que. Antes retornava null e
                      // clicar em 'ver itens' nao fazia nada -- o BR14559/26 tem
