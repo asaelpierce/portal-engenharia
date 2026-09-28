@@ -6995,6 +6995,10 @@ function FollowUpComercial({ currentUser }) {
   // ---- Volta dos arquivos preenchidos --------------------------------------
   const [importando, setImportando] = useState(false);
   const [resultadoImp, setResultadoImp] = useState(null);
+  // Tela "por vendedor": gráfico de colunas Aberto / Realizada / Perdido,
+  // clicando na coluna lista os BRs. grafSel = { vendedor|null, grupo|null }.
+  const [grafAberto, setGrafAberto] = useState(false);
+  const [grafSel, setGrafSel] = useState(null);
   const [arrastando, setArrastando] = useState(false);
 
   const importarArquivos = useCallback(async (files) => {
@@ -7187,23 +7191,173 @@ function FollowUpComercial({ currentUser }) {
       <div style={{ display: 'grid', gap: 8, gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))' }}>
         {[
           { t: `Pedido em carteira · ${confirmados.length} BRs`, v: moeda(soma(confirmados, 'valor_proposta')), c: T.oliveText,
-            dica: 'Tem pedido de venda e ainda não tem nota fiscal. Valor da proposta.' },
+            dica: 'Tem pedido de venda e ainda não tem nota fiscal. Valor da proposta.', grupo: 'realizada' },
           { t: `Já faturado · ${faturados.length} BRs`, v: moeda(soma(faturados, 'receita_faturada')), c: T.blueText,
-            dica: 'Já tem nota fiscal de venda. Valor faturado líquido (o que saiu em nota), não o da proposta.' },
+            dica: 'Já tem nota fiscal de venda. Valor faturado líquido (o que saiu em nota), não o da proposta.', grupo: 'realizada' },
           { t: `Perdido · ${perdidos.length} BRs`, v: moeda(soma(perdidos, 'valor_proposta')), c: T.rustText,
-            dica: 'Marcado como Perdido pelo vendedor. Valor da proposta.' },
-          { t: 'Em aberto', v: String(emAberto.length), c: T.ink },
-          { t: 'Valor em aberto', v: moeda(soma(emAberto, 'valor_proposta')), c: T.inkDim },
-          { t: 'Sem classificação', v: String(semClass), c: semClass ? T.amberText : T.inkFaint },
+            dica: 'Marcado como Perdido pelo vendedor. Valor da proposta.', grupo: 'perdido' },
+          { t: 'Em aberto', v: String(emAberto.length), c: T.ink, grupo: 'aberto' },
+          { t: 'Valor em aberto', v: moeda(soma(emAberto, 'valor_proposta')), c: T.inkDim, grupo: 'aberto' },
+          { t: 'Sem classificação', v: String(semClass), c: semClass ? T.amberText : T.inkFaint, grupo: 'aberto' },
         ].map(k => (
-          <div key={k.t} title={k.ajuda || k.dica || ''}
+          <div key={k.t} title={`${k.ajuda || k.dica || ''}${k.ajuda || k.dica ? ' · ' : ''}Clique para ver por vendedor`}
+            onClick={() => { setGrafAberto(true); setGrafSel(k.grupo ? { vendedor: null, grupo: k.grupo } : null); }}
             style={{ background: T.panel, border: `1px solid ${k.ajuda ? T.amberText : T.line}`, borderRadius: 8,
-              padding: '9px 12px', cursor: k.ajuda ? 'help' : 'default' }}>
+              padding: '9px 12px', cursor: 'pointer' }}>
             <div style={{ fontSize: 10.5, color: k.ajuda ? T.amberText : T.inkFaint }}>{k.t}</div>
             <div style={{ fontSize: 18, fontWeight: 700, color: k.c, fontVariantNumeric: 'tabular-nums' }}>{k.v}</div>
           </div>
         ))}
       </div>
+
+      {grafAberto && (() => {
+        // POR VENDEDOR: Aberto / Realizada / Perdido, pelo valor da proposta.
+        // Realizada = tem pedido (em carteira) ou já faturado. Usa a carteira
+        // inteira que o usuário pode ver, sem os filtros da tabela.
+        const GRUPOS = [
+          { k: 'aberto', r: 'Aberto', cor: T.gold, f: l => l.situacao === 'em aberto' },
+          { k: 'realizada', r: 'Realizada', cor: T.olive, f: l => ['pedido confirmado', 'faturado'].includes(l.situacao) },
+          { k: 'perdido', r: 'Perdido', cor: T.rust, f: l => l.situacao === 'perdido' },
+        ];
+        const vendsG = [...new Set(base.map(l => l.vendedor).filter(Boolean))]
+          .map(v => {
+            const d = base.filter(l => l.vendedor === v);
+            const g = Object.fromEntries(GRUPOS.map(gr => {
+              const x = d.filter(gr.f);
+              return [gr.k, { n: x.length, valor: soma(x, 'valor_proposta') }];
+            }));
+            return { v, g, total: GRUPOS.reduce((s, gr) => s + g[gr.k].valor, 0) };
+          })
+          .filter(x => x.total > 0)
+          .sort((a, b) => b.total - a.total);
+        const maxV = Math.max(1, ...vendsG.flatMap(x => GRUPOS.map(gr => x.g[gr.k].valor)));
+        const totG = Object.fromEntries(GRUPOS.map(gr => {
+          const x = base.filter(gr.f);
+          return [gr.k, { n: x.length, valor: soma(x, 'valor_proposta') }];
+        }));
+        const ALT = 220;
+        const lista2 = grafSel
+          ? base.filter(l => (!grafSel.vendedor || l.vendedor === grafSel.vendedor)
+              && (!grafSel.grupo || GRUPOS.find(gr => gr.k === grafSel.grupo).f(l)))
+              .sort((a, b) => (Number(b.valor_proposta) || 0) - (Number(a.valor_proposta) || 0))
+          : [];
+        const grupoSel = grafSel?.grupo ? GRUPOS.find(gr => gr.k === grafSel.grupo) : null;
+        const fechar = () => { setGrafAberto(false); setGrafSel(null); };
+        return (
+          <div onClick={fechar}
+            style={{ position: 'fixed', inset: 0, background: 'rgba(20,18,15,0.45)', zIndex: 60,
+              display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '40px 16px', overflowY: 'auto' }}>
+            <div onClick={e => e.stopPropagation()}
+              style={{ background: T.panel, borderRadius: 12, width: '100%', maxWidth: 1080, boxShadow: '0 12px 40px rgba(0,0,0,0.25)' }}>
+              <div style={{ padding: '14px 18px', borderBottom: `1px solid ${T.line}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                <div>
+                  <div style={{ fontSize: 15, fontWeight: 700 }}>Propostas por vendedor</div>
+                  <div style={{ fontSize: 11.5, color: T.inkFaint }}>Valor da proposta · Realizada = pedido em carteira + já faturado · clique numa coluna para ver os BRs</div>
+                </div>
+                <button onClick={fechar} style={{ fontFamily: 'inherit', fontSize: 12, padding: '6px 12px', borderRadius: 6,
+                  border: `1px solid ${T.line}`, background: T.panel, color: T.inkDim, cursor: 'pointer' }}>Fechar</button>
+              </div>
+
+              <div style={{ display: 'flex', gap: 10, padding: '12px 18px 0', flexWrap: 'wrap' }}>
+                {GRUPOS.map(gr => {
+                  const ativo = grafSel?.grupo === gr.k && !grafSel?.vendedor;
+                  return (
+                    <button key={gr.k} onClick={() => setGrafSel({ vendedor: null, grupo: gr.k })}
+                      style={{ fontFamily: 'inherit', display: 'flex', alignItems: 'center', gap: 8, padding: '7px 12px', borderRadius: 8, cursor: 'pointer',
+                        border: `1px solid ${ativo ? gr.cor : T.line}`, background: ativo ? `${gr.cor}1A` : T.panel, textAlign: 'left' }}>
+                      <span style={{ width: 12, height: 12, borderRadius: 3, background: gr.cor, flexShrink: 0 }} />
+                      <span>
+                        <span style={{ display: 'block', fontSize: 11, color: T.inkFaint }}>{gr.r} · {totG[gr.k].n} BRs</span>
+                        <span style={{ display: 'block', fontSize: 15, fontWeight: 700, color: T.ink }}>{moeda(totG[gr.k].valor)}</span>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div style={{ overflowX: 'auto', padding: '14px 18px 6px' }}>
+                <div style={{ display: 'flex', alignItems: 'flex-end', gap: 22, minWidth: vendsG.length * 118, height: ALT + 56 }}>
+                  {vendsG.map(x => (
+                    <div key={x.v} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: 96, flexShrink: 0 }}>
+                      <div style={{ display: 'flex', alignItems: 'flex-end', gap: 4, height: ALT + 18 }}>
+                        {GRUPOS.map(gr => {
+                          const val = x.g[gr.k].valor;
+                          const h = val > 0 ? Math.max(3, Math.round(ALT * val / maxV)) : 0;
+                          const sel = grafSel?.vendedor === x.v && grafSel?.grupo === gr.k;
+                          const apagado = grafSel?.grupo && grafSel.grupo !== gr.k;
+                          return (
+                            <div key={gr.k} onClick={() => setGrafSel({ vendedor: x.v, grupo: gr.k })}
+                              title={`${x.v} · ${gr.r}: ${moeda(val)} em ${x.g[gr.k].n} BRs`}
+                              style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-end', width: 28, height: '100%', cursor: 'pointer' }}>
+                              <div style={{ fontSize: 9.5, color: T.inkDim, marginBottom: 2, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
+                                {val > 0 ? moeda(val) : ''}
+                              </div>
+                              <div style={{ width: 24, height: h, background: gr.cor, borderRadius: '4px 4px 0 0',
+                                opacity: apagado ? 0.35 : 1, outline: sel ? `2px solid ${T.ink}` : 'none', outlineOffset: 1 }} />
+                            </div>
+                          );
+                        })}
+                      </div>
+                      <div style={{ borderTop: `1px solid ${T.line}`, width: '100%', paddingTop: 5, fontSize: 10.5, fontWeight: 600, color: T.ink,
+                        textAlign: 'center', lineHeight: 1.25, height: 32, overflow: 'hidden' }} title={x.v}>{x.v}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div style={{ borderTop: `1px solid ${T.line}` }}>
+                {!grafSel ? (
+                  <div style={{ padding: '14px 18px', fontSize: 12, color: T.inkFaint }}>Clique numa coluna (ou num dos totais acima) para listar os BRs.</div>
+                ) : (
+                  <>
+                    <div style={{ padding: '10px 18px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                      <div style={{ fontSize: 12.5, fontWeight: 700 }}>
+                        {grupoSel && <span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 2, background: grupoSel.cor, marginRight: 6 }} />}
+                        {grupoSel ? grupoSel.r : 'Todos'} · {grafSel.vendedor || 'todos os vendedores'}
+                        <span style={{ fontWeight: 400, color: T.inkFaint }}> — {lista2.length} BRs · {moeda(soma(lista2, 'valor_proposta'))}</span>
+                      </div>
+                      {grafSel.vendedor && (
+                        <button onClick={() => setGrafSel({ vendedor: null, grupo: grafSel.grupo })}
+                          style={{ fontFamily: 'inherit', fontSize: 11, padding: '4px 10px', borderRadius: 6, border: `1px solid ${T.line}`, background: T.panel, color: T.inkDim, cursor: 'pointer' }}>
+                          ver de todos os vendedores
+                        </button>
+                      )}
+                    </div>
+                    <div style={{ maxHeight: 380, overflowY: 'auto' }}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                        <thead><tr style={{ background: T.panelAlt, position: 'sticky', top: 0 }}>
+                          {['BR', 'Cliente', 'Vendedor', 'Valor da proposta', 'Situação', 'Dias'].map((h, i) => (
+                            <th key={h} style={{ padding: '7px 12px', fontSize: 10.5, fontWeight: 600, color: T.inkFaint, textAlign: i === 3 || i === 5 ? 'right' : 'left' }}>{h}</th>
+                          ))}
+                        </tr></thead>
+                        <tbody>
+                          {lista2.map((l, i) => (
+                            <tr key={`${l.br}-${i}`} style={{ borderTop: `1px solid ${T.lineSoft}` }}>
+                              <td style={{ padding: '6px 12px', fontWeight: 600, whiteSpace: 'nowrap' }}>{l.br}</td>
+                              <td style={{ padding: '6px 12px', maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={l.cliente}>{l.cliente}</td>
+                              <td style={{ padding: '6px 12px', color: T.inkDim, whiteSpace: 'nowrap' }}>{l.vendedor}</td>
+                              <td style={{ padding: '6px 12px', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{moeda(Number(l.valor_proposta) || 0)}</td>
+                              <td style={{ padding: '6px 12px' }}>
+                                <span style={{ fontSize: 10.5, padding: '2px 7px', borderRadius: 4, whiteSpace: 'nowrap',
+                                  color: l.situacao === 'faturado' ? T.blueText : l.situacao === 'pedido confirmado' ? T.oliveText : l.situacao === 'perdido' ? T.rustText : T.amberText,
+                                  background: l.situacao === 'faturado' ? T.blueSoft : l.situacao === 'pedido confirmado' ? T.oliveSoft : l.situacao === 'perdido' ? T.rustSoft : T.amberSoft }}>
+                                  {l.situacao === 'faturado' ? 'Faturado' : l.situacao === 'pedido confirmado' ? 'Pedido em carteira'
+                                    : l.situacao === 'perdido' ? 'Perdido' : (l.estagio_vendedor_rotulo || 'Em aberto')}
+                                </span>
+                              </td>
+                              <td style={{ padding: '6px 12px', textAlign: 'right', color: T.inkDim }}>{l.dias_aberto ?? ''}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {(() => {
         // VALOR POR ESTAGIO, cheio. Antes eu multiplicava valor x peso e
