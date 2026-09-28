@@ -20753,6 +20753,10 @@ function Custeio() {
   const [mpFora, setMpFora] = useState([]);      // MP apontada que não entrou no custo
   // Serviço/material contratado que ainda não faturou, por BR (v_custeio_pendente_faturar)
   const [pendFat, setPendFat] = useState({});
+  // Pente fino compra × apontado (v_custeio_compra_x_apontado_sinal) e o
+  // cruzamento sobra × falta do mesmo item entre projetos
+  const [cxa, setCxa] = useState({});
+  const [cxaCruz, setCxaCruz] = useState([]);
   const [brOrc, setBrOrc] = useState('');
   const [fatFiltro, setFatFiltro] = useState('todos'); // todos | faturados | nao_faturados
   const [caixaAberta, setCaixaAberta] = useState(null); // material | servicos | frete | outros
@@ -20827,6 +20831,15 @@ function Custeio() {
         const pf = await lerTudo('v_custeio_pendente_faturar');
         const m = {}; (pf || []).forEach(x => { m[x.br] = x; });
         setPendFat(m);
+      }
+      {
+        const SEM_PROBLEMA = ['bate', 'coberto por PI/OP', 'revenda (vendido como veio)'];
+        const cx = await lerTudo('v_custeio_compra_x_apontado_sinal');
+        const m2 = {};
+        (cx || []).filter(x => !SEM_PROBLEMA.includes(x.sinal) && Math.abs(Number(x.valor_divergente) || 0) >= 500)
+          .forEach(x => { (m2[x.br] = m2[x.br] || []).push(x); });
+        setCxa(m2);
+        setCxaCruz(await lerTudo('v_custeio_compra_x_apontado_cruzamento'));
       }
       // Historico do verificador. 60 dias bastam para ver tendencia sem
       // arrastar a tabela inteira, que cresce ~17 linhas por dia.
@@ -23369,6 +23382,12 @@ function Custeio() {
                         <td style={{ padding: '9px 12px', fontSize: 12.5, fontWeight: 600 }}>
                           {b.br}
                           {!b.faturado && <span style={{ marginLeft: 6, fontSize: 10, color: T.amberText, background: T.amberSoft, padding: '2px 6px', borderRadius: 4 }}>⏳ não faturado</span>}
+                          {(cxa[b.br] || []).length > 0 && (
+                            <span style={{ marginLeft: 6, fontSize: 10, color: T.rustText, background: T.rustSoft, padding: '2px 6px', borderRadius: 4, whiteSpace: 'nowrap' }}
+                              title={`Compra × apontado não bate em ${cxa[b.br].length} item(ns). Abra o projeto para ver item a item.`}>
+                              ⚠ compra × apontado ({cxa[b.br].length})
+                            </span>
+                          )}
                           {b.faturado && Number(pendFat[b.br]?.servico_pendente) > 100 && (
                             <span style={{ marginLeft: 6, fontSize: 10, color: T.blueText, background: T.blueSoft, padding: '2px 6px', borderRadius: 4, whiteSpace: 'nowrap' }}
                               title={`Pedido de serviço ${pendFat[b.br].pedidos_servico} ainda não faturado: ${moeda(Number(pendFat[b.br].servico_pendente))}. A margem desta linha é só do que já faturou (material) — quando a nota de serviço sair, a receita sobe e a margem melhora.`}>
@@ -23428,6 +23447,80 @@ function Custeio() {
                 </table>
               </div>
             </div>
+
+            {brOrc && (() => {
+              // PENTE FINO COMPRA × APONTADO -- item a item, o que entrou no
+              // projeto (compra + saída de estoque − devolução) contra o que as
+              // OPs apontaram. Quando sobra aqui e falta noutro projeto do mesmo
+              // item, mostra o outro lado: é o padrão do lote comprado num BR só.
+              const brSel = Object.keys(cxa).find(k => k.toLowerCase().includes(brOrc.toLowerCase()))
+                || [...new Set(cxaCruz.flatMap(c => [c.br_sobra, c.br_falta]))].find(k => (k || '').toLowerCase().includes(brOrc.toLowerCase()));
+              if (!brSel) return null;
+              const itensD = (cxa[brSel] || []).slice().sort((a, b) => Math.abs(Number(b.valor_divergente)) - Math.abs(Number(a.valor_divergente)));
+              const cruz = cxaCruz.filter(c => c.br_sobra === brSel || c.br_falta === brSel);
+              if (!itensD.length && !cruz.length) return null;
+              const EXPL = {
+                'devolveu mais do que saiu': ['Voltou ao estoque mais do que entrou no projeto — a devolução abate um custo que nunca foi somado, e o custo fica menor do que é.', T.rustText, T.rustSoft],
+                'entrou no projeto e nada foi apontado': ['Comprado ou retirado do estoque e nenhuma OP apontou. Se o projeto já faturou, é compra de lote para outro projeto ou sobra que deveria voltar ao estoque.', T.amberText, T.amberSoft],
+                'entrou mais do que foi apontado': ['Entrou mais do que as OPs usaram. A diferença está no custo deste projeto sem ter sido usada nele.', T.amberText, T.amberSoft],
+                'apontou mais do que entrou': ['As OPs usaram mais do que entrou. O material a mais veio de outro projeto ou do estoque sem movimento — o custo dele não está aqui.', T.blueText, T.blueSoft],
+                'apontado sem compra nem saída de estoque': ['Apontado na OP sem nenhuma entrada no projeto — o custo desse material não está aqui.', T.blueText, T.blueSoft],
+                'unidades diferentes (compra × apontamento)': ['Compra e apontamento em unidades diferentes — não dá para comparar a quantidade.', T.inkDim, T.panelAlt],
+              };
+              const num = (v) => (Number(v) || 0).toLocaleString('pt-BR', { maximumFractionDigits: 1 });
+              return (
+                <div style={{ background: T.panel, border: `1px solid ${T.rustText}55`, borderRadius: 10, marginTop: 14, overflow: 'hidden' }}>
+                  <div style={{ padding: '10px 14px', borderBottom: `1px solid ${T.line}`, fontSize: 12.5, fontWeight: 700, display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+                    <span>⚠ Compra × apontado — {brSel}</span>
+                    <span style={{ fontSize: 11, fontWeight: 400, color: T.inkFaint }}>entrou = compra + saída de estoque − devolução · apontado = OPs do BR</span>
+                  </div>
+                  {itensD.length > 0 && (
+                    <div style={{ overflowX: 'auto' }}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11.5 }}>
+                        <thead><tr style={{ background: T.panelAlt }}>
+                          {['Item', 'Comprado', 'Do estoque', 'Devolvido', 'Apontado', 'Diferença', 'O que é'].map((h, i) => (
+                            <th key={h} style={{ padding: '7px 10px', fontSize: 10.5, fontWeight: 600, color: T.inkFaint, textAlign: i === 0 || i === 6 ? 'left' : 'right', whiteSpace: 'nowrap' }}>{h}</th>
+                          ))}
+                        </tr></thead>
+                        <tbody>
+                          {itensD.map((x, i) => {
+                            const ex = EXPL[x.sinal] || [x.sinal, T.inkDim, T.panelAlt];
+                            return (
+                              <tr key={i} style={{ borderTop: `1px solid ${T.lineSoft}`, verticalAlign: 'top' }}>
+                                <td style={{ padding: '7px 10px', maxWidth: 260 }}>
+                                  <div style={{ fontWeight: 600 }}>{x.descr_prod}</div>
+                                  <div style={{ fontSize: 10, color: T.inkFaint }}>cód. {x.cod_prod}{x.notas_compra ? ` · NF ${x.notas_compra}` : ''}{x.ops ? ` · OP ${x.ops}` : ''}</div>
+                                </td>
+                                <td style={{ padding: '7px 10px', textAlign: 'right' }}>{Number(x.qtd_compra) ? num(x.qtd_compra) : '—'}</td>
+                                <td style={{ padding: '7px 10px', textAlign: 'right' }}>{Number(x.qtd_estoque) ? num(x.qtd_estoque) : '—'}</td>
+                                <td style={{ padding: '7px 10px', textAlign: 'right' }}>{Number(x.qtd_devolvida) ? num(x.qtd_devolvida) : '—'}</td>
+                                <td style={{ padding: '7px 10px', textAlign: 'right', fontWeight: 600 }}>{num(x.qtd_apontada)} <span style={{ color: T.inkFaint, fontWeight: 400 }}>{x.unidade_apontada || x.unidade || ''}</span></td>
+                                <td style={{ padding: '7px 10px', textAlign: 'right', fontWeight: 700, whiteSpace: 'nowrap', color: ex[1] }}>{moeda(Math.abs(Number(x.valor_divergente) || 0))}</td>
+                                <td style={{ padding: '7px 10px', minWidth: 240 }}>
+                                  <span style={{ fontSize: 10, fontWeight: 700, color: ex[1], background: ex[2], padding: '2px 6px', borderRadius: 4 }}>{x.sinal}</span>
+                                  <div style={{ fontSize: 10.5, color: T.inkDim, marginTop: 4, lineHeight: 1.45 }}>{ex[0]}{x.projeto_faturado && x.lado === 'sobra' ? ' Este projeto já faturou.' : ''}</div>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                  {cruz.length > 0 && (
+                    <div style={{ padding: '10px 14px', borderTop: `1px solid ${T.line}`, background: T.panelAlt }}>
+                      <div style={{ fontSize: 11.5, fontWeight: 700, marginBottom: 6 }}>O mesmo item sobra num projeto e falta noutro — provável compra de lote lançada num BR só</div>
+                      {cruz.map((c, i) => (
+                        <div key={i} style={{ fontSize: 11, color: T.inkDim, lineHeight: 1.6 }}>
+                          <strong>{c.descr_prod}</strong>: sobram {num(c.qtd_sobra)} no <strong>{c.br_sobra}</strong>{c.notas_compra ? ` (NF ${c.notas_compra})` : ''} e faltam {num(c.qtd_falta)} no <strong>{c.br_falta}</strong>{c.ops_falta ? ` (OP ${c.ops_falta})` : ''} — casam {num(c.qtd_casavel)} ≈ {moeda(Number(c.valor_casavel) || 0)}
+                        </div>
+                      ))}
+                      <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 6 }}>Confirmado, o custo é repartido pelo rateio de compra (custeio_rateio_compra): quantidade usada × valor unitário da nota.</div>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
 
             {brOrc && (() => {
               // BLOCOS POR CATEGORIA -- o coracao da tela.
