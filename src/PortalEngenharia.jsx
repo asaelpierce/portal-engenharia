@@ -26295,6 +26295,18 @@ function CriarBR({ currentUser }) {
   const [erro, setErro] = useState(null);
   const [sucesso, setSucesso] = useState(null);
   const [historico, setHistorico] = useState([]);
+  const [atualizandoHist, setAtualizandoHist] = useState(false);
+  const atualizarDoSankhya = async () => {
+    setAtualizandoHist(true);
+    try {
+      const { data, error } = await supabase.rpc('fn_atualizar_brs_criados_portal');
+      if (error) throw error;
+      alert(data?.mensagem || 'Atualizado.');
+      const { data: novo } = await supabase.from('brs_criados_portal').select('*').order('criado_em', { ascending: false }).limit(100);
+      setHistorico(novo || []);
+    } catch (err) { alert('Erro: ' + (err.message || err)); }
+    setAtualizandoHist(false);
+  };
 
   const chamar = async (payload) => {
     const res = await fetch(`${SUPABASE_URL}/functions/v1/sankhya-criar-br`, {
@@ -26541,22 +26553,11 @@ function CriarBR({ currentUser }) {
 
       <Panel title="Criados pelo portal" subtitle="Registro de tudo que foi criado por aqui — o projeto em si fica no Sankhya.">
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 10 }}>
-          <button onClick={async (e) => {
-            const btn = e.currentTarget;
-            btn.disabled = true; btn.textContent = 'Atualizando…';
-            try {
-              const { data, error } = await supabase.rpc('fn_atualizar_brs_criados_portal');
-              if (error) throw error;
-              alert(data?.mensagem || 'Atualizado.');
-              const { data: novo } = await supabase.from('brs_criados_portal').select('*').order('criado_em', { ascending: false }).limit(100);
-              setHistorico(novo || []);
-            } catch (err) { alert('Erro: ' + (err.message || err)); }
-            btn.disabled = false; btn.textContent = '↻ Atualizar do Sankhya';
-          }}
-          style={{ fontFamily: 'inherit', fontSize: 11.5, fontWeight: 600, padding: '6px 14px',
-            borderRadius: 6, border: `1px solid ${T.line}`, background: T.panelAlt,
-            color: T.inkDim, cursor: 'pointer' }}>
-            ↻ Atualizar do Sankhya
+          <button onClick={atualizarDoSankhya} disabled={atualizandoHist}
+            style={{ fontFamily: 'inherit', fontSize: 11.5, fontWeight: 600, padding: '6px 14px',
+              borderRadius: 6, border: '1px solid ' + T.line, background: T.panelAlt,
+              color: T.inkDim, cursor: atualizandoHist ? 'default' : 'pointer' }}>
+            {atualizandoHist ? 'Atualizando...' : 'Atualizar do Sankhya'}
           </button>
         </div>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
