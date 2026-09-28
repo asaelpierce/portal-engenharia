@@ -7002,7 +7002,7 @@ function FollowUpComercial({ currentUser }) {
     const { default: ExcelJS } = await import('exceljs');
     const porRotulo = Object.fromEntries(estagios.map(e => [e.rotulo.toLowerCase(), e.estagio]));
     const brsConhecidos = new Set(linhas.map(l => l.br));
-    const aplicar = []; const ignorados = [];
+    const aplicar = []; const ignorados = []; const pendentes = [];
 
     // Acha as colunas pelo CABECALHO e a aba pelo NOME. Antes era posicao fixa
     // -- pulava 2 linhas, lia estagio na coluna 6 e observacao na 7 -- e quando
@@ -7062,14 +7062,25 @@ function FollowUpComercial({ currentUser }) {
           if (!brsConhecidos.has(br)) { ignorados.push(`${br}: não existe no portal`); return; }
           const estagio = porRotulo[rot.toLowerCase()];
           if (rot && !estagio) { ignorados.push(`${br}: estágio "${rot}" não reconhecido`); return; }
-          // celula de estagio APAGADA limpa a classificacao, igual ao botao da
-          // tela -- e como o vendedor desfaz pelo Excel
-          if (!rot && !obs && !exp) return;
+          // Estágio e expectativa são OBRIGATÓRIOS (28/09/2026). Célula vazia não
+          // apaga mais a classificação: vira pendência. A expectativa só pode
+          // ficar vazia quando o estágio é Perdido. Mesma regra da leitura
+          // automática do e-mail (comercial-followup-receber v6).
+          const atualL = linhas.find(x => x.br === br) || {};
+          const emAbertoL = atualL.situacao === 'em aberto';
+          if (!rot) {
+            if (obs) aplicar.push({ br, observacao_vendedor: obs });
+            if (emAbertoL) pendentes.push(`${br}: estágio obrigatório não preenchido`);
+            return;
+          }
+          const perdidoL = estagio === 'perdido';
+          if (!perdidoL && !exp && !atualL.expectativa_fechamento)
+            pendentes.push(`${br}: falta a expectativa de fechamento (obrigatória) — estágio gravado`);
           aplicar.push({
             br,
-            estagio_vendedor: estagio ?? null,
-            ...(estagio ? { estagio_vendedor_em: new Date().toISOString() } : { estagio_vendedor_em: null }),
-            ...(exp ? { expectativa_fechamento: exp } : {}),
+            estagio_vendedor: estagio,
+            estagio_vendedor_em: new Date().toISOString(),
+            ...(exp ? { expectativa_fechamento: exp } : perdidoL ? { expectativa_fechamento: null } : {}),
             ...(obs ? { observacao_vendedor: obs } : {}),
           });
         });
@@ -7115,6 +7126,7 @@ function FollowUpComercial({ currentUser }) {
             resposta_arquivo: files[0]?.name || null,
             linhas_importadas: gravados,
             linhas_recusadas: ignorados.length,
+            linhas_pendentes: pendentes.length,
             observacao: `Importado pela tela${currentUser?.nome ? ` por ${currentUser.nome}` : ''}`,
           }).eq('id', aberto.id);
         }
@@ -7122,7 +7134,7 @@ function FollowUpComercial({ currentUser }) {
     } catch (err) { console.error('não deu para fechar o envio:', err); }
 
     await carregar();
-    setResultadoImp({ gravados, ignorados });
+    setResultadoImp({ gravados, ignorados, pendentes });
     setImportando(false);
   }, [estagios, linhas, carregar, currentUser]);
 
@@ -7607,6 +7619,14 @@ function FollowUpComercial({ currentUser }) {
               {resultadoImp.gravados === 0 && resultadoImp.ignorados.length === 0 &&
                 ' — a planilha foi lida mas nenhuma linha tinha estágio ou observação preenchidos'}
             </div>
+            {(resultadoImp.pendentes || []).length > 0 && (
+              <div style={{ color: T.amberText, marginTop: 4 }}>
+                {resultadoImp.pendentes.length} {resultadoImp.pendentes.length === 1 ? 'pendência' : 'pendências'} (estágio e expectativa são obrigatórios):
+                <ul style={{ margin: '3px 0 0 16px', padding: 0 }}>
+                  {resultadoImp.pendentes.slice(0, 8).map((m, i) => <li key={i} style={{ fontSize: 11 }}>{m}</li>)}
+                </ul>
+              </div>
+            )}
             {resultadoImp.ignorados.length > 0 && (
               <div style={{ color: T.rustText, marginTop: 4 }}>
                 {resultadoImp.ignorados.length} não {resultadoImp.ignorados.length === 1 ? 'entrou' : 'entraram'}:
