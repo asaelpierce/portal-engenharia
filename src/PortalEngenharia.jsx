@@ -21674,6 +21674,10 @@ function Custeio() {
                                       ...(Number(pendFat[r.br]?.servico_pendente) > 100 ? [{
                                         l: `⏳ Serviço contratado ainda não faturado (pedido ${pendFat[r.br].pedidos_servico}) — a margem acima é só do que já faturou; quando a nota de serviço sair, a receita sobe nesse valor`,
                                         v: Number(pendFat[r.br].servico_pendente), info: true }] : []),
+                                      ...(Number(pendFat[r.br]?.material_pendente) > 1000 &&
+                                          Number(pendFat[r.br].material_pendente) > 0.3 * Number(pendFat[r.br].material_pedido) ? [{
+                                        l: `⏳ Faturamento parcial: ainda falta faturar material do pedido ${pendFat[r.br].pedidos_material} — o custo pode ser do projeto inteiro, então a margem acima fica pior do que será`,
+                                        v: Number(pendFat[r.br].material_pendente), info: true }] : []),
                                     ].filter(x => x.forte || x.v !== 0).map((x, i) => (
                                       <tr key={i} style={{ borderBottom: x.forte ? `1px solid ${T.line}` : 'none' }}>
                                         <td style={{ padding: '5px 8px', fontSize: 11.5,
@@ -23369,6 +23373,13 @@ function Custeio() {
                             <span style={{ marginLeft: 6, fontSize: 10, color: T.blueText, background: T.blueSoft, padding: '2px 6px', borderRadius: 4, whiteSpace: 'nowrap' }}
                               title={`Pedido de serviço ${pendFat[b.br].pedidos_servico} ainda não faturado: ${moeda(Number(pendFat[b.br].servico_pendente))}. A margem desta linha é só do que já faturou (material) — quando a nota de serviço sair, a receita sobe e a margem melhora.`}>
                               ⏳ serviço a faturar {moeda(Number(pendFat[b.br].servico_pendente))}
+                            </span>
+                          )}
+                          {b.faturado && Number(pendFat[b.br]?.material_pendente) > 1000 &&
+                            Number(pendFat[b.br].material_pendente) > 0.3 * Number(pendFat[b.br].material_pedido) && (
+                            <span style={{ marginLeft: 6, fontSize: 10, color: T.blueText, background: T.blueSoft, padding: '2px 6px', borderRadius: 4, whiteSpace: 'nowrap' }}
+                              title={`Faturamento parcial: o pedido de material ${pendFat[b.br].pedidos_material} tem ${moeda(Number(pendFat[b.br].material_pedido))} e só ${moeda(Number(pendFat[b.br].material_faturado))} já saiu em nota. O custo já lançado pode ser do projeto inteiro, então a margem desta linha fica pior do que será.`}>
+                              ⏳ material a faturar {moeda(Number(pendFat[b.br].material_pendente))}
                             </span>
                           )}
                           {b.nuregs && b.nuregs.size > 1 && <span style={{ marginLeft: 6, fontSize: 10, color: T.inkDim, background: T.panelAlt, border: `1px solid ${T.line}`, padding: '2px 6px', borderRadius: 4 }}
