@@ -20757,6 +20757,10 @@ function Custeio() {
   // cruzamento sobra × falta do mesmo item entre projetos
   const [cxa, setCxa] = useState({});
   const [cxaCruz, setCxaCruz] = useState([]);
+  // Conferência OP por OP do projeto aberto (v_custeio_op_movimento_x_apontado):
+  // saiu para a OP = apontado na OP + sobra que voltou da OP. Busca sob demanda.
+  const [opMov, setOpMov] = useState({ chave: '', linhas: [] });
+  const [opMovTodas, setOpMovTodas] = useState(false);
   const [brOrc, setBrOrc] = useState('');
   const [fatFiltro, setFatFiltro] = useState('todos'); // todos | faturados | nao_faturados
   const [caixaAberta, setCaixaAberta] = useState(null); // material | servicos | frete | outros
@@ -20858,6 +20862,17 @@ function Custeio() {
     setLoading(false);
   }, [compIni, lerTudo]);
   useEffect(() => { carregar(); }, [carregar]);
+  useEffect(() => {
+    const termo = (brOrc || '').trim();
+    if (termo.length < 4) { setOpMov({ chave: '', linhas: [] }); return; }
+    let vivo = true;
+    (async () => {
+      const { data } = await supabase.from('v_custeio_op_movimento_x_apontado')
+        .select('*').ilike('br', `%${termo}%`).limit(800);
+      if (vivo) setOpMov({ chave: termo, linhas: data || [] });
+    })();
+    return () => { vivo = false; };
+  }, [brOrc]);
 
   // Roda o verificador sob demanda. A funcao no banco e SECURITY DEFINER
   // porque precisa gravar o resultado em custeio_verificacao, onde o anon so
@@ -23454,11 +23469,16 @@ function Custeio() {
               // OPs apontaram. Quando sobra aqui e falta noutro projeto do mesmo
               // item, mostra o outro lado: é o padrão do lote comprado num BR só.
               const brSel = Object.keys(cxa).find(k => k.toLowerCase().includes(brOrc.toLowerCase()))
-                || [...new Set(cxaCruz.flatMap(c => [c.br_sobra, c.br_falta]))].find(k => (k || '').toLowerCase().includes(brOrc.toLowerCase()));
+                || [...new Set(cxaCruz.flatMap(c => [c.br_sobra, c.br_falta]))].find(k => (k || '').toLowerCase().includes(brOrc.toLowerCase()))
+                || (opMov.linhas.find(o => o.br) || {}).br;
               if (!brSel) return null;
+              const ORDEM_OP = { 'apontou mais do que saiu': 0, 'apontado sem saída para a OP': 1, 'sobrou e não voltou ao estoque': 2, 'saiu para a OP e nada foi apontado': 3, 'fecha': 9 };
+              const opsDoBr = opMov.linhas.filter(o => o.br === brSel)
+                .sort((a, b) => (ORDEM_OP[a.situacao] ?? 5) - (ORDEM_OP[b.situacao] ?? 5) || Number(a.op) - Number(b.op));
+              const opsProblema = opsDoBr.filter(o => o.situacao !== 'fecha');
               const itensD = (cxa[brSel] || []).slice().sort((a, b) => Math.abs(Number(b.valor_divergente)) - Math.abs(Number(a.valor_divergente)));
               const cruz = cxaCruz.filter(c => c.br_sobra === brSel || c.br_falta === brSel);
-              if (!itensD.length && !cruz.length) return null;
+              if (!itensD.length && !cruz.length && !opsDoBr.length) return null;
               // Regra (28/09/2026): o que entrou (compra, ou saída MP -> Processamento)
               // tem que ser igual ao apontado + o que voltou ao estoque.
               const EXPL = {
@@ -23513,6 +23533,85 @@ function Custeio() {
                       </table>
                     </div>
                   )}
+                  {opsDoBr.length > 0 && (() => {
+                    const fmtD = (d) => d ? String(d).slice(0, 10).split('-').reverse().join('/') : '';
+                    const COR_OP = {
+                      'fecha': [T.oliveText, T.oliveSoft],
+                      'apontou mais do que saiu': [T.rustText, T.rustSoft],
+                      'apontado sem saída para a OP': [T.blueText, T.blueSoft],
+                      'sobrou e não voltou ao estoque': [T.amberText, T.amberSoft],
+                      'saiu para a OP e nada foi apontado': [T.amberText, T.amberSoft],
+                    };
+                    const mostrar = opMovTodas ? opsDoBr : opsProblema;
+                    return (
+                      <div style={{ borderTop: `1px solid ${T.line}` }}>
+                        <div style={{ padding: '10px 14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+                          <div>
+                            <div style={{ fontSize: 12, fontWeight: 700 }}>OP por OP — saiu para a OP = apontado + sobra que voltou</div>
+                            <div style={{ fontSize: 10.5, color: T.inkFaint }}>
+                              {opsDoBr.length - opsProblema.length} de {opsDoBr.length} item(ns) fecham · só entram movimentos com a OP na nota (a sobra sem OP fica na conta do projeto, acima)
+                            </div>
+                          </div>
+                          {opsProblema.length < opsDoBr.length && (
+                            <button onClick={() => setOpMovTodas(v => !v)}
+                              style={{ fontSize: 11, padding: '4px 10px', borderRadius: 6, border: `1px solid ${T.line}`, background: T.panel, color: T.inkDim, cursor: 'pointer' }}>
+                              {opMovTodas ? 'só o que não fecha' : 'mostrar também as que fecham'}
+                            </button>
+                          )}
+                        </div>
+                        {mostrar.length === 0 ? (
+                          <div style={{ padding: '0 14px 12px', fontSize: 11.5, color: T.oliveText }}>Todas as OPs deste projeto fecham.</div>
+                        ) : (
+                          <div style={{ overflowX: 'auto' }}>
+                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11.5 }}>
+                              <thead><tr style={{ background: T.panelAlt }}>
+                                {['OP', 'Item', 'Saiu para a OP', 'Apontado', 'Voltou (sobra)', 'Saldo', 'Situação'].map((h, i) => (
+                                  <th key={h} style={{ padding: '7px 10px', fontSize: 10.5, fontWeight: 600, color: T.inkFaint, textAlign: i <= 1 || i === 6 ? 'left' : 'right', whiteSpace: 'nowrap' }}>{h}</th>
+                                ))}
+                              </tr></thead>
+                              <tbody>
+                                {mostrar.map((o, i) => {
+                                  const cor = COR_OP[o.situacao] || [T.inkDim, T.panelAlt];
+                                  const num = (v) => (Number(v) || 0).toLocaleString('pt-BR', { maximumFractionDigits: 1 });
+                                  return (
+                                    <tr key={i} style={{ borderTop: `1px solid ${T.lineSoft}`, verticalAlign: 'top' }}>
+                                      <td style={{ padding: '7px 10px', fontWeight: 700, whiteSpace: 'nowrap' }}>{o.op}</td>
+                                      <td style={{ padding: '7px 10px', maxWidth: 240 }}>
+                                        <div>{o.descr_prod}</div>
+                                        <div style={{ fontSize: 10, color: T.inkFaint }}>cód. {o.cod_prod}</div>
+                                      </td>
+                                      <td style={{ padding: '7px 10px', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                                        {Number(o.qtd_saida) ? num(o.qtd_saida) : '—'}
+                                        {o.saida_de && <div style={{ fontSize: 10, color: T.inkFaint }}>{fmtD(o.saida_de)}{o.saida_ate && o.saida_ate !== o.saida_de ? ` a ${fmtD(o.saida_ate)}` : ''}</div>}
+                                      </td>
+                                      <td style={{ padding: '7px 10px', textAlign: 'right', whiteSpace: 'nowrap', fontWeight: 600 }}>
+                                        {Number(o.qtd_apontada) ? num(o.qtd_apontada) : '—'}
+                                        {o.apont_de && <div style={{ fontSize: 10, color: T.inkFaint, fontWeight: 400 }}>{fmtD(o.apont_de)}{o.apont_ate && o.apont_ate !== o.apont_de ? ` a ${fmtD(o.apont_ate)}` : ''}</div>}
+                                      </td>
+                                      <td style={{ padding: '7px 10px', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                                        {Number(o.qtd_sobra) ? num(o.qtd_sobra) : '—'}
+                                        {o.sobra_de && <div style={{ fontSize: 10, color: T.inkFaint }}>{fmtD(o.sobra_de)}{o.sobra_ate && o.sobra_ate !== o.sobra_de ? ` a ${fmtD(o.sobra_ate)}` : ''}</div>}
+                                      </td>
+                                      <td style={{ padding: '7px 10px', textAlign: 'right', whiteSpace: 'nowrap', fontWeight: 700, color: cor[0] }}>
+                                        {Number(o.saldo) > 0 ? '+' : ''}{num(o.saldo)}
+                                        {Math.abs(Number(o.valor_saldo) || 0) >= 1 && <div style={{ fontSize: 10, fontWeight: 400 }}>{moeda(Math.abs(Number(o.valor_saldo)))}</div>}
+                                      </td>
+                                      <td style={{ padding: '7px 10px', minWidth: 170 }}>
+                                        <span style={{ fontSize: 10, fontWeight: 700, color: cor[0], background: cor[1], padding: '2px 6px', borderRadius: 4 }}>{o.situacao}</span>
+                                        {o.sobra_depois_do_apontamento && o.situacao !== 'fecha' && (
+                                          <div style={{ fontSize: 10, color: T.inkDim, marginTop: 3 }}>sobra voltou depois do último apontamento — conferir</div>
+                                        )}
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
                   {cruz.length > 0 && (
                     <div style={{ padding: '10px 14px', borderTop: `1px solid ${T.line}`, background: T.panelAlt }}>
                       <div style={{ fontSize: 11.5, fontWeight: 700, marginBottom: 6 }}>O mesmo item sobra num projeto e falta noutro — provável compra de lote lançada num BR só</div>
