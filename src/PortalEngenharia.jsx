@@ -21047,7 +21047,7 @@ function CusteioPorOP() {
         <select value={tipo} onChange={e => setTipo(e.target.value)}
           style={{ fontFamily: 'inherit', fontSize: 12.5, padding: '6px 10px', borderRadius: 6, border: `1px solid ${T.line}`, background: T.panel }}>
           <option value="final">OPs de produto final</option>
-          <option value="outras">Intermediárias e sem apontamento de produção</option>
+          <option value="outras">Estoque, intermediárias e sem apontamento de produção</option>
           <option value="todos">Todas as OPs</option>
         </select>
         <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="buscar OP, BR, cliente, produto, vendedor"
