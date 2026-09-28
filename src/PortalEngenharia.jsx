@@ -26540,6 +26540,26 @@ function CriarBR({ currentUser }) {
       </Panel>
 
       <Panel title="Criados pelo portal" subtitle="Registro de tudo que foi criado por aqui — o projeto em si fica no Sankhya.">
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 10 }}>
+          <button onClick={async () => {
+            const btn = event.currentTarget;
+            btn.disabled = true; btn.textContent = 'Atualizando…';
+            try {
+              const { data, error } = await supabase.rpc('fn_atualizar_brs_criados_portal');
+              if (error) throw error;
+              alert(data?.mensagem || 'Atualizado.');
+              // Recarregar a lista
+              const { data: novo } = await supabase.from('brs_criados_portal').select('*').order('criado_em', { ascending: false }).limit(100);
+              setHistorico(novo || []);
+            } catch (e) { alert('Erro: ' + (e.message || e)); }
+            btn.disabled = false; btn.textContent = '↻ Atualizar do Sankhya';
+          }}
+          style={{ fontFamily: 'inherit', fontSize: 11.5, fontWeight: 600, padding: '6px 14px',
+            borderRadius: 6, border: `1px solid ${T.line}`, background: T.panelAlt,
+            color: T.inkDim, cursor: 'pointer' }}>
+            ↻ Atualizar do Sankhya
+          </button>
+        </div>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
           <thead>
             <tr style={{ background: T.panelAlt, borderBottom: `1px solid ${T.line}` }}>
