@@ -3656,8 +3656,9 @@ const TXT = {
     porVendedor: 'Desempenho por vendedor',
     cicloTitulo: 'Propostas e fechamento, mês a mês',
     diasAtePedido: 'Da proposta ao pedido', diasAteFaturar: 'Do pedido ao faturamento',
-    convMedia: 'Conversão média',
-    explicaConv: 'BRs que viraram pedido ou faturamento, sobre o TOTAL de propostas. Ninguém marca proposta como perdida hoje, então contar só os "decididos" daria 100% para todos.',
+    convMedia: 'Média mensal (valor)',
+    convDecididos: 'Ganho × perdido (valor)',
+    explicaConv: 'Por VALOR: quanto do valor proposto virou pedido (em carteira ou já faturado), pelo valor da proposta. Média mensal = a mesma conta mês a mês, pela data da proposta. Ganho × perdido = só entre as propostas já decididas.',
     explicaPrev: 'Soma das propostas em aberto, cada uma multiplicada pelo fator do seu estágio no cenário escolhido.',
     explicaCenario: 'os fatores por estágio são editáveis — a regra de vocês ainda está sendo definida',
     explicaPrevisaoMes: 'pelo mês que o vendedor espera fechar, não pelo mês da proposta · barra cheia = valor bruto, barra escura = cenário',
@@ -3782,7 +3783,7 @@ const TXT = {
     ajEstagio: 'Divide as propostas em aberto pelo estágio de classificação (Avançado, Alto, Médio, Baixo). O estágio vem do follow up do vendedor. Quanto mais peso em Avançado e Alto, mais previsível é o faturamento dos próximos meses.',
     ajAging: 'Mostra há quanto tempo cada proposta está aberta, em faixas (30, 60, 90, 180 dias). Proposta velha parada quase sempre é proposta perdida que ninguém marcou — e infla o funil sem chance real de fechar.',
     ajReceita: 'Receita faturada mês a mês no ano. Cada coluna abre as notas do mês. Serve para acompanhar ritmo: se a média dos últimos 3 meses está abaixo da meta, a bandeira sobe cedo.',
-    ajConversao: 'Taxa de conversão = quantas propostas viraram pedido (contagem, não valor). Mede a eficácia comercial. Conversão caindo com funil crescendo = equipe abrindo proposta sem qualificar o lead.',
+    ajConversao: 'Conversão por valor = quanto do valor proposto virou pedido. Mede quanto do esforço comercial vira receita: uma proposta grande perdida pesa mais que várias pequenas ganhas. Conversão caindo com funil crescendo = equipe abrindo proposta sem qualificar o lead.',
     ajFaturado: 'Faturamento realizado dividido por vendedor e por cliente. Mostra quem está entregando resultado e onde está concentrada a receita.',
     ajCiclo: 'Quantos dias leva entre abrir a proposta e o pedido entrar. Ciclo curto é sinal de relacionamento maduro com o cliente; ciclo longo pode ser preço, burocracia ou proposta que deveria ter sido descartada.',
     ajAbertoPorMes: 'Volume de propostas novas que entram no funil a cada mês. Se cai dois meses seguidos, a prospecção está fraca — o faturamento vai sentir 3 a 6 meses depois.',
@@ -3849,8 +3850,9 @@ const TXT = {
     porVendedor: 'Performance by salesperson',
     cicloTitulo: 'Proposals and closings, month by month',
     diasAtePedido: 'Proposal to order', diasAteFaturar: 'Order to invoice',
-    convMedia: 'Average win rate',
-    explicaConv: 'Projects that became an order or invoice, over ALL proposals. Nobody marks proposals as lost today, so counting only "decided" ones would show 100% for everyone.',
+    convMedia: 'Monthly average (value)',
+    convDecididos: 'Won × lost (value)',
+    explicaConv: 'By VALUE: how much of the proposed value became an order (backlog or invoiced). Monthly average = same ratio month by month, by proposal date. Won × lost = only among decided proposals.',
     explicaPrev: 'Open proposals, each multiplied by its stage factor in the chosen scenario.',
     explicaCenario: 'stage factors are editable — the final rule is still being defined',
     explicaPrevisaoMes: 'by the month the salesperson expects to close, not the proposal month · light bar = full value, dark bar = scenario',
@@ -3975,7 +3977,7 @@ const TXT = {
     ajEstagio: 'Breaks open proposals down by classification stage. Stages come from the salesperson follow up. More weight in Advanced/High means more predictable revenue.',
     ajAging: 'Shows how long each proposal has been open, in bands. Old stuck proposals are almost always lost deals nobody marked — they inflate the funnel without real closing chance.',
     ajReceita: 'Monthly invoiced revenue for the year. Each column opens the month\'s invoices. Tracks pace against target.',
-    ajConversao: 'Win rate = how many proposals became orders (count, not value). Measures sales effectiveness.',
+    ajConversao: 'Win rate by value = how much of the proposed value became orders. A large lost proposal weighs more than several small wins.',
     ajFaturado: 'Invoiced revenue split by salesperson and customer. Shows who is delivering and where revenue concentrates.',
     ajCiclo: 'Days from proposal to order. Short cycle = mature customer relationship; long cycle may be pricing, red tape, or a proposal that should have been discarded.',
     ajAbertoPorMes: 'New proposals entering the funnel each month. Two consecutive drops mean prospecting is weak — revenue will feel it 3–6 months later.',
@@ -4641,6 +4643,23 @@ function PainelDiretoria() {
   const perdidos = dados.filter(d => d.situacao === 'perdido');
   const ganhos = pedidos.length + faturados.length;
   const convPct = dados.length > 0 ? (ganhos / dados.length) * 100 : null;
+  // CONVERSÃO POR VALOR (29/09/2026): quanto do valor proposto virou pedido
+  // (pedido em carteira + faturado, pelo valor da proposta), não quantos BRs.
+  const valorGanho = soma(pedidos) + soma(faturados);
+  const valorProposto = soma(dados);
+  const convPctValor = valorProposto > 0 ? (valorGanho / valorProposto) * 100 : null;
+  const convDecididosValor = (valorGanho + soma(perdidos)) > 0 ? (valorGanho / (valorGanho + soma(perdidos))) * 100 : null;
+  const convMensalValor = (() => {
+    const porMes = {};
+    dados.forEach(d => {
+      const m = d.competencia; if (!m) return;
+      porMes[m] = porMes[m] || { total: 0, ganho: 0 };
+      porMes[m].total += Number(d.valor) || 0;
+      if (d.situacao === 'pedido confirmado' || d.situacao === 'faturado') porMes[m].ganho += Number(d.valor) || 0;
+    });
+    const meses = Object.values(porMes).filter(x => x.total > 0);
+    return meses.length ? meses.reduce((s, x) => s + x.ganho / x.total, 0) / meses.length * 100 : null;
+  })();
   const receitaFat = soma(faturados, 'receita_faturada');
   // Regra oficial do pipeline: valor × peso do estágio; sem classificação = 0.
   const somaPonderado = soma(abertos, 'valor_ponderado');
@@ -5688,95 +5707,8 @@ IMPORTANTE: Responda SOMENTE com base nos dados acima. Se a pergunta pede algo q
       {gavetaDe('sem:')}
 
       <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))' }}>
-        {/* ── PERGUNTE À IA ── */}
-      <div style={{ background: T.panel, border: `1.5px solid ${iaAberta ? T.terracotta + '66' : T.line}`,
-        borderRadius: 11, overflow: 'hidden', transition: 'border-color .3s' }}>
-        <div onClick={() => setIaAberta(!iaAberta)}
-          style={{ padding: '12px 15px', display: 'flex', justifyContent: 'space-between',
-            alignItems: 'center', cursor: 'pointer', userSelect: 'none' }}>
-          <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ fontSize: 16 }}>✦</span>
-            <span style={{ fontSize: 12.5, fontWeight: 700 }}>{t.iaTitulo}</span>
-            <span style={{ fontSize: 10.5, color: T.inkFaint }}>{t.iaSub}</span>
-            <span style={{ fontSize: 8, color: T.inkFaint, opacity: 0.5 }}>v3</span>
-          </span>
-          <span style={{ fontSize: 14, color: T.inkFaint, transform: iaAberta ? 'rotate(180deg)' : 'none',
-            transition: 'transform .2s' }}>▾</span>
-        </div>
-        {iaAberta && (
-          <div style={{ padding: '0 15px 15px' }}>
-            <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap', marginBottom: 10 }}>
-              <span style={{ fontSize: 10.5, color: T.inkFaint, alignSelf: 'center' }}>{t.iaSugestoes}</span>
-              {[t.iaS1, t.iaS2, t.iaS3, t.iaS4, t.iaS5, t.iaS6].map(s => (
-                <button key={s} onClick={() => { setIaPergunta(s); perguntarIA(s); }}
-                  disabled={iaPensando}
-                  style={{ fontFamily: 'inherit', fontSize: 10.5, padding: '4px 10px', borderRadius: 6,
-                    border: `1px solid ${T.line}`, background: T.panelAlt, color: T.inkDim,
-                    cursor: iaPensando ? 'default' : 'pointer', whiteSpace: 'nowrap' }}>{s}</button>
-              ))}
-            </div>
-            <div style={{ display: 'flex', gap: 8 }}>
-              <input value={iaPergunta} onChange={e => setIaPergunta(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && !iaPensando && perguntarIA(iaPergunta)}
-                placeholder={t.iaPlaceholder} disabled={iaPensando}
-                style={{ flex: 1, fontFamily: 'inherit', fontSize: 12, padding: '9px 12px',
-                  borderRadius: 7, border: `1px solid ${T.line}`, background: T.panelAlt,
-                  color: T.ink, outline: 'none' }} />
-              <button onClick={() => perguntarIA(iaPergunta)} disabled={iaPensando || !iaPergunta.trim()}
-                style={{ fontFamily: 'inherit', fontSize: 12, fontWeight: 700, padding: '9px 16px',
-                  borderRadius: 7, border: 'none', cursor: iaPensando ? 'default' : 'pointer',
-                  background: iaPensando ? T.line : T.terracotta, color: '#fff' }}>
-                {iaPensando ? t.iaPensandoTxt : t.iaEnviar}
-              </button>
-            </div>
-            {iaPensando && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, color: T.inkFaint }}>
-                <svg width="18" height="18" viewBox="0 0 46 46" className="g-spin">
-                  <circle cx="23" cy="23" r="18" fill="none" stroke={T.lineSoft} strokeWidth="4" />
-                  <circle cx="23" cy="23" r="18" fill="none" stroke={T.terracotta} strokeWidth="4"
-                    strokeLinecap="round" strokeDasharray="60 113" />
-                </svg>
-                <span style={{ fontSize: 11.5 }}>{t.iaPensandoTxt}</span>
-              </div>
-            )}
-            {iaResposta && !iaPensando && (
-              <div style={{ marginTop: 12, padding: '12px 14px', background: `${T.terracotta}08`,
-                border: `1px solid ${T.terracotta}22`, borderRadius: 8, fontSize: 12,
-                lineHeight: 1.7, color: T.ink, whiteSpace: 'pre-wrap' }}>
-                {iaResposta}
-              </div>
-            )}
-            {iaHistorico.length > 1 && !iaPensando && (
-              <details style={{ marginTop: 10 }}>
-                <summary style={{ fontSize: 10.5, color: T.inkFaint, cursor: 'pointer' }}>
-                  Histórico ({iaHistorico.length} perguntas)
-                </summary>
-                <div style={{ maxHeight: 300, overflowY: 'auto', marginTop: 6 }}>
-                  {iaHistorico.slice(0, -1).reverse().map((h, i) => (
-                    <div key={i} style={{ padding: '8px 0', borderBottom: `1px solid ${T.lineSoft}` }}>
-                      <div style={{ fontSize: 11, fontWeight: 600, color: T.inkDim, marginBottom: 4 }}>
-                        {h.q} <span style={{ fontWeight: 400, color: T.inkFaint }}>{h.ts.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</span>
-                      </div>
-                      <div style={{ fontSize: 11.5, color: T.inkDim, lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>
-                        {h.r.slice(0, 400)}{h.r.length > 400 ? '…' : ''}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </details>
-            )}
-            {(iaResposta || iaHistorico.length > 0) && !iaPensando && (
-              <button onClick={() => { setIaResposta(''); setIaHistorico([]); setIaPergunta(''); }}
-                style={{ fontFamily: 'inherit', fontSize: 10.5, marginTop: 8, padding: '4px 10px',
-                  borderRadius: 5, border: `1px solid ${T.line}`, background: 'transparent',
-                  color: T.inkFaint, cursor: 'pointer' }}>{t.iaLimpar}</button>
-            )}
-          </div>
-        )}
-      </div>
-
       {painel(t.funilSituacao, (
-          <Rosca dados={roscaFunil} centro={val(soma(dados))} subcentro={`${dados.length} ${t.brs}`}
+          <Rosca dados={roscaFunil} tamanho={240} espessura={36} centro={val(soma(dados))} subcentro={`${dados.length} ${t.brs}`}
             ativo={detalhe?.chave?.startsWith('sit:') ? detalhe.chave.slice(4) : null}
             aoClicar={(fatia) => {
               const mapa = { [t.emAberto]: abertos, [t.pedido]: pedidos,
@@ -5800,7 +5732,7 @@ IMPORTANTE: Responda SOMENTE com base nos dados acima. Se a pergunta pede algo q
               </div>
             ) : null;
           })()}
-          <Rosca dados={roscaEstagio} centro={val(soma(abertos))} subcentro={`${abertos.length} ${t.propostas}`}
+          <Rosca dados={roscaEstagio} tamanho={240} espessura={36} centro={val(soma(abertos))} subcentro={`${abertos.length} ${t.propostas}`}
             ativo={detalhe?.chave?.startsWith('est:') ? detalhe.chave.slice(4) : null}
             aoClicar={(fatia) => {
               const lista = abertos.filter(d => d.estagio === fatia.k);
@@ -5900,11 +5832,9 @@ IMPORTANTE: Responda SOMENTE com base nos dados acima. Se a pergunta pede algo q
         {painel(t.conversao, (
           <div style={{ display: 'flex', justifyContent: 'space-around', alignItems: 'flex-start',
             flexWrap: 'wrap', gap: 18, paddingTop: 6 }}>
-            <Medidor pct={convPct} par={G.roxo} rotulo={`${ganhos} ${t.de} ${dados.length}`} />
-            {ciclo.length > 0 && (
-              <Medidor pct={ciclo.reduce((s, c) => s + (Number(c.conversao_pct) || 0), 0) / ciclo.length}
-                par={G.verde} rotulo={t.convMedia} />
-            )}
+            <Medidor pct={convPctValor} par={G.roxo} rotulo={`${val(valorGanho)} ${t.de} ${val(valorProposto)}`} />
+            {convMensalValor != null && <Medidor pct={convMensalValor} par={G.verde} rotulo={t.convMedia} />}
+            {convDecididosValor != null && <Medidor pct={convDecididosValor} par={G.ambar} rotulo={t.convDecididos} />}
           </div>
         ), t.explicaConv)}
         {painel(t.fatTitulo, (
@@ -6841,7 +6771,10 @@ function FollowUpComercial({ currentUser }) {
 
   // Vendedor vinculado ve so a carteira dele, igual ao resto do portal.
   const soMinhas = currentUser?.vendedor_sankhya && !currentUser?.ve_todos_vendedores;
-  const base = linhas.filter(l => !soMinhas || String(l.cod_vendedor) === String(currentUser.vendedor_sankhya));
+  // Projeto estoque (cliente Kalenborn do Brasil) não é venda: fica fora, como
+  // na Diretoria (v_comercial_diretoria). Era a diferença de R$ 2,8 mi na carteira.
+  const base = linhas.filter(l => !/^KALENBORN DO BRASIL/i.test(l.cliente || ''))
+    .filter(l => !soMinhas || String(l.cod_vendedor) === String(currentUser.vendedor_sankhya));
   const vendedores = ['Todos', ...[...new Set(base.map(l => l.vendedor).filter(Boolean))].sort()];
   const contem = (valor, busca) =>
     !busca || String(valor ?? '').toLowerCase().includes(busca.toLowerCase());
@@ -7202,7 +7135,9 @@ function FollowUpComercial({ currentUser }) {
 
       <div style={{ display: 'grid', gap: 8, gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))' }}>
         {[
-          { t: `Pedido em carteira · ${confirmados.length} BRs`, v: moeda(soma(confirmados, 'valor_proposta')), c: T.oliveText,
+          { t: `Pedido em carteira · ${confirmados.length} BRs`,
+            // mesma regra da Diretoria: sem valor de proposta, vale o valor do pedido
+            v: moeda(confirmados.reduce((s, l) => s + (Number(l.valor_proposta ?? l.valor_pedido) || 0), 0)), c: T.oliveText,
             dica: 'Tem pedido de venda e ainda não tem nota fiscal. Valor da proposta.', abrir: () => abrirGrafico('fechados', 'carteira') },
           { t: `Já faturado · ${faturados.length} BRs`, v: moeda(soma(faturados, 'receita_faturada')), c: T.blueText,
             dica: 'Já tem nota fiscal de venda. Valor faturado líquido (o que saiu em nota), não o da proposta.', abrir: () => abrirGrafico('fechados', 'faturado') },
