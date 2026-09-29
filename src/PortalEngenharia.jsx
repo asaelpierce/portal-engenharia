@@ -621,7 +621,6 @@ function PortalConteudo({ currentUser, session }) {
           {renderTab('reservas_pendentes', <TabErrorBoundary tab="Reservas Pendentes"><ReservasPendentes /></TabErrorBoundary>)}
           {renderTab('verificacao_projetos', <TabErrorBoundary tab="Verificação de Projetos"><VerificacaoProjetos currentUser={currentUser} /></TabErrorBoundary>)}
           {renderTab('analise_comercial', <TabErrorBoundary tab="Follow Up Comercial"><AnaliseComercial currentUser={currentUser} /></TabErrorBoundary>)}
-          {renderTab('crm', <TabErrorBoundary tab="CRM"><CRM currentUser={currentUser} /></TabErrorBoundary>)}
           {renderTab('prospeccao_clientes', <TabErrorBoundary tab="Prospecção de Clientes"><ProspeccaoClientes /></TabErrorBoundary>)}
           {renderTab('almoxarifado_fluxo', <TabErrorBoundary tab="Fluxo de Materiais"><AlmoxarifadoFluxo currentUser={currentUser} /></TabErrorBoundary>)}
           {renderTab('pedidosvale', <PedidosVale />)}
@@ -688,7 +687,6 @@ function Sidebar({ view, setView, pendCount, papel, telasPermitidas }) {
     { id: 'reservas_pendentes', label: 'Reservas Pendentes', icon: AlertTriangle },
     { id: 'verificacao_projetos', label: 'Verificação de Projetos', icon: ClipboardCheck },
     { id: 'analise_comercial', label: 'Follow Up Comercial', icon: TrendingUp },
-    { id: 'crm',          label: 'CRM',                    icon: Users },
     { id: 'prospeccao_clientes', label: 'Prospecção de Clientes', icon: UserPlus },
     { id: 'almoxarifado_fluxo', label: 'Fluxo de Materiais', icon: Package },
     { id: 'pedidosvale',  label: 'Pedidos Vale',           icon: FileWarning },
@@ -703,8 +701,6 @@ function Sidebar({ view, setView, pendCount, papel, telasPermitidas }) {
   // Custeio por OP (modelo de teste) acompanha a permissão do Custeio
   let permitidos = permitidos0 && permitidos0.includes('custeio') && !permitidos0.includes('custeio_op')
     ? [...permitidos0, 'custeio_op'] : permitidos0;
-  // CRM acompanha a permissão do Follow Up Comercial
-  if (permitidos && permitidos.includes('analise_comercial') && !permitidos.includes('crm')) permitidos = [...permitidos, 'crm'];
   const items = permitidos ? todosItems.filter(i => permitidos.includes(i.id)) : todosItems;
   return (
     // O menu tem 20+ itens e crescia junto com a pagina: quem estava no fim da
@@ -8279,6 +8275,7 @@ function PainelComercial({ currentUser }) {
       <div style={{ display: 'flex', gap: 2, borderBottom: `1px solid ${T.line}` }}>
         {[{ id: 'faturamento', label: 'Faturado x Previsto' },
           { id: 'followup', label: 'Follow Up' },
+          { id: 'crm', label: 'CRM' },
           { id: 'diretoria', label: 'Diretoria' },
           { id: 'modelo', label: 'Modelo Preditivo' }].map(ab => (
           <button key={ab.id} onClick={() => setSubAba(ab.id)} style={{
@@ -8292,7 +8289,7 @@ function PainelComercial({ currentUser }) {
         ))}
       </div>
 
-      {subAba === 'modelo' ? <ModeloPreditivo /> : subAba === 'followup' ? <FollowUpComercial currentUser={currentUser} /> : subAba === 'diretoria' ? <PainelDiretoria /> : <>
+      {subAba === 'modelo' ? <ModeloPreditivo /> : subAba === 'followup' ? <FollowUpComercial currentUser={currentUser} /> : subAba === 'crm' ? <CRM currentUser={currentUser} /> : subAba === 'diretoria' ? <PainelDiretoria /> : <>
 
       {/* Filtro de período — de/até */}
       <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '14px 18px' }}>
@@ -28243,7 +28240,6 @@ const TELAS_CATALOGO = [
   { id: 'reservas_pendentes', label: 'Reservas Pendentes' },
   { id: 'verificacao_projetos', label: 'Verificação de Projetos' },
   { id: 'analise_comercial', label: 'Follow Up Comercial' },
-  { id: 'crm', label: 'CRM' },
   { id: 'prospeccao_clientes', label: 'Prospecção de Clientes' },
   { id: 'almoxarifado_fluxo', label: 'Fluxo de Materiais' },
   { id: 'pedidosvale',  label: 'Pedidos Vale' },
