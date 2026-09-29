@@ -7816,9 +7816,9 @@ function FollowUpComercial({ currentUser }) {
           </table>
         </div>
         <div style={{ padding: '9px 12px', borderTop: `1px solid ${T.line}`, fontSize: 10.5, color: T.inkFaint }}>
-          O ponderado é o valor da proposta vezes o peso do estágio. Os pesos ficam em tabela: se a empresa
-          decidir que Médio vale 40% em vez de 50%, todo o funil se recalcula sem mexer em código.
-          BR sem proposta cadastrada ainda não soma no ponderado — falta o valor, não a intenção.
+          O peso do estágio é a chance de a proposta fechar, e pondera a <strong>quantidade de pedidos</strong>, não o valor:
+          num estágio com 20 propostas a 50%, contam 10 pedidos com o valor cheio, escolhidos pelo relacionamento do cliente.
+          Os pesos ficam em tabela: se a empresa decidir que Médio vale 40% em vez de 50%, a previsão se recalcula sem mexer em código.
           Quem já tem <strong>pedido de venda</strong> entra com 100% do valor líquido: não se pondera o que o
           cliente já fechou. <strong>Estágio comercial</strong> muda só aqui na tela; <strong>Estágio vendedor</strong>{' '}
           muda só quando a planilha dele é carregada. Uma não sobrescreve a outra — e quando as duas discordam,
@@ -21004,6 +21004,7 @@ function CRM({ currentUser }) {
   const [atividades, setAtividades] = useState([]);
   const [vendedores, setVendedores] = useState([]);
   const [perfil, setPerfil] = useState({ ve_tudo: true, vendedor: null });
+  const [relCli, setRelCli] = useState({});
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState(null);
   const [aviso, setAviso] = useState(null);
@@ -21044,6 +21045,8 @@ function CRM({ currentUser }) {
         currentUser?.email ? supabase.from('v_crm_usuario').select('*').ilike('email', currentUser.email).maybeSingle().then(r => r.data) : Promise.resolve(null),
       ]);
       setEtapas(et); setNegocios(ng); setEmpresas(em); setAtividades(at);
+      const { data: rel } = await supabase.from('v_comercial_cliente_relacionamento').select('cliente,score,pedidos_36m');
+      setRelCli(Object.fromEntries((rel || []).map(r => [r.cliente, r])));
       setVendedores(vd.filter(v => v.ativo && !v.em_copia).map(v => v.vendedor).sort());
       if (pu && !pu.ve_tudo && pu.vendedor) { setPerfil({ ve_tudo: false, vendedor: pu.vendedor }); setResp(pu.vendedor); }
       setErro(null);
@@ -21086,6 +21089,20 @@ function CRM({ currentUser }) {
     border: `1px solid ${ativo ? T.ink : T.line}`, background: ativo ? T.ink : T.panel, color: ativo ? T.panel : T.inkDim });
   const campo = { fontFamily: 'inherit', fontSize: 12.5, padding: '6px 10px', borderRadius: 6, border: `1px solid ${T.line}`, background: T.panel };
   const negAberto = abertoId ? negocios.find(n => n.id === abertoId) : null;
+  // PREVISÃO POR PEDIDOS (regra do Asael): a chance da etapa pondera a
+  // QUANTIDADE. Em cada etapa de Vendas fecham round(n × chance), com o valor
+  // cheio, escolhidos pela nota de relacionamento do cliente -- a mesma regra
+  // da Diretoria. Calculado sobre todos os negócios, não só o filtro da tela.
+  const previstoPorEtapa = {}; const devemFechar = new Set();
+  // só as etapas de negociação, como na Diretoria (proposta sem estágio fica fora)
+  etapas.filter(e => e.pipeline_id === 'vendas' && ['baixo', 'medio', 'alto', 'avancado'].includes(e.codigo) && (e.probabilidade || 0) > 0).forEach(e => {
+    const lista = negocios.filter(n => n.pipeline_id === 'vendas' && n.etapa_id === e.id)
+      .map(n => ({ n, nota: relCli[empPorId[n.empresa_id]?.nome]?.score ?? 0, ped: relCli[empPorId[n.empresa_id]?.nome]?.pedidos_36m ?? 0 }))
+      .sort((a, b) => b.nota - a.nota || b.ped - a.ped || (Number(b.n.valor) || 0) - (Number(a.n.valor) || 0));
+    const k = Math.round(lista.length * e.probabilidade / 100);
+    lista.slice(0, k).forEach(x => devemFechar.add(x.n.id));
+    previstoPorEtapa[e.id] = { k, valor: lista.slice(0, k).reduce((s, x) => s + (Number(x.n.valor) || 0), 0) };
+  });
   const nomePipe = { leads: 'Leads', vendas: 'Vendas', posvendas: 'Pós-vendas' };
 
   return (
@@ -21145,6 +21162,12 @@ function CRM({ currentUser }) {
                       <div style={{ padding: '9px 11px', borderBottom: `3px solid ${et.cor || T.line}` }}>
                         <div style={{ fontSize: 12, fontWeight: 700 }}>{et.nome}{et.probabilidade != null ? <span style={{ fontWeight: 400, color: T.inkFaint }}> · {et.probabilidade}%</span> : ''}</div>
                         <div style={{ fontSize: 11, color: T.inkFaint }}>{cards.length} · {moeda(cards.reduce((s, n) => s + valorDe(n), 0))}</div>
+                        {previstoPorEtapa[et.id] && (
+                          <div style={{ fontSize: 10.5, color: T.oliveText, marginTop: 1 }}
+                            title="Etapa com n negócios e chance p: fecham n × p, com o valor cheio, escolhidos pelo relacionamento do cliente">
+                            fecham {previstoPorEtapa[et.id].k} · {moeda(previstoPorEtapa[et.id].valor)}
+                          </div>
+                        )}
                       </div>
                       <div style={{ overflowY: 'auto', padding: 8, display: 'flex', flexDirection: 'column', gap: 7 }}>
                         {cards.slice(0, 150).map(n => {
@@ -21183,14 +21206,14 @@ function CRM({ currentUser }) {
             const COLS = [
               { c: 'titulo', t: pipeline === 'leads' ? 'Lead' : 'Negócio' }, { c: 'empresa', t: 'Empresa' }, { c: 'etapa', t: 'Etapa' },
               { c: 'valor', t: pipeline === 'leads' ? 'Potencial' : 'Valor', r: true }, { c: 'prob', t: pipeline === 'leads' ? 'Score' : 'Prob.', r: true },
-              { c: 'ponderado', t: 'Ponderado', r: true }, { c: 'previsao', t: pipeline === 'leads' ? 'Origem' : 'Previsão' },
+              { c: 'fecha', t: 'Deve fechar' }, { c: 'previsao', t: pipeline === 'leads' ? 'Origem' : 'Previsão' },
               { c: 'responsavel', t: 'Responsável' }, { c: 'concorrente', t: 'Concorrente' }, { c: 'proxima', t: 'Próxima tarefa' }, { c: 'dias', t: 'Dias na etapa', r: true },
             ];
             const linhasL = doPipe.filter(n => etapasPipe.some(e => e.id === n.etapa_id)).map(n => {
               const prox = (pendPorNeg[n.id] || [])[0];
               const prob = n.pipeline_id === 'leads' ? n.score : probDe(n);
               return { n, titulo: n.br || n.titulo, empresa: empPorId[n.empresa_id]?.nome || '', etapa: etapaPorId[n.etapa_id]?.ordem ?? 0,
-                valor: valorDe(n), prob: prob ?? -1, ponderado: n.pipeline_id === 'leads' ? null : valorDe(n) * (probDe(n) ?? 0) / 100,
+                valor: valorDe(n), prob: prob ?? -1, fecha: devemFechar.has(n.id) ? 1 : 0,
                 previsao: n.pipeline_id === 'leads' ? (n.fonte || '') : (n.previsao_fechamento || ''), responsavel: n.responsavel || '',
                 concorrente: n.concorrente || '', proxima: prox ? new Date(prox.vencimento || '2999-01-01').getTime() : Infinity, prox,
                 dias: diasDesde(n.etapa_desde) ?? 0 };
@@ -21225,7 +21248,10 @@ function CRM({ currentUser }) {
                             </td>
                             <td style={{ padding: '7px 10px', textAlign: 'right' }}>{l.valor ? moeda(l.valor) : '—'}</td>
                             <td style={{ padding: '7px 10px', textAlign: 'right' }}>{l.prob >= 0 ? (pipeline === 'leads' ? l.prob : `${l.prob}%`) : '—'}</td>
-                            <td style={{ padding: '7px 10px', textAlign: 'right', color: T.inkDim }}>{l.ponderado ? moeda(l.ponderado) : '—'}</td>
+                            <td style={{ padding: '7px 10px', whiteSpace: 'nowrap' }}>
+                              {l.fecha ? <span style={{ fontSize: 10.5, fontWeight: 700, color: T.oliveText, background: T.oliveSoft, padding: '2px 7px', borderRadius: 4 }}>deve fechar</span>
+                                       : <span style={{ color: T.inkFaint }}>—</span>}
+                            </td>
                             <td style={{ padding: '7px 10px', color: T.inkDim }}>{l.previsao || '—'}</td>
                             <td style={{ padding: '7px 10px', color: T.inkDim, whiteSpace: 'nowrap' }}>{l.responsavel || '—'}</td>
                             <td style={{ padding: '7px 10px', color: T.inkDim }}>{l.concorrente || '—'}</td>
@@ -21241,7 +21267,7 @@ function CRM({ currentUser }) {
                 </div>
                 <div style={{ padding: '7px 12px', fontSize: 11, color: T.inkFaint, borderTop: `1px solid ${T.line}` }}>
                   {linhasL.length} {pipeline === 'leads' ? 'leads' : 'negócios'} · {moeda(linhasL.reduce((s, l) => s + (l.valor || 0), 0))}
-                  {pipeline !== 'leads' ? ` · ponderado ${moeda(linhasL.reduce((s, l) => s + (l.ponderado || 0), 0))}` : ''}
+                  {pipeline === 'vendas' ? ` · devem fechar ${linhasL.filter(l => l.fecha).length}, ${moeda(linhasL.filter(l => l.fecha).reduce((s, l) => s + (l.valor || 0), 0))} com o valor cheio` : ''}
                 </div>
               </div>
             );
