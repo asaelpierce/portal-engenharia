@@ -20708,270 +20708,444 @@ function ApontarHoras({ setores, apontamentos, onSalvo }) {
 }
 
 /* ============================================================================
-   CUSTEIO POR OP — MODELO DE TESTE (28/09/2026)
-   Tela separada do Custeio por projeto, para não mexer na lógica dele.
-   Cada linha é uma OP:
-     material    = baixa real da OP (notas de apontamento TOP 1600, custo médio)
+   CUSTEIO POR OP — MODELO DE TESTE (v2, 29/09/2026)
+   Só por ORDEM DE PRODUÇÃO, sem BR (decisão do Asael). Cada OP:
+     material    = baixa real da nota de apontamento (TOP 1600, custo médio)
+     previsto    = lista de materiais do processo no Sankhya (TPRLMP) × o que
+                   a OP produziu (item de quantidade fixa não escala)
      mão de obra = horas apontadas na OP × custo da hora do mês
-     overhead    = CIF + benefícios + insumos do mês, rateado pelas OPs do mês
-     receita     = quantidade produzida × preço do produto no pedido do projeto
-   Fontes: v_custeio_op_analise, v_custeio_op_itens, v_custeio_mao_de_obra,
+     overhead    = o do mês, rateado pelas OPs pela base escolhida na tela:
+                   material + mão de obra, ou horas
+   Fontes: v_custeio_op_producao, v_custeio_op_produto_custo,
+   v_custeio_op_previsto_x_real, v_custeio_mao_de_obra,
    v_custeio_op_movimento_x_apontado.
 ============================================================================ */
 function CusteioPorOP() {
-  const [linhas, setLinhas] = useState([]);
+  const [aba, setAba] = useState('ops');
+  const [ops, setOps] = useState([]);
+  const [produtos, setProdutos] = useState([]);
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState(null);
   const [comp, setComp] = useState('todas');
-  const [tipo, setTipo] = useState('final');
+  const [situ, setSitu] = useState('finalizada');
   const [busca, setBusca] = useState('');
-  const [ordem, setOrdem] = useState({ c: 'custo_total', asc: false });
+  const [baseOvh, setBaseOvh] = useState('horas');
+  const [ordem, setOrdem] = useState({ c: 'custo', asc: false });
   const [aberta, setAberta] = useState(null);
   const [det, setDet] = useState(null);
+  const [prodAberto, setProdAberto] = useState(null);
+  const [desvios, setDesvios] = useState(null);
   const moeda = (v) => fmtMoedaCompacta(v);
   const num = (v, d = 1) => (Number(v) || 0).toLocaleString('pt-BR', { maximumFractionDigits: d });
   const fmtD = (d) => d ? String(d).slice(0, 10).split('-').reverse().join('/') : '—';
+  const H = baseOvh === 'horas';
+  const ovh = (l) => Number(H ? l.overhead_horas : l.overhead) || 0;
+  const custo = (l) => Number(H ? l.custo_total_horas : l.custo_total) || 0;
+  const cUnit = (l) => (H ? l.custo_unitario_horas : l.custo_unitario);
 
+  const lerTudo = async (tabela, aplicar) => {
+    let todas = [];
+    for (let de = 0; ; de += 1000) {
+      let q = supabase.from(tabela).select('*').range(de, de + 999);
+      if (aplicar) q = aplicar(q);
+      const { data, error } = await q;
+      if (error) throw error;
+      todas = todas.concat(data || []);
+      if (!data || data.length < 1000) break;
+    }
+    return todas;
+  };
   useEffect(() => {
     (async () => {
       try {
-        let todas = [];
-        for (let de = 0; ; de += 1000) {
-          const { data, error } = await supabase.from('v_custeio_op_analise').select('*')
-            .gte('competencia', '2026-01').range(de, de + 999);
-          if (error) throw error;
-          todas = todas.concat(data || []);
-          if (!data || data.length < 1000) break;
-        }
-        setLinhas(todas);
+        const [o, p] = await Promise.all([
+          lerTudo('v_custeio_op_producao', q => q.gte('competencia', '2026-01')),
+          lerTudo('v_custeio_op_produto_custo'),
+        ]);
+        setOps(o); setProdutos(p);
       } catch (e) { setErro(e.message || String(e)); }
       setLoading(false);
     })();
   }, []);
+  useEffect(() => {
+    if (aba !== 'desvios' || desvios) return;
+    (async () => {
+      const { data } = await supabase.from('v_custeio_op_previsto_x_real').select('*')
+        .in('situacao', ['consumiu a mais', 'não previsto']).gte('valor_desvio', 200).order('valor_desvio', { ascending: false }).limit(400);
+      setDesvios(data || []);
+    })();
+  }, [aba, desvios]);
 
   const abrir = async (op) => {
     if (aberta === op) { setAberta(null); setDet(null); return; }
     setAberta(op); setDet(null);
-    const [it, mo, mv] = await Promise.all([
-      supabase.from('v_custeio_op_itens').select('*').eq('op', op).order('dtneg'),
-      supabase.from('v_custeio_mao_de_obra').select('competencia,setor_nome,horas,pessoas,custo_mao_obra,custo_hora').eq('idiproc', op),
+    const [px, mo, mv] = await Promise.all([
+      supabase.from('v_custeio_op_previsto_x_real').select('*').eq('op', op),
+      supabase.from('v_custeio_mao_de_obra').select('competencia,setor_nome,horas,pessoas,custo_mao_obra').eq('idiproc', op),
       supabase.from('v_custeio_op_movimento_x_apontado').select('*').eq('op', op),
     ]);
-    setDet({ itens: it.data || [], mo: mo.data || [], mov: mv.data || [] });
+    setDet({ px: (px.data || []).sort((a, b) => Math.abs(Number(b.valor_desvio) || 0) - Math.abs(Number(a.valor_desvio) || 0)), mo: mo.data || [], mov: mv.data || [] });
   };
-
-  const comps = [...new Set(linhas.map(l => l.competencia).filter(Boolean))].sort().reverse();
-  const termo = busca.trim().toLowerCase();
-  const lista = linhas
-    .filter(l => comp === 'todas' || l.competencia === comp)
-    .filter(l => tipo === 'todos' || (tipo === 'final' ? l.tipo === 'final' : l.tipo !== 'final'))
-    .filter(l => !termo || [l.op, l.br, l.cliente, l.produto, l.vendedor].some(x => String(x ?? '').toLowerCase().includes(termo)))
-    .sort((a, b) => {
-      const va = a[ordem.c], vb = b[ordem.c];
-      const r = (typeof va === 'number' || !isNaN(Number(va))) && va !== null && vb !== null
-        ? Number(va) - Number(vb) : String(va ?? '').localeCompare(String(vb ?? ''));
-      return ordem.asc ? r : -r;
-    });
-  const soma = (c) => lista.reduce((s, l) => s + (Number(l[c]) || 0), 0);
-  const rec = soma('receita_estimada'), custo = soma('custo_total');
 
   if (loading) return <div style={{ padding: 40, textAlign: 'center', color: T.inkFaint }}>Carregando as OPs…</div>;
   if (erro) return <div style={{ padding: 20, color: T.rustText }}>Erro ao carregar: {erro}</div>;
 
+  const medianaProd = Object.fromEntries(produtos.map(p => [p.cod_produto, Number(H ? p.custo_unit_medio_horas : p.custo_unit_mediana) || null]));
+  const comps = [...new Set(ops.map(l => l.competencia).filter(Boolean))].sort().reverse();
+  const termo = busca.trim().toLowerCase();
+  const lista = ops
+    .filter(l => comp === 'todas' || l.competencia === comp)
+    .filter(l => situ === 'todas' || l.situacao === situ)
+    .filter(l => !termo || [l.op, l.produto, l.cod_produto].some(x => String(x ?? '').toLowerCase().includes(termo)))
+    .map(l => {
+      const med = medianaProd[l.cod_produto];
+      const cu = Number(cUnit(l));
+      return { ...l, _custo: custo(l), _ovh: ovh(l), _cu: cu || null,
+        _vsMed: med && cu ? Math.round(100 * (cu - med) / med) : null };
+    })
+    .sort((a, b) => {
+      const k = { custo: '_custo', cu: '_cu', vs: '_vsMed', desvio: 'desvio_material', op: 'op', qtd: 'qtd_produzida', horas: 'horas' }[ordem.c] || ordem.c;
+      const va = a[k] ?? -Infinity, vb = b[k] ?? -Infinity;
+      const r = typeof va === 'number' && typeof vb === 'number' ? va - vb : String(va).localeCompare(String(vb));
+      return ordem.asc ? r : -r;
+    });
+  const soma = (f) => lista.reduce((s, l) => s + (Number(typeof f === 'function' ? f(l) : l[f]) || 0), 0);
+  const botao = (ativo) => ({ fontFamily: 'inherit', fontSize: 12, padding: '6px 12px', borderRadius: 6, cursor: 'pointer',
+    border: `1px solid ${ativo ? T.ink : T.line}`, background: ativo ? T.ink : T.panel, color: ativo ? T.panel : T.inkDim });
+  const campo = { fontFamily: 'inherit', fontSize: 12.5, padding: '6px 10px', borderRadius: 6, border: `1px solid ${T.line}`, background: T.panel };
+  const corDesvio = (p) => p == null ? T.inkFaint : p > 20 ? T.rustText : p > 5 ? T.amberText : p < -20 ? T.blueText : T.oliveText;
+  const COR_SIT = { 'conforme': [T.oliveText, T.oliveSoft], 'consumiu a mais': [T.rustText, T.rustSoft], 'não previsto': [T.rustText, T.rustSoft],
+    'consumiu a menos': [T.blueText, T.blueSoft], 'não consumido': [T.amberText, T.amberSoft] };
+
   const COLS = [
-    { c: 'op', t: 'OP' }, { c: 'br', t: 'BR' }, { c: 'cliente', t: 'Cliente' }, { c: 'produto', t: 'Produto' },
-    { c: 'qtd_produzida', t: 'Qtd', r: true }, { c: 'ultimo_apontamento', t: 'Apontado' },
-    { c: 'material', t: 'Material', r: true }, { c: 'mao_obra', t: 'Mão de obra', r: true },
-    { c: 'overhead', t: 'Overhead', r: true }, { c: 'custo_total', t: 'Custo total', r: true },
-    { c: 'custo_unitario', t: 'Custo/un.', r: true }, { c: 'receita_estimada', t: 'Receita', r: true },
-    { c: 'margem_pct', t: 'Margem', r: true },
+    { c: 'op', t: 'OP' }, { c: 'produto', t: 'Produto' }, { c: 'situacao', t: 'Situação' }, { c: 'qtd', t: 'Peças', r: true },
+    { c: 'material', t: 'Material', r: true }, { c: 'desvio', t: 'vs previsto', r: true }, { c: 'horas', t: 'Mão de obra', r: true },
+    { c: 'ovh', t: 'Overhead', r: true }, { c: 'custo', t: 'Custo total', r: true }, { c: 'cu', t: 'Custo/peça', r: true },
+    { c: 'vs', t: 'vs mediana do produto', r: true },
   ];
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 14, paddingTop: 14 }}>
-      <div style={{ background: T.amberSoft, color: T.amberText, borderRadius: 8, padding: '10px 14px', fontSize: 12, lineHeight: 1.5 }}>
-        <strong>Modelo de teste — custeio por OP.</strong> Não altera o Custeio por projeto. Cada linha é uma OP de 2026:
-        <strong> material</strong> = baixa real da nota de apontamento (custo médio) ·
-        <strong> mão de obra</strong> = horas apontadas × custo da hora do mês ·
-        <strong> overhead</strong> = o do mês, rateado pelas OPs pela base material + mão de obra ·
-        <strong> receita</strong> = quantidade produzida × preço do produto no pedido. É o valor do que a OP produziu, não o que já faturou.
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12, paddingTop: 14 }}>
+      <div style={{ background: T.amberSoft, color: T.amberText, borderRadius: 8, padding: '9px 14px', fontSize: 12, lineHeight: 1.5 }}>
+        <strong>Modelo de teste — custeio por ordem de produção.</strong> Não altera o Custeio por projeto e não olha BR.
+        Material = baixa real do apontamento · previsto = lista de materiais do Sankhya × peças produzidas ·
+        mão de obra = horas × custo da hora do mês · overhead = o do mês, rateado pela base escolhida ao lado.
       </div>
 
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-        <select value={comp} onChange={e => setComp(e.target.value)}
-          style={{ fontFamily: 'inherit', fontSize: 12.5, padding: '6px 10px', borderRadius: 6, border: `1px solid ${T.line}`, background: T.panel }}>
-          <option value="todas">2026 inteiro</option>
-          {comps.map(c => <option key={c} value={c}>{c.slice(5)}/{c.slice(0, 4)}</option>)}
-        </select>
-        <select value={tipo} onChange={e => setTipo(e.target.value)}
-          style={{ fontFamily: 'inherit', fontSize: 12.5, padding: '6px 10px', borderRadius: 6, border: `1px solid ${T.line}`, background: T.panel }}>
-          <option value="final">OPs de produto final</option>
-          <option value="outras">Estoque, intermediárias e sem apontamento de produção</option>
-          <option value="todos">Todas as OPs</option>
-        </select>
-        <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="buscar OP, BR, cliente, produto, vendedor"
-          style={{ fontFamily: 'inherit', fontSize: 12.5, padding: '6px 10px', borderRadius: 6, border: `1px solid ${T.line}`, minWidth: 280 }} />
-        <span style={{ fontSize: 11.5, color: T.inkFaint }}>{lista.length} OPs</span>
-      </div>
-
-      <div style={{ display: 'grid', gap: 8, gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))' }}>
-        {[
-          { t: 'Receita estimada', v: moeda(rec), c: T.ink },
-          { t: 'Material', v: moeda(soma('material')), c: T.inkDim },
-          { t: 'Mão de obra', v: moeda(soma('mao_obra')), c: T.inkDim, s: `${num(soma('horas'), 0)} h` },
-          { t: 'Overhead', v: moeda(soma('overhead')), c: T.inkDim },
-          { t: 'Custo total', v: moeda(custo), c: T.ink },
-          { t: 'Margem', v: rec ? `${num(100 * (rec - custo) / rec)}%` : '—', c: rec - custo >= 0 ? T.oliveText : T.rustText, s: rec ? moeda(rec - custo) : '' },
-        ].map(k => (
-          <div key={k.t} style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 8, padding: '9px 12px' }}>
-            <div style={{ fontSize: 10.5, color: T.inkFaint }}>{k.t}</div>
-            <div style={{ fontSize: 18, fontWeight: 700, color: k.c, fontVariantNumeric: 'tabular-nums' }}>{k.v}</div>
-            {k.s && <div style={{ fontSize: 10.5, color: T.inkFaint }}>{k.s}</div>}
-          </div>
+        {[['ops', 'OPs'], ['produto', 'Por produto'], ['desvios', 'Desvios de material']].map(([k, r]) => (
+          <button key={k} onClick={() => setAba(k)} style={botao(aba === k)}>{r}</button>
         ))}
+        <span style={{ width: 1, height: 20, background: T.line, margin: '0 4px' }} />
+        <span style={{ fontSize: 11.5, color: T.inkFaint }}>Overhead por</span>
+        <button onClick={() => setBaseOvh('horas')} style={botao(H)}>horas</button>
+        <button onClick={() => setBaseOvh('material')} style={botao(!H)}>material + MO</button>
       </div>
 
-      <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
-        <div style={{ overflowX: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11.5 }}>
-            <thead><tr style={{ background: T.panelAlt }}>
-              {COLS.map(col => (
-                <th key={col.c} onClick={() => setOrdem(o => ({ c: col.c, asc: o.c === col.c ? !o.asc : false }))}
-                  style={{ padding: '8px 10px', fontSize: 10.5, fontWeight: 600, color: ordem.c === col.c ? T.ink : T.inkFaint,
-                    textAlign: col.r ? 'right' : 'left', whiteSpace: 'nowrap', cursor: 'pointer', userSelect: 'none' }}>
-                  {col.t}{ordem.c === col.c ? (ordem.asc ? ' ▲' : ' ▼') : ''}
-                </th>
-              ))}
-            </tr></thead>
-            <tbody>
-              {lista.slice(0, 400).map((l, i) => (
-                <React.Fragment key={`${l.op}-${i}`}>
-                  <tr onClick={() => abrir(l.op)}
-                    style={{ borderTop: `1px solid ${T.lineSoft}`, cursor: 'pointer', background: aberta === l.op ? T.panelAlt : 'transparent' }}>
-                    <td style={{ padding: '7px 10px', fontWeight: 700, whiteSpace: 'nowrap' }}>{l.op}</td>
-                    <td style={{ padding: '7px 10px', whiteSpace: 'nowrap' }}>{l.br || '—'}</td>
-                    <td style={{ padding: '7px 10px', maxWidth: 170, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={l.cliente}>{l.cliente || '—'}</td>
-                    <td style={{ padding: '7px 10px', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={l.produto}>
-                      {l.produto || '—'}
-                      {l.tipo !== 'final' && <span style={{ marginLeft: 6, fontSize: 9.5, color: T.amberText }}>{l.tipo}</span>}
-                    </td>
-                    <td style={{ padding: '7px 10px', textAlign: 'right' }}>{num(l.qtd_produzida)}</td>
-                    <td style={{ padding: '7px 10px', whiteSpace: 'nowrap', color: T.inkDim }}>{fmtD(l.ultimo_apontamento)}</td>
-                    <td style={{ padding: '7px 10px', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{moeda(Number(l.material) || 0)}</td>
-                    <td style={{ padding: '7px 10px', textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: l.sem_horas ? T.amberText : T.ink }}
-                      title={l.sem_horas ? 'Nenhuma hora apontada nesta OP' : `${num(l.horas)} h`}>
-                      {l.sem_horas ? 'sem horas' : moeda(Number(l.mao_obra) || 0)}
-                    </td>
-                    <td style={{ padding: '7px 10px', textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: T.inkDim }}>{moeda(Number(l.overhead) || 0)}</td>
-                    <td style={{ padding: '7px 10px', textAlign: 'right', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{moeda(Number(l.custo_total) || 0)}</td>
-                    <td style={{ padding: '7px 10px', textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: T.inkDim }}>{l.custo_unitario != null ? moeda(Number(l.custo_unitario)) : '—'}</td>
-                    <td style={{ padding: '7px 10px', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{l.receita_estimada != null ? moeda(Number(l.receita_estimada)) : '—'}</td>
-                    <td style={{ padding: '7px 10px', textAlign: 'right', fontWeight: 700,
-                      color: l.margem_pct == null ? T.inkFaint : Number(l.margem_pct) < 0 ? T.rustText : Number(l.margem_pct) < 25 ? T.amberText : T.oliveText }}>
-                      {l.margem_pct == null ? '—' : `${num(l.margem_pct)}%`}
-                    </td>
-                  </tr>
-                  {aberta === l.op && (
-                    <tr><td colSpan={COLS.length} style={{ padding: 0, background: T.panelAlt }}>
-                      {!det ? <div style={{ padding: 14, fontSize: 12, color: T.inkFaint }}>Carregando a OP…</div> : (() => {
-                        const prod = det.itens.filter(x => x.papel === 'produzido');
-                        const cons = det.itens.filter(x => x.papel === 'consumo').sort((a, b) => (Number(b.valor) || 0) - (Number(a.valor) || 0));
-                        const tot = (Number(l.custo_total) || 0) || 1;
-                        const partes = [
-                          { r: 'Material', v: Number(l.material) || 0, c: T.gold },
-                          { r: 'Mão de obra', v: Number(l.mao_obra) || 0, c: T.blue },
-                          { r: 'Overhead', v: Number(l.overhead) || 0, c: T.inkFaint },
-                        ];
-                        const bloco = { background: T.panel, border: `1px solid ${T.line}`, borderRadius: 8, padding: 10 };
-                        return (
-                          <div style={{ padding: 14, display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))' }}>
-                            <div style={bloco}>
-                              <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}>Conta da OP {l.op}</div>
-                              <div style={{ display: 'flex', height: 10, borderRadius: 5, overflow: 'hidden', marginBottom: 8 }}>
-                                {partes.map(p => <div key={p.r} style={{ width: `${100 * p.v / tot}%`, background: p.c }} title={`${p.r}: ${moeda(p.v)}`} />)}
-                              </div>
-                              {[
-                                ['Receita estimada', l.receita_estimada != null ? `${num(l.qtd_produzida)} × ${moeda(Number(l.preco_unitario))} = ${moeda(Number(l.receita_estimada))}` : 'produto sem preço no pedido do projeto'],
-                                ['− Material consumido', moeda(Number(l.material) || 0)],
-                                ['− Mão de obra', l.sem_horas ? 'nenhuma hora apontada' : `${num(l.horas)} h = ${moeda(Number(l.mao_obra) || 0)}`],
-                                ['− Overhead do mês', moeda(Number(l.overhead) || 0)],
-                                ['= Margem', l.margem != null ? `${moeda(Number(l.margem))} (${num(l.margem_pct)}%)` : '—'],
-                              ].map(([a, b]) => (
-                                <div key={a} style={{ display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 11.5, padding: '3px 0',
-                                  fontWeight: a.startsWith('=') ? 700 : 400, borderTop: a.startsWith('=') ? `1px solid ${T.line}` : 'none' }}>
-                                  <span style={{ color: T.inkDim }}>{a}</span><span>{b}</span>
-                                </div>
-                              ))}
-                              <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 6 }}>
-                                Projeto {l.br || '—'} · {l.vendedor || ''} · apontada de {fmtD(l.primeiro_apontamento)} a {fmtD(l.ultimo_apontamento)}
-                                {l.qtd_produzir ? ` · OP para ${num(l.qtd_produzir)} un.` : ''}
-                              </div>
-                            </div>
+      {aba === 'ops' && (
+        <>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+            <select value={comp} onChange={e => setComp(e.target.value)} style={campo}>
+              <option value="todas">2026 inteiro</option>
+              {comps.map(c => <option key={c} value={c}>{c.slice(5)}/{c.slice(0, 4)}</option>)}
+            </select>
+            <select value={situ} onChange={e => setSitu(e.target.value)} style={campo}>
+              <option value="finalizada">Finalizadas</option>
+              <option value="produzindo">Produzindo</option>
+              <option value="em andamento">Em andamento (sem peça produzida)</option>
+              <option value="todas">Todas</option>
+            </select>
+            <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="buscar OP ou produto" style={{ ...campo, minWidth: 220 }} />
+            <span style={{ fontSize: 11.5, color: T.inkFaint }}>{lista.length} OPs</span>
+          </div>
 
-                            <div style={bloco}>
-                              <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}>Material consumido ({cons.length} itens)</div>
-                              <div style={{ maxHeight: 220, overflowY: 'auto' }}>
-                                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
-                                  <tbody>
-                                    {cons.map((x, j) => (
-                                      <tr key={j} style={{ borderTop: `1px solid ${T.lineSoft}` }}>
-                                        <td style={{ padding: '3px 4px', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={x.descr}>
-                                          {x.descr || x.cod_prod}{x.rateado && <span style={{ fontSize: 9.5, color: T.amberText }}> · insumo</span>}
-                                        </td>
-                                        <td style={{ padding: '3px 4px', textAlign: 'right', whiteSpace: 'nowrap' }}>{num(x.quantidade, 2)}</td>
-                                        <td style={{ padding: '3px 4px', textAlign: 'right', whiteSpace: 'nowrap', fontWeight: 600 }}>{moeda(Number(x.valor) || 0)}</td>
-                                      </tr>
-                                    ))}
-                                  </tbody>
-                                </table>
-                              </div>
-                              {prod.length > 0 && (
-                                <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 6 }}>
-                                  Produziu: {prod.map(p => `${num(p.quantidade)} × ${p.descr || p.cod_prod}`).join(' · ')}
-                                </div>
-                              )}
-                            </div>
+          <div style={{ display: 'grid', gap: 8, gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))' }}>
+            {[
+              { t: 'OPs', v: String(lista.length), s: `${num(soma('qtd_produzida'), 0)} peças produzidas` },
+              { t: 'Material', v: moeda(soma('material')), s: `previsto ${moeda(soma('material_previsto'))}`,
+                c: soma('material') > soma('material_previsto') * 1.05 ? T.rustText : T.ink },
+              { t: 'Mão de obra', v: moeda(soma('mao_obra')), s: `${num(soma('horas'), 0)} h · ${lista.filter(l => l.sem_horas).length} OPs sem hora` },
+              { t: `Overhead (por ${H ? 'horas' : 'material + MO'})`, v: moeda(soma(ovh)), s: 'do mês de cada OP' },
+              { t: 'Custo total', v: moeda(soma(custo)), s: '' },
+              { t: 'OPs com desvio de material', v: String(lista.filter(l => l.itens_fora > 0).length), s: 'item fora do previsto em R$ 100 ou mais',
+                c: T.amberText },
+            ].map(k => (
+              <div key={k.t} style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 8, padding: '9px 12px' }}>
+                <div style={{ fontSize: 10.5, color: T.inkFaint }}>{k.t}</div>
+                <div style={{ fontSize: 18, fontWeight: 700, color: k.c || T.ink, fontVariantNumeric: 'tabular-nums' }}>{k.v}</div>
+                {k.s && <div style={{ fontSize: 10.5, color: T.inkFaint }}>{k.s}</div>}
+              </div>
+            ))}
+          </div>
 
-                            <div style={bloco}>
-                              <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}>Horas por setor</div>
-                              {det.mo.length === 0 ? <div style={{ fontSize: 11.5, color: T.amberText }}>Nenhuma hora apontada nesta OP.</div> : (
-                                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
-                                  <tbody>
-                                    {det.mo.map((h, j) => (
-                                      <tr key={j} style={{ borderTop: `1px solid ${T.lineSoft}` }}>
-                                        <td style={{ padding: '3px 4px' }}>{h.setor_nome || '—'} <span style={{ color: T.inkFaint }}>· {h.competencia}</span></td>
-                                        <td style={{ padding: '3px 4px', textAlign: 'right' }}>{num(h.horas)} h · {h.pessoas} pess.</td>
-                                        <td style={{ padding: '3px 4px', textAlign: 'right', fontWeight: 600 }}>{moeda(Number(h.custo_mao_obra) || 0)}</td>
-                                      </tr>
-                                    ))}
-                                  </tbody>
-                                </table>
-                              )}
-                              <div style={{ fontSize: 12, fontWeight: 700, margin: '10px 0 6px' }}>Saída × apontado × sobra</div>
-                              {det.mov.filter(m => m.situacao !== 'fecha').length === 0
-                                ? <div style={{ fontSize: 11.5, color: T.oliveText }}>Tudo o que saiu para esta OP foi apontado ou voltou ao estoque.</div>
-                                : det.mov.filter(m => m.situacao !== 'fecha').slice(0, 8).map((m, j) => (
-                                  <div key={j} style={{ fontSize: 11, padding: '2px 0', color: T.inkDim }}>
-                                    <strong style={{ color: T.ink }}>{m.descr_prod || m.cod_prod}</strong>: saiu {num(m.qtd_saida)}, apontou {num(m.qtd_apontada)}, voltou {num(m.qtd_sobra)} — {m.situacao}
+          <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11.5 }}>
+                <thead><tr style={{ background: T.panelAlt }}>
+                  {COLS.map(col => (
+                    <th key={col.c} onClick={() => setOrdem(o => ({ c: col.c, asc: o.c === col.c ? !o.asc : false }))}
+                      style={{ padding: '8px 10px', fontSize: 10.5, fontWeight: 600, color: ordem.c === col.c ? T.ink : T.inkFaint,
+                        textAlign: col.r ? 'right' : 'left', whiteSpace: 'nowrap', cursor: 'pointer', userSelect: 'none' }}>
+                      {col.t}{ordem.c === col.c ? (ordem.asc ? ' ▲' : ' ▼') : ''}
+                    </th>
+                  ))}
+                </tr></thead>
+                <tbody>
+                  {lista.slice(0, 400).map((l, i) => (
+                    <React.Fragment key={`${l.op}-${i}`}>
+                      <tr onClick={() => abrir(l.op)} style={{ borderTop: `1px solid ${T.lineSoft}`, cursor: 'pointer', background: aberta === l.op ? T.panelAlt : 'transparent' }}>
+                        <td style={{ padding: '7px 10px', fontWeight: 700 }}>{l.op}</td>
+                        <td style={{ padding: '7px 10px', maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={l.produto}>{l.produto || l.cod_produto || '—'}</td>
+                        <td style={{ padding: '7px 10px', whiteSpace: 'nowrap', color: T.inkDim }}>
+                          {l.situacao}<div style={{ fontSize: 10, color: T.inkFaint }}>{fmtD(l.primeiro_apontamento)} a {fmtD(l.ultimo_apontamento)}</div>
+                        </td>
+                        <td style={{ padding: '7px 10px', textAlign: 'right' }}>
+                          {num(l.qtd_produzida)}{l.qtd_produzir && Number(l.qtd_produzir) !== Number(l.qtd_produzida) ? <span style={{ color: T.inkFaint }}> / {num(l.qtd_produzir)}</span> : ''}
+                        </td>
+                        <td style={{ padding: '7px 10px', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{moeda(Number(l.material) || 0)}</td>
+                        <td style={{ padding: '7px 10px', textAlign: 'right', fontWeight: 600, color: corDesvio(l.desvio_material_pct) }}
+                          title={l.tem_previsto ? `Previsto ${moeda(Number(l.material_previsto) || 0)} · ${l.itens_fora} item(ns) fora` : 'Sem lista de materiais no Sankhya'}>
+                          {l.desvio_material_pct == null ? '—' : `${Number(l.desvio_material_pct) > 0 ? '+' : ''}${num(l.desvio_material_pct)}%`}
+                        </td>
+                        <td style={{ padding: '7px 10px', textAlign: 'right', color: l.sem_horas ? T.amberText : T.ink }} title={`${num(l.horas)} h`}>
+                          {l.sem_horas ? 'sem horas' : moeda(Number(l.mao_obra) || 0)}
+                        </td>
+                        <td style={{ padding: '7px 10px', textAlign: 'right', color: T.inkDim }}>{moeda(l._ovh)}</td>
+                        <td style={{ padding: '7px 10px', textAlign: 'right', fontWeight: 700 }}>{moeda(l._custo)}</td>
+                        <td style={{ padding: '7px 10px', textAlign: 'right' }}>{l._cu ? moeda(l._cu) : '—'}</td>
+                        <td style={{ padding: '7px 10px', textAlign: 'right', fontWeight: 700, color: corDesvio(l._vsMed) }}>
+                          {l._vsMed == null ? '—' : `${l._vsMed > 0 ? '+' : ''}${l._vsMed}%`}
+                        </td>
+                      </tr>
+                      {aberta === l.op && (
+                        <tr><td colSpan={COLS.length} style={{ padding: 0, background: T.panelAlt }}>
+                          {!det ? <div style={{ padding: 14, fontSize: 12, color: T.inkFaint }}>Carregando a OP…</div> : (
+                            <div style={{ padding: 14, display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))' }}>
+                              <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 8, padding: 10, gridColumn: '1 / -1' }}>
+                                <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}>
+                                  Material previsto × consumido — OP {l.op} · {num(l.qtd_produzida)} peça(s)
+                                  <span style={{ fontWeight: 400, color: T.inkFaint }}> · previsto {moeda(Number(l.material_previsto) || 0)}, consumido {moeda(Number(l.material) || 0)}</span>
+                                </div>
+                                {det.px.length === 0 ? <div style={{ fontSize: 11.5, color: T.inkFaint }}>Sem lista de materiais nem consumo registrado.</div> : (
+                                  <div style={{ maxHeight: 280, overflowY: 'auto' }}>
+                                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+                                      <thead><tr>
+                                        {['Item', 'Por peça', 'Previsto', 'Consumido', 'Desvio', 'R$ desvio', ''].map((h, j) => (
+                                          <th key={j} style={{ padding: '4px 6px', fontSize: 10, color: T.inkFaint, fontWeight: 600, textAlign: j && j < 6 ? 'right' : 'left', position: 'sticky', top: 0, background: T.panel }}>{h}</th>
+                                        ))}
+                                      </tr></thead>
+                                      <tbody>
+                                        {det.px.map((x, j) => {
+                                          const cs = COR_SIT[x.situacao] || [T.inkDim, T.panelAlt];
+                                          return (
+                                            <tr key={j} style={{ borderTop: `1px solid ${T.lineSoft}` }}>
+                                              <td style={{ padding: '4px 6px', maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={x.descr}>
+                                                {x.descr || x.cod_prod}{x.insumo && <span style={{ fontSize: 9.5, color: T.amberText }}> · insumo</span>}
+                                              </td>
+                                              <td style={{ padding: '4px 6px', textAlign: 'right', color: T.inkFaint }}>{x.qtd_por_unidade != null ? num(x.qtd_por_unidade, 3) : '—'}</td>
+                                              <td style={{ padding: '4px 6px', textAlign: 'right' }}>{x.qtd_prevista != null ? num(x.qtd_prevista, 2) : '—'}</td>
+                                              <td style={{ padding: '4px 6px', textAlign: 'right', fontWeight: 600 }}>{num(x.qtd_real, 2)}</td>
+                                              <td style={{ padding: '4px 6px', textAlign: 'right', color: cs[0] }}>{x.desvio_pct != null ? `${Number(x.desvio_pct) > 0 ? '+' : ''}${num(x.desvio_pct)}%` : '—'}</td>
+                                              <td style={{ padding: '4px 6px', textAlign: 'right', color: cs[0], fontWeight: 600 }}>{Math.abs(Number(x.valor_desvio) || 0) >= 1 ? moeda(Number(x.valor_desvio)) : '—'}</td>
+                                              <td style={{ padding: '4px 6px' }}><span style={{ fontSize: 9.5, fontWeight: 700, color: cs[0], background: cs[1], padding: '1px 6px', borderRadius: 4, whiteSpace: 'nowrap' }}>{x.situacao}</span></td>
+                                            </tr>
+                                          );
+                                        })}
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                )}
+                              </div>
+                              <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 8, padding: 10 }}>
+                                <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}>Conta da OP</div>
+                                {[
+                                  ['Material consumido', moeda(Number(l.material) || 0)],
+                                  ['Mão de obra', l.sem_horas ? 'nenhuma hora apontada' : `${num(l.horas)} h = ${moeda(Number(l.mao_obra) || 0)}`],
+                                  [`Overhead (por ${H ? 'horas' : 'material + MO'})`, moeda(l._ovh)],
+                                  ['= Custo total', moeda(l._custo)],
+                                  ['Custo por peça', l._cu ? moeda(l._cu) : '—'],
+                                  ['Mediana do produto', medianaProd[l.cod_produto] ? moeda(medianaProd[l.cod_produto]) : '—'],
+                                ].map(([a, b]) => (
+                                  <div key={a} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11.5, padding: '3px 0',
+                                    fontWeight: a.startsWith('=') ? 700 : 400, borderTop: a.startsWith('=') ? `1px solid ${T.line}` : 'none' }}>
+                                    <span style={{ color: T.inkDim }}>{a}</span><span>{b}</span>
                                   </div>
                                 ))}
+                                <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 6 }}>
+                                  OP {l.status === 'F' ? 'finalizada' : 'aberta'} no Sankhya{l.inicio ? ` · iniciada ${fmtD(l.inicio)}` : ''}{l.termino ? ` · terminada ${fmtD(l.termino)}` : ''}
+                                  {l.qtd_produzir ? ` · para ${num(l.qtd_produzir)} peça(s)` : ''}
+                                </div>
+                              </div>
+                              <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 8, padding: 10 }}>
+                                <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}>Horas por setor</div>
+                                {det.mo.length === 0 ? <div style={{ fontSize: 11.5, color: T.amberText }}>Nenhuma hora apontada nesta OP.</div> : det.mo.map((h, j) => (
+                                  <div key={j} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, padding: '2px 0', borderTop: `1px solid ${T.lineSoft}` }}>
+                                    <span>{h.setor_nome || '—'} <span style={{ color: T.inkFaint }}>· {h.competencia}</span></span>
+                                    <span>{num(h.horas)} h · <strong>{moeda(Number(h.custo_mao_obra) || 0)}</strong></span>
+                                  </div>
+                                ))}
+                                <div style={{ fontSize: 12, fontWeight: 700, margin: '10px 0 6px' }}>Saída × apontado × sobra</div>
+                                {det.mov.filter(m => m.situacao !== 'fecha').length === 0
+                                  ? <div style={{ fontSize: 11.5, color: T.oliveText }}>Tudo o que saiu para esta OP foi apontado ou voltou ao estoque.</div>
+                                  : det.mov.filter(m => m.situacao !== 'fecha').slice(0, 8).map((m, j) => (
+                                    <div key={j} style={{ fontSize: 11, padding: '2px 0', color: T.inkDim }}>
+                                      <strong style={{ color: T.ink }}>{m.descr_prod || m.cod_prod}</strong>: saiu {num(m.qtd_saida)}, apontou {num(m.qtd_apontada)}, voltou {num(m.qtd_sobra)} — {m.situacao}
+                                    </div>
+                                  ))}
+                              </div>
                             </div>
-                          </div>
-                        );
-                      })()}
-                    </td></tr>
-                  )}
-                </React.Fragment>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        {lista.length > 400 && (
-          <div style={{ padding: '8px 12px', fontSize: 11, color: T.inkFaint, borderTop: `1px solid ${T.line}` }}>
-            Mostrando 400 de {lista.length} OPs — use a busca ou o mês para refinar. Os totais acima consideram todas.
+                          )}
+                        </td></tr>
+                      )}
+                    </React.Fragment>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {lista.length > 400 && <div style={{ padding: '8px 12px', fontSize: 11, color: T.inkFaint, borderTop: `1px solid ${T.line}` }}>Mostrando 400 de {lista.length} — refine pela busca ou pelo mês. Os totais consideram todas.</div>}
           </div>
-        )}
-      </div>
+        </>
+      )}
+
+      {aba === 'produto' && (() => {
+        const termoP = busca.trim().toLowerCase();
+        const listaP = produtos.filter(p => Number(p.ops) >= 2)
+          .filter(p => !termoP || String(p.produto || '').toLowerCase().includes(termoP) || String(p.cod_produto).includes(termoP))
+          .map(p => ({ ...p, _disp: Number(p.custo_unit_min) > 0 ? Number(p.custo_unit_max) / Number(p.custo_unit_min) : null }))
+          .sort((a, b) => Number(b.custo_total) - Number(a.custo_total));
+        const opsDo = prodAberto ? ops.filter(o => o.cod_produto === prodAberto && Number(o.qtd_produzida) > 0)
+          .map(o => ({ ...o, _cu: Number(cUnit(o)) || null })).sort((a, b) => (b._cu || 0) - (a._cu || 0)) : [];
+        const med = prodAberto ? medianaProd[prodAberto] : null;
+        return (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="buscar produto" style={{ ...campo, minWidth: 240 }} />
+              <span style={{ fontSize: 11.5, color: T.inkFaint }}>{listaP.length} produtos feitos em 2 ou mais OPs · clique para ver OP por OP</span>
+            </div>
+            <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                  <thead><tr style={{ background: T.panelAlt }}>
+                    {['Produto', 'OPs', 'Peças', 'Custo/peça médio', 'Mediana', 'Mais barata', 'Mais cara', 'Mais cara ÷ mais barata', 'Custo total'].map((h, i) => (
+                      <th key={h} style={{ padding: '8px 10px', fontSize: 10.5, fontWeight: 600, color: T.inkFaint, textAlign: i ? 'right' : 'left', whiteSpace: 'nowrap' }}>{h}</th>
+                    ))}
+                  </tr></thead>
+                  <tbody>
+                    {listaP.slice(0, 300).map(p => (
+                      <React.Fragment key={p.cod_produto}>
+                        <tr onClick={() => setProdAberto(prodAberto === p.cod_produto ? null : p.cod_produto)}
+                          style={{ borderTop: `1px solid ${T.lineSoft}`, cursor: 'pointer', background: prodAberto === p.cod_produto ? T.panelAlt : 'transparent' }}>
+                          <td style={{ padding: '7px 10px', fontWeight: 600, maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={p.produto}>{p.produto || p.cod_produto}</td>
+                          <td style={{ padding: '7px 10px', textAlign: 'right' }}>{p.ops}</td>
+                          <td style={{ padding: '7px 10px', textAlign: 'right' }}>{num(p.qtd_total)}</td>
+                          <td style={{ padding: '7px 10px', textAlign: 'right', fontWeight: 700 }}>{moeda(Number(H ? p.custo_unit_medio_horas : p.custo_unit_medio) || 0)}</td>
+                          <td style={{ padding: '7px 10px', textAlign: 'right' }}>{moeda(Number(p.custo_unit_mediana) || 0)}</td>
+                          <td style={{ padding: '7px 10px', textAlign: 'right', color: T.oliveText }}>{moeda(Number(p.custo_unit_min) || 0)}</td>
+                          <td style={{ padding: '7px 10px', textAlign: 'right', color: T.rustText }}>{moeda(Number(p.custo_unit_max) || 0)}</td>
+                          <td style={{ padding: '7px 10px', textAlign: 'right', fontWeight: 700, color: p._disp > 2 ? T.rustText : p._disp > 1.3 ? T.amberText : T.oliveText }}>
+                            {p._disp ? `${num(p._disp, 1)}×` : '—'}
+                          </td>
+                          <td style={{ padding: '7px 10px', textAlign: 'right' }}>{moeda(Number(p.custo_total) || 0)}</td>
+                        </tr>
+                        {prodAberto === p.cod_produto && (
+                          <tr><td colSpan={9} style={{ padding: '8px 14px', background: T.panelAlt }}>
+                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+                              <thead><tr>{['OP', 'Apontada', 'Peças', 'Material', 'vs previsto', 'Horas', 'Custo/peça', 'vs mediana'].map((h, i) => (
+                                <th key={h} style={{ padding: '4px 6px', fontSize: 10, fontWeight: 600, color: T.inkFaint, textAlign: i >= 2 ? 'right' : 'left' }}>{h}</th>
+                              ))}</tr></thead>
+                              <tbody>
+                                {opsDo.map(o => {
+                                  const vs = med && o._cu ? Math.round(100 * (o._cu - med) / med) : null;
+                                  return (
+                                    <tr key={o.op} onClick={() => { setAba('ops'); setSitu('todas'); setBusca(String(o.op)); abrir(o.op); }}
+                                      style={{ borderTop: `1px solid ${T.lineSoft}`, cursor: 'pointer' }} title="Abrir a OP">
+                                      <td style={{ padding: '4px 6px', fontWeight: 700 }}>{o.op}</td>
+                                      <td style={{ padding: '4px 6px', color: T.inkDim }}>{fmtD(o.ultimo_apontamento)}</td>
+                                      <td style={{ padding: '4px 6px', textAlign: 'right' }}>{num(o.qtd_produzida)}</td>
+                                      <td style={{ padding: '4px 6px', textAlign: 'right' }}>{moeda(Number(o.material) || 0)}</td>
+                                      <td style={{ padding: '4px 6px', textAlign: 'right', color: corDesvio(o.desvio_material_pct) }}>{o.desvio_material_pct == null ? '—' : `${Number(o.desvio_material_pct) > 0 ? '+' : ''}${num(o.desvio_material_pct)}%`}</td>
+                                      <td style={{ padding: '4px 6px', textAlign: 'right', color: o.sem_horas ? T.amberText : T.inkDim }}>{o.sem_horas ? 'sem horas' : `${num(o.horas)} h`}</td>
+                                      <td style={{ padding: '4px 6px', textAlign: 'right', fontWeight: 700 }}>{o._cu ? moeda(o._cu) : '—'}</td>
+                                      <td style={{ padding: '4px 6px', textAlign: 'right', fontWeight: 700, color: corDesvio(vs) }}>{vs == null ? '—' : `${vs > 0 ? '+' : ''}${vs}%`}</td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </td></tr>
+                        )}
+                      </React.Fragment>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {aba === 'desvios' && (() => {
+        if (!desvios) return <div style={{ padding: 20, color: T.inkFaint }}>Carregando os desvios…</div>;
+        const porItem = Object.values(desvios.reduce((m, x) => {
+          const k = x.cod_prod;
+          m[k] = m[k] || { cod_prod: k, descr: x.descr, ops: 0, valor: 0, amais: 0, fora: 0, insumo: x.insumo };
+          m[k].ops++; m[k].valor += Number(x.valor_desvio) || 0;
+          if (x.situacao === 'não previsto') m[k].fora++; else m[k].amais++;
+          return m;
+        }, {})).sort((a, b) => b.valor - a.valor);
+        const total = porItem.reduce((s, x) => s + x.valor, 0);
+        return (
+          <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))' }}>
+            <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: 12 }}>
+              <div style={{ fontSize: 12.5, fontWeight: 700 }}>Itens mais consumidos acima do previsto</div>
+              <div style={{ fontSize: 10.5, color: T.inkFaint, marginBottom: 8 }}>
+                soma do excesso em R$ por item, nas OPs de 2026 · "fora da lista" = consumido sem estar na lista de materiais (pode ser troca de código) · total {moeda(total)}
+              </div>
+              <div style={{ maxHeight: 520, overflowY: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11.5 }}>
+                  <thead><tr>{['Item', 'OPs a mais', 'OPs fora da lista', 'Excesso'].map((h, i) => (
+                    <th key={h} style={{ padding: '5px 6px', fontSize: 10, color: T.inkFaint, fontWeight: 600, textAlign: i ? 'right' : 'left', position: 'sticky', top: 0, background: T.panel }}>{h}</th>
+                  ))}</tr></thead>
+                  <tbody>
+                    {porItem.slice(0, 80).map(x => (
+                      <tr key={x.cod_prod} style={{ borderTop: `1px solid ${T.lineSoft}` }}>
+                        <td style={{ padding: '5px 6px', maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={x.descr}>
+                          {x.descr || x.cod_prod}{x.insumo && <span style={{ fontSize: 9.5, color: T.amberText }}> · insumo</span>}
+                        </td>
+                        <td style={{ padding: '5px 6px', textAlign: 'right' }}>{x.amais || '—'}</td>
+                        <td style={{ padding: '5px 6px', textAlign: 'right', color: x.fora ? T.rustText : T.inkFaint }}>{x.fora || '—'}</td>
+                        <td style={{ padding: '5px 6px', textAlign: 'right', fontWeight: 700, color: T.rustText }}>{moeda(x.valor)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: 12 }}>
+              <div style={{ fontSize: 12.5, fontWeight: 700 }}>Maiores desvios por OP</div>
+              <div style={{ fontSize: 10.5, color: T.inkFaint, marginBottom: 8 }}>item a item, R$ 200 ou mais acima do previsto · clique para abrir a OP</div>
+              <div style={{ maxHeight: 520, overflowY: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11.5 }}>
+                  <thead><tr>{['OP', 'Item', 'Previsto', 'Consumido', 'Excesso'].map((h, i) => (
+                    <th key={h} style={{ padding: '5px 6px', fontSize: 10, color: T.inkFaint, fontWeight: 600, textAlign: i >= 2 ? 'right' : 'left', position: 'sticky', top: 0, background: T.panel }}>{h}</th>
+                  ))}</tr></thead>
+                  <tbody>
+                    {desvios.slice(0, 150).map((x, j) => (
+                      <tr key={j} onClick={() => { setAba('ops'); setSitu('todas'); setBusca(String(x.op)); abrir(x.op); }} style={{ borderTop: `1px solid ${T.lineSoft}`, cursor: 'pointer' }}>
+                        <td style={{ padding: '5px 6px', fontWeight: 700 }}>{x.op}</td>
+                        <td style={{ padding: '5px 6px', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={x.descr}>{x.descr || x.cod_prod}</td>
+                        <td style={{ padding: '5px 6px', textAlign: 'right', color: T.inkDim }}>{x.qtd_prevista != null ? num(x.qtd_prevista, 2) : 'fora da lista'}</td>
+                        <td style={{ padding: '5px 6px', textAlign: 'right' }}>{num(x.qtd_real, 2)}</td>
+                        <td style={{ padding: '5px 6px', textAlign: 'right', fontWeight: 700, color: T.rustText }}>{moeda(Number(x.valor_desvio) || 0)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
