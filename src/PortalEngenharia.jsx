@@ -20742,6 +20742,12 @@ function CusteioPorOP() {
   const ovh = (l) => Number(H ? l.overhead_horas : l.overhead) || 0;
   const custo = (l) => Number(H ? l.custo_total_horas : l.custo_total) || 0;
   const cUnit = (l) => (H ? l.custo_unitario_horas : l.custo_unitario);
+  // frete e serviços de terceiros entram por rateio mensal (não dá para seguir por OP)
+  const serv = (l) => (Number(l.rateio_frete) || 0) + (Number(l.rateio_industrializacao) || 0)
+    + (Number(l.rateio_autoclave) || 0) + (Number(l.rateio_outro_servico) || 0);
+  const [conf, setConf] = useState(null);
+  const [fornec, setFornec] = useState(null);
+  const [recarga, setRecarga] = useState(0);
 
   const lerTudo = async (tabela, aplicar) => {
     let todas = [];
@@ -20766,7 +20772,17 @@ function CusteioPorOP() {
       } catch (e) { setErro(e.message || String(e)); }
       setLoading(false);
     })();
-  }, []);
+  }, [recarga]);
+  useEffect(() => {
+    if (aba !== 'rateio') return;
+    (async () => {
+      const [c, f] = await Promise.all([
+        supabase.from('v_custeio_op_conferencia_mes').select('*').order('comp'),
+        supabase.from('v_custeio_servico_fornecedor_2026').select('*').order('valor', { ascending: false }),
+      ]);
+      setConf(c.data || []); setFornec(f.data || []);
+    })();
+  }, [aba, recarga]);
   useEffect(() => {
     if (aba !== 'desvios' || desvios) return;
     (async () => {
@@ -20801,11 +20817,11 @@ function CusteioPorOP() {
     .map(l => {
       const med = medianaProd[l.cod_produto];
       const cu = Number(cUnit(l));
-      return { ...l, _custo: custo(l), _ovh: ovh(l), _cu: cu || null,
+      return { ...l, _custo: custo(l), _ovh: ovh(l), _serv: serv(l), _cu: cu || null,
         _vsMed: med && cu ? Math.round(100 * (cu - med) / med) : null };
     })
     .sort((a, b) => {
-      const k = { custo: '_custo', cu: '_cu', vs: '_vsMed', desvio: 'desvio_material', op: 'op', qtd: 'qtd_produzida', horas: 'horas' }[ordem.c] || ordem.c;
+      const k = { custo: '_custo', cu: '_cu', vs: '_vsMed', desvio: 'desvio_material', op: 'op', qtd: 'qtd_produzida', horas: 'horas', ovh: '_ovh', serv: '_serv' }[ordem.c] || ordem.c;
       const va = a[k] ?? -Infinity, vb = b[k] ?? -Infinity;
       const r = typeof va === 'number' && typeof vb === 'number' ? va - vb : String(va).localeCompare(String(vb));
       return ordem.asc ? r : -r;
@@ -20821,7 +20837,7 @@ function CusteioPorOP() {
   const COLS = [
     { c: 'op', t: 'OP' }, { c: 'produto', t: 'Produto' }, { c: 'situacao', t: 'Situação' }, { c: 'qtd', t: 'Peças', r: true },
     { c: 'material', t: 'Material', r: true }, { c: 'desvio', t: 'vs previsto', r: true }, { c: 'horas', t: 'Mão de obra', r: true },
-    { c: 'ovh', t: 'Overhead', r: true }, { c: 'custo', t: 'Custo total', r: true }, { c: 'cu', t: 'Custo/peça', r: true },
+    { c: 'ovh', t: 'Overhead', r: true }, { c: 'serv', t: 'Serviço + frete', r: true }, { c: 'custo', t: 'Custo total', r: true }, { c: 'cu', t: 'Custo/peça', r: true },
     { c: 'vs', t: 'vs mediana do produto', r: true },
   ];
 
@@ -20834,7 +20850,7 @@ function CusteioPorOP() {
       </div>
 
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-        {[['ops', 'OPs'], ['produto', 'Por produto'], ['desvios', 'Desvios de material']].map(([k, r]) => (
+        {[['ops', 'OPs'], ['produto', 'Por produto'], ['desvios', 'Desvios de material'], ['rateio', 'Rateio e conferência']].map(([k, r]) => (
           <button key={k} onClick={() => setAba(k)} style={botao(aba === k)}>{r}</button>
         ))}
         <span style={{ width: 1, height: 20, background: T.line, margin: '0 4px' }} />
@@ -20860,6 +20876,19 @@ function CusteioPorOP() {
             </select>
             <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="buscar OP ou produto" style={{ ...campo, minWidth: 220 }} />
             <span style={{ fontSize: 11.5, color: T.inkFaint }}>{lista.length} OPs</span>
+            <button onClick={() => {
+                const cab = ['OP', 'Produto', 'Situação', 'Peças produzidas', 'Peças planejadas', 'Material', 'Material previsto', 'Desvio material %',
+                  'Horas', 'Mão de obra', `Overhead (${H ? 'horas' : 'material+MO'})`, 'Frete (rateio)', 'Industrialização (rateio)', 'Autoclave (rateio)',
+                  'Outros serviços (rateio)', 'Custo total', 'Custo por peça', 'vs mediana do produto %', 'Primeiro apontamento', 'Último apontamento'];
+                const n = (v) => v == null || v === '' ? '' : String(Number(v).toFixed(2)).replace('.', ',');
+                const linhasCsv = lista.map(l => [l.op, `"${String(l.produto || '').replace(/"/g, "'")}"`, l.situacao, n(l.qtd_produzida), n(l.qtd_produzir),
+                  n(l.material), n(l.material_previsto), n(l.desvio_material_pct), n(l.horas), n(l.mao_obra), n(l._ovh), n(l.rateio_frete),
+                  n(l.rateio_industrializacao), n(l.rateio_autoclave), n(l.rateio_outro_servico), n(l._custo), n(l._cu), l._vsMed ?? '',
+                  l.primeiro_apontamento || '', l.ultimo_apontamento || ''].join(';'));
+                const blob = new Blob(['\ufeff' + [cab.join(';'), ...linhasCsv].join('\n')], { type: 'text/csv;charset=utf-8' });
+                const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+                a.download = `custeio_por_op_${comp === 'todas' ? '2026' : comp}_${situ}.csv`; a.click(); URL.revokeObjectURL(a.href);
+              }} style={botao(false)}>Baixar CSV</button>
           </div>
 
           {situ === 'cancelada' && (
@@ -20884,6 +20913,7 @@ function CusteioPorOP() {
                 c: soma('material') > soma('material_previsto') * 1.05 ? T.rustText : T.ink },
               { t: 'Mão de obra', v: moeda(soma('mao_obra')), s: `${num(soma('horas'), 0)} h · ${lista.filter(l => l.sem_horas).length} OPs sem hora` },
               { t: `Overhead (por ${H ? 'horas' : 'material + MO'})`, v: moeda(soma(ovh)), s: 'do mês de cada OP' },
+              { t: 'Serviço e frete (rateio)', v: moeda(soma(serv)), s: `frete ${moeda(soma('rateio_frete'))} · serviços ${moeda(soma(l => serv(l) - (Number(l.rateio_frete) || 0)))}` },
               { t: 'Custo total', v: moeda(soma(custo)), s: '' },
               { t: 'OPs com desvio de material', v: String(lista.filter(l => l.itens_fora > 0).length), s: 'item fora do previsto em R$ 100 ou mais',
                 c: T.amberText },
@@ -20933,6 +20963,10 @@ function CusteioPorOP() {
                           {l.sem_horas ? 'sem horas' : moeda(Number(l.mao_obra) || 0)}
                         </td>
                         <td style={{ padding: '7px 10px', textAlign: 'right', color: T.inkDim }}>{moeda(l._ovh)}</td>
+                        <td style={{ padding: '7px 10px', textAlign: 'right', color: T.inkDim }}
+                          title={`Frete ${moeda(Number(l.rateio_frete) || 0)} · industrialização ${moeda(Number(l.rateio_industrializacao) || 0)} · autoclave ${moeda(Number(l.rateio_autoclave) || 0)} · outros ${moeda(Number(l.rateio_outro_servico) || 0)}`}>
+                          {l._serv ? moeda(l._serv) : '—'}
+                        </td>
                         <td style={{ padding: '7px 10px', textAlign: 'right', fontWeight: 700 }}>{moeda(l._custo)}</td>
                         <td style={{ padding: '7px 10px', textAlign: 'right' }}>{l._cu ? moeda(l._cu) : '—'}</td>
                         <td style={{ padding: '7px 10px', textAlign: 'right', fontWeight: 700, color: corDesvio(l._vsMed) }}>
@@ -20984,6 +21018,10 @@ function CusteioPorOP() {
                                   ['Material consumido', moeda(Number(l.material) || 0)],
                                   ['Mão de obra', l.sem_horas ? 'nenhuma hora apontada' : `${num(l.horas)} h = ${moeda(Number(l.mao_obra) || 0)}`],
                                   [`Overhead (por ${H ? 'horas' : 'material + MO'})`, moeda(l._ovh)],
+                                  ['Frete (rateio do mês, pelo material)', moeda(Number(l.rateio_frete) || 0)],
+                                  ['Industrialização (rateio, material + MO)', moeda(Number(l.rateio_industrializacao) || 0)],
+                                  ['Autoclave (rateio, material + MO)', moeda(Number(l.rateio_autoclave) || 0)],
+                                  ...(Number(l.rateio_outro_servico) ? [['Outros serviços de produção (rateio)', moeda(Number(l.rateio_outro_servico))]] : []),
                                   ['= Custo total', moeda(l._custo)],
                                   ['Custo por peça', l._cu ? moeda(l._cu) : '—'],
                                   ['Mediana do produto', medianaProd[l.cod_produto] ? moeda(medianaProd[l.cod_produto]) : '—'],
@@ -21097,6 +21135,110 @@ function CusteioPorOP() {
                           </td></tr>
                         )}
                       </React.Fragment>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {aba === 'rateio' && (() => {
+        if (!conf || !fornec) return <div style={{ padding: 20, color: T.inkFaint }}>Carregando a conferência…</div>;
+        const TIPOS = [['industrializacao', 'Industrialização'], ['autoclave', 'Autoclave'], ['outro_producao', 'Outro de produção'], ['fora', 'Fora do rateio'], ['a classificar', 'A classificar']];
+        const tot = (k) => conf.reduce((s, c) => s + (Number(c[k]) || 0), 0);
+        const dif = (a, b) => Math.abs((Number(a) || 0) - (Number(b) || 0)) >= 1;
+        const celula = (pool, rat) => (
+          <td style={{ padding: '6px 8px', textAlign: 'right', whiteSpace: 'nowrap' }}>
+            <div style={{ fontWeight: 600 }}>{moeda(Number(pool) || 0)}</div>
+            <div style={{ fontSize: 10, color: dif(pool, rat) ? T.rustText : T.oliveText }}>{dif(pool, rat) ? `rateado ${moeda(Number(rat) || 0)}` : 'rateado ✓'}</div>
+          </td>
+        );
+        const salvarTipo = async (nome, tipo) => {
+          await supabase.from('custeio_servico_fornecedor').upsert({ nomeparc: nome, tipo, confirmado: true, atualizado_em: new Date().toISOString(),
+            observacao: 'classificado na tela Custeio por OP' }, { onConflict: 'nomeparc' });
+          setRecarga(x => x + 1);
+        };
+        const aClass = fornec.filter(f => f.tipo === 'a classificar');
+        return (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: 12 }}>
+              <div style={{ fontSize: 12.5, fontWeight: 700 }}>Conferência do mês: o que entrou × o que foi rateado nas OPs</div>
+              <div style={{ fontSize: 10.5, color: T.inkFaint, marginBottom: 8 }}>
+                frete e serviços pela data da nota · frete rateado pelo material consumido, serviços pelo material + mão de obra · OP cancelada não recebe ·
+                "rateado ✓" = o total do mês foi inteiro para as OPs
+              </div>
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11.5 }}>
+                  <thead><tr style={{ background: T.panelAlt }}>
+                    {['Mês', 'OPs', 'Material', 'Mão de obra', 'Overhead', 'Frete', 'Industrialização', 'Autoclave', 'Outros serviços', 'A classificar', 'Fora do rateio'].map((h, i) => (
+                      <th key={h} style={{ padding: '7px 8px', fontSize: 10.5, fontWeight: 600, color: T.inkFaint, textAlign: i ? 'right' : 'left', whiteSpace: 'nowrap' }}>{h}</th>
+                    ))}
+                  </tr></thead>
+                  <tbody>
+                    {conf.map(c => (
+                      <tr key={c.comp} style={{ borderTop: `1px solid ${T.lineSoft}` }}>
+                        <td style={{ padding: '6px 8px', fontWeight: 700 }}>{c.comp.slice(5)}/{c.comp.slice(2, 4)}</td>
+                        <td style={{ padding: '6px 8px', textAlign: 'right' }}>{c.ops}</td>
+                        <td style={{ padding: '6px 8px', textAlign: 'right' }}>{moeda(Number(c.material) || 0)}</td>
+                        <td style={{ padding: '6px 8px', textAlign: 'right' }}>{moeda(Number(c.mao_obra) || 0)}<div style={{ fontSize: 10, color: T.inkFaint }}>{num(c.horas, 0)} h</div></td>
+                        {celula(c.overhead_mes, H ? c.overhead_horas_rateado : c.overhead_rateado)}
+                        {celula(c.frete, c.frete_rateado)}
+                        {celula(c.industrializacao, c.industrializacao_rateado)}
+                        {celula(c.autoclave, c.autoclave_rateado)}
+                        {celula(c.outro_servico, c.outro_servico_rateado)}
+                        <td style={{ padding: '6px 8px', textAlign: 'right', color: Number(c.servico_a_classificar) ? T.amberText : T.inkFaint }}>{moeda(Number(c.servico_a_classificar) || 0)}</td>
+                        <td style={{ padding: '6px 8px', textAlign: 'right', color: T.inkFaint }}>{moeda(Number(c.servico_fora) || 0)}</td>
+                      </tr>
+                    ))}
+                    <tr style={{ borderTop: `2px solid ${T.line}`, fontWeight: 700 }}>
+                      <td style={{ padding: '7px 8px' }}>2026</td>
+                      <td style={{ padding: '7px 8px', textAlign: 'right' }}>{tot('ops')}</td>
+                      <td style={{ padding: '7px 8px', textAlign: 'right' }}>{moeda(tot('material'))}</td>
+                      <td style={{ padding: '7px 8px', textAlign: 'right' }}>{moeda(tot('mao_obra'))}</td>
+                      <td style={{ padding: '7px 8px', textAlign: 'right' }}>{moeda(tot('overhead_mes'))}</td>
+                      <td style={{ padding: '7px 8px', textAlign: 'right' }}>{moeda(tot('frete'))}</td>
+                      <td style={{ padding: '7px 8px', textAlign: 'right' }}>{moeda(tot('industrializacao'))}</td>
+                      <td style={{ padding: '7px 8px', textAlign: 'right' }}>{moeda(tot('autoclave'))}</td>
+                      <td style={{ padding: '7px 8px', textAlign: 'right' }}>{moeda(tot('outro_servico'))}</td>
+                      <td style={{ padding: '7px 8px', textAlign: 'right', color: T.amberText }}>{moeda(tot('servico_a_classificar'))}</td>
+                      <td style={{ padding: '7px 8px', textAlign: 'right', color: T.inkFaint }}>{moeda(tot('servico_fora'))}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: 12 }}>
+              <div style={{ fontSize: 12.5, fontWeight: 700 }}>Fornecedores de serviço em 2026 (natureza Serviços Tomados PJ)</div>
+              <div style={{ fontSize: 10.5, color: T.inkFaint, marginBottom: 8 }}>
+                o tipo decide para onde vai o valor: industrialização, autoclave e outro de produção entram no rateio das OPs; "fora do rateio" é obra, consultoria,
+                serviço de campo, administrativo · {aClass.length} fornecedor(es) ainda a classificar, {moeda(aClass.reduce((s, f) => s + (Number(f.valor) || 0), 0))}, não entram ·
+                a classificação automática foi pelo nome — ao escolher aqui fica confirmada, e o rateio se recalcula na hora
+              </div>
+              <div style={{ overflowX: 'auto', maxHeight: 460, overflowY: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11.5 }}>
+                  <thead><tr>
+                    {['Fornecedor', 'Títulos', 'Valor 2026', 'Exemplos do histórico', 'Tipo', ''].map((h, i) => (
+                      <th key={h + i} style={{ padding: '6px 8px', fontSize: 10.5, fontWeight: 600, color: T.inkFaint, textAlign: i === 1 || i === 2 ? 'right' : 'left', position: 'sticky', top: 0, background: T.panel }}>{h}</th>
+                    ))}
+                  </tr></thead>
+                  <tbody>
+                    {fornec.slice().sort((a, b) => (a.tipo === 'a classificar' ? 0 : 1) - (b.tipo === 'a classificar' ? 0 : 1) || Number(b.valor) - Number(a.valor)).map(f => (
+                      <tr key={f.nomeparc} style={{ borderTop: `1px solid ${T.lineSoft}` }}>
+                        <td style={{ padding: '6px 8px', fontWeight: 600 }}>{f.nomeparc}</td>
+                        <td style={{ padding: '6px 8px', textAlign: 'right' }}>{f.titulos}</td>
+                        <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 700 }}>{moeda(Number(f.valor) || 0)}</td>
+                        <td style={{ padding: '6px 8px', color: T.inkDim, maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={f.exemplos_historico}>{f.exemplos_historico || '—'}</td>
+                        <td style={{ padding: '6px 8px' }}>
+                          <select value={f.tipo} onChange={e => salvarTipo(f.nomeparc, e.target.value)}
+                            style={{ ...campo, fontSize: 11.5, padding: '3px 6px', color: f.tipo === 'a classificar' ? T.amberText : f.tipo === 'fora' ? T.inkFaint : T.ink }}>
+                            {TIPOS.map(([v, r]) => <option key={v} value={v}>{r}</option>)}
+                          </select>
+                        </td>
+                        <td style={{ padding: '6px 8px', fontSize: 10, color: f.confirmado ? T.oliveText : T.amberText, whiteSpace: 'nowrap' }}>{f.confirmado ? 'confirmado' : 'automático'}</td>
+                      </tr>
                     ))}
                   </tbody>
                 </table>
