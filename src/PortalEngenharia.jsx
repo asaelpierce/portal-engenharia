@@ -4683,8 +4683,18 @@ function PainelDiretoria() {
     const estagiosP = (estagiosCfg || []).filter(e => Number(e.peso) > 0).sort((x, y) => (x.ordem ?? 0) - (y.ordem ?? 0));
     const porEstagio = estagiosP.map(e => {
       const p = Number(e.peso);
+      const partes = (r) => {
+        if (!r) return 'cliente sem histórico → nota 0';
+        const R = Math.min(1, (Number(r.pedidos_36m) || 0) / 12);
+        const C = Number(r.taxa_conversao ?? 0.5);
+        const dias = r.ultimo_pedido ? (Date.now() - new Date(r.ultimo_pedido).getTime()) / 86400000 : null;
+        const Tt = dias == null ? 0 : dias <= 183 ? 1 : dias <= 365 ? 0.6 : dias <= 730 ? 0.3 : 0;
+        const f = (x) => x.toFixed(2).replace('.', ',');
+        return `nota ${r.score} = 100 × (0,5 × ${f(R)} + 0,3 × ${f(C)} + 0,2 × ${f(Tt)}) · ${r.pedidos_36m} pedidos em 36 meses`;
+      };
       const lista = abertos.filter(d => d.estagio_codigo === e.estagio).map(d => ({
-        ...d, _nota: rel[d.cliente]?.score ?? 0, _pedidos: rel[d.cliente]?.pedidos_36m ?? 0, _mes: mesDe(d.expectativa_fechamento) }))
+        ...d, _nota: rel[d.cliente]?.score ?? 0, _pedidos: rel[d.cliente]?.pedidos_36m ?? 0, _mes: mesDe(d.expectativa_fechamento),
+        _calc: partes(rel[d.cliente]) }))
         .sort((x, y) => y._nota - x._nota || y._pedidos - x._pedidos || (Number(y.valor) || 0) - (Number(x.valor) || 0));
       const k = Math.round(lista.length * p);
       return { estagio: e.estagio, rotulo: e.rotulo, p, n: lista.length, k, lista, fecham: lista.slice(0, k), ficam: lista.slice(k),
@@ -5807,14 +5817,17 @@ IMPORTANTE: Responda SOMENTE com base nos dados acima. Se a pergunta pede algo q
           ...(pp.semMes.length ? [{ k: 'sem mês', mes: 'sem', lista: pp.semMes, valor: soma(pp.semMes), n: pp.semMes.length, semData: true }] : [])];
         const maxV = Math.max(1, ...colunas.map(c => c.valor));
         const ALT = 170;
-        const regra = (e) => `${e.n} propostas em ${e.rotulo} × ${Math.round(e.p * 100)}% de chance = ${e.k} fecham, com o valor cheio. `
-          + `Escolhidas pela nota de relacionamento do cliente (recorrência de pedidos em 36 meses, conversão, recência)${e.corte != null ? `; nota de corte ${e.corte}` : ''}.`;
+        const regra = (e) => `${e.n} propostas em ${e.rotulo} × ${Math.round(e.p * 100)}% de chance = ${e.n * e.p} → arredonda para ${e.k} que fecham, com o valor cheio. `
+          + `Ordem: nota do cliente (maior primeiro); empate pela quantidade de pedidos em 36 meses, depois pelo valor. As ${e.k} primeiras fecham; `
+          + `a nota de corte (${e.corte ?? '—'}) é a nota da ${e.k}ª. Nota = 100 × (0,5 × R + 0,3 × C + 0,2 × T): `
+          + `R = pedidos de venda do cliente nos últimos 36 meses ÷ 12 (máx. 1); C = propostas ganhas ÷ (ganhas + perdidas), 0,5 sem histórico; `
+          + `T = último pedido até 6 meses 1 · até 12 meses 0,6 · até 24 meses 0,3 · mais 0.`;
         return (
           <>
             <div style={{ display: 'grid', gap: 8, gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', marginBottom: 14 }}>
               {pp.porEstagio.map(e => (
                 <div key={e.estagio} onClick={() => abrir(`pp:${e.estagio}`, `${t.prevNovaTitulo} · ${e.rotulo}`, regra(e),
-                    e.fecham.map(d => ({ ...d, estagio: `${e.rotulo} · nota ${d._nota}` })), e.previsto)}
+                    e.lista.map((d, i) => ({ ...d, estagio: `${i + 1}º ${i < e.k ? '· FECHA' : '· fica'} · ${d._calc}` })), e.previsto)}
                   style={{ border: `1px solid ${T.line}`, borderTop: `3px solid ${(COR[e.estagio] || G.cinza)[1]}`, borderRadius: 9, padding: '10px 12px', cursor: 'pointer' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, fontWeight: 700, color: (COR[e.estagio] || G.cinza)[1] }}>
                     <span>{e.rotulo}</span><span>{Math.round(e.p * 100)}%</span>
