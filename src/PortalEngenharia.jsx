@@ -20878,7 +20878,8 @@ function CusteioPorOP() {
   if (loading) return <div style={{ padding: 40, textAlign: 'center', color: T.inkFaint }}>Carregando as OPs…</div>;
   if (erro) return <div style={{ padding: 20, color: T.rustText }}>Erro ao carregar: {erro}</div>;
 
-  const medianaProd = Object.fromEntries(produtos.map(p => [p.cod_produto, Number(H ? p.custo_unit_medio_horas : p.custo_unit_mediana) || null]));
+  const medianaProd = Object.fromEntries(produtos.map(p => [p.cod_produto, Number(H ? p.custo_unit_mediana_horas : p.custo_unit_mediana) || null]));
+  const dias = (v) => v == null ? '—' : `${num(v, 1)} d`;
   const comps = [...new Set(ops.map(l => l.competencia).filter(Boolean))].sort().reverse();
   const termo = busca.trim().toLowerCase();
   const lista = ops
@@ -20950,12 +20951,12 @@ function CusteioPorOP() {
             <button onClick={() => {
                 const cab = ['OP', 'Produto', 'Situação', 'Peças produzidas', 'Peças planejadas', 'Material', 'Material previsto', 'Desvio material %',
                   'Horas', 'Mão de obra', `Overhead (${H ? 'horas' : 'material+MO'})`, 'Frete (rateio)', 'Industrialização (rateio)', 'Autoclave (rateio)',
-                  'Outros serviços (rateio)', 'Custo total', 'Custo por peça', 'vs mediana do produto %', 'Primeiro apontamento', 'Último apontamento'];
+                  'Outros serviços (rateio)', 'Custo total', 'Custo por peça', 'vs mediana do produto %', 'Primeiro apontamento', 'Último apontamento', 'Código do PA', 'Duração (dias)', 'Dias de trabalho (h ÷ 8,8)'];
                 const n = (v) => v == null || v === '' ? '' : String(Number(v).toFixed(2)).replace('.', ',');
                 const linhasCsv = lista.map(l => [l.op, `"${String(l.produto || '').replace(/"/g, "'")}"`, l.situacao, n(l.qtd_produzida), n(l.qtd_produzir),
                   n(l.material), n(l.material_previsto), n(l.desvio_material_pct), n(l.horas), n(l.mao_obra), n(l._ovh), n(l.rateio_frete),
                   n(l.rateio_industrializacao), n(l.rateio_autoclave), n(l.rateio_outro_servico), n(l._custo), n(l._cu), l._vsMed ?? '',
-                  l.primeiro_apontamento || '', l.ultimo_apontamento || ''].join(';'));
+                  l.primeiro_apontamento || '', l.ultimo_apontamento || '', l.cod_produto || '', n(l.duracao_dias), n(Number(l.horas) / 8.8)].join(';'));
                 const blob = new Blob(['\ufeff' + [cab.join(';'), ...linhasCsv].join('\n')], { type: 'text/csv;charset=utf-8' });
                 const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
                 a.download = `custeio_por_op_${comp === 'todas' ? '2026' : comp}_${situ}.csv`; a.click(); URL.revokeObjectURL(a.href);
@@ -21014,13 +21015,15 @@ function CusteioPorOP() {
                     <React.Fragment key={`${l.op}-${i}`}>
                       <tr onClick={() => abrir(l.op)} style={{ borderTop: `1px solid ${T.lineSoft}`, cursor: 'pointer', background: aberta === l.op ? T.panelAlt : 'transparent' }}>
                         <td style={{ padding: '7px 10px', fontWeight: 700 }}>{l.op}</td>
-                        <td style={{ padding: '7px 10px', maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={l.produto}>{l.produto || l.cod_produto || '—'}</td>
+                        <td style={{ padding: '7px 10px', maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={`${l.cod_produto || ''} · ${l.produto || ''}`}>
+                          <span style={{ color: T.inkFaint, marginRight: 5, fontVariantNumeric: 'tabular-nums' }}>{l.cod_produto}</span>{l.produto || '—'}
+                        </td>
                         <td style={{ padding: '7px 10px', whiteSpace: 'nowrap', color: T.inkDim }}>
                           {['cancelada', 'suspensa'].includes(l.situacao)
                             ? <span style={{ fontSize: 10.5, fontWeight: 700, padding: '1px 6px', borderRadius: 4,
                                 color: l.situacao === 'cancelada' ? T.rustText : T.amberText, background: l.situacao === 'cancelada' ? T.rustSoft : T.amberSoft }}>{l.situacao}</span>
                             : l.situacao}
-                          <div style={{ fontSize: 10, color: T.inkFaint }}>{fmtD(l.primeiro_apontamento)} a {fmtD(l.ultimo_apontamento)}</div>
+                          <div style={{ fontSize: 10, color: T.inkFaint }}>{fmtD(l.primeiro_apontamento)} a {fmtD(l.ultimo_apontamento)}{Number(l.duracao_dias) > 0 ? ` · ${num(l.duracao_dias, 0)} d` : ''}</div>
                         </td>
                         <td style={{ padding: '7px 10px', textAlign: 'right' }}>
                           {num(l.qtd_produzida)}{l.qtd_produzir && Number(l.qtd_produzir) !== Number(l.qtd_produzida) ? <span style={{ color: T.inkFaint }}> / {num(l.qtd_produzir)}</span> : ''}
@@ -21095,6 +21098,8 @@ function CusteioPorOP() {
                                   ...(Number(l.rateio_outro_servico) ? [['Outros serviços de produção (rateio)', moeda(Number(l.rateio_outro_servico))]] : []),
                                   ['= Custo total', moeda(l._custo)],
                                   ['Custo por peça', l._cu ? moeda(l._cu) : '—'],
+                                  ['Duração da OP', Number(l.duracao_dias) > 0 ? `${num(l.duracao_dias, 1)} dias corridos` : '—'],
+                                  ['Dias de trabalho', l.sem_horas ? '—' : `${num(Number(l.horas) / 8.8, 1)} dias (${num(l.horas)} h ÷ 8,8 h)`],
                                   ['Mediana do produto', medianaProd[l.cod_produto] ? moeda(medianaProd[l.cod_produto]) : '—'],
                                 ].map(([a, b]) => (
                                   <div key={a} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11.5, padding: '3px 0',
@@ -21142,7 +21147,8 @@ function CusteioPorOP() {
         const termoP = busca.trim().toLowerCase();
         const listaP = produtos.filter(p => Number(p.ops) >= 2)
           .filter(p => !termoP || String(p.produto || '').toLowerCase().includes(termoP) || String(p.cod_produto).includes(termoP))
-          .map(p => ({ ...p, _disp: Number(p.custo_unit_min) > 0 ? Number(p.custo_unit_max) / Number(p.custo_unit_min) : null }))
+          .map(p => { const mn = Number(H ? p.custo_unit_min_horas : p.custo_unit_min), mx = Number(H ? p.custo_unit_max_horas : p.custo_unit_max);
+                      return { ...p, _disp: mn > 0 ? mx / mn : null }; })
           .sort((a, b) => Number(b.custo_total) - Number(a.custo_total));
         const opsDo = prodAberto ? ops.filter(o => o.cod_produto === prodAberto && Number(o.qtd_produzida) > 0 && o.situacao !== 'cancelada')
           .map(o => ({ ...o, _cu: Number(cUnit(o)) || null })).sort((a, b) => (b._cu || 0) - (a._cu || 0)) : [];
@@ -21157,8 +21163,12 @@ function CusteioPorOP() {
               <div style={{ overflowX: 'auto' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                   <thead><tr style={{ background: T.panelAlt }}>
-                    {['Produto', 'OPs', 'Peças', 'Custo/peça médio', 'Mediana', 'Mais barata', 'Mais cara', 'Mais cara ÷ mais barata', 'Custo total'].map((h, i) => (
-                      <th key={h} style={{ padding: '8px 10px', fontSize: 10.5, fontWeight: 600, color: T.inkFaint, textAlign: i ? 'right' : 'left', whiteSpace: 'nowrap' }}>{h}</th>
+                    {[['Código', 'left'], ['Produto (PA)', 'left'], ['OPs', 'right'], ['Peças', 'right'], ['Custo/peça médio', 'right'], ['Mediana', 'right'],
+                      ['Mais barata', 'right'], ['Mais cara', 'right'], ['Cara ÷ barata', 'right'], ['Horas/peça', 'right'],
+                      ['Dias de trabalho/OP', 'right', 'horas apontadas por OP ÷ 8,8 h (jornada de 44 h em 5 dias); só OPs com horas'],
+                      ['Duração média/OP', 'right', 'dias corridos do início ao término da OP no Sankhya (aberta: até o último apontamento); só OPs com duração > 0'],
+                      ['Custo total', 'right']].map(([h, al, tt]) => (
+                      <th key={h} title={tt || ''} style={{ padding: '8px 10px', fontSize: 10.5, fontWeight: 600, color: T.inkFaint, textAlign: al, whiteSpace: 'nowrap', cursor: tt ? 'help' : 'default' }}>{h}{tt ? ' ⓘ' : ''}</th>
                     ))}
                   </tr></thead>
                   <tbody>
@@ -21166,22 +21176,29 @@ function CusteioPorOP() {
                       <React.Fragment key={p.cod_produto}>
                         <tr onClick={() => setProdAberto(prodAberto === p.cod_produto ? null : p.cod_produto)}
                           style={{ borderTop: `1px solid ${T.lineSoft}`, cursor: 'pointer', background: prodAberto === p.cod_produto ? T.panelAlt : 'transparent' }}>
-                          <td style={{ padding: '7px 10px', fontWeight: 600, maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={p.produto}>{p.produto || p.cod_produto}</td>
+                          <td style={{ padding: '7px 10px', color: T.inkDim, fontVariantNumeric: 'tabular-nums' }}>{p.cod_produto}</td>
+                          <td style={{ padding: '7px 10px', fontWeight: 600, maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={p.produto}>{p.produto || '—'}</td>
                           <td style={{ padding: '7px 10px', textAlign: 'right' }}>{p.ops}</td>
                           <td style={{ padding: '7px 10px', textAlign: 'right' }}>{num(p.qtd_total)}</td>
                           <td style={{ padding: '7px 10px', textAlign: 'right', fontWeight: 700 }}>{moeda(Number(H ? p.custo_unit_medio_horas : p.custo_unit_medio) || 0)}</td>
-                          <td style={{ padding: '7px 10px', textAlign: 'right' }}>{moeda(Number(p.custo_unit_mediana) || 0)}</td>
-                          <td style={{ padding: '7px 10px', textAlign: 'right', color: T.oliveText }}>{moeda(Number(p.custo_unit_min) || 0)}</td>
-                          <td style={{ padding: '7px 10px', textAlign: 'right', color: T.rustText }}>{moeda(Number(p.custo_unit_max) || 0)}</td>
+                          <td style={{ padding: '7px 10px', textAlign: 'right' }}>{moeda(Number(H ? p.custo_unit_mediana_horas : p.custo_unit_mediana) || 0)}</td>
+                          <td style={{ padding: '7px 10px', textAlign: 'right', color: T.oliveText }}>{moeda(Number(H ? p.custo_unit_min_horas : p.custo_unit_min) || 0)}</td>
+                          <td style={{ padding: '7px 10px', textAlign: 'right', color: T.rustText }}>{moeda(Number(H ? p.custo_unit_max_horas : p.custo_unit_max) || 0)}</td>
                           <td style={{ padding: '7px 10px', textAlign: 'right', fontWeight: 700, color: p._disp > 2 ? T.rustText : p._disp > 1.3 ? T.amberText : T.oliveText }}>
                             {p._disp ? `${num(p._disp, 1)}×` : '—'}
                           </td>
-                          <td style={{ padding: '7px 10px', textAlign: 'right' }}>{moeda(Number(p.custo_total) || 0)}</td>
+                          <td style={{ padding: '7px 10px', textAlign: 'right', color: T.inkDim }}>{p.horas_por_peca != null ? `${num(p.horas_por_peca, 2)} h` : '—'}</td>
+                          <td style={{ padding: '7px 10px', textAlign: 'right', fontWeight: 600 }}
+                            title={p.horas_media_op != null ? `${num(p.horas_media_op)} h por OP em média${Number(p.ops_sem_horas) ? ` · ${p.ops_sem_horas} OP(s) sem hora apontada ficaram de fora` : ''}` : 'nenhuma OP com hora apontada'}>
+                            {dias(p.dias_trabalho_media_op)}{Number(p.ops_sem_horas) ? <span style={{ color: T.amberText, fontWeight: 400 }}> *</span> : ''}
+                          </td>
+                          <td style={{ padding: '7px 10px', textAlign: 'right' }} title={p.duracao_mediana_dias != null ? `mediana ${num(p.duracao_mediana_dias, 1)} dias` : ''}>{dias(p.duracao_media_dias)}</td>
+                          <td style={{ padding: '7px 10px', textAlign: 'right' }}>{moeda(Number(H ? p.custo_total_horas : p.custo_total) || 0)}</td>
                         </tr>
                         {prodAberto === p.cod_produto && (
-                          <tr><td colSpan={9} style={{ padding: '8px 14px', background: T.panelAlt }}>
+                          <tr><td colSpan={13} style={{ padding: '8px 14px', background: T.panelAlt }}>
                             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
-                              <thead><tr>{['OP', 'Apontada', 'Peças', 'Material', 'vs previsto', 'Horas', 'Custo/peça', 'vs mediana'].map((h, i) => (
+                              <thead><tr>{['OP', 'Apontada', 'Peças', 'Material', 'vs previsto', 'Horas', 'Dias de trabalho', 'Duração', 'Custo/peça', 'vs mediana'].map((h, i) => (
                                 <th key={h} style={{ padding: '4px 6px', fontSize: 10, fontWeight: 600, color: T.inkFaint, textAlign: i >= 2 ? 'right' : 'left' }}>{h}</th>
                               ))}</tr></thead>
                               <tbody>
@@ -21196,6 +21213,8 @@ function CusteioPorOP() {
                                       <td style={{ padding: '4px 6px', textAlign: 'right' }}>{moeda(Number(o.material) || 0)}</td>
                                       <td style={{ padding: '4px 6px', textAlign: 'right', color: corDesvio(o.desvio_material_pct) }}>{o.desvio_material_pct == null ? '—' : `${Number(o.desvio_material_pct) > 0 ? '+' : ''}${num(o.desvio_material_pct)}%`}</td>
                                       <td style={{ padding: '4px 6px', textAlign: 'right', color: o.sem_horas ? T.amberText : T.inkDim }}>{o.sem_horas ? 'sem horas' : `${num(o.horas)} h`}</td>
+                                      <td style={{ padding: '4px 6px', textAlign: 'right', color: T.inkDim }}>{o.sem_horas ? '—' : dias(Number(o.horas) / 8.8)}</td>
+                                      <td style={{ padding: '4px 6px', textAlign: 'right', color: T.inkDim }}>{Number(o.duracao_dias) > 0 ? dias(o.duracao_dias) : '—'}</td>
                                       <td style={{ padding: '4px 6px', textAlign: 'right', fontWeight: 700 }}>{o._cu ? moeda(o._cu) : '—'}</td>
                                       <td style={{ padding: '4px 6px', textAlign: 'right', fontWeight: 700, color: corDesvio(vs) }}>{vs == null ? '—' : `${vs > 0 ? '+' : ''}${vs}%`}</td>
                                     </tr>
