@@ -3662,6 +3662,9 @@ const TXT = {
     explicaVendedor: 'barra clara = total proposto, barra intensa = o que fechou · % = conversão sobre o total',
     explicaCiclo: 'barra cheia = proposto, verde = virou pedido',
     explicaFaturado: 'Receita das notas dos BRs vendidos em 2026. O quadro abaixo abre a diferença para o faturamento total da empresa.',
+    vendidoKdb: 'Vendido no ano (Painel KdB)', entradasKdb: 'pedidos lançados',
+    explicaVendidoKdb: 'Net value dos pedidos lançados no Painel KdB no ano, conferido à mão. Conta pela data do pedido — inclui pedido de proposta de ano anterior.',
+    explicaPedidoKdb: 'BRs com pedido de venda e ainda sem nota. Valor do pedido no Painel KdB (net value); sem lançamento no KdB, o da proposta. Brinde, retrabalho e estoque não contam.',
     fatTitulo: 'De onde vem o faturamento de 2026', fatTotal: 'Faturamento total do ano',
     fatSub: 'o painel acima é do funil de 2026; este quadro fecha com a tela de Faturamento',
     fatExplica: 'O cartão “Faturado” conta só o que foi vendido em 2026. O restante veio de projetos fechados em anos anteriores e entregues agora — em obra longa isso é o normal, e é a diferença entre este painel e a tela de Faturamento.',
@@ -3856,6 +3859,9 @@ const TXT = {
     explicaVendedor: 'light bar = total proposed, solid bar = closed · % = win rate over the total',
     explicaCiclo: 'light bar = proposed, green = became an order',
     explicaFaturado: 'Invoiced revenue for projects sold in 2026. The panel below breaks down the gap to company-wide revenue.',
+    vendidoKdb: 'Sold this year (KdB panel)', entradasKdb: 'orders booked',
+    explicaVendidoKdb: 'Net value of orders booked in the KdB panel this year, manually checked. Counted by order date.',
+    explicaPedidoKdb: 'Projects with a sales order and no invoice yet. Order net value from the KdB panel; without it, the proposal value.',
     fatTitulo: 'Where 2026 revenue comes from', fatTotal: 'Total revenue for the year',
     fatSub: 'the cards above cover the 2026 funnel; this panel reconciles with the Invoicing screen',
     fatExplica: 'The “Invoiced” card counts only what was sold in 2026. The rest came from projects closed in earlier years and delivered now — normal for long-cycle work, and the reason this dashboard differs from the Invoicing screen.',
@@ -4566,6 +4572,7 @@ function PainelDiretoria() {
   // DETALHE do grafico clicado: { titulo, regra, linhas }. Um so por vez --
   // varios abertos ao mesmo tempo viram bagunca numa tela de consulta.
   const [detalhe, setDetalhe] = useState(null);
+  const [vendaKdb, setVendaKdb] = useState([]);
   const t = TXT[idioma];
 
   const carregar = useCallback(async () => {
@@ -4578,6 +4585,8 @@ function PainelDiretoria() {
       supabase.from('v_comercial_faturado_detalhe').select('*'),
       supabase.from('comercial_estagio').select('*').order('ordem'),
     ]);
+    const { data: vk } = await supabase.from('v_comercial_venda_kdb_ano').select('*');
+    setVendaKdb(vk || []);
     const [pv2, rk, mx] = await Promise.all([
       supabase.from('v_comercial_previsibilidade').select('*'),
       supabase.from('v_comercial_ranking_cliente_3anos').select('*').limit(60),
@@ -5607,7 +5616,11 @@ IMPORTANTE: Responda SOMENTE com base nos dados acima. Se a pergunta pede algo q
           { t: t.emAberto, bruto: soma(abertos), n: `${abertos.length} ${t.propostas}`, p: G.ambar },
           { t: t.ponderado, bruto: somaPonderado, n: t.ponderadoSub, p: G.ciano, ajuda: t.explicaPonderado },
           { t: t.paradoMais90, bruto: valor90, n: `${abertos90.length} ${t.propostas}`, p: G.vermelho, ajuda: t.explicaAging },
-          { t: t.pedido, bruto: soma(pedidos), n: `${pedidos.length} ${t.brs}`, p: G.azul },
+          ...(() => {
+            const vk = vendaKdb.find(x => Number(x.ano) === new Date().getFullYear());
+            return vk ? [{ t: t.vendidoKdb, bruto: Number(vk.vendido) || 0, n: `${vk.entradas} ${t.entradasKdb}`, p: G.roxo, ajuda: t.explicaVendidoKdb }] : [];
+          })(),
+          { t: t.pedido, bruto: soma(pedidos), n: `${pedidos.length} ${t.brs}`, p: G.azul, ajuda: t.explicaPedidoKdb },
           { t: t.faturado, bruto: receitaFat, n: `${faturados.length} ${t.brs}`, p: G.verde, ajuda: t.explicaFaturado },
           { t: t.previsto, bruto: totalCenario, n: cenarios.find(c => c.c === cenario)?.r || '', p: G.roxo },
           { t: t.diasAtePedido, txt: diasPedido == null ? '—' : `${diasPedido} ${t.dias}`, n: t.medio, p: G.ciano },
@@ -6693,7 +6706,12 @@ function FollowUpComercial({ currentUser }) {
       supabase.from('comercial_followup_config').select('webhook_url').eq('id', 1).maybeSingle(),
       supabase.from('v_comercial_candidata_desconto').select('*'),
     ]);
-    setLinhas(p.data || []);
+    // Valor da venda = net value do Painel KdB (conferido à mão). Só vale para
+    // BR ganho (em carteira ou faturado); o valor da proposta continua na tabela.
+    const { data: kdb } = await supabase.from('v_comercial_venda_kdb').select('br,net_value');
+    const kdbPorBr = Object.fromEntries((kdb || []).map(x => [x.br, Number(x.net_value)]));
+    setLinhas((p.data || []).map(l => ({ ...l,
+      valor_venda_kdb: kdbPorBr[String(l.br || '').toUpperCase().replace('-', '/')] ?? null })));
     setEstagios(e.data || []);
     setEnvioHist(h.data || []);
     setWebhook(c.data?.webhook_url || '');
@@ -7133,8 +7151,8 @@ function FollowUpComercial({ currentUser }) {
         {[
           { t: `Pedido em carteira · ${confirmados.length} BRs`,
             // mesma regra da Diretoria: sem valor de proposta, vale o valor do pedido
-            v: moeda(confirmados.reduce((s, l) => s + (Number(l.valor_proposta ?? l.valor_pedido) || 0), 0)), c: T.oliveText,
-            dica: 'Tem pedido de venda e ainda não tem nota fiscal. Valor da proposta.', abrir: () => abrirGrafico('fechados', 'carteira') },
+            v: moeda(confirmados.reduce((s, l) => s + (Number(l.valor_venda_kdb ?? l.valor_proposta ?? l.valor_pedido) || 0), 0)), c: T.oliveText,
+            dica: 'Tem pedido de venda e ainda não tem nota fiscal. Valor do pedido no Painel KdB (net value); sem lançamento no KdB, o da proposta.', abrir: () => abrirGrafico('fechados', 'carteira') },
           { t: `Já faturado · ${faturados.length} BRs`, v: moeda(soma(faturados, 'receita_faturada')), c: T.blueText,
             dica: 'Já tem nota fiscal de venda. Valor faturado líquido (o que saiu em nota), não o da proposta.', abrir: () => abrirGrafico('fechados', 'faturado') },
           { t: `Perdido · ${perdidos.length} BRs`, v: moeda(soma(perdidos, 'valor_proposta')), c: T.rustText,
