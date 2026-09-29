@@ -3745,12 +3745,12 @@ const TXT = {
     colMargem: 'Margem média', colComExp: 'Com data',
     regraPrev: 'Propostas em aberto de {g}. O ponderado é valor × peso do estágio; o lucro previsto é valor × margem orçada do BR.',
     pgDeduzido: 'PG deduzido do grupo do produto para {n} propostas — o tipo só é gravado quando o item vira pedido, então na proposta ele é inferido pelo histórico.',
-    rankTitulo: 'Ranking de clientes — faturamento dos últimos anos',
-    rankSub: 'notas de venda desde 2023 · o ano corrente é parcial, então a variação é ritmo, não fechamento',
+    rankTitulo: 'Ranking de clientes — pedidos de venda dos últimos anos',
+    rankSub: 'pedidos de venda desde 2023 (sem brinde, retrabalho e estoque) · o ano corrente é parcial: a tendência compara o ritmo anualizado com o ano anterior · parou de comprar = mais de 18 meses sem pedido',
     rankCliente: 'Cliente', rankTotal: 'Total', rankTend: 'Tendência', rankUltima: 'Última compra',
     rankAberto: 'Em aberto hoje', rankDias: 'dias', rankHoje: 'hoje',
     tendCrescendo: 'crescendo', tendCaindo: 'caindo', tendParou: 'parou de comprar', tendNovo: 'cliente novo',
-    rankAlerta: '{n} clientes do top 20 pararam de comprar ou estão caindo mais de 30% — somam {v} de faturamento histórico.',
+    rankAlerta: '{n} clientes do top 20 pararam de comprar ou estão comprando 30% abaixo do ritmo do ano passado — somam {v} em pedidos no período.',
     verMais: 'ver mais', verMenos: 'ver menos',
     pvTitulo: 'Previsão de vendas', pvSub: 'valor da proposta × peso do estágio, no mês que o vendedor espera fechar · a linha tracejada é a média mensal de faturamento real',
     pvBruto: 'Valor cheio com data', pvPrevisto: 'Previsto no cenário', pvSemData: 'Sem data do vendedor',
@@ -3946,12 +3946,12 @@ const TXT = {
     colMargem: 'Avg margin', colComExp: 'With date',
     regraPrev: 'Open proposals for {g}. Weighted is value × stage weight; forecast profit is value × the BR budgeted margin.',
     pgDeduzido: 'PG inferred from the product group for {n} proposals — the type is only recorded once the item becomes an order, so on a proposal it is inferred from history.',
-    rankTitulo: 'Customer ranking — revenue over recent years',
-    rankSub: 'sales invoices since 2023 · the current year is partial, so the change is pace, not a close',
+    rankTitulo: 'Customer ranking — sales orders over recent years',
+    rankSub: 'sales orders since 2023 · current year annualized against last year · stopped buying = no order in 18 months',
     rankCliente: 'Customer', rankTotal: 'Total', rankTend: 'Trend', rankUltima: 'Last purchase',
     rankAberto: 'Open today', rankDias: 'days', rankHoje: 'today',
     tendCrescendo: 'growing', tendCaindo: 'declining', tendParou: 'stopped buying', tendNovo: 'new customer',
-    rankAlerta: '{n} customers in the top 20 stopped buying or are down more than 30% — they add up to {v} in historical revenue.',
+    rankAlerta: '{n} customers in the top 20 stopped buying or are ordering 30% below last year pace — {v} in orders over the period.',
     verMais: 'show more', verMenos: 'show less',
     pvTitulo: 'Sales forecast', pvSub: 'proposal value × stage weight, on the month the salesperson expects to close · the dashed line is the average monthly invoiced revenue',
     pvBruto: 'Full value with a date', pvPrevisto: 'Forecast in scenario', pvSemData: 'No date from sales',
@@ -4600,7 +4600,8 @@ function PainelDiretoria() {
     setClienteRel(rel || []);
     const [pv2, rk, mx] = await Promise.all([
       supabase.from('v_comercial_previsibilidade').select('*'),
-      supabase.from('v_comercial_ranking_cliente_3anos').select('*').limit(60),
+      // ordenado pelo total: sem isso vinham 60 clientes quaisquer
+      supabase.from('v_comercial_ranking_cliente_3anos').select('*').order('total_periodo', { ascending: false, nullsFirst: false }).limit(60),
       supabase.from('v_comercial_mix_vendedor').select('*'),
     ]);
     setPrev(pv2.data || []); setRank(rk.data || []); setMix(mx.data || []);
@@ -5174,7 +5175,7 @@ IMPORTANTE: Responda SOMENTE com base nos dados acima. Se a pergunta pede algo q
   const rankVis = rankTudo ? rank : rank.slice(0, 20);
   const anosRank = [3, 2, 1, 0].map(i => new Date().getFullYear() - i);
   const rankRisco = rank.slice(0, 20).filter(r =>
-    r.tendencia === 'parou de comprar' || (Number(r.var_pct) || 0) < -30);
+    r.tendencia === 'parou de comprar' || r.tendencia === 'caindo');
   const TEND = {
     'crescendo': { rot: t.tendCrescendo, cor: G.verde },
     'caindo': { rot: t.tendCaindo, cor: G.ambar },
