@@ -621,6 +621,7 @@ function PortalConteudo({ currentUser, session }) {
           {renderTab('reservas_pendentes', <TabErrorBoundary tab="Reservas Pendentes"><ReservasPendentes /></TabErrorBoundary>)}
           {renderTab('verificacao_projetos', <TabErrorBoundary tab="Verificação de Projetos"><VerificacaoProjetos currentUser={currentUser} /></TabErrorBoundary>)}
           {renderTab('analise_comercial', <TabErrorBoundary tab="Follow Up Comercial"><AnaliseComercial currentUser={currentUser} /></TabErrorBoundary>)}
+          {renderTab('crm', <TabErrorBoundary tab="CRM"><CRM currentUser={currentUser} /></TabErrorBoundary>)}
           {renderTab('prospeccao_clientes', <TabErrorBoundary tab="Prospecção de Clientes"><ProspeccaoClientes /></TabErrorBoundary>)}
           {renderTab('almoxarifado_fluxo', <TabErrorBoundary tab="Fluxo de Materiais"><AlmoxarifadoFluxo currentUser={currentUser} /></TabErrorBoundary>)}
           {renderTab('pedidosvale', <PedidosVale />)}
@@ -687,6 +688,7 @@ function Sidebar({ view, setView, pendCount, papel, telasPermitidas }) {
     { id: 'reservas_pendentes', label: 'Reservas Pendentes', icon: AlertTriangle },
     { id: 'verificacao_projetos', label: 'Verificação de Projetos', icon: ClipboardCheck },
     { id: 'analise_comercial', label: 'Follow Up Comercial', icon: TrendingUp },
+    { id: 'crm',          label: 'CRM',                    icon: Users },
     { id: 'prospeccao_clientes', label: 'Prospecção de Clientes', icon: UserPlus },
     { id: 'almoxarifado_fluxo', label: 'Fluxo de Materiais', icon: Package },
     { id: 'pedidosvale',  label: 'Pedidos Vale',           icon: FileWarning },
@@ -699,8 +701,10 @@ function Sidebar({ view, setView, pendCount, papel, telasPermitidas }) {
   ];
   const permitidos0 = telasPermitidas || ACESSO_LEGADO[papel];
   // Custeio por OP (modelo de teste) acompanha a permissão do Custeio
-  const permitidos = permitidos0 && permitidos0.includes('custeio') && !permitidos0.includes('custeio_op')
+  let permitidos = permitidos0 && permitidos0.includes('custeio') && !permitidos0.includes('custeio_op')
     ? [...permitidos0, 'custeio_op'] : permitidos0;
+  // CRM acompanha a permissão do Follow Up Comercial
+  if (permitidos && permitidos.includes('analise_comercial') && !permitidos.includes('crm')) permitidos = [...permitidos, 'crm'];
   const items = permitidos ? todosItems.filter(i => permitidos.includes(i.id)) : todosItems;
   return (
     // O menu tem 20+ itens e crescia junto com a pagina: quem estava no fim da
@@ -21217,6 +21221,549 @@ function CusteioPorOP() {
   );
 }
 
+/* ============================================================================
+   CRM — substitui o Agendor (28/09/2026)
+   Dois pipelines: Vendas (sobre os BRs, com oportunidade antes do BR) e
+   Pós-vendas (nasce da nota faturada). Tabelas crm_*; sincronização de hora
+   em hora (fn_crm_sincronizar); mover card = fn_crm_mover, que grava o
+   estágio do vendedor no Follow Up (uma verdade só). Ganho vem do Sankhya.
+============================================================================ */
+const CRM_TIPOS_ATIV = [
+  { v: 'ligacao', r: 'Ligação' }, { v: 'visita', r: 'Visita' }, { v: 'reuniao', r: 'Reunião' },
+  { v: 'email', r: 'E-mail' }, { v: 'whatsapp', r: 'WhatsApp' }, { v: 'tarefa', r: 'Tarefa' },
+];
+const crmRotuloTipo = (t) => (CRM_TIPOS_ATIV.find(x => x.v === t) || { r: t }).r;
+
+function CRM({ currentUser }) {
+  const autor = currentUser?.nome || currentUser?.email || 'portal';
+  const [aba, setAba] = useState('funil');
+  const [pipeline, setPipeline] = useState('vendas');
+  const [etapas, setEtapas] = useState([]);
+  const [negocios, setNegocios] = useState([]);
+  const [empresas, setEmpresas] = useState([]);
+  const [atividades, setAtividades] = useState([]);
+  const [vendedores, setVendedores] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [erro, setErro] = useState(null);
+  const [aviso, setAviso] = useState(null);
+  const [resp, setResp] = useState('');
+  const [busca, setBusca] = useState('');
+  const [mostrarFechados, setMostrarFechados] = useState(false);
+  const [abertoId, setAbertoId] = useState(null);
+  const [empresaAberta, setEmpresaAberta] = useState(null);
+  const [perda, setPerda] = useState(null);          // { negocio, etapa } aguardando motivo
+  const [novoNeg, setNovoNeg] = useState(null);      // formulário de oportunidade
+  const [arrastando, setArrastando] = useState(null);
+  const moeda = (v) => fmtMoedaCompacta(v);
+  const fmtDH = (d) => d ? new Date(d).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
+  const fmtD = (d) => d ? new Date(d).toLocaleDateString('pt-BR') : '—';
+  const diasDesde = (d) => d ? Math.max(0, Math.floor((Date.now() - new Date(d).getTime()) / 86400000)) : null;
+
+  const lerTudo = async (tabela, aplicar) => {
+    let todas = [];
+    for (let de = 0; ; de += 1000) {
+      let q = supabase.from(tabela).select('*').range(de, de + 999);
+      if (aplicar) q = aplicar(q);
+      const { data, error } = await q;
+      if (error) throw error;
+      todas = todas.concat(data || []);
+      if (!data || data.length < 1000) break;
+    }
+    return todas;
+  };
+
+  const carregar = useCallback(async () => {
+    try {
+      const [et, ng, em, at, vd] = await Promise.all([
+        lerTudo('crm_etapa', q => q.order('ordem')),
+        lerTudo('crm_negocio'),
+        lerTudo('crm_empresa'),
+        lerTudo('crm_atividade', q => q.is('concluida_em', null)),
+        supabase.from('comercial_vendedor_email').select('vendedor,ativo,em_copia').then(r => r.data || []),
+      ]);
+      setEtapas(et); setNegocios(ng); setEmpresas(em); setAtividades(at);
+      setVendedores(vd.filter(v => v.ativo && !v.em_copia).map(v => v.vendedor).sort());
+      setErro(null);
+    } catch (e) { setErro(e.message || String(e)); }
+    setLoading(false);
+  }, []);
+  useEffect(() => { carregar(); }, [carregar]);
+
+  const empPorId = useMemo(() => Object.fromEntries(empresas.map(e => [e.id, e])), [empresas]);
+  const etapaPorId = useMemo(() => Object.fromEntries(etapas.map(e => [e.id, e])), [etapas]);
+  const pendPorNeg = useMemo(() => {
+    const m = {};
+    atividades.forEach(a => { if (a.negocio_id) (m[a.negocio_id] = m[a.negocio_id] || []).push(a); });
+    return m;
+  }, [atividades]);
+
+  const mover = async (neg, codigo, motivo = null) => {
+    const et = etapas.find(e => e.pipeline_id === neg.pipeline_id && e.codigo === codigo);
+    if (!et) return;
+    if (et.tipo === 'perdido' && !motivo) { setPerda({ negocio: neg, etapa: codigo, motivo: '' }); return; }
+    const { data, error } = await supabase.rpc('fn_crm_mover', { p_negocio: neg.id, p_etapa: codigo, p_autor: autor, p_motivo: motivo });
+    if (error || !data?.ok) { setAviso({ tipo: 'erro', t: error?.message || data?.erro || 'Não foi possível mover.' }); return; }
+    setAviso(data.nova_oportunidade ? { tipo: 'ok', t: 'Card movido. Uma oportunidade de reposição foi aberta no pipeline de Vendas.' } : null);
+    await carregar();
+  };
+
+  if (loading) return <div style={{ padding: 40, textAlign: 'center', color: T.inkFaint }}>Carregando o CRM…</div>;
+  if (erro) return <div style={{ padding: 20, color: T.rustText }}>Erro ao carregar o CRM: {erro}</div>;
+
+  const termo = busca.trim().toLowerCase();
+  const casaBusca = (n) => !termo || [n.titulo, n.br, empPorId[n.empresa_id]?.nome, n.responsavel].some(x => String(x ?? '').toLowerCase().includes(termo));
+  const etapasPipe = etapas.filter(e => e.pipeline_id === pipeline)
+    .filter(e => mostrarFechados || e.tipo === 'aberta');
+  const doPipe = negocios.filter(n => n.pipeline_id === pipeline && (!resp || n.responsavel === resp) && casaBusca(n));
+  const botao = (ativo) => ({ fontFamily: 'inherit', fontSize: 12, padding: '6px 12px', borderRadius: 6, cursor: 'pointer',
+    border: `1px solid ${ativo ? T.ink : T.line}`, background: ativo ? T.ink : T.panel, color: ativo ? T.panel : T.inkDim });
+  const campo = { fontFamily: 'inherit', fontSize: 12.5, padding: '6px 10px', borderRadius: 6, border: `1px solid ${T.line}`, background: T.panel };
+
+  const negAberto = abertoId ? negocios.find(n => n.id === abertoId) : null;
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12, paddingTop: 14 }}>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+        {[['funil', 'Funil'], ['tarefas', `Tarefas${atividades.length ? ` (${atividades.length})` : ''}`], ['empresas', 'Empresas']].map(([k, r]) => (
+          <button key={k} onClick={() => setAba(k)} style={botao(aba === k)}>{r}</button>
+        ))}
+        <span style={{ flex: 1 }} />
+        <select value={resp} onChange={e => setResp(e.target.value)} style={campo}>
+          <option value="">Todos os responsáveis</option>
+          {vendedores.map(v => <option key={v} value={v}>{v}</option>)}
+        </select>
+        <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="buscar BR, empresa, título" style={{ ...campo, minWidth: 200 }} />
+      </div>
+
+      {aviso && (
+        <div onClick={() => setAviso(null)} style={{ padding: '8px 12px', borderRadius: 6, fontSize: 12, cursor: 'pointer',
+          background: aviso.tipo === 'erro' ? T.rustSoft : T.oliveSoft, color: aviso.tipo === 'erro' ? T.rustText : T.oliveText }}>
+          {aviso.t} <span style={{ opacity: 0.6 }}>· clique para fechar</span>
+        </div>
+      )}
+
+      {aba === 'funil' && (
+        <>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+            <button onClick={() => setPipeline('vendas')} style={botao(pipeline === 'vendas')}>Vendas</button>
+            <button onClick={() => setPipeline('posvendas')} style={botao(pipeline === 'posvendas')}>Pós-vendas</button>
+            <label style={{ fontSize: 12, color: T.inkDim, display: 'flex', alignItems: 'center', gap: 5, marginLeft: 6 }}>
+              <input type="checkbox" checked={mostrarFechados} onChange={e => setMostrarFechados(e.target.checked)} />
+              mostrar {pipeline === 'vendas' ? 'ganhos e perdidos' : 'reposição e encerrados'}
+            </label>
+            <span style={{ flex: 1 }} />
+            {pipeline === 'vendas' && (
+              <button onClick={() => setNovoNeg({ titulo: '', empresa_id: '', valor: '', responsavel: resp || '', previsao: '' })}
+                style={{ ...botao(false), borderColor: T.terracotta || T.rust, color: T.rustText, fontWeight: 600 }}>+ Oportunidade</button>
+            )}
+          </div>
+
+          <div style={{ overflowX: 'auto', paddingBottom: 8 }}>
+            <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start', minWidth: etapasPipe.length * 250 }}>
+              {etapasPipe.map(et => {
+                const cards = doPipe.filter(n => n.etapa_id === et.id)
+                  .sort((a, b) => (Number(b.valor) || 0) - (Number(a.valor) || 0));
+                return (
+                  <div key={et.id}
+                    onDragOver={e => { e.preventDefault(); }}
+                    onDrop={e => { e.preventDefault(); if (arrastando && arrastando.etapa_id !== et.id) mover(arrastando, et.codigo); setArrastando(null); }}
+                    style={{ flex: '1 0 240px', maxWidth: 300, background: T.panelAlt, borderRadius: 10, border: `1px solid ${T.line}`,
+                      display: 'flex', flexDirection: 'column', maxHeight: '72vh' }}>
+                    <div style={{ padding: '9px 11px', borderBottom: `3px solid ${et.cor || T.line}` }}>
+                      <div style={{ fontSize: 12, fontWeight: 700 }}>{et.nome}</div>
+                      <div style={{ fontSize: 11, color: T.inkFaint }}>{cards.length} · {moeda(cards.reduce((s, n) => s + (Number(n.valor) || 0), 0))}</div>
+                    </div>
+                    <div style={{ overflowY: 'auto', padding: 8, display: 'flex', flexDirection: 'column', gap: 7 }}>
+                      {cards.slice(0, 150).map(n => {
+                        const pend = pendPorNeg[n.id] || [];
+                        const atrasada = pend.some(a => a.vencimento && new Date(a.vencimento) < new Date());
+                        const dias = diasDesde(n.etapa_desde);
+                        return (
+                          <div key={n.id} draggable onDragStart={() => setArrastando(n)} onClick={() => setAbertoId(n.id)}
+                            style={{ background: T.panel, borderRadius: 8, border: `1px solid ${T.line}`, padding: '8px 10px', cursor: 'pointer',
+                              borderLeft: `3px solid ${atrasada ? T.rust : pend.length ? T.gold : 'transparent'}` }}>
+                            <div style={{ fontSize: 12, fontWeight: 700, lineHeight: 1.3 }}>{n.br || n.titulo}</div>
+                            <div style={{ fontSize: 11, color: T.inkDim, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {empPorId[n.empresa_id]?.nome || (n.br ? n.titulo.replace(`${n.br} · `, '') : '—')}
+                            </div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 5, fontSize: 11 }}>
+                              <span style={{ fontWeight: 700 }}>{n.valor ? moeda(Number(n.valor)) : '—'}</span>
+                              <span style={{ color: T.inkFaint }}>{n.previsao_fechamento || (dias != null ? `${dias}d na etapa` : '')}</span>
+                            </div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 3, fontSize: 10.5, color: T.inkFaint }}>
+                              <span>{n.responsavel || 'sem responsável'}</span>
+                              {pend.length > 0 && <span style={{ color: atrasada ? T.rustText : T.amberText }}>{pend.length} tarefa{pend.length > 1 ? 's' : ''}{atrasada ? ' · atrasada' : ''}</span>}
+                            </div>
+                          </div>
+                        );
+                      })}
+                      {cards.length > 150 && <div style={{ fontSize: 11, color: T.inkFaint, textAlign: 'center' }}>+{cards.length - 150} — use a busca</div>}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+          <div style={{ fontSize: 11, color: T.inkFaint }}>
+            Arraste o card para mudar de etapa. Nos BRs, a negociação (Baixo a Avançado) é a mesma do Follow Up e da planilha do vendedor.
+            {pipeline === 'vendas' ? ' Ganho entra sozinho quando o pedido de venda chega no Sankhya.' : ' Levar para Reposição abre uma oportunidade nova em Vendas.'}
+          </div>
+        </>
+      )}
+
+      {aba === 'tarefas' && (() => {
+        const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
+        const amanha = new Date(hoje); amanha.setDate(amanha.getDate() + 1);
+        const semana = new Date(hoje); semana.setDate(semana.getDate() + 8);
+        const minhas = atividades.filter(a => !resp || a.responsavel === resp)
+          .filter(a => { const n = negocios.find(x => x.id === a.negocio_id); return !termo || !n || casaBusca(n) || a.titulo.toLowerCase().includes(termo); })
+          .sort((a, b) => new Date(a.vencimento || '2999-01-01') - new Date(b.vencimento || '2999-01-01'));
+        const grupos = [
+          ['Atrasadas', minhas.filter(a => a.vencimento && new Date(a.vencimento) < hoje), T.rustText],
+          ['Hoje', minhas.filter(a => a.vencimento && new Date(a.vencimento) >= hoje && new Date(a.vencimento) < amanha), T.amberText],
+          ['Próximos 7 dias', minhas.filter(a => a.vencimento && new Date(a.vencimento) >= amanha && new Date(a.vencimento) < semana), T.ink],
+          ['Depois', minhas.filter(a => a.vencimento && new Date(a.vencimento) >= semana), T.inkDim],
+          ['Sem data', minhas.filter(a => !a.vencimento), T.inkFaint],
+        ];
+        const concluir = async (a) => {
+          await supabase.from('crm_atividade').update({ concluida_em: new Date().toISOString() }).eq('id', a.id);
+          await supabase.from('crm_historico').insert({ negocio_id: a.negocio_id, empresa_id: a.empresa_id, tipo: 'atividade',
+            texto: `${crmRotuloTipo(a.tipo)} concluída: ${a.titulo}`, autor });
+          carregar();
+        };
+        return (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {grupos.filter(g => g[1].length).map(([t, lista, cor]) => (
+              <div key={t} style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
+                <div style={{ padding: '8px 12px', fontSize: 12.5, fontWeight: 700, color: cor, borderBottom: `1px solid ${T.line}` }}>{t} · {lista.length}</div>
+                {lista.slice(0, 200).map(a => {
+                  const n = negocios.find(x => x.id === a.negocio_id);
+                  return (
+                    <div key={a.id} style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '7px 12px', borderTop: `1px solid ${T.lineSoft}`, fontSize: 12, flexWrap: 'wrap' }}>
+                      <input type="checkbox" onChange={() => concluir(a)} title="Concluir" />
+                      <span style={{ fontSize: 10.5, padding: '2px 7px', borderRadius: 4, background: T.panelAlt, color: T.inkDim }}>{crmRotuloTipo(a.tipo)}</span>
+                      <span style={{ fontWeight: 600, flex: '1 1 240px' }}>{a.titulo}</span>
+                      {n && <span onClick={() => setAbertoId(n.id)} style={{ color: T.blueText, cursor: 'pointer' }}>{n.br || n.titulo}</span>}
+                      <span style={{ color: T.inkDim, minWidth: 110 }}>{a.responsavel || '—'}</span>
+                      <span style={{ color: cor, minWidth: 110, textAlign: 'right' }}>{a.vencimento ? fmtDH(a.vencimento) : ''}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            ))}
+            {!minhas.length && <div style={{ padding: 20, textAlign: 'center', color: T.inkFaint }}>Nenhuma tarefa pendente{resp ? ` para ${resp}` : ''}.</div>}
+          </div>
+        );
+      })()}
+
+      {aba === 'empresas' && (() => {
+        const abertos = negocios.filter(n => n.pipeline_id === 'vendas' && etapaPorId[n.etapa_id]?.tipo === 'aberta');
+        const lista = empresas
+          .filter(e => !termo || [e.nome, e.cnpj, e.cidade].some(x => String(x ?? '').toLowerCase().includes(termo)))
+          .map(e => { const ab = abertos.filter(n => n.empresa_id === e.id && (!resp || n.responsavel === resp));
+                      return { ...e, nAb: ab.length, vAb: ab.reduce((s, n) => s + (Number(n.valor) || 0), 0) }; })
+          .filter(e => !resp || e.nAb > 0)
+          .sort((a, b) => b.vAb - a.vAb || a.nome.localeCompare(b.nome));
+        return (
+          <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                <thead><tr style={{ background: T.panelAlt }}>
+                  {['Empresa', 'Cidade', 'CNPJ', 'Negócios abertos', 'Valor aberto'].map((h, i) => (
+                    <th key={h} style={{ padding: '8px 12px', fontSize: 10.5, fontWeight: 600, color: T.inkFaint, textAlign: i >= 3 ? 'right' : 'left' }}>{h}</th>
+                  ))}
+                </tr></thead>
+                <tbody>
+                  {lista.slice(0, 300).map(e => (
+                    <tr key={e.id} onClick={() => setEmpresaAberta(e.id)} style={{ borderTop: `1px solid ${T.lineSoft}`, cursor: 'pointer' }}>
+                      <td style={{ padding: '7px 12px', fontWeight: 600 }}>{e.nome}</td>
+                      <td style={{ padding: '7px 12px', color: T.inkDim }}>{[e.cidade, e.uf].filter(Boolean).join(' / ') || '—'}</td>
+                      <td style={{ padding: '7px 12px', color: T.inkDim, whiteSpace: 'nowrap' }}>{e.cnpj && e.cnpj !== '—' ? e.cnpj : '—'}</td>
+                      <td style={{ padding: '7px 12px', textAlign: 'right' }}>{e.nAb || '—'}</td>
+                      <td style={{ padding: '7px 12px', textAlign: 'right', fontWeight: 600 }}>{e.vAb ? moeda(e.vAb) : '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        );
+      })()}
+
+      {negAberto && (
+        <CRMFichaNegocio negocio={negAberto} etapas={etapas} empresa={empPorId[negAberto.empresa_id]} vendedores={vendedores}
+          autor={autor} onFechar={() => setAbertoId(null)} onMover={mover} onMudou={carregar} />
+      )}
+      {empresaAberta && !negAberto && (
+        <CRMFichaEmpresa empresa={empPorId[empresaAberta]} negocios={negocios.filter(n => n.empresa_id === empresaAberta)}
+          etapaPorId={etapaPorId} autor={autor} onFechar={() => setEmpresaAberta(null)} onAbrirNegocio={setAbertoId} onMudou={carregar} />
+      )}
+
+      {perda && (
+        <div onClick={() => setPerda(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(20,18,15,0.45)', zIndex: 80, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: T.panel, borderRadius: 10, padding: 18, width: '100%', maxWidth: 440 }}>
+            <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 4 }}>Por que perdeu {perda.negocio.br || perda.negocio.titulo}?</div>
+            <div style={{ fontSize: 11.5, color: T.inkFaint, marginBottom: 10 }}>O motivo é obrigatório e fica no histórico do negócio.</div>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
+              {['Preço', 'Prazo de entrega', 'Perdeu para concorrente', 'Cliente desistiu / adiou', 'Especificação técnica', 'Sem retorno do cliente'].map(m => (
+                <button key={m} onClick={() => setPerda(p => ({ ...p, motivo: m }))} style={botao(perda.motivo === m)}>{m}</button>
+              ))}
+            </div>
+            <textarea value={perda.motivo} onChange={e => setPerda(p => ({ ...p, motivo: e.target.value }))} rows={3}
+              placeholder="ou descreva o motivo" style={{ ...campo, width: '100%', boxSizing: 'border-box', resize: 'vertical' }} />
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 10 }}>
+              <button onClick={() => setPerda(null)} style={botao(false)}>Cancelar</button>
+              <button disabled={!perda.motivo.trim()} onClick={async () => { const p = perda; setPerda(null); await mover(p.negocio, p.etapa, p.motivo.trim()); }}
+                style={{ ...botao(true), opacity: perda.motivo.trim() ? 1 : 0.5 }}>Marcar como perdido</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {novoNeg && (
+        <div onClick={() => setNovoNeg(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(20,18,15,0.45)', zIndex: 80, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: T.panel, borderRadius: 10, padding: 18, width: '100%', maxWidth: 480, display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div style={{ fontSize: 14, fontWeight: 700 }}>Nova oportunidade</div>
+            <div style={{ fontSize: 11.5, color: T.inkFaint }}>Para o que ainda não tem BR: visita, contato, indicação. Quando a proposta sair, é só ligar o BR na ficha.</div>
+            <input value={novoNeg.titulo} onChange={e => setNovoNeg(v => ({ ...v, titulo: e.target.value }))} placeholder="O que é (ex.: revestimento das calhas da britagem)" style={campo} />
+            <select value={novoNeg.empresa_id} onChange={e => setNovoNeg(v => ({ ...v, empresa_id: e.target.value }))} style={campo}>
+              <option value="">Empresa…</option>
+              {empresas.slice().sort((a, b) => a.nome.localeCompare(b.nome)).map(e => <option key={e.id} value={e.id}>{e.nome}{e.cidade ? ` — ${e.cidade}/${e.uf || ''}` : ''}</option>)}
+            </select>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <input value={novoNeg.valor} onChange={e => setNovoNeg(v => ({ ...v, valor: e.target.value }))} placeholder="Valor estimado (R$)" inputMode="decimal" style={{ ...campo, flex: 1 }} />
+              <input value={novoNeg.previsao} onChange={e => setNovoNeg(v => ({ ...v, previsao: e.target.value }))} placeholder="Previsão (MM/AAAA)" style={{ ...campo, flex: 1 }} />
+            </div>
+            <select value={novoNeg.responsavel} onChange={e => setNovoNeg(v => ({ ...v, responsavel: e.target.value }))} style={campo}>
+              <option value="">Responsável…</option>
+              {vendedores.map(v => <option key={v} value={v}>{v}</option>)}
+            </select>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 4 }}>
+              <button onClick={() => setNovoNeg(null)} style={botao(false)}>Cancelar</button>
+              <button disabled={!novoNeg.titulo.trim() || !novoNeg.empresa_id} onClick={async () => {
+                  const v = novoNeg; setNovoNeg(null);
+                  const etO = etapas.find(e => e.pipeline_id === 'vendas' && e.codigo === 'oportunidade');
+                  const valor = Number(String(v.valor).replace(/\./g, '').replace(',', '.')) || null;
+                  const { data, error } = await supabase.from('crm_negocio').insert({ pipeline_id: 'vendas', etapa_id: etO.id, titulo: v.titulo.trim(),
+                    empresa_id: Number(v.empresa_id), valor, responsavel: v.responsavel || null, previsao_fechamento: v.previsao || null,
+                    origem: 'manual', criado_por: autor }).select('id').single();
+                  if (error) { setAviso({ tipo: 'erro', t: error.message }); return; }
+                  await supabase.from('crm_historico').insert({ negocio_id: data.id, empresa_id: Number(v.empresa_id), tipo: 'sistema', texto: 'Oportunidade criada', autor });
+                  await carregar(); setAbertoId(data.id);
+                }} style={{ ...botao(true), opacity: novoNeg.titulo.trim() && novoNeg.empresa_id ? 1 : 0.5 }}>Criar</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Ficha do negócio: etapa, dados, tarefas, anotação, histórico e contatos
+function CRMFichaNegocio({ negocio: n, etapas, empresa, vendedores, autor, onFechar, onMover, onMudou }) {
+  const [ativs, setAtivs] = useState([]);
+  const [hist, setHist] = useState([]);
+  const [contatos, setContatos] = useState([]);
+  const [nota, setNota] = useState('');
+  const [nova, setNova] = useState({ tipo: 'ligacao', titulo: '', vencimento: '', responsavel: n.responsavel || '' });
+  const [brLigar, setBrLigar] = useState('');
+  const [novoCtt, setNovoCtt] = useState(null);
+  const moeda = (v) => fmtMoedaCompacta(v);
+  const fmtDH = (d) => d ? new Date(d).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
+  const campo = { fontFamily: 'inherit', fontSize: 12.5, padding: '6px 9px', borderRadius: 6, border: `1px solid ${T.line}`, background: T.panel };
+  const botao = (forte) => ({ fontFamily: 'inherit', fontSize: 12, padding: '6px 12px', borderRadius: 6, cursor: 'pointer',
+    border: `1px solid ${forte ? T.ink : T.line}`, background: forte ? T.ink : T.panel, color: forte ? T.panel : T.inkDim });
+
+  const carregar = useCallback(async () => {
+    const [a, h, c] = await Promise.all([
+      supabase.from('crm_atividade').select('*').eq('negocio_id', n.id).order('vencimento', { ascending: true }),
+      supabase.from('crm_historico').select('*').eq('negocio_id', n.id).order('em', { ascending: false }).limit(100),
+      n.empresa_id ? supabase.from('crm_contato').select('*').eq('empresa_id', n.empresa_id).eq('ativo', true).order('nome') : Promise.resolve({ data: [] }),
+    ]);
+    setAtivs(a.data || []); setHist(h.data || []); setContatos(c.data || []);
+  }, [n.id, n.empresa_id]);
+  useEffect(() => { carregar(); }, [carregar]);
+
+  const etapasPipe = etapas.filter(e => e.pipeline_id === n.pipeline_id);
+  const etAtual = etapas.find(e => e.id === n.etapa_id);
+  const registrar = async (tipo, texto) => {
+    await supabase.from('crm_historico').insert({ negocio_id: n.id, empresa_id: n.empresa_id, tipo, texto, autor });
+  };
+
+  return (
+    <div onClick={onFechar} style={{ position: 'fixed', inset: 0, background: 'rgba(20,18,15,0.35)', zIndex: 70, display: 'flex', justifyContent: 'flex-end' }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: T.panel, width: 'min(600px, 100vw)', height: '100%', overflowY: 'auto', boxShadow: '-8px 0 30px rgba(0,0,0,0.2)' }}>
+        <div style={{ padding: '14px 18px', borderBottom: `1px solid ${T.line}`, position: 'sticky', top: 0, background: T.panel, zIndex: 1 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10 }}>
+            <div>
+              <div style={{ fontSize: 11, color: T.inkFaint }}>{n.pipeline_id === 'vendas' ? 'Vendas' : 'Pós-vendas'} · {n.origem === 'br' ? 'do BR' : n.origem === 'faturamento' ? 'da nota faturada' : n.origem === 'reposicao' ? 'reposição' : 'oportunidade'}</div>
+              <div style={{ fontSize: 16, fontWeight: 700 }}>{n.br || n.titulo}</div>
+              <div style={{ fontSize: 12.5, color: T.inkDim }}>{empresa?.nome || '—'}{empresa?.cidade ? ` · ${empresa.cidade}/${empresa.uf || ''}` : ''}</div>
+            </div>
+            <button onClick={onFechar} style={botao(false)}>Fechar</button>
+          </div>
+          <div style={{ display: 'flex', gap: 14, marginTop: 8, fontSize: 12, flexWrap: 'wrap' }}>
+            <span><span style={{ color: T.inkFaint }}>Valor </span><strong>{n.valor ? moeda(Number(n.valor)) : '—'}</strong></span>
+            <span><span style={{ color: T.inkFaint }}>Responsável </span>{n.responsavel || '—'}</span>
+            {n.previsao_fechamento && <span><span style={{ color: T.inkFaint }}>Previsão </span>{n.previsao_fechamento}</span>}
+            {n.data_faturamento && <span><span style={{ color: T.inkFaint }}>Faturado em </span>{new Date(n.data_faturamento + 'T00:00:00').toLocaleDateString('pt-BR')}</span>}
+          </div>
+          <div style={{ display: 'flex', gap: 5, marginTop: 10, flexWrap: 'wrap' }}>
+            {etapasPipe.map(e => (
+              <button key={e.id} disabled={e.so_sistema} onClick={() => onMover(n, e.codigo).then(() => carregar())}
+                title={e.so_sistema ? 'Entra sozinho quando o pedido chega no Sankhya' : `Mover para ${e.nome}`}
+                style={{ fontFamily: 'inherit', fontSize: 10.5, padding: '4px 8px', borderRadius: 12, cursor: e.so_sistema ? 'not-allowed' : 'pointer',
+                  border: `1px solid ${e.id === n.etapa_id ? e.cor : T.line}`, background: e.id === n.etapa_id ? e.cor : T.panel,
+                  color: e.id === n.etapa_id ? '#fff' : T.inkDim, opacity: e.so_sistema && e.id !== n.etapa_id ? 0.5 : 1 }}>
+                {e.nome}
+              </button>
+            ))}
+          </div>
+          {etAtual?.tipo === 'perdido' && n.motivo_perda && <div style={{ fontSize: 11.5, color: T.rustText, marginTop: 6 }}>Motivo da perda: {n.motivo_perda}</div>}
+        </div>
+
+        <div style={{ padding: '12px 18px', display: 'flex', flexDirection: 'column', gap: 16 }}>
+          {n.pipeline_id === 'vendas' && !n.br && (
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', fontSize: 12 }}>
+              <span style={{ color: T.inkDim }}>A proposta já saiu?</span>
+              <input value={brLigar} onChange={e => setBrLigar(e.target.value.toUpperCase())} placeholder="BR00000/26" style={{ ...campo, width: 130 }} />
+              <button onClick={async () => {
+                  const br = brLigar.trim(); if (!br) return;
+                  const { error } = await supabase.from('crm_negocio').update({ br, atualizado_em: new Date().toISOString() }).eq('id', n.id);
+                  if (error) { alert(error.message.includes('duplicate') ? `${br} já tem um negócio no CRM.` : error.message); return; }
+                  await registrar('sistema', `BR ${br} ligado à oportunidade`); setBrLigar(''); onMudou();
+                }} style={botao(false)}>Ligar BR</button>
+            </div>
+          )}
+
+          <div>
+            <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 6 }}>Tarefas</div>
+            {ativs.map(a => (
+              <div key={a.id} style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 12, padding: '4px 0', borderTop: `1px solid ${T.lineSoft}`,
+                opacity: a.concluida_em ? 0.55 : 1 }}>
+                <input type="checkbox" checked={!!a.concluida_em} onChange={async () => {
+                    await supabase.from('crm_atividade').update({ concluida_em: a.concluida_em ? null : new Date().toISOString() }).eq('id', a.id);
+                    if (!a.concluida_em) await registrar('atividade', `${crmRotuloTipo(a.tipo)} concluída: ${a.titulo}`);
+                    carregar(); onMudou();
+                  }} />
+                <span style={{ fontSize: 10.5, padding: '1px 6px', borderRadius: 4, background: T.panelAlt, color: T.inkDim }}>{crmRotuloTipo(a.tipo)}</span>
+                <span style={{ flex: 1, textDecoration: a.concluida_em ? 'line-through' : 'none' }}>{a.titulo}</span>
+                <span style={{ color: !a.concluida_em && a.vencimento && new Date(a.vencimento) < new Date() ? T.rustText : T.inkFaint, whiteSpace: 'nowrap' }}>{fmtDH(a.vencimento)}</span>
+              </div>
+            ))}
+            <div style={{ display: 'flex', gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
+              <select value={nova.tipo} onChange={e => setNova(v => ({ ...v, tipo: e.target.value }))} style={campo}>
+                {CRM_TIPOS_ATIV.map(t => <option key={t.v} value={t.v}>{t.r}</option>)}
+              </select>
+              <input value={nova.titulo} onChange={e => setNova(v => ({ ...v, titulo: e.target.value }))} placeholder="o que fazer" style={{ ...campo, flex: '1 1 160px' }} />
+              <input type="datetime-local" value={nova.vencimento} onChange={e => setNova(v => ({ ...v, vencimento: e.target.value }))} style={campo} />
+              <select value={nova.responsavel} onChange={e => setNova(v => ({ ...v, responsavel: e.target.value }))} style={campo}>
+                <option value="">responsável</option>
+                {vendedores.map(v => <option key={v} value={v}>{v}</option>)}
+              </select>
+              <button disabled={!nova.titulo.trim()} onClick={async () => {
+                  await supabase.from('crm_atividade').insert({ negocio_id: n.id, empresa_id: n.empresa_id, tipo: nova.tipo, titulo: nova.titulo.trim(),
+                    vencimento: nova.vencimento ? new Date(nova.vencimento).toISOString() : null, responsavel: nova.responsavel || null, criado_por: autor });
+                  await registrar('atividade', `${crmRotuloTipo(nova.tipo)} agendada: ${nova.titulo.trim()}${nova.vencimento ? ` para ${fmtDH(new Date(nova.vencimento))}` : ''}`);
+                  setNova(v => ({ ...v, titulo: '', vencimento: '' })); carregar(); onMudou();
+                }} style={botao(true)}>Agendar</button>
+            </div>
+          </div>
+
+          <div>
+            <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 6 }}>Anotação</div>
+            <textarea value={nota} onChange={e => setNota(e.target.value)} rows={3} placeholder="o que aconteceu, o que o cliente disse, próximos passos"
+              style={{ ...campo, width: '100%', boxSizing: 'border-box', resize: 'vertical' }} />
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 6 }}>
+              <button disabled={!nota.trim()} onClick={async () => { await registrar('anotacao', nota.trim()); setNota(''); carregar(); }} style={botao(true)}>Salvar anotação</button>
+            </div>
+          </div>
+
+          <div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+              <div style={{ fontSize: 12.5, fontWeight: 700 }}>Contatos da empresa</div>
+              {n.empresa_id && <button onClick={() => setNovoCtt({ nome: '', cargo: '', email: '', celular: '' })} style={botao(false)}>+ contato</button>}
+            </div>
+            {contatos.length === 0 && !novoCtt && <div style={{ fontSize: 12, color: T.inkFaint }}>Nenhum contato cadastrado.</div>}
+            {contatos.map(c => (
+              <div key={c.id} style={{ fontSize: 12, padding: '4px 0', borderTop: `1px solid ${T.lineSoft}` }}>
+                <strong>{c.nome}</strong>{c.cargo ? ` · ${c.cargo}` : ''}
+                <div style={{ color: T.inkDim }}>
+                  {c.celular && <a href={`https://wa.me/55${String(c.celular).replace(/\D/g, '')}`} target="_blank" rel="noreferrer" style={{ color: T.oliveText, marginRight: 10 }}>{c.celular}</a>}
+                  {c.telefone && <a href={`tel:${c.telefone}`} style={{ color: T.inkDim, marginRight: 10 }}>{c.telefone}</a>}
+                  {c.email && <a href={`mailto:${c.email}`} style={{ color: T.blueText }}>{c.email}</a>}
+                </div>
+              </div>
+            ))}
+            {novoCtt && (
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
+                {[['nome', 'Nome'], ['cargo', 'Cargo'], ['celular', 'Celular'], ['email', 'E-mail']].map(([k, r]) => (
+                  <input key={k} value={novoCtt[k]} onChange={e => setNovoCtt(v => ({ ...v, [k]: e.target.value }))} placeholder={r} style={{ ...campo, flex: '1 1 120px' }} />
+                ))}
+                <button onClick={() => setNovoCtt(null)} style={botao(false)}>Cancelar</button>
+                <button disabled={!novoCtt.nome.trim()} onClick={async () => {
+                    await supabase.from('crm_contato').insert({ empresa_id: n.empresa_id, nome: novoCtt.nome.trim(), cargo: novoCtt.cargo || null,
+                      celular: novoCtt.celular || null, email: novoCtt.email || null, criado_por: autor });
+                    await registrar('contato', `Contato cadastrado: ${novoCtt.nome.trim()}`); setNovoCtt(null); carregar();
+                  }} style={botao(true)}>Salvar</button>
+              </div>
+            )}
+          </div>
+
+          <div>
+            <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 6 }}>Histórico</div>
+            {hist.map(h => (
+              <div key={h.id} style={{ fontSize: 12, padding: '6px 0', borderTop: `1px solid ${T.lineSoft}` }}>
+                <div style={{ fontSize: 10.5, color: T.inkFaint }}>{fmtDH(h.em)} · {h.autor || '—'} · {h.tipo}</div>
+                <div style={{ whiteSpace: 'pre-wrap', color: h.tipo === 'anotacao' ? T.ink : T.inkDim }}>{h.texto}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Ficha da empresa: dados do Sankhya, contatos e negócios
+function CRMFichaEmpresa({ empresa: e, negocios, etapaPorId, autor, onFechar, onAbrirNegocio, onMudou }) {
+  const [contatos, setContatos] = useState([]);
+  const moeda = (v) => fmtMoedaCompacta(v);
+  useEffect(() => {
+    supabase.from('crm_contato').select('*').eq('empresa_id', e.id).eq('ativo', true).order('nome').then(r => setContatos(r.data || []));
+  }, [e.id]);
+  if (!e) return null;
+  return (
+    <div onClick={onFechar} style={{ position: 'fixed', inset: 0, background: 'rgba(20,18,15,0.35)', zIndex: 70, display: 'flex', justifyContent: 'flex-end' }}>
+      <div onClick={ev => ev.stopPropagation()} style={{ background: T.panel, width: 'min(560px, 100vw)', height: '100%', overflowY: 'auto', padding: '14px 18px', boxShadow: '-8px 0 30px rgba(0,0,0,0.2)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10 }}>
+          <div>
+            <div style={{ fontSize: 16, fontWeight: 700 }}>{e.nome}</div>
+            <div style={{ fontSize: 12, color: T.inkDim }}>{[e.cidade, e.uf].filter(Boolean).join(' / ')}{e.cnpj && e.cnpj !== '—' ? ` · CNPJ ${e.cnpj}` : ''}</div>
+            <div style={{ fontSize: 12, color: T.inkDim }}>{[e.telefone, e.email].filter(Boolean).join(' · ')}</div>
+          </div>
+          <button onClick={onFechar} style={{ fontFamily: 'inherit', fontSize: 12, padding: '6px 12px', borderRadius: 6, border: `1px solid ${T.line}`, background: T.panel, cursor: 'pointer', height: 30 }}>Fechar</button>
+        </div>
+        <div style={{ fontSize: 12.5, fontWeight: 700, margin: '14px 0 6px' }}>Negócios ({negocios.length})</div>
+        {negocios.slice().sort((a, b) => new Date(b.criado_em) - new Date(a.criado_em)).map(n => (
+          <div key={n.id} onClick={() => onAbrirNegocio(n.id)} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 12, padding: '6px 0', borderTop: `1px solid ${T.lineSoft}`, cursor: 'pointer' }}>
+            <span><strong>{n.br || n.titulo}</strong> <span style={{ color: T.inkFaint }}>· {n.pipeline_id === 'vendas' ? 'Vendas' : 'Pós-vendas'}</span></span>
+            <span style={{ color: etapaPorId[n.etapa_id]?.cor || T.inkDim, whiteSpace: 'nowrap' }}>{etapaPorId[n.etapa_id]?.nome} · {n.valor ? moeda(Number(n.valor)) : '—'}</span>
+          </div>
+        ))}
+        <div style={{ fontSize: 12.5, fontWeight: 700, margin: '14px 0 6px' }}>Contatos ({contatos.length})</div>
+        {contatos.length === 0 && <div style={{ fontSize: 12, color: T.inkFaint }}>Nenhum contato — cadastre pela ficha de um negócio.</div>}
+        {contatos.map(c => (
+          <div key={c.id} style={{ fontSize: 12, padding: '5px 0', borderTop: `1px solid ${T.lineSoft}` }}>
+            <strong>{c.nome}</strong>{c.cargo ? ` · ${c.cargo}` : ''}
+            <div style={{ color: T.inkDim }}>{[c.celular, c.telefone, c.email].filter(Boolean).join(' · ')}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function Custeio() {
   const [aba, setAba] = useState('analise');
   const [produtos, setProdutos] = useState([]);
@@ -27761,6 +28308,7 @@ const TELAS_CATALOGO = [
   { id: 'reservas_pendentes', label: 'Reservas Pendentes' },
   { id: 'verificacao_projetos', label: 'Verificação de Projetos' },
   { id: 'analise_comercial', label: 'Follow Up Comercial' },
+  { id: 'crm', label: 'CRM' },
   { id: 'prospeccao_clientes', label: 'Prospecção de Clientes' },
   { id: 'almoxarifado_fluxo', label: 'Fluxo de Materiais' },
   { id: 'pedidosvale',  label: 'Pedidos Vale' },
