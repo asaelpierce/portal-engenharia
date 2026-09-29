@@ -5857,35 +5857,6 @@ IMPORTANTE: Responda SOMENTE com base nos dados acima. Se a pergunta pede algo q
         ), t.fatSub)}
       </div>
 
-      {painel(t.cicloTitulo, (
-        <Colunas dados={colCiclo} par={G.verde}
-          dica={(d) => `${d.k} · ${d.rot} · ${d.sub}`} rotulo={t.explicaCiclo}
-          ativo={detalhe?.chave?.startsWith('ciclo:') ? detalhe.chave.slice(6) : null}
-          aoClicar={(col) => {
-            const mes = ciclo.find(c => rotMes(c.competencia) === col.k);
-            if (!mes) return;
-            const lista = dados.filter(d => d.competencia === mes.competencia);
-            abrir(`ciclo:${col.k}`, `${t.cicloTitulo} · ${col.k}`,
-              t.regraCiclo.replace('{m}', col.k).replace('{p}', String(mes.propostas))
-                .replace('{f}', String(mes.viraram_pedido)).replace('{c}', String(mes.conversao_pct)),
-              lista, soma(lista));
-          }} />
-      ))}
-
-      {gavetaDe('ciclo:')}
-
-      {painel(t.abertoPorMesTitulo, (
-        <Colunas dados={colAberto} par={G.ambar} altura={155}
-          dica={(d) => `${d.k} · ${val(d.total)} · ${d.sub} ${t.propostas}`}
-          ativo={detalhe?.chave?.startsWith('abm:') ? detalhe.chave.slice(4) : null}
-          aoClicar={(col) => {
-            const lst = abertos.filter(d => rotMes(d.competencia) === col.k);
-            abrir(`abm:${col.k}`, `${t.abertoPorMesTitulo} · ${col.k}`,
-              t.regraAbertoPorMes.replace('{m}', col.k), lst, soma(lst));
-          }} />
-      ), t.explicaAbertoPorMes.replace('{v}', val(soma(abertos))))}
-
-      {gavetaDe('abm:')}
 
       {painel(t.compTitulo, (
         <>
