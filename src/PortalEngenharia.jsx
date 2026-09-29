@@ -3800,7 +3800,7 @@ const TXT = {
     ajTopDeals: 'As maiores propostas em aberto no funil. São as que mais impactam o resultado se fecharem (ou se forem perdidas). Merecem acompanhamento individual.',
     ajCenarios: 'Três cenários de receita futura: otimista (todo mundo fecha), ponderado (peso do estágio) e conservador (só os avançados e pedidos). A faixa entre eles mostra o risco — quanto mais larga, mais incerto.',
     ajRanking: 'Faturamento por cliente ano a ano desde 2023, com tendência calculada, dias sem comprar e propostas em aberto. Identifica quem está crescendo, quem parou e quem está em risco de perder.',
-    ajVendedor: 'Desempenho de cada vendedor: funil, ponderado, faturado, conversão. Serve para a reunião individual — os números são os mesmos que o vendedor vê no follow up dele.',
+    ajVendedor: 'Desempenho de cada vendedor no funil de 2026: total proposto, o que fechou e a conversão. Serve para a reunião individual — os números são os mesmos que o vendedor vê no follow up dele.',
     ajTopClientes: 'Os clientes com maior valor em aberto no funil. Mostra onde está o dinheiro parado e o potencial de faturamento de curto prazo.',
     iaTitulo: 'Pergunte à IA',
     iaSub: 'faça perguntas sobre os dados comerciais — a IA analisa o funil, o mix, o custeio e responde na hora',
