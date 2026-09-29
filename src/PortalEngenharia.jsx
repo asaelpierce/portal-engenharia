@@ -4604,7 +4604,10 @@ function PainelDiretoria() {
       supabase.from('v_comercial_ranking_cliente_3anos').select('*').order('total_periodo', { ascending: false, nullsFirst: false }).limit(60),
       supabase.from('v_comercial_mix_vendedor').select('*'),
     ]);
-    setPrev(pv2.data || []); setRank(rk.data || []); setMix(mx.data || []);
+    // a base renomeou margem_pct para margem: o painel "Onde cabe desconto"
+    // procurava margem_pct e recebia vazio -- nenhuma proposta passava no filtro
+    setPrev((pv2.data || []).map(p => ({ ...p, margem_pct: p.margem_pct ?? p.margem })));
+    setRank(rk.data || []); setMix(mx.data || []);
     setDados(d.data || []); setCambio(c.data || []);
     setPrevisao(pv.data || []); setCiclo(cc.data || []);
     setFatOrigem(fo.data || []); setFatDet(fd.data || []);
@@ -6485,6 +6488,10 @@ function FollowUpComercial({ currentUser }) {
   const [descPtos, setDescPtos] = useState(5);
   const [minDias, setMinDias] = useState(15);
   const [minMargem, setMinMargem] = useState(40);
+  // MARGEM OCULTA NO FOLLOW UP (regra do Asael, 29/09/2026): a Diretoria mostra
+  // margem, o Follow Up não. O dado continua carregado; para voltar a mostrar
+  // a coluna "Margin" e o quadro de candidatas a desconto, trocar para true.
+  const MOSTRAR_MARGEM = false;
   // Filtros por coluna, como no Excel. Texto para BR e Cliente, lista para
   // Vendedor e os dois estagios.
   const [filtros, setFiltros] = useState({ br: '', cliente: '', vendedor: '', estC: '', estV: '' });
@@ -7371,7 +7378,7 @@ function FollowUpComercial({ currentUser }) {
         );
       })()}
 
-      {candidatas.length > 0 && (() => {
+      {MOSTRAR_MARGEM && candidatas.length > 0 && (() => {
         // Proposta parada com margem alta pode fechar com desconto. O CUSTO NAO
         // MUDA: o desconto sai inteiro da margem. Proposta de R$ 100 com 50% de
         // margem tem R$ 50 de custo -- com 10% de desconto vai a R$ 90 e a
@@ -7621,9 +7628,10 @@ function FollowUpComercial({ currentUser }) {
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 1060 }}>
             <thead style={{ position: 'sticky', top: 0, zIndex: 1 }}><tr style={{ background: T.panelAlt }}>
-              {['BR', 'Cliente', 'Vendedor', 'Dias', 'Valor da proposta', 'Margin', 'Estágio comercial', 'Estágio vendedor', 'Expectativa', 'Observação'].map((h, i) => (
+              {['BR', 'Cliente', 'Vendedor', 'Dias', 'Valor da proposta', 'Margin', 'Estágio comercial', 'Estágio vendedor', 'Expectativa', 'Observação']
+                .filter(h => MOSTRAR_MARGEM || h !== 'Margin').map((h, i) => (
                 <th key={h + i} style={{ padding: '9px 12px', fontSize: 11, fontWeight: 600, color: T.inkFaint,
-                  textAlign: [3,4,5,9].includes(i) ? 'right' : 'left', whiteSpace: 'nowrap' }}>{h}</th>
+                  textAlign: ['Dias', 'Valor da proposta', 'Margin', 'Observação'].includes(h) ? 'right' : 'left', whiteSpace: 'nowrap' }}>{h}</th>
               ))}
             </tr>
             {/* Linha de filtro por coluna, como no Excel. Texto onde a busca e
@@ -7634,7 +7642,7 @@ function FollowUpComercial({ currentUser }) {
                 { k: 'cliente', tipo: 'texto', ph: 'filtrar cliente' },
                 { k: 'vendedor', tipo: 'lista',
                   ops: [...new Set(base.map(l => l.vendedor).filter(Boolean))].sort() },
-                null, null, null,
+                null, null, ...(MOSTRAR_MARGEM ? [null] : []),
                 { k: 'estC', tipo: 'lista', estagio: true },
                 { k: 'estV', tipo: 'lista', estagio: true },
                 null,
@@ -7692,6 +7700,7 @@ function FollowUpComercial({ currentUser }) {
                         title={l.status_proposta ? `Proposta: ${l.status_proposta}` : 'Sem proposta cadastrada ainda'}>
                         {l.valor_proposta ? moeda(l.valor_proposta) : <span style={{ color: T.inkFaint }}>sem proposta</span>}
                       </td>
+                      {MOSTRAR_MARGEM && (
                       <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', fontVariantNumeric: 'tabular-nums',
                         color: l.margin == null ? T.inkFaint
                              : Number(l.margin) < 20 ? T.rustText
@@ -7699,6 +7708,7 @@ function FollowUpComercial({ currentUser }) {
                         title="Margin do orçamento no Sankhya — margem PREVISTA na precificação, não a realizada">
                         {l.margin == null ? '—' : `${Number(l.margin).toFixed(1)}%`}
                       </td>
+                      )}
                       <td style={{ padding: '8px 12px' }}>
                         {l.situacao === 'faturado' ? (
                           <span style={{ fontSize: 11, color: T.blueText, background: T.blueSoft,
