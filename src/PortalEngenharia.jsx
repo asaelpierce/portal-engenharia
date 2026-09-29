@@ -3663,10 +3663,10 @@ const TXT = {
     explicaCiclo: 'barra cheia = proposto, verde = virou pedido',
     explicaFaturado: 'Receita das notas dos BRs vendidos em 2026. O quadro abaixo abre a diferença para o faturamento total da empresa.',
     vendidoKdb: 'Vendido no ano (Painel KdB)', entradasKdb: 'pedidos lançados',
-    prevAteDez: 'Previsão até dez/', fechEsperados: 'fechamentos esperados',
+    prevAteDez: 'Previsão até dez/', fechEsperados: 'fechamentos esperados', pedidosPrevistos: 'pedidos previstos',
     prevNovaTitulo: 'Previsão de fechamento',
-    prevNovaSub: 'cada proposta fecha inteira ou não fecha, com a chance do estágio, no mês de expectativa · 5.000 simulações · faixa = 80% dos cenários (P10–P90), traço = mediana, pontilhado = maior proposta do mês · embaixo: fechamentos esperados de N e chance de fechar pelo menos um',
-    explicaPrevNova: 'Mediana da simulação das propostas em aberto com expectativa até dezembro. A chance de cada proposta é o peso do estágio (ainda não calibrado com o histórico). Embaixo, a faixa provável: 80% dos cenários ficam entre esses valores.',
+    prevNovaSub: 'a chance pondera a QUANTIDADE: em cada estágio fecham propostas × chance, com o valor cheio, escolhidas pelo relacionamento do cliente (recorrência, conversão, recência) · as colunas mostram em que mês entram, pela expectativa · clique para ver os BRs',
+    explicaPrevNova: 'Valor cheio das propostas que devem fechar com expectativa até dezembro. Em cada estágio fecham propostas × chance, escolhidas pela nota de relacionamento do cliente.',
     explicaVendidoKdb: 'Net value dos pedidos lançados no Painel KdB no ano, conferido à mão. Conta pela data do pedido — inclui pedido de proposta de ano anterior.',
     explicaPedidoKdb: 'BRs com pedido de venda e ainda sem nota. Valor do pedido no Painel KdB (net value); sem lançamento no KdB, o da proposta. Brinde, retrabalho e estoque não contam.',
     fatTitulo: 'De onde vem o faturamento de 2026', fatTotal: 'Faturamento total do ano',
@@ -3864,10 +3864,10 @@ const TXT = {
     explicaCiclo: 'light bar = proposed, green = became an order',
     explicaFaturado: 'Invoiced revenue for projects sold in 2026. The panel below breaks down the gap to company-wide revenue.',
     vendidoKdb: 'Sold this year (KdB panel)', entradasKdb: 'orders booked',
-    prevAteDez: 'Forecast to Dec/', fechEsperados: 'expected wins',
+    prevAteDez: 'Forecast to Dec/', fechEsperados: 'expected wins', pedidosPrevistos: 'expected orders',
     prevNovaTitulo: 'Closing forecast',
-    prevNovaSub: 'each proposal closes in full or not at all, with its stage probability, in the expected month · 5,000 simulations · band = 80% of scenarios (P10–P90), line = median, dashed = largest proposal of the month',
-    explicaPrevNova: 'Median of the simulation of open proposals expected to close by December. Band: 80% of scenarios fall in this range.',
+    prevNovaSub: 'probability weights the COUNT: in each stage, proposals × probability close at full value, picked by customer relationship (repeat orders, win rate, recency) · columns show the expected month',
+    explicaPrevNova: 'Full value of the proposals expected to close by December, picked by customer relationship score.',
     explicaVendidoKdb: 'Net value of orders booked in the KdB panel this year, manually checked. Counted by order date.',
     explicaPedidoKdb: 'Projects with a sales order and no invoice yet. Order net value from the KdB panel; without it, the proposal value.',
     fatTitulo: 'Where 2026 revenue comes from', fatTotal: 'Total revenue for the year',
@@ -4581,6 +4581,7 @@ function PainelDiretoria() {
   // varios abertos ao mesmo tempo viram bagunca numa tela de consulta.
   const [detalhe, setDetalhe] = useState(null);
   const [vendaKdb, setVendaKdb] = useState([]);
+  const [clienteRel, setClienteRel] = useState([]);
   const t = TXT[idioma];
 
   const carregar = useCallback(async () => {
@@ -4595,6 +4596,8 @@ function PainelDiretoria() {
     ]);
     const { data: vk } = await supabase.from('v_comercial_venda_kdb_ano').select('*');
     setVendaKdb(vk || []);
+    const { data: rel } = await supabase.from('v_comercial_cliente_relacionamento').select('cliente,score,pedidos_36m,valor_36m,ultimo_pedido,taxa_conversao');
+    setClienteRel(rel || []);
     const [pv2, rk, mx] = await Promise.all([
       supabase.from('v_comercial_previsibilidade').select('*'),
       supabase.from('v_comercial_ranking_cliente_3anos').select('*').limit(60),
@@ -4662,37 +4665,34 @@ function PainelDiretoria() {
   const valorProposto = soma(dados);
   const convPctValor = valorProposto > 0 ? (valorGanho / valorProposto) * 100 : null;
   const convDecididosValor = (valorGanho + soma(perdidos)) > 0 ? (valorGanho / (valorGanho + soma(perdidos))) * 100 : null;
-  // PREVISÃO DE FECHAMENTO (29/09/2026). O peso do estágio é a CHANCE de a
-  // proposta fechar, não uma fração do valor: ela fecha inteira ou não fecha,
-  // no mês de expectativa. Simulação de Monte Carlo: 5.000 rodadas, em cada uma
-  // cada proposta fecha ou não pela chance do estágio. Saem, por mês: fechamentos
-  // esperados (soma das chances), faixa provável (P10–P90) e mediana.
-  const previsaoFech = (() => {
-    const pesoDe = Object.fromEntries((estagiosCfg || []).map(e => [e.estagio, Number(e.peso)]));
-    const mesDe = (s) => { const m = /^(\d{2})\/(\d{4})$/.exec(String(s || '').trim()); return m ? `${m[2]}-${m[1]}` : null; };
+  // PREVISÃO POR PEDIDOS (29/09/2026, regra do Asael). O peso do estágio é a
+  // chance de a proposta fechar, então pondera a QUANTIDADE, não o valor: num
+  // estágio com n propostas e chance p, fecham round(n × p), com o valor cheio.
+  // Quais: as dos clientes de melhor relacionamento (v_comercial_cliente_
+  // relacionamento: recorrência 36 meses, conversão, recência). Cada escolhida
+  // entra no mês de expectativa; sem mês, fica na coluna "sem mês".
+  const previsaoPed = (() => {
+    const rel = Object.fromEntries((clienteRel || []).map(r => [r.cliente, r]));
     const hojeMes = new Date().toISOString().slice(0, 7);
-    const comChance = abertos.map(d => ({ ...d, _p: pesoDe[d.estagio_codigo], _mes: mesDe(d.expectativa_fechamento) }));
-    const validos = comChance.filter(d => d._p > 0 && d._mes);
-    const semExp = comChance.filter(d => !d._mes);
-    const semEst = comChance.filter(d => d._mes && !(d._p > 0));
-    let semente = 42;
-    const rnd = () => { semente = (semente * 1664525 + 1013904223) % 4294967296; return semente / 4294967296; };
-    const simular = (lista) => {
-      const N = 5000; const res = new Float64Array(N);
-      for (let i = 0; i < N; i++) { let s = 0; for (const d of lista) if (rnd() < d._p) s += Number(d.valor) || 0; res[i] = s; }
-      res.sort();
-      const q = (f) => res[Math.min(N - 1, Math.floor(f * N))];
-      return { p10: q(0.10), p50: q(0.50), p90: q(0.90),
-        esperados: lista.reduce((s, d) => s + d._p, 0),
-        chanceAlgum: 1 - lista.reduce((s, d) => s * (1 - d._p), 1),
-        maior: lista.reduce((m, d) => Math.max(m, Number(d.valor) || 0), 0), n: lista.length, lista };
-    };
-    const meses = [...new Set(validos.map(d => d._mes))].sort();
-    const porMes = meses.map(m => ({ mes: m, atrasado: m < hojeMes, ...simular(validos.filter(d => d._mes === m)) }));
     const anoAtual = hojeMes.slice(0, 4);
-    const ateDez = simular(validos.filter(d => d._mes.slice(0, 4) === anoAtual));
-    const depois = simular(validos.filter(d => d._mes.slice(0, 4) > anoAtual));
-    return { porMes, ateDez, depois, semExp, semEst, anoAtual };
+    const mesDe = (s) => { const m = /^(\d{2})\/(\d{4})$/.exec(String(s || '').trim()); return m ? `${m[2]}-${m[1]}` : null; };
+    const estagiosP = (estagiosCfg || []).filter(e => Number(e.peso) > 0).sort((x, y) => (x.ordem ?? 0) - (y.ordem ?? 0));
+    const porEstagio = estagiosP.map(e => {
+      const p = Number(e.peso);
+      const lista = abertos.filter(d => d.estagio_codigo === e.estagio).map(d => ({
+        ...d, _nota: rel[d.cliente]?.score ?? 0, _pedidos: rel[d.cliente]?.pedidos_36m ?? 0, _mes: mesDe(d.expectativa_fechamento) }))
+        .sort((x, y) => y._nota - x._nota || y._pedidos - x._pedidos || (Number(y.valor) || 0) - (Number(x.valor) || 0));
+      const k = Math.round(lista.length * p);
+      return { estagio: e.estagio, rotulo: e.rotulo, p, n: lista.length, k, lista, fecham: lista.slice(0, k), ficam: lista.slice(k),
+        total: soma(lista), previsto: soma(lista.slice(0, k)), corte: k > 0 ? lista[k - 1]._nota : null };
+    });
+    const escolhidas = porEstagio.flatMap(e => e.fecham.map(d => ({ ...d, _estagio: e.rotulo })));
+    const meses = [...new Set(escolhidas.map(d => d._mes).filter(Boolean))].sort();
+    const porMes = meses.map(m => { const l = escolhidas.filter(d => d._mes === m); return { mes: m, lista: l, valor: soma(l), n: l.length }; });
+    const semMes = escolhidas.filter(d => !d._mes);
+    const ateDez = escolhidas.filter(d => d._mes && d._mes.slice(0, 4) === anoAtual);
+    return { porEstagio, escolhidas, porMes, semMes, ateDez, anoAtual,
+      semEstagio: abertos.filter(d => !estagiosP.some(e => e.estagio === d.estagio_codigo)) };
   })();
   const convMensalValor = (() => {
     const porMes = {};
@@ -5654,8 +5654,8 @@ IMPORTANTE: Responda SOMENTE com base nos dados acima. Se a pergunta pede algo q
       <div style={{ display: 'grid', gap: 9, gridTemplateColumns: 'repeat(auto-fit, minmax(158px, 1fr))' }}>
         {[
           { t: t.emAberto, bruto: soma(abertos), n: `${abertos.length} ${t.propostas}`, p: G.ambar },
-          { t: `${t.prevAteDez} ${previsaoFech.anoAtual}`, bruto: previsaoFech.ateDez.p50,
-            n: `${val(previsaoFech.ateDez.p10)} a ${val(previsaoFech.ateDez.p90)} · ${previsaoFech.ateDez.esperados.toFixed(1)} ${t.fechEsperados}`,
+          { t: `${t.prevAteDez}${previsaoPed.anoAtual.slice(2)}`, bruto: soma(previsaoPed.ateDez),
+            n: `${previsaoPed.ateDez.length} ${t.pedidosPrevistos} · total ${val(soma(previsaoPed.escolhidas))}`,
             p: G.ciano, ajuda: t.explicaPrevNova },
           { t: t.paradoMais90, bruto: valor90, n: `${abertos90.length} ${t.propostas}`, p: G.vermelho, ajuda: t.explicaAging },
           ...(() => {
@@ -5796,71 +5796,62 @@ IMPORTANTE: Responda SOMENTE com base nos dados acima. Se a pergunta pede algo q
       {gavetaDe('sit:', 'est:')}
 
       {painel(t.prevNovaTitulo, (() => {
-        const pf = previsaoFech;
-        const rotM = (m) => { const [a, mm] = m.split('-'); return `${['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'][Number(mm) - 1]}/${a.slice(2)}`; };
-        const maxV = Math.max(1, ...pf.porMes.map(x => x.p90), ...pf.porMes.map(x => x.maior));
-        const ALT = 190;
-        const resumo = [
-          { r: `Até dez/${pf.anoAtual.slice(2)}`, s: pf.ateDez, cor: G.ciano[1] },
-          { r: `${Number(pf.anoAtual) + 1} em diante`, s: pf.depois, cor: G.roxo[1] },
-        ];
+        const pp = previsaoPed;
+        const rotM = (m) => { const [a2, mm] = m.split('-'); return `${['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'][Number(mm) - 1]}/${a2.slice(2)}`; };
+        const COR = { avancado: G.verde, alto: G.azul, medio: G.ambar, baixo: G.rosa };
+        const colunas = [...pp.porMes.map(x => ({ k: rotM(x.mes), ...x })),
+          ...(pp.semMes.length ? [{ k: 'sem mês', mes: 'sem', lista: pp.semMes, valor: soma(pp.semMes), n: pp.semMes.length, semData: true }] : [])];
+        const maxV = Math.max(1, ...colunas.map(c => c.valor));
+        const ALT = 170;
+        const regra = (e) => `${e.n} propostas em ${e.rotulo} × ${Math.round(e.p * 100)}% de chance = ${e.k} fecham, com o valor cheio. `
+          + `Escolhidas pela nota de relacionamento do cliente (recorrência de pedidos em 36 meses, conversão, recência)${e.corte != null ? `; nota de corte ${e.corte}` : ''}.`;
         return (
           <>
-            <div style={{ display: 'grid', gap: 8, gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', marginBottom: 14 }}>
-              {resumo.map(x => (
-                <div key={x.r} style={{ border: `1px solid ${T.line}`, borderRadius: 9, padding: '10px 12px' }}>
-                  <div style={{ fontSize: 10.5, color: T.inkFaint }}>{x.r} · {x.s.n} {t.propostas}</div>
-                  <div style={{ fontSize: 19, fontWeight: 800, color: x.cor }}>{val(x.s.p10)} a {val(x.s.p90)}</div>
-                  <div style={{ fontSize: 10.5, color: T.inkDim }}>mediana {val(x.s.p50)} · {x.s.esperados.toFixed(1)} {t.fechEsperados}</div>
+            <div style={{ display: 'grid', gap: 8, gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', marginBottom: 14 }}>
+              {pp.porEstagio.map(e => (
+                <div key={e.estagio} onClick={() => abrir(`pp:${e.estagio}`, `${t.prevNovaTitulo} · ${e.rotulo}`, regra(e),
+                    e.fecham.map(d => ({ ...d, estagio: `${e.rotulo} · nota ${d._nota}` })), e.previsto)}
+                  style={{ border: `1px solid ${T.line}`, borderTop: `3px solid ${(COR[e.estagio] || G.cinza)[1]}`, borderRadius: 9, padding: '10px 12px', cursor: 'pointer' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, fontWeight: 700, color: (COR[e.estagio] || G.cinza)[1] }}>
+                    <span>{e.rotulo}</span><span>{Math.round(e.p * 100)}%</span>
+                  </div>
+                  <div style={{ fontSize: 11, color: T.inkDim, marginTop: 3 }}>{e.n} propostas → <strong style={{ color: T.ink }}>{e.k} fecham</strong></div>
+                  <div style={{ fontSize: 19, fontWeight: 800, color: T.ink, marginTop: 4 }}>{val(e.previsto)}</div>
+                  <div style={{ fontSize: 10.5, color: T.inkFaint }}>de {val(e.total)} em aberto{e.corte != null ? ` · nota de corte ${e.corte}` : ''}</div>
                 </div>
               ))}
-              <div style={{ border: `1px dashed ${T.amberText}66`, borderRadius: 9, padding: '10px 12px', background: T.amberSoft }}>
-                <div style={{ fontSize: 10.5, color: T.amberText }}>Fora da previsão</div>
-                <div style={{ fontSize: 13, fontWeight: 700, color: T.amberText, marginTop: 2 }}>
-                  {pf.semExp.length} sem mês de expectativa · {val(soma(pf.semExp))}
-                </div>
-                {pf.semEst.length > 0 && <div style={{ fontSize: 10.5, color: T.amberText }}>{pf.semEst.length} com mês mas sem estágio · {val(soma(pf.semEst))}</div>}
+            </div>
+            <div style={{ fontSize: 11.5, fontWeight: 700, marginBottom: 4 }}>
+              Quando entram: {pp.escolhidas.length} pedidos previstos · {val(soma(pp.escolhidas))}
+            </div>
+            <div style={{ overflowX: 'auto' }}>
+              <div style={{ display: 'flex', alignItems: 'flex-end', gap: 14, minWidth: colunas.length * 72, height: ALT + 56, paddingTop: 16 }}>
+                {colunas.map(c => (
+                  <div key={c.k} onClick={() => abrir(`pp:m:${c.mes}`, `${t.prevNovaTitulo} · ${c.k}`,
+                      c.semData ? 'Propostas que devem fechar mas não têm mês de expectativa — pedir a data ao vendedor.' : `Pedidos previstos com expectativa em ${c.k}.`,
+                      c.lista.map(d => ({ ...d, estagio: `${d._estagio} · nota ${d._nota}` })), c.valor)}
+                    title={`${c.k}: ${c.n} pedidos previstos · ${val(c.valor)}`}
+                    style={{ flex: '1 0 58px', display: 'flex', flexDirection: 'column', alignItems: 'center', cursor: 'pointer' }}>
+                    <div style={{ fontSize: 10, color: T.inkDim, marginBottom: 3, whiteSpace: 'nowrap' }}>{val(c.valor)}</div>
+                    <div style={{ width: 30, height: Math.max(3, Math.round(ALT * c.valor / maxV)), borderRadius: '4px 4px 0 0',
+                      background: c.semData ? `repeating-linear-gradient(45deg, ${G.ambar[0]}, ${G.ambar[0]} 5px, ${G.ambar[1]} 5px, ${G.ambar[1]} 10px)`
+                        : `linear-gradient(180deg, ${G.ciano[0]}, ${G.ciano[1]})` }} />
+                    <div style={{ fontSize: 10.5, fontWeight: 600, marginTop: 6, color: c.semData ? T.amberText : T.ink }}>{c.k}</div>
+                    <div style={{ fontSize: 9.5, color: T.inkFaint }}>{c.n} ped.</div>
+                  </div>
+                ))}
               </div>
             </div>
-            {pf.porMes.length === 0 ? (
-              <div style={{ fontSize: 12, color: T.inkFaint }}>Nenhuma proposta em aberto com estágio e mês de expectativa.</div>
-            ) : (
-              <div style={{ overflowX: 'auto' }}>
-                <div style={{ display: 'flex', alignItems: 'flex-end', gap: 14, minWidth: pf.porMes.length * 76, height: ALT + 70, paddingTop: 18 }}>
-                  {pf.porMes.map(x => {
-                    const y = (v) => Math.round(ALT * v / maxV);
-                    return (
-                      <div key={x.mes} onClick={() => abrir(`pf:${x.mes}`, `${t.prevNovaTitulo} · ${rotM(x.mes)}`,
-                          `Propostas em aberto com expectativa em ${rotM(x.mes)}. Chance de cada uma = peso do estágio. Faixa provável ${val(x.p10)} a ${val(x.p90)}; ${x.esperados.toFixed(1)} fechamentos esperados de ${x.n}.`,
-                          x.lista, soma(x.lista))}
-                        title={`${rotM(x.mes)}: faixa ${val(x.p10)} a ${val(x.p90)} · mediana ${val(x.p50)} · ${x.esperados.toFixed(1)} fechamentos esperados de ${x.n} · chance de fechar pelo menos um: ${Math.round(100 * x.chanceAlgum)}% · maior proposta ${val(x.maior)}`}
-                        style={{ flex: '1 0 62px', display: 'flex', flexDirection: 'column', alignItems: 'center', cursor: 'pointer' }}>
-                        <div style={{ fontSize: 10, color: T.inkDim, marginBottom: 3, whiteSpace: 'nowrap' }}>{val(x.p50)}</div>
-                        <div style={{ position: 'relative', width: 30, height: ALT }}>
-                          {/* maior proposta do mês: o teto do que um único fechamento traz */}
-                          <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: y(x.maior), borderRadius: 4,
-                            border: `1px dashed ${T.line}`, boxSizing: 'border-box' }} />
-                          {/* faixa provável P10–P90 */}
-                          <div style={{ position: 'absolute', left: 3, right: 3, bottom: y(x.p10), height: Math.max(3, y(x.p90) - y(x.p10)),
-                            borderRadius: 4, background: `linear-gradient(180deg, ${G.ciano[0]}, ${G.ciano[1]})`, opacity: x.atrasado ? 0.45 : 0.9 }} />
-                          {/* mediana */}
-                          <div style={{ position: 'absolute', left: -3, right: -3, bottom: y(x.p50), height: 2, background: T.ink }} />
-                        </div>
-                        <div style={{ fontSize: 10.5, fontWeight: 600, marginTop: 6, color: x.atrasado ? T.rustText : T.ink }}>{rotM(x.mes)}</div>
-                        <div style={{ fontSize: 9.5, color: T.inkFaint, textAlign: 'center', lineHeight: 1.3 }}>
-                          {x.esperados.toFixed(1)} de {x.n}<br />{Math.round(100 * x.chanceAlgum)}% ≥1
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
+            {pp.semEstagio.length > 0 && (
+              <div style={{ fontSize: 11, color: T.amberText, marginTop: 8 }}>
+                Fora da conta: {pp.semEstagio.length} propostas em aberto sem estágio do vendedor ({val(soma(pp.semEstagio))}).
               </div>
             )}
           </>
         );
       })(), t.prevNovaSub)}
 
-      {gavetaDe('pf:')}
+      {gavetaDe('pp:')}
 
       <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))' }}>
         {painel(t.agingTitulo, (
