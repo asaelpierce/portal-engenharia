@@ -21108,7 +21108,7 @@ function CRM({ currentUser }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12, paddingTop: 14 }}>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-        {[['funil', 'Funil'], ['tarefas', `Tarefas${atividades.length ? ` (${atividades.length})` : ''}`], ['empresas', 'Empresas']].map(([k, r]) => (
+        {[['dashboard', 'Dashboard'], ['funil', 'Funil'], ['tarefas', `Tarefas${atividades.length ? ` (${atividades.length})` : ''}`], ['empresas', 'Empresas']].map(([k, r]) => (
           <button key={k} onClick={() => setAba(k)} style={botao(aba === k)}>{r}</button>
         ))}
         <span style={{ flex: 1 }} />
@@ -21278,6 +21278,12 @@ function CRM({ currentUser }) {
             {pipeline === 'posvendas' && 'Levar para Reposição abre uma oportunidade nova em Vendas.'}
           </div>
         </>
+      )}
+
+      {aba === 'dashboard' && (
+        <CRMDashboard negocios={negocios} empresas={empresas} atividades={atividades} etapas={etapas} devemFechar={devemFechar}
+          resp={resp} onAbrirEmpresa={setEmpresaAberta} onAbrirNegocio={setAbertoId}
+          irParaFunil={(p) => { setPipeline(p); setAba('funil'); }} />
       )}
 
       {aba === 'tarefas' && (() => {
@@ -21469,6 +21475,203 @@ function CRM({ currentUser }) {
           </div>
         );
       })()}
+    </div>
+  );
+}
+
+// Dashboard do CRM (fase 2, 29/09/2026). Reaproveita os gráficos da Diretoria
+// (Rosca, BarrasH, Colunas) sobre os dados do CRM. O filtro de responsável do
+// topo do CRM vale para o painel inteiro.
+function CRMDashboard({ negocios, empresas, atividades, etapas, devemFechar, resp, onAbrirEmpresa, onAbrirNegocio, irParaFunil }) {
+  const [feitas, setFeitas] = useState([]);
+  const [ultimo, setUltimo] = useState({});
+  const [kdbAno, setKdbAno] = useState(null);
+  const moeda = (v) => fmtMoedaCompacta(v);
+  useEffect(() => {
+    (async () => {
+      const desde = new Date(Date.now() - 56 * 86400000).toISOString();
+      const [f, u, k] = await Promise.all([
+        supabase.from('crm_atividade').select('id,tipo,responsavel,concluida_em').gte('concluida_em', desde).limit(5000),
+        supabase.from('v_crm_ultimo_contato').select('*'),
+        supabase.from('v_comercial_venda_kdb_ano').select('*'),
+      ]);
+      setFeitas(f.data || []);
+      setUltimo(Object.fromEntries((u.data || []).map(x => [x.empresa_id, x.ultimo_contato])));
+      setKdbAno((k.data || []).find(x => Number(x.ano) === new Date().getFullYear()) || null);
+    })();
+  }, []);
+
+  const empPorId = Object.fromEntries(empresas.map(e => [e.id, e]));
+  const etapaPorId = Object.fromEntries(etapas.map(e => [e.id, e]));
+  const meu = (n) => !resp || n.responsavel === resp;
+  const vendas = negocios.filter(n => n.pipeline_id === 'vendas' && meu(n));
+  const abertos = vendas.filter(n => etapaPorId[n.etapa_id]?.tipo === 'aberta');
+  const ganhos = vendas.filter(n => etapaPorId[n.etapa_id]?.tipo === 'ganho');
+  const perdidos = vendas.filter(n => etapaPorId[n.etapa_id]?.tipo === 'perdido');
+  const leads = negocios.filter(n => n.pipeline_id === 'leads' && meu(n));
+  const leadsAbertos = leads.filter(n => etapaPorId[n.etapa_id]?.tipo === 'aberta');
+  const leadsConv = leads.filter(n => etapaPorId[n.etapa_id]?.tipo === 'ganho');
+  const leadsDesc = leads.filter(n => etapaPorId[n.etapa_id]?.tipo === 'perdido');
+  const ativs = atividades.filter(a => !resp || a.responsavel === resp);
+  const atrasadas = ativs.filter(a => a.vencimento && new Date(a.vencimento) < new Date());
+  const soma = (l, f = 'valor') => l.reduce((s, n) => s + (Number(n[f]) || 0), 0);
+  const fecham = abertos.filter(n => devemFechar.has(n.id));
+  const diasDe = (d) => d ? Math.floor((Date.now() - new Date(d).getTime()) / 86400000) : null;
+
+  // clientes com negócio em aberto e sem contato há 60+ dias
+  const semContato = Object.values(abertos.reduce((m, n) => {
+    if (!n.empresa_id) return m;
+    const x = m[n.empresa_id] || (m[n.empresa_id] = { emp: empPorId[n.empresa_id], n: 0, valor: 0 });
+    x.n++; x.valor += Number(n.valor) || 0; return m;
+  }, {})).map(x => ({ ...x, dias: diasDe(ultimo[x.emp?.id]) }))
+    .filter(x => x.emp && (x.dias == null || x.dias >= 60))
+    .sort((a, b) => b.valor - a.valor);
+
+  const PARES = [G.azul, G.verde, G.ambar, G.roxo, G.ciano, G.rosa, G.vermelho, G.cinza];
+  const agrupa = (lista, chave, campo = 'valor') => {
+    const m = {};
+    lista.forEach(n => { const k = chave(n) || 'Não informado'; m[k] = m[k] || { k, v: 0, n: 0 }; m[k].v += campo ? (Number(n[campo]) || 0) : 1; m[k].n++; });
+    return Object.values(m).sort((a, b) => b.v - a.v);
+  };
+
+  const funil = etapas.filter(e => e.pipeline_id === 'vendas' && e.tipo === 'aberta').map((e, i) => {
+    const l = abertos.filter(n => n.etapa_id === e.id);
+    const d = l.filter(n => devemFechar.has(n.id));
+    return { k: e.nome, v: soma(l), dentro: ['baixo', 'medio', 'alto', 'avancado'].includes(e.codigo) ? soma(d) : undefined,
+      rot: moeda(soma(l)), extra: `${l.length}${d.length ? ` · ${d.length} fecham` : ''}`, par: [e.cor || PARES[i % 8][0], e.cor || PARES[i % 8][1]] };
+  });
+  const regiao = agrupa(abertos, n => empPorId[n.empresa_id]?.regiao).map((x, i) => ({ ...x, par: PARES[i % 8], rot: moeda(x.v) }));
+  const segmento = agrupa(abertos, n => empPorId[n.empresa_id]?.segmento).slice(0, 8).map((x, i) => ({ ...x, par: PARES[i % 8], rot: moeda(x.v), extra: `${x.n}` }));
+  const origem = agrupa(leads, n => n.fonte, null).map((x, i) => ({ ...x, par: PARES[i % 8], rot: `${x.v}` }));
+  const motivos = agrupa(perdidos.filter(n => n.motivo_perda), n => n.motivo_perda, null).slice(0, 8).map(x => ({ ...x, par: G.vermelho, rot: `${x.v}` }));
+  const porTipo = agrupa(feitas.filter(a => !resp || a.responsavel === resp), a => crmRotuloTipo(a.tipo), null).map((x, i) => ({ ...x, par: PARES[i % 8], rot: `${x.v}` }));
+  const semanas = Array.from({ length: 8 }, (_, i) => {
+    const fim = new Date(); fim.setHours(23, 59, 59, 999); fim.setDate(fim.getDate() - 7 * (7 - i));
+    const ini = new Date(fim); ini.setDate(ini.getDate() - 6); ini.setHours(0, 0, 0, 0);
+    const n = feitas.filter(a => (!resp || a.responsavel === resp) && new Date(a.concluida_em) >= ini && new Date(a.concluida_em) <= fim).length;
+    return { k: ini.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }), total: n, rot: String(n), sub: 'concluídas' };
+  });
+  const parado = etapas.filter(e => e.pipeline_id === 'vendas' && e.tipo === 'aberta').map((e, i) => {
+    const l = abertos.filter(n => n.etapa_id === e.id);
+    const med = l.length ? Math.round(l.reduce((s, n) => s + (diasDe(n.etapa_desde) || 0), 0) / l.length) : 0;
+    return { k: e.nome, v: med, rot: `${med} dias`, extra: `${l.length}`, par: med > 90 ? G.vermelho : med > 45 ? G.ambar : G.verde };
+  });
+  const vends = [...new Set(negocios.filter(n => n.pipeline_id === 'vendas').map(n => n.responsavel).filter(Boolean))]
+    .filter(v => !resp || v === resp).map(v => {
+      const ab = abertos.filter(n => n.responsavel === v), fe = fecham.filter(n => n.responsavel === v);
+      return { v, aberto: soma(ab), nAb: ab.length, fecha: soma(fe), nFe: fe.length,
+        ganho: soma(ganhos.filter(n => n.responsavel === v)), nGa: ganhos.filter(n => n.responsavel === v).length,
+        nPe: perdidos.filter(n => n.responsavel === v).length,
+        atras: atividades.filter(a => a.responsavel === v && a.vencimento && new Date(a.vencimento) < new Date()).length };
+    }).sort((a, b) => b.aberto - a.aberto);
+  const maxV = Math.max(1, ...vends.map(x => Math.max(x.aberto, x.ganho)));
+
+  const card = (titulo, sub, corpo, span) => (
+    <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 11, padding: '13px 15px', gridColumn: span ? '1 / -1' : undefined, minWidth: 0 }}>
+      <div style={{ fontSize: 12.5, fontWeight: 700 }}>{titulo}</div>
+      {sub && <div style={{ fontSize: 10.5, color: T.inkFaint, marginBottom: 10 }}>{sub}</div>}
+      {corpo}
+    </div>
+  );
+  const vazio = (t) => <div style={{ fontSize: 11.5, color: T.inkFaint, padding: '8px 0' }}>{t}</div>;
+  const kpis = [
+    { t: 'Em aberto (Vendas)', v: moeda(soma(abertos)), s: `${abertos.length} negócios`, p: G.ambar },
+    { t: 'Devem fechar', v: moeda(soma(fecham)), s: `${fecham.length} pedidos · valor cheio`, p: G.verde, h: 'Em cada etapa de negociação fecham negócios × chance, escolhidos pelo relacionamento do cliente' },
+    ...(!resp && kdbAno ? [{ t: `Vendido em ${kdbAno.ano} (KdB)`, v: moeda(Number(kdbAno.vendido)), s: `${kdbAno.entradas} pedidos`, p: G.roxo }] : []),
+    ...(!resp && kdbAno ? [{ t: 'Ticket médio', v: moeda(Number(kdbAno.vendido) / Math.max(1, Number(kdbAno.brs))), s: `por BR vendido em ${kdbAno.ano}`, p: G.azul }] : []),
+    { t: 'Leads em aberto', v: String(leadsAbertos.length), s: leadsConv.length + leadsDesc.length ? `${Math.round(100 * leadsConv.length / (leadsConv.length + leadsDesc.length))}% convertem` : 'sem histórico ainda', p: G.ciano },
+    { t: 'Tarefas atrasadas', v: String(atrasadas.length), s: `de ${ativs.length} pendentes`, p: atrasadas.length ? G.vermelho : G.verde },
+    { t: 'Clientes sem contato', v: String(semContato.length), s: `60+ dias · ${moeda(soma(semContato))} em aberto`, p: semContato.length ? G.vermelho : G.verde },
+  ];
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div style={{ display: 'grid', gap: 9, gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))' }}>
+        {kpis.map(k => (
+          <div key={k.t} title={k.h || ''} style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 11, padding: '12px 14px', position: 'relative', overflow: 'hidden' }}>
+            <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 3, background: `linear-gradient(90deg, ${k.p[0]}, ${k.p[1]})` }} />
+            <div style={{ fontSize: 10.5, color: T.inkFaint }}>{k.t}</div>
+            <div style={{ fontSize: 20, fontWeight: 800, color: k.p[1], fontVariantNumeric: 'tabular-nums' }}>{k.v}</div>
+            <div style={{ fontSize: 10, color: T.inkFaint }}>{k.s}</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))' }}>
+        {card('Funil de Vendas por etapa', 'valor em aberto · a parte forte é o que deve fechar, com o valor cheio · clique para abrir o funil',
+          <BarrasH dados={funil} aoClicar={() => irParaFunil('vendas')} />)}
+        {card('Tempo parado por etapa', 'média de dias desde a última mudança de etapa · vermelho acima de 90 dias',
+          <BarrasH dados={parado} />)}
+
+        {card('Por vendedor', 'em aberto, o que deve fechar (valor cheio), ganhos e perdidos no funil de 2026, tarefas atrasadas', (
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+              <thead><tr>
+                {['Vendedor', 'Em aberto', 'Deve fechar', 'Ganho', 'Perdidos', 'Atrasadas'].map((h, i) => (
+                  <th key={h} style={{ padding: '6px 8px', fontSize: 10.5, fontWeight: 600, color: T.inkFaint, textAlign: i ? 'right' : 'left' }}>{h}</th>
+                ))}
+              </tr></thead>
+              <tbody>
+                {vends.map(x => (
+                  <tr key={x.v} style={{ borderTop: `1px solid ${T.lineSoft}` }}>
+                    <td style={{ padding: '7px 8px', fontWeight: 600, whiteSpace: 'nowrap' }}>{x.v}</td>
+                    {[[x.aberto, x.nAb, G.ambar], [x.fecha, x.nFe, G.verde], [x.ganho, x.nGa, G.roxo]].map(([v, n, p], j) => (
+                      <td key={j} style={{ padding: '7px 8px', textAlign: 'right', minWidth: 120 }}>
+                        <div style={{ fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{moeda(v)} <span style={{ fontWeight: 400, color: T.inkFaint, fontSize: 10.5 }}>· {n}</span></div>
+                        <div style={{ height: 4, background: T.lineSoft, borderRadius: 2, marginTop: 3 }}>
+                          <div style={{ height: 4, width: `${100 * v / maxV}%`, background: `linear-gradient(90deg, ${p[0]}, ${p[1]})`, borderRadius: 2, marginLeft: 'auto' }} />
+                        </div>
+                      </td>
+                    ))}
+                    <td style={{ padding: '7px 8px', textAlign: 'right', color: T.inkDim }}>{x.nPe}</td>
+                    <td style={{ padding: '7px 8px', textAlign: 'right', color: x.atras ? T.rustText : T.inkFaint, fontWeight: x.atras ? 700 : 400 }}>{x.atras}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ), true)}
+
+        {card('Em aberto por região', 'pelo cadastro do cliente no Sankhya',
+          regiao.length ? <Rosca dados={regiao} tamanho={180} espessura={28} centro={moeda(soma(abertos))} subcentro={`${abertos.length} negócios`} /> : vazio('Sem negócios em aberto.'))}
+        {card('Em aberto por segmento', 'os 8 maiores · número = negócios',
+          segmento.length ? <BarrasH dados={segmento} /> : vazio('Sem negócios em aberto.'))}
+
+        {card('Leads por origem', `${leads.length} leads · ${leadsConv.length} convertidos · ${leadsDesc.length} descartados`,
+          origem.length ? <Rosca dados={origem} tamanho={180} espessura={28} centro={String(leads.length)} subcentro="leads" /> : vazio('Nenhum lead cadastrado ainda. Crie pelo botão "+ Lead" no funil de Leads.'))}
+        {card('Motivos de perda', 'dos negócios marcados como perdidos no CRM, com motivo',
+          motivos.length ? <BarrasH dados={motivos} /> : vazio('Ainda sem perdas com motivo — o motivo passou a ser obrigatório no CRM.'))}
+
+        {card('Atividades concluídas por semana', 'últimas 8 semanas',
+          feitas.length ? <Colunas dados={semanas} par={G.ciano} altura={150} /> : vazio('Nenhuma atividade concluída nas últimas 8 semanas.'))}
+        {card('Atividades por tipo', 'concluídas nas últimas 8 semanas',
+          porTipo.length ? <BarrasH dados={porTipo} /> : vazio('Nenhuma atividade concluída nas últimas 8 semanas.'))}
+
+        {card(`Clientes sem contato há 60 dias ou mais (${semContato.length})`, 'com negócio em aberto e nenhuma anotação, atividade ou mudança de etapa feita por alguém · ordenados pelo valor em aberto · clique para abrir', (
+          semContato.length === 0 ? vazio('Todos os clientes com negócio em aberto tiveram contato nos últimos 60 dias.') : (
+            <div style={{ overflowX: 'auto', maxHeight: 360, overflowY: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                <thead><tr>
+                  {['Cliente', 'Região', 'Negócios', 'Em aberto', 'Último contato'].map((h, i) => (
+                    <th key={h} style={{ padding: '6px 8px', fontSize: 10.5, fontWeight: 600, color: T.inkFaint, textAlign: i >= 2 ? 'right' : 'left', position: 'sticky', top: 0, background: T.panel }}>{h}</th>
+                  ))}
+                </tr></thead>
+                <tbody>
+                  {semContato.slice(0, 60).map(x => (
+                    <tr key={x.emp.id} onClick={() => onAbrirEmpresa(x.emp.id)} style={{ borderTop: `1px solid ${T.lineSoft}`, cursor: 'pointer' }}>
+                      <td style={{ padding: '6px 8px', fontWeight: 600 }}>{x.emp.nome}</td>
+                      <td style={{ padding: '6px 8px', color: T.inkDim }}>{x.emp.regiao || '—'}</td>
+                      <td style={{ padding: '6px 8px', textAlign: 'right' }}>{x.n}</td>
+                      <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 700 }}>{moeda(x.valor)}</td>
+                      <td style={{ padding: '6px 8px', textAlign: 'right', color: T.rustText }}>{x.dias == null ? 'nunca registrado' : `${x.dias} dias`}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )
+        ), true)}
+      </div>
     </div>
   );
 }
