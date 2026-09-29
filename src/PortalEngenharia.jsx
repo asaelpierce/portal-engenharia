@@ -20771,7 +20771,8 @@ function CusteioPorOP() {
     if (aba !== 'desvios' || desvios) return;
     (async () => {
       const { data } = await supabase.from('v_custeio_op_previsto_x_real').select('*')
-        .in('situacao', ['consumiu a mais', 'não previsto']).gte('valor_desvio', 200).order('valor_desvio', { ascending: false }).limit(400);
+        .in('situacao', ['consumiu a mais', 'não previsto']).eq('cancelada', false)
+        .gte('valor_desvio', 200).order('valor_desvio', { ascending: false }).limit(400);
       setDesvios(data || []);
     })();
   }, [aba, desvios]);
@@ -20853,12 +20854,29 @@ function CusteioPorOP() {
               <option value="finalizada">Finalizadas</option>
               <option value="produzindo">Produzindo</option>
               <option value="em andamento">Em andamento (sem peça produzida)</option>
-              <option value="todas">Todas</option>
+              <option value="suspensa">Suspensas</option>
+              <option value="cancelada">Canceladas</option>
+              <option value="todas">Todas (inclusive canceladas)</option>
             </select>
             <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="buscar OP ou produto" style={{ ...campo, minWidth: 220 }} />
             <span style={{ fontSize: 11.5, color: T.inkFaint }}>{lista.length} OPs</span>
           </div>
 
+          {situ === 'cancelada' && (
+            <div style={{ background: T.rustSoft, color: T.rustText, borderRadius: 8, padding: '9px 14px', fontSize: 12, lineHeight: 1.5 }}>
+              <strong>OPs canceladas no Sankhya.</strong> O que está aqui é custo que não virou produto: horas apontadas, material que saiu
+              para a OP e o overhead que elas absorveram. Ficam fora da comparação por produto e dos desvios de material.
+              Quando a OP foi cancelada e substituída por outra, as horas ficaram na antiga — vale conferir se foram para a nova.
+            </div>
+          )}
+          {(() => {
+            const canc = ops.filter(o => o.situacao === 'cancelada' && (comp === 'todas' || o.competencia === comp));
+            return situ !== 'cancelada' && canc.length > 0 ? (
+              <div onClick={() => setSitu('cancelada')} style={{ fontSize: 11.5, color: T.rustText, cursor: 'pointer' }}>
+                {canc.length} OP(s) cancelada(s) no período, com {num(canc.reduce((s, o) => s + (Number(o.horas) || 0), 0), 0)} h e {moeda(canc.reduce((s, o) => s + custo(o), 0))} de custo, estão fora desta visão · clique para ver
+              </div>
+            ) : null;
+          })()}
           <div style={{ display: 'grid', gap: 8, gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))' }}>
             {[
               { t: 'OPs', v: String(lista.length), s: `${num(soma('qtd_produzida'), 0)} peças produzidas` },
@@ -20897,7 +20915,11 @@ function CusteioPorOP() {
                         <td style={{ padding: '7px 10px', fontWeight: 700 }}>{l.op}</td>
                         <td style={{ padding: '7px 10px', maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={l.produto}>{l.produto || l.cod_produto || '—'}</td>
                         <td style={{ padding: '7px 10px', whiteSpace: 'nowrap', color: T.inkDim }}>
-                          {l.situacao}<div style={{ fontSize: 10, color: T.inkFaint }}>{fmtD(l.primeiro_apontamento)} a {fmtD(l.ultimo_apontamento)}</div>
+                          {['cancelada', 'suspensa'].includes(l.situacao)
+                            ? <span style={{ fontSize: 10.5, fontWeight: 700, padding: '1px 6px', borderRadius: 4,
+                                color: l.situacao === 'cancelada' ? T.rustText : T.amberText, background: l.situacao === 'cancelada' ? T.rustSoft : T.amberSoft }}>{l.situacao}</span>
+                            : l.situacao}
+                          <div style={{ fontSize: 10, color: T.inkFaint }}>{fmtD(l.primeiro_apontamento)} a {fmtD(l.ultimo_apontamento)}</div>
                         </td>
                         <td style={{ padding: '7px 10px', textAlign: 'right' }}>
                           {num(l.qtd_produzida)}{l.qtd_produzir && Number(l.qtd_produzir) !== Number(l.qtd_produzida) ? <span style={{ color: T.inkFaint }}> / {num(l.qtd_produzir)}</span> : ''}
@@ -20972,7 +20994,7 @@ function CusteioPorOP() {
                                   </div>
                                 ))}
                                 <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 6 }}>
-                                  OP {l.status === 'F' ? 'finalizada' : 'aberta'} no Sankhya{l.inicio ? ` · iniciada ${fmtD(l.inicio)}` : ''}{l.termino ? ` · terminada ${fmtD(l.termino)}` : ''}
+                                  OP {{ F: 'finalizada', C: 'CANCELADA', S: 'suspensa', A: 'aberta' }[l.status] || 'sem status'} no Sankhya{l.inicio ? ` · iniciada ${fmtD(l.inicio)}` : ''}{l.termino ? ` · terminada ${fmtD(l.termino)}` : ''}
                                   {l.qtd_produzir ? ` · para ${num(l.qtd_produzir)} peça(s)` : ''}
                                 </div>
                               </div>
@@ -21013,7 +21035,7 @@ function CusteioPorOP() {
           .filter(p => !termoP || String(p.produto || '').toLowerCase().includes(termoP) || String(p.cod_produto).includes(termoP))
           .map(p => ({ ...p, _disp: Number(p.custo_unit_min) > 0 ? Number(p.custo_unit_max) / Number(p.custo_unit_min) : null }))
           .sort((a, b) => Number(b.custo_total) - Number(a.custo_total));
-        const opsDo = prodAberto ? ops.filter(o => o.cod_produto === prodAberto && Number(o.qtd_produzida) > 0)
+        const opsDo = prodAberto ? ops.filter(o => o.cod_produto === prodAberto && Number(o.qtd_produzida) > 0 && o.situacao !== 'cancelada')
           .map(o => ({ ...o, _cu: Number(cUnit(o)) || null })).sort((a, b) => (b._cu || 0) - (a._cu || 0)) : [];
         const med = prodAberto ? medianaProd[prodAberto] : null;
         return (
