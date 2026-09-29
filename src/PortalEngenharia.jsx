@@ -3663,6 +3663,10 @@ const TXT = {
     explicaCiclo: 'barra cheia = proposto, verde = virou pedido',
     explicaFaturado: 'Receita das notas dos BRs vendidos em 2026. O quadro abaixo abre a diferença para o faturamento total da empresa.',
     vendidoKdb: 'Vendido no ano (Painel KdB)', entradasKdb: 'pedidos lançados',
+    prevAteDez: 'Previsão até dez/', fechEsperados: 'fechamentos esperados',
+    prevNovaTitulo: 'Previsão de fechamento',
+    prevNovaSub: 'cada proposta fecha inteira ou não fecha, com a chance do estágio, no mês de expectativa · 5.000 simulações · faixa = 80% dos cenários (P10–P90), traço = mediana, pontilhado = maior proposta do mês · embaixo: fechamentos esperados de N e chance de fechar pelo menos um',
+    explicaPrevNova: 'Mediana da simulação das propostas em aberto com expectativa até dezembro. A chance de cada proposta é o peso do estágio (ainda não calibrado com o histórico). Embaixo, a faixa provável: 80% dos cenários ficam entre esses valores.',
     explicaVendidoKdb: 'Net value dos pedidos lançados no Painel KdB no ano, conferido à mão. Conta pela data do pedido — inclui pedido de proposta de ano anterior.',
     explicaPedidoKdb: 'BRs com pedido de venda e ainda sem nota. Valor do pedido no Painel KdB (net value); sem lançamento no KdB, o da proposta. Brinde, retrabalho e estoque não contam.',
     fatTitulo: 'De onde vem o faturamento de 2026', fatTotal: 'Faturamento total do ano',
@@ -3860,6 +3864,10 @@ const TXT = {
     explicaCiclo: 'light bar = proposed, green = became an order',
     explicaFaturado: 'Invoiced revenue for projects sold in 2026. The panel below breaks down the gap to company-wide revenue.',
     vendidoKdb: 'Sold this year (KdB panel)', entradasKdb: 'orders booked',
+    prevAteDez: 'Forecast to Dec/', fechEsperados: 'expected wins',
+    prevNovaTitulo: 'Closing forecast',
+    prevNovaSub: 'each proposal closes in full or not at all, with its stage probability, in the expected month · 5,000 simulations · band = 80% of scenarios (P10–P90), line = median, dashed = largest proposal of the month',
+    explicaPrevNova: 'Median of the simulation of open proposals expected to close by December. Band: 80% of scenarios fall in this range.',
     explicaVendidoKdb: 'Net value of orders booked in the KdB panel this year, manually checked. Counted by order date.',
     explicaPedidoKdb: 'Projects with a sales order and no invoice yet. Order net value from the KdB panel; without it, the proposal value.',
     fatTitulo: 'Where 2026 revenue comes from', fatTotal: 'Total revenue for the year',
@@ -4654,6 +4662,38 @@ function PainelDiretoria() {
   const valorProposto = soma(dados);
   const convPctValor = valorProposto > 0 ? (valorGanho / valorProposto) * 100 : null;
   const convDecididosValor = (valorGanho + soma(perdidos)) > 0 ? (valorGanho / (valorGanho + soma(perdidos))) * 100 : null;
+  // PREVISÃO DE FECHAMENTO (29/09/2026). O peso do estágio é a CHANCE de a
+  // proposta fechar, não uma fração do valor: ela fecha inteira ou não fecha,
+  // no mês de expectativa. Simulação de Monte Carlo: 5.000 rodadas, em cada uma
+  // cada proposta fecha ou não pela chance do estágio. Saem, por mês: fechamentos
+  // esperados (soma das chances), faixa provável (P10–P90) e mediana.
+  const previsaoFech = (() => {
+    const pesoDe = Object.fromEntries((estagiosCfg || []).map(e => [e.estagio, Number(e.peso)]));
+    const mesDe = (s) => { const m = /^(\d{2})\/(\d{4})$/.exec(String(s || '').trim()); return m ? `${m[2]}-${m[1]}` : null; };
+    const hojeMes = new Date().toISOString().slice(0, 7);
+    const comChance = abertos.map(d => ({ ...d, _p: pesoDe[d.estagio_codigo], _mes: mesDe(d.expectativa_fechamento) }));
+    const validos = comChance.filter(d => d._p > 0 && d._mes);
+    const semExp = comChance.filter(d => !d._mes);
+    const semEst = comChance.filter(d => d._mes && !(d._p > 0));
+    let semente = 42;
+    const rnd = () => { semente = (semente * 1664525 + 1013904223) % 4294967296; return semente / 4294967296; };
+    const simular = (lista) => {
+      const N = 5000; const res = new Float64Array(N);
+      for (let i = 0; i < N; i++) { let s = 0; for (const d of lista) if (rnd() < d._p) s += Number(d.valor) || 0; res[i] = s; }
+      res.sort();
+      const q = (f) => res[Math.min(N - 1, Math.floor(f * N))];
+      return { p10: q(0.10), p50: q(0.50), p90: q(0.90),
+        esperados: lista.reduce((s, d) => s + d._p, 0),
+        chanceAlgum: 1 - lista.reduce((s, d) => s * (1 - d._p), 1),
+        maior: lista.reduce((m, d) => Math.max(m, Number(d.valor) || 0), 0), n: lista.length, lista };
+    };
+    const meses = [...new Set(validos.map(d => d._mes))].sort();
+    const porMes = meses.map(m => ({ mes: m, atrasado: m < hojeMes, ...simular(validos.filter(d => d._mes === m)) }));
+    const anoAtual = hojeMes.slice(0, 4);
+    const ateDez = simular(validos.filter(d => d._mes.slice(0, 4) === anoAtual));
+    const depois = simular(validos.filter(d => d._mes.slice(0, 4) > anoAtual));
+    return { porMes, ateDez, depois, semExp, semEst, anoAtual };
+  })();
   const convMensalValor = (() => {
     const porMes = {};
     dados.forEach(d => {
@@ -5614,7 +5654,9 @@ IMPORTANTE: Responda SOMENTE com base nos dados acima. Se a pergunta pede algo q
       <div style={{ display: 'grid', gap: 9, gridTemplateColumns: 'repeat(auto-fit, minmax(158px, 1fr))' }}>
         {[
           { t: t.emAberto, bruto: soma(abertos), n: `${abertos.length} ${t.propostas}`, p: G.ambar },
-          { t: t.ponderado, bruto: somaPonderado, n: t.ponderadoSub, p: G.ciano, ajuda: t.explicaPonderado },
+          { t: `${t.prevAteDez} ${previsaoFech.anoAtual}`, bruto: previsaoFech.ateDez.p50,
+            n: `${val(previsaoFech.ateDez.p10)} a ${val(previsaoFech.ateDez.p90)} · ${previsaoFech.ateDez.esperados.toFixed(1)} ${t.fechEsperados}`,
+            p: G.ciano, ajuda: t.explicaPrevNova },
           { t: t.paradoMais90, bruto: valor90, n: `${abertos90.length} ${t.propostas}`, p: G.vermelho, ajuda: t.explicaAging },
           ...(() => {
             const vk = vendaKdb.find(x => Number(x.ano) === new Date().getFullYear());
@@ -5622,7 +5664,6 @@ IMPORTANTE: Responda SOMENTE com base nos dados acima. Se a pergunta pede algo q
           })(),
           { t: t.pedido, bruto: soma(pedidos), n: `${pedidos.length} ${t.brs}`, p: G.azul, ajuda: t.explicaPedidoKdb },
           { t: t.faturado, bruto: receitaFat, n: `${faturados.length} ${t.brs}`, p: G.verde, ajuda: t.explicaFaturado },
-          { t: t.previsto, bruto: totalCenario, n: cenarios.find(c => c.c === cenario)?.r || '', p: G.roxo },
           { t: t.diasAtePedido, txt: diasPedido == null ? '—' : `${diasPedido} ${t.dias}`, n: t.medio, p: G.ciano },
           { t: t.diasAteFaturar, txt: diasFat == null ? '—' : `${diasFat} ${t.dias}`, n: t.medio, p: G.rosa },
         ].map((k, i) => (
@@ -5754,6 +5795,73 @@ IMPORTANTE: Responda SOMENTE com base nos dados acima. Se a pergunta pede algo q
 
       {gavetaDe('sit:', 'est:')}
 
+      {painel(t.prevNovaTitulo, (() => {
+        const pf = previsaoFech;
+        const rotM = (m) => { const [a, mm] = m.split('-'); return `${['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'][Number(mm) - 1]}/${a.slice(2)}`; };
+        const maxV = Math.max(1, ...pf.porMes.map(x => x.p90), ...pf.porMes.map(x => x.maior));
+        const ALT = 190;
+        const resumo = [
+          { r: `Até dez/${pf.anoAtual.slice(2)}`, s: pf.ateDez, cor: G.ciano[1] },
+          { r: `${Number(pf.anoAtual) + 1} em diante`, s: pf.depois, cor: G.roxo[1] },
+        ];
+        return (
+          <>
+            <div style={{ display: 'grid', gap: 8, gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', marginBottom: 14 }}>
+              {resumo.map(x => (
+                <div key={x.r} style={{ border: `1px solid ${T.line}`, borderRadius: 9, padding: '10px 12px' }}>
+                  <div style={{ fontSize: 10.5, color: T.inkFaint }}>{x.r} · {x.s.n} {t.propostas}</div>
+                  <div style={{ fontSize: 19, fontWeight: 800, color: x.cor }}>{val(x.s.p10)} a {val(x.s.p90)}</div>
+                  <div style={{ fontSize: 10.5, color: T.inkDim }}>mediana {val(x.s.p50)} · {x.s.esperados.toFixed(1)} {t.fechEsperados}</div>
+                </div>
+              ))}
+              <div style={{ border: `1px dashed ${T.amberText}66`, borderRadius: 9, padding: '10px 12px', background: T.amberSoft }}>
+                <div style={{ fontSize: 10.5, color: T.amberText }}>Fora da previsão</div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: T.amberText, marginTop: 2 }}>
+                  {pf.semExp.length} sem mês de expectativa · {val(soma(pf.semExp))}
+                </div>
+                {pf.semEst.length > 0 && <div style={{ fontSize: 10.5, color: T.amberText }}>{pf.semEst.length} com mês mas sem estágio · {val(soma(pf.semEst))}</div>}
+              </div>
+            </div>
+            {pf.porMes.length === 0 ? (
+              <div style={{ fontSize: 12, color: T.inkFaint }}>Nenhuma proposta em aberto com estágio e mês de expectativa.</div>
+            ) : (
+              <div style={{ overflowX: 'auto' }}>
+                <div style={{ display: 'flex', alignItems: 'flex-end', gap: 14, minWidth: pf.porMes.length * 76, height: ALT + 70, paddingTop: 18 }}>
+                  {pf.porMes.map(x => {
+                    const y = (v) => Math.round(ALT * v / maxV);
+                    return (
+                      <div key={x.mes} onClick={() => abrir(`pf:${x.mes}`, `${t.prevNovaTitulo} · ${rotM(x.mes)}`,
+                          `Propostas em aberto com expectativa em ${rotM(x.mes)}. Chance de cada uma = peso do estágio. Faixa provável ${val(x.p10)} a ${val(x.p90)}; ${x.esperados.toFixed(1)} fechamentos esperados de ${x.n}.`,
+                          x.lista, soma(x.lista))}
+                        title={`${rotM(x.mes)}: faixa ${val(x.p10)} a ${val(x.p90)} · mediana ${val(x.p50)} · ${x.esperados.toFixed(1)} fechamentos esperados de ${x.n} · chance de fechar pelo menos um: ${Math.round(100 * x.chanceAlgum)}% · maior proposta ${val(x.maior)}`}
+                        style={{ flex: '1 0 62px', display: 'flex', flexDirection: 'column', alignItems: 'center', cursor: 'pointer' }}>
+                        <div style={{ fontSize: 10, color: T.inkDim, marginBottom: 3, whiteSpace: 'nowrap' }}>{val(x.p50)}</div>
+                        <div style={{ position: 'relative', width: 30, height: ALT }}>
+                          {/* maior proposta do mês: o teto do que um único fechamento traz */}
+                          <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: y(x.maior), borderRadius: 4,
+                            border: `1px dashed ${T.line}`, boxSizing: 'border-box' }} />
+                          {/* faixa provável P10–P90 */}
+                          <div style={{ position: 'absolute', left: 3, right: 3, bottom: y(x.p10), height: Math.max(3, y(x.p90) - y(x.p10)),
+                            borderRadius: 4, background: `linear-gradient(180deg, ${G.ciano[0]}, ${G.ciano[1]})`, opacity: x.atrasado ? 0.45 : 0.9 }} />
+                          {/* mediana */}
+                          <div style={{ position: 'absolute', left: -3, right: -3, bottom: y(x.p50), height: 2, background: T.ink }} />
+                        </div>
+                        <div style={{ fontSize: 10.5, fontWeight: 600, marginTop: 6, color: x.atrasado ? T.rustText : T.ink }}>{rotM(x.mes)}</div>
+                        <div style={{ fontSize: 9.5, color: T.inkFaint, textAlign: 'center', lineHeight: 1.3 }}>
+                          {x.esperados.toFixed(1)} de {x.n}<br />{Math.round(100 * x.chanceAlgum)}% ≥1
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </>
+        );
+      })(), t.prevNovaSub)}
+
+      {gavetaDe('pf:')}
+
       <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))' }}>
         {painel(t.agingTitulo, (
           <>
@@ -5858,203 +5966,17 @@ IMPORTANTE: Responda SOMENTE com base nos dados acima. Se a pergunta pede algo q
       </div>
 
 
-      {painel(t.compTitulo, (
-        <>
-          {/* Legenda: três séries + os níveis que compõem a coluna do meio.
-              Clicar num nível isola ele no empilhado — ver só o Avançado
-              responde "o que está mesmo para fechar". */}
-          <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'center',
-            marginBottom: 12, fontSize: 10.5 }}>
-            {[[t.serieCheio, G.cinza], [t.seriePond, null], [t.serieReal, G.verde]].map(([r, p]) => (
-              <span key={r} style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-                <span style={{ width: 10, height: 10, borderRadius: 2,
-                  background: p ? `linear-gradient(135deg, ${p[0]}, ${p[1]})`
-                    : `linear-gradient(135deg, ${G.verde[0]}, ${G.azul[0]}, ${G.ambar[0]})` }} />
-                <span style={{ color: T.inkDim, fontWeight: 600 }}>{r}</span>
-              </span>
-            ))}
-            <span style={{ color: T.line }}>│</span>
-            {niveisPrev.map(n => {
-              const on = estagioIsolado === n.cod;
-              return (
-                <span key={n.cod} className="g-clicavel"
-                  onClick={() => setEstagioIsolado(on ? null : n.cod)}
-                  style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 8px',
-                    borderRadius: 5, border: `1px solid ${on ? n.par[0] : 'transparent'}`,
-                    background: on ? `${n.par[0]}16` : 'transparent',
-                    opacity: estagioIsolado == null || on ? 1 : 0.4 }}>
-                  <span style={{ width: 9, height: 9, borderRadius: 2,
-                    background: `linear-gradient(135deg, ${n.par[0]}, ${n.par[1]})` }} />
-                  <span style={{ color: T.inkDim }}>{n.rot}</span>
-                  <span style={{ color: n.par[1], fontWeight: 700 }}>{(n.peso * 100).toFixed(0)}%</span>
-                </span>
-              );
-            })}
-            {estagioIsolado != null && (
-              <button onClick={() => { setEstagioIsolado(null); setDetalhe(null); }}
-                style={{ fontFamily: 'inherit', fontSize: 10.5, fontWeight: 600, padding: '4px 10px',
-                  borderRadius: 5, cursor: 'pointer', border: `1px solid ${T.line}`,
-                  background: T.panel, color: T.inkDim, marginLeft: 'auto' }}>↺ {t.verTodos}</button>
-            )}
-          </div>
-
-          {(() => {
-            // Coluna do meio vazia na maioria dos meses NÃO é bug: é proposta
-            // sem classificação, que pesa zero. Dizer isso no gráfico evita a
-            // conclusão errada de que o dado sumiu.
-            const comPond = trio.filter(d => d.pond.some(p => p.v > 0)).length;
-            return comPond < trio.length && estagioIsolado == null ? (
-              <div style={{ fontSize: 11, color: T.amberText, background: T.amberSoft,
-                border: `1px solid ${T.amberText}33`, borderRadius: 7, padding: '9px 12px',
-                marginBottom: 12, lineHeight: 1.5 }}>
-                {t.avisoPondVazio.replace('{m}', String(comPond)).replace('{tot}', String(trio.length))}
-              </div>
-            ) : null;
-          })()}
-
-          <ColunasTrio dados={trio} niveis={niveisPrev} fmt={val} altura={205}
-            ativo={detalhe?.chave?.startsWith('trio:') ? detalhe.chave.slice(5) : null}
-            aoClicar={(d) => {
-              const p = d.pond.reduce((s, x) => s + x.v, 0);
-              abrir(`trio:${d.k}`, `${t.compTitulo} · ${d.k}`,
-                t.regraComp.replace('{m}', d.k).replace('{c}', val(d.cheio))
-                  .replace('{r}', val(d.realizado)).replace('{p}', val(p)),
-                d.listaMes, d.cheio);
-            }} />
-
-          <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', alignItems: 'baseline',
-            marginTop: 12, paddingTop: 10, borderTop: `1px solid ${T.lineSoft}` }}>
-            {[[t.totalCheio, trioCheio, G.cinza], [t.totalPond, trioPond, G.azul],
-              [t.totalReal, trioReal, G.verde]].map(([r, v, p]) => (
-              <span key={r} style={{ fontSize: 11 }}>
-                <span style={{ color: T.inkFaint }}>{r}: </span>
-                <strong style={{ fontSize: 14.5, color: p[1], fontVariantNumeric: 'tabular-nums' }}>
-                  {val(v)}
-                </strong>
-              </span>
-            ))}
-            {trioCheio > 0 && (
-              <span style={{ fontSize: 11, color: T.inkFaint }}>
-                <strong style={{ color: G.verde[1] }}>{((trioReal / trioCheio) * 100).toFixed(0)}%</strong>{' '}
-                {t.taxaReal}
-              </span>
-            )}
-          </div>
-        </>
-      ), t.explicaComp)}
+      
 
       {gavetaDe('trio:')}
 
-      {painel(t.cardsTitulo, (
-        <div style={{ display: 'grid', gap: 9, gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))' }}>
-          {cardsNivel.map((c, i) => {
-            const on = estagioIsolado === c.cod;
-            return (
-              <div key={c.cod} className="g-card g-linha g-clicavel"
-                onClick={() => {
-                  const novo = on ? null : c.cod;
-                  setEstagioIsolado(novo);
-                  if (novo === null) { setDetalhe(null); return; }
-                  abrir(`nivel:${c.cod}`, `${c.rot}`,
-                    t.regraNivel.replace('{e}', c.rot).replace('{p}', `${(c.peso * 100).toFixed(0)}%`),
-                    c.lista, soma(c.lista));
-                }}
-                style={{ position: 'relative', overflow: 'hidden', borderRadius: 10, padding: '12px 14px',
-                  border: `1px solid ${on ? c.par[0] : T.line}`, animationDelay: `${i * 60}ms`,
-                  background: on ? `linear-gradient(180deg, ${c.par[0]}12, transparent)` : T.panelAlt }}>
-                <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 3,
-                  background: `linear-gradient(90deg, ${c.par[0]}, ${c.par[1]})` }} />
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8 }}>
-                  <span style={{ fontSize: 11.5, fontWeight: 800, color: c.par[1] }}>{c.rot}</span>
-                  <span style={{ fontSize: 10, fontWeight: 700, color: c.par[1] }}>
-                    {(c.peso * 100).toFixed(0)}%
-                  </span>
-                </div>
-                <div style={{ fontSize: 10, color: T.inkFaint, marginTop: 7 }}>
-                  {c.n} {t.propostas} · {t.nivelCheio}
-                </div>
-                <div style={{ fontSize: 15, fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>
-                  {val(c.cheio)}
-                </div>
-                <div style={{ fontSize: 10, color: T.inkFaint, marginTop: 6, paddingTop: 6,
-                  borderTop: `1px solid ${T.lineSoft}` }}>{t.nivelPond}</div>
-                <div style={{ fontSize: 17, fontWeight: 800, color: c.par[1],
-                  fontVariantNumeric: 'tabular-nums' }}>
-                  <Contador valor={c.pond} formata={val} />
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      ), t.cardsSub)}
+      
 
       {gavetaDe('nivel:')}
 
-      {painel(t.pvTitulo, (
-        <>
-          <div style={{ display: 'grid', gap: 8, gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
-            marginBottom: 13 }}>
-            {[
-              { t: t.pvBruto, v: val(pvTotalBruto), p: G.ambar, s: `${prevComExp.length} ${t.propostas}` },
-              { t: t.pvPrevisto, v: val(pvTotalPrevisto), p: G.roxo,
-                s: cenarios.find(c => c.c === cenario)?.r || '' },
-              { t: t.pvMeses, v: String(colPrevVendas.length), p: G.ciano,
-                s: colPrevVendas.length ? `${colPrevVendas[0].k} – ${colPrevVendas[colPrevVendas.length - 1].k}` : '—' },
-              { t: t.pvSemData, v: val(soma(prevSemExp)), p: G.vermelho, s: `${prevSemExp.length} ${t.propostas}` },
-              ...(mediaMensal > 0 ? [{ t: t.pvVsMedia, p: G.verde,
-                v: `${(pvTotalPrevisto / mediaMensal).toFixed(1)}×`, s: val(mediaMensal) }] : []),
-            ].map((k, i) => (
-              <div key={k.t} className="g-card g-linha" style={{ background: T.panel,
-                border: `1px solid ${T.line}`, borderRadius: 10, padding: '11px 13px',
-                position: 'relative', overflow: 'hidden', animationDelay: `${i * 50}ms` }}>
-                <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 3,
-                  background: `linear-gradient(90deg, ${k.p[0]}, ${k.p[1]})` }} />
-                <div style={{ fontSize: 10.5, color: T.inkFaint, minHeight: 24 }}>{k.t}</div>
-                <div style={{ fontSize: 18, fontWeight: 800, color: k.p[1],
-                  fontVariantNumeric: 'tabular-nums' }}>{k.v}</div>
-                <div style={{ fontSize: 9.5, color: T.inkFaint, marginTop: 2 }}>{k.s}</div>
-              </div>
-            ))}
-          </div>
+      
 
-          {colPrevVendas.length === 0 ? (
-            <div style={{ fontSize: 11.5, color: T.amberText, background: T.amberSoft,
-              border: `1px solid ${T.amberText}33`, borderRadius: 7, padding: '12px 14px', lineHeight: 1.55 }}>
-              {t.pvVazio}
-            </div>
-          ) : (
-            <>
-              <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 10, fontSize: 10.5 }}>
-                {faixasPrev.map(f => (
-                  <span key={f.cod} style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-                    <span style={{ width: 10, height: 10, borderRadius: 2,
-                      background: `linear-gradient(135deg, ${f.par[0]}, ${f.par[1]})` }} />
-                    <span style={{ color: T.inkDim }}>{f.rot}</span>
-                    <span style={{ color: f.par[1], fontWeight: 700 }}>{(f.fator * 100).toFixed(0)}%</span>
-                  </span>
-                ))}
-              </div>
-              <ColunasPilha dados={colPrevVendas} faixas={faixasPrev} fmt={val} altura={200}
-                referencia={mediaMensal} refRotulo={`${t.mediaMes}: ${val(mediaMensal)}`}
-                ativo={detalhe?.chave?.startsWith('pv:') ? detalhe.chave.slice(3) : null}
-                aoClicar={(col) => abrir(`pv:${col.k}`, `${t.pvTitulo} · ${col.k}`,
-                  t.pvRegraMes.replace('{m}', col.k)
-                    .replace('{c}', cenarios.find(c => c.c === cenario)?.r || cenario),
-                  col.lista, col.bruto)} />
-              {mediaMensal > 0 && (
-                <div style={{ fontSize: 10.5, color: T.inkDim, background: T.panelAlt, borderRadius: 7,
-                  padding: '9px 12px', marginTop: 10, lineHeight: 1.55 }}>
-                  {t.pvAlerta.replace('{c}', cenarios.find(c => c.c === cenario)?.r || cenario)
-                    .replace('{v}', val(pvTotalPrevisto)).replace('{m}', val(mediaMensal))
-                    .replace('{p}', pvPctComData.toFixed(0))}
-                </div>
-              )}
-            </>
-          )}
-        </>
-      ), t.pvSub)}
-
-      {gavetaDe('pv:')}
+      
 
       {mix.length > 0 && painel(t.mixTitulo, (
         <>
@@ -6397,73 +6319,7 @@ IMPORTANTE: Responda SOMENTE com base nos dados acima. Se a pergunta pede algo q
 
       {gavetaDe('cob:')}
 
-      {painel(t.prevTitulo, (
-        <>
-          {prevSemExp.length > 0 && (
-            <div style={{ fontSize: 11, color: T.amberText, background: T.amberSoft,
-              border: `1px solid ${T.amberText}33`, borderRadius: 7, padding: '9px 12px',
-              marginBottom: 12, lineHeight: 1.5 }}>
-              {t.prevSemExp.replace('{n}', String(prevSemExp.length)).replace('{v}', val(soma(prevSemExp)))}
-            </div>
-          )}
-          {colPrevisib.length > 0 && (
-            <Colunas dados={colPrevisib} par={G.roxo} altura={165}
-              dica={(d) => `${d.k} · ${val(d.total)} · ${d.sub} ${t.propostas}`}
-              ativo={detalhe?.chave?.startsWith('prev:') ? detalhe.chave.slice(5) : null}
-              aoClicar={(col) => {
-                const lst = prevComExp.filter(p => rotMes(p.mes_previsto) === col.k);
-                abrir(`prev:${col.k}`, `${t.prevTitulo} · ${col.k}`,
-                  t.regraPrev.replace('{g}', col.k), lst, soma(lst));
-              }} />
-          )}
-
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap',
-            marginTop: 14, paddingTop: 12, borderTop: `1px solid ${T.lineSoft}` }}>
-            <span style={{ fontSize: 11.5, color: T.inkDim, fontWeight: 600 }}>{t.prevPor}</span>
-            {botoes(Object.entries(EIXOS).map(([k, x]) => [k, x.rot]), prevPor, setPrevPor)}
-          </div>
-
-          <div style={{ overflowX: 'auto', marginTop: 10 }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 720 }}>
-              <thead><tr style={{ background: T.panelAlt }}>
-                {[eixo.rot, t.colQtd, t.colValor, t.colPond, t.colLucro, t.colMargem, t.colComExp].map((h, i) => (
-                  <th key={h} style={{ padding: '7px 10px', fontSize: 10.5, fontWeight: 600, color: T.inkFaint,
-                    textAlign: i === 0 ? 'left' : 'right', whiteSpace: 'nowrap' }}>{h}</th>
-                ))}
-              </tr></thead>
-              <tbody>
-                {matriz.slice(0, 15).map((g, i) => (
-                  <tr key={g.k} className="g-linha g-clicavel"
-                    onClick={() => abrir(`mtz:${g.k}`, `${eixo.rot} · ${g.k}`,
-                      t.regraPrev.replace('{g}', g.k), g.lista, g.v)}
-                    style={{ borderBottom: `1px solid ${T.lineSoft}`, animationDelay: `${i * 35}ms`,
-                      background: detalhe?.chave === `mtz:${g.k}` ? T.panelAlt : 'transparent' }}>
-                    <td style={{ padding: '7px 10px', fontSize: 11.5, fontWeight: 600, maxWidth: 210,
-                      whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={g.k}>{g.k}</td>
-                    <td style={{ padding: '7px 10px', fontSize: 11, textAlign: 'right', color: T.inkFaint }}>{g.n}</td>
-                    <td style={{ padding: '7px 10px', fontSize: 12, textAlign: 'right', fontWeight: 700,
-                      fontVariantNumeric: 'tabular-nums' }}>{val(g.v)}</td>
-                    <td style={{ padding: '7px 10px', fontSize: 11.5, textAlign: 'right', color: G.ciano[1],
-                      fontVariantNumeric: 'tabular-nums' }}>{val(g.pond)}</td>
-                    <td style={{ padding: '7px 10px', fontSize: 11.5, textAlign: 'right', color: G.verde[1],
-                      fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{val(g.lucro)}</td>
-                    <td style={{ padding: '7px 10px', fontSize: 11, textAlign: 'right', color: T.inkDim }}>
-                      {g.margem > 0 ? `${g.margem.toFixed(0)}%` : '—'}
-                    </td>
-                    <td style={{ padding: '7px 10px', fontSize: 11, textAlign: 'right',
-                      color: g.comExp === 0 ? T.rustText : T.inkDim }}>{g.comExp}/{g.n}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          {prevPor === 'pg' && pgDeduzidos > 0 && (
-            <div style={{ fontSize: 10, color: T.inkFaint, marginTop: 8, lineHeight: 1.5 }}>
-              {t.pgDeduzido.replace('{n}', String(pgDeduzidos))}
-            </div>
-          )}
-        </>
-      ), t.prevSub)}
+      
 
       {gavetaDe('prev:', 'mtz:')}
 
@@ -6582,35 +6438,11 @@ IMPORTANTE: Responda SOMENTE com base nos dados acima. Se a pergunta pede algo q
       </div>
 
       <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))' }}>
-        {painel(t.cenariosTitulo, (
-          <BarrasH dados={barrasCen} altura={28}
-            ativo={cenarios.find(c2 => c2.c === cenario)?.r || null}
-            aoClicar={(b2) => {
-              const c2 = cenarios.find(x => x.r === b2.k);
-              if (!c2) return;
-              setCenario(c2.c);
-              const lista = previsao.filter(x => x.cenario === c2.c)
-                .map(x => ({ ...x, valor: x.valor_cenario, estagio: x.estagio_rotulo }));
-              const fatores = [...new Map(previsao.filter(x => x.cenario === c2.c)
-                .map(x => [x.estagio_rotulo, Math.round(Number(x.fator) * 100)])).entries()]
-                .map(([e, f]) => `${e} ${f}%`).join(', ');
-              abrir(`cen:${b2.k}`, `${t.cenariosTitulo} · ${b2.k}`,
-                t.regraCenario.replace('{f}', fatores), lista, soma(lista, 'valor_cenario'));
-            }} />
-        ), t.explicaCenario)}
-        {painel(t.previsaoMes, (
-          colPrev.length === 0 ? (
-            <div style={{ fontSize: 11.5, color: T.amberText, background: T.amberSoft, padding: '11px 13px',
-              borderRadius: 6, lineHeight: 1.55 }}>
-              <strong>{t.semPrevisaoTitulo}</strong> {t.semPrevisao}
-              {semData.length > 0 && <> {t.semDataValor.replace('{n}', String(semData.length)).replace('{v}', val(soma(semData, 'valor_cenario')))}</>}
-            </div>
-          ) : <Colunas dados={colPrev} par={G.roxo}
-                dica={(d) => `${d.k} · ${d.rot}`} rotulo={t.explicaPrevisaoMes} />
-        ))}
+        
+        
       </div>
 
-      {gavetaDe('cen:')}
+      
 
       <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))' }}>
         {painel(t.porVendedor, (
