@@ -3678,9 +3678,9 @@ const TXT = {
     desconto: 'Desconto no preço', paradaHa: 'Parada há mais de', margemAcima: 'Margem acima de',
     propostasParadas: 'Propostas no filtro', valorHoje: 'Preço de hoje',
     valorComDesconto: 'Novo preço ao cliente', abreMao: 'Abre mão de',
-    lucroDepois: 'Lucro depois', margemDepois: 'Margem depois', margemAtual: 'Margem hoje',
+    lucroDepois: 'Margem R$ depois', margemDepois: 'Margem depois', margemAtual: 'Margem hoje',
     cliente: 'Cliente', mostrando: 'mostrando {n} de {t}',
-    avisoVermelho: '{n} propostas ficam com lucro NEGATIVO neste desconto — o preço cairia abaixo do custo orçado.',
+    avisoVermelho: '{n} propostas ficam com margem NEGATIVA neste desconto — o preço cairia abaixo do custo orçado.',
     semPrevisaoTitulo: 'Nenhuma proposta tem expectativa de fechamento preenchida ainda.',
     semPrevisao: 'A coluna é nova e vai chegar quando os vendedores devolverem o follow up. Até lá, a previsão existe mas não tem como ser distribuída por mês.',
     semDataValor: '{n} propostas sem data de fechamento, somando {v} no cenário.',
@@ -3719,10 +3719,10 @@ const TXT = {
     semVerdeSub: 'estágio Avançado ou Alto — chance alta declarada, energia aqui converte',
     semAmareloSub: 'estágio Médio ou sem classificação — precisa de ação do vendedor para mudar de cor',
     semVermelhoSub: 'estágio Baixo, ou sem classificação parado há +180 dias — energia aqui raramente volta',
-    lucroEmJogo: 'lucro em jogo',
-    regraSemVerde: 'Propostas em aberto com estágio Avançado ou Alto (classificação do vendedor). O lucro em jogo é valor × margem orçada de cada BR — {s} das propostas desta cor têm margem no Sankhya.',
-    regraSemAmarelo: 'Propostas em aberto com estágio Médio, ou ainda sem classificação do vendedor (exceto as paradas há +180 dias, que caem no vermelho). É a pilha que o follow up destrava: classificar muda a cor. O lucro em jogo é valor × margem orçada.',
-    regraSemVermelho: 'Propostas em aberto com estágio Baixo, ou sem classificação e paradas há mais de 180 dias. Não é lista de descarte — é lista de DECISÃO: ou alguém caça, ou desiste formalmente e limpa o funil. O lucro em jogo é valor × margem orçada.',
+    lucroEmJogo: 'margem em jogo',
+    regraSemVerde: 'Propostas em aberto com estágio Avançado ou Alto (classificação do vendedor). A margem em jogo é valor × margem orçada de cada BR — {s} das propostas desta cor têm margem no Sankhya.',
+    regraSemAmarelo: 'Propostas em aberto com estágio Médio, ou ainda sem classificação do vendedor (exceto as paradas há +180 dias, que caem no vermelho). É a pilha que o follow up destrava: classificar muda a cor. A margem em jogo é valor × margem orçada.',
+    regraSemVermelho: 'Propostas em aberto com estágio Baixo, ou sem classificação e paradas há mais de 180 dias. Não é lista de descarte — é lista de DECISÃO: ou alguém caça, ou desiste formalmente e limpa o funil. A margem em jogo é valor × margem orçada.',
     ponderado: 'Em aberto ponderado',
     ponderadoSub: 'valor × peso do estágio',
     explicaPonderado: 'Cada proposta em aberto multiplicada pelo peso do estágio dado pelo vendedor (pesos cadastrados na tabela de estágios). Proposta SEM classificação vale ZERO aqui — classificar é o que faz este número subir. É a leitura mais honesta do funil: o que ele vale pela régua do próprio time.',
@@ -3740,10 +3740,10 @@ const TXT = {
     prevPor: 'Abrir por', porVendedor2: 'Vendedor', porPG: 'Tipo (PG)', porEstagio2: 'Estágio', porCliente: 'Cliente',
     prevSemExp: '{n} propostas ({v}) ainda não têm mês de fechamento preenchido e ficam fora das colunas. A lista suspensa de meses foi para a planilha do follow up justamente para destravar isso.',
     prevMatriz: 'Quem tem o quê, e quanto vale',
-    prevMatrizSub: 'linha a linha: valor em aberto, o que a régua prevê e o lucro que cada um carrega',
-    colQtd: 'Propostas', colValor: 'Em aberto', colPond: 'Ponderado', colLucro: 'Lucro previsto',
+    prevMatrizSub: 'linha a linha: valor em aberto, o que a régua prevê e a margem que cada um carrega',
+    colQtd: 'Propostas', colValor: 'Em aberto', colPond: 'Ponderado', colLucro: 'Margem prevista (R$)',
     colMargem: 'Margem média', colComExp: 'Com data',
-    regraPrev: 'Propostas em aberto de {g}. O ponderado é valor × peso do estágio; o lucro previsto é valor × margem orçada do BR.',
+    regraPrev: 'Propostas em aberto de {g}. O ponderado é valor × peso do estágio; a margem prevista é valor × margem orçada do BR.',
     pgDeduzido: 'PG deduzido do grupo do produto para {n} propostas — o tipo só é gravado quando o item vira pedido, então na proposta ele é inferido pelo histórico.',
     rankTitulo: 'Ranking de clientes — pedidos de venda dos últimos anos',
     rankSub: 'pedidos de venda desde 2023 (sem brinde, retrabalho e estoque) · o ano corrente é parcial: a tendência compara o ritmo anualizado com o ano anterior · parou de comprar = mais de 18 meses sem pedido',
@@ -3764,8 +3764,8 @@ const TXT = {
     dscTitulo: 'Onde cabe desconto', dscSub: 'proposta com margem gorda parada num estágio fraco é candidata a fechar com desconto — o custo não muda, o desconto sai inteiro da margem',
     dscMargemMin: 'Margem acima de', dscEstagios: 'Estágio', dscDesconto: 'Desconto no preço',
     dscProjetos: 'Projetos no filtro', dscValorHoje: 'Preço de hoje', dscValorNovo: 'Novo preço',
-    dscAbreMao: 'Abre mão de', dscLucroDepois: 'Lucro depois', dscMargemDepois: 'Margem depois',
-    dscMargemHoje: 'Margem hoje', dscNegativo: '{n} propostas ficariam com lucro NEGATIVO neste desconto — o preço cairia abaixo do custo orçado.',
+    dscAbreMao: 'Abre mão de', dscLucroDepois: 'Margem R$ depois', dscMargemDepois: 'Margem depois',
+    dscMargemHoje: 'Margem hoje', dscNegativo: '{n} propostas ficariam com margem NEGATIVA neste desconto — o preço cairia abaixo do custo orçado.',
     dscExplica: 'Uma proposta de R$ 100 com 50% de margem tem R$ 50 de custo. Com 10% de desconto ela vai a R$ 90 e a margem cai para 44,4%, não para 40% — o custo continua o mesmo.',
     dscVazio: 'Nenhuma proposta no filtro. Solte a margem mínima ou inclua outros estágios.',
     dscAvisoSemClass: 'Com estágio Médio ou Baixo só aparecem {n} projetos ({v}), porque {p}% do funil ainda está sem classificação. Os {ns} projetos sem classificação com margem acima do filtro somam {vs} — inclua "Sem classificação" acima para vê-los.',
@@ -3879,9 +3879,9 @@ const TXT = {
     desconto: 'Price discount', paradaHa: 'Open for more than', margemAcima: 'Margin above',
     propostasParadas: 'Proposals in filter', valorHoje: 'Current price',
     valorComDesconto: 'New price to customer', abreMao: 'Given up',
-    lucroDepois: 'Profit after', margemDepois: 'Margin after', margemAtual: 'Margin today',
+    lucroDepois: 'Margin after (R$)', margemDepois: 'Margin after', margemAtual: 'Margin today',
     cliente: 'Customer', mostrando: 'showing {n} of {t}',
-    avisoVermelho: '{n} proposals end up with NEGATIVE profit at this discount — the price would fall below budgeted cost.',
+    avisoVermelho: '{n} proposals end up with NEGATIVE margin at this discount — the price would fall below budgeted cost.',
     semPrevisaoTitulo: 'No proposal has an expected closing date yet.',
     semPrevisao: 'The column is new and will arrive as salespeople return the follow-up. Until then the forecast exists but cannot be spread across months.',
     semDataValor: '{n} proposals with no closing date, totalling {v} in this scenario.',
@@ -3920,10 +3920,10 @@ const TXT = {
     semVerdeSub: 'stage Advanced or High — declared high probability, energy here converts',
     semAmareloSub: 'stage Medium or unclassified — needs salesperson action to change color',
     semVermelhoSub: 'stage Low, or unclassified and stuck for 180+ days — energy here rarely comes back',
-    lucroEmJogo: 'profit at stake',
-    regraSemVerde: 'Open proposals staged Advanced or High (salesperson\'s call). Profit at stake is value × budgeted margin per BR — {s} of the proposals in this color have a margin in the ERP.',
-    regraSemAmarelo: 'Open proposals staged Medium, or not yet classified (except those stuck for 180+ days, which fall into red). This is the pile the follow-up unlocks: classifying changes the color. Profit at stake is value × budgeted margin.',
-    regraSemVermelho: 'Open proposals staged Low, or unclassified and stuck for over 180 days. Not a discard list — a DECISION list: either someone chases, or formally drops it and cleans the funnel. Profit at stake is value × budgeted margin.',
+    lucroEmJogo: 'margin at stake',
+    regraSemVerde: 'Open proposals staged Advanced or High (salesperson\'s call). Margin at stake is value × budgeted margin per BR — {s} of the proposals in this color have a margin in the ERP.',
+    regraSemAmarelo: 'Open proposals staged Medium, or not yet classified (except those stuck for 180+ days, which fall into red). This is the pile the follow-up unlocks: classifying changes the color. Margin at stake is value × budgeted margin.',
+    regraSemVermelho: 'Open proposals staged Low, or unclassified and stuck for over 180 days. Not a discard list — a DECISION list: either someone chases, or formally drops it and cleans the funnel. Margin at stake is value × budgeted margin.',
     ponderado: 'Weighted open pipeline',
     ponderadoSub: 'value × stage weight',
     explicaPonderado: 'Each open proposal multiplied by the weight of the stage set by the salesperson (weights from the stage table). UNCLASSIFIED proposals count as ZERO here — classifying is what makes this number grow. The most honest read of the funnel: what it is worth by the team\'s own ruler.',
@@ -3941,10 +3941,10 @@ const TXT = {
     prevPor: 'Break down by', porVendedor2: 'Salesperson', porPG: 'Type (PG)', porEstagio2: 'Stage', porCliente: 'Customer',
     prevSemExp: '{n} proposals ({v}) still have no expected closing month and stay out of the columns. The month drop-down was added to the follow-up sheet exactly to unlock this.',
     prevMatriz: 'Who holds what, and what it is worth',
-    prevMatrizSub: 'row by row: open value, what the ruler forecasts and the profit each one carries',
-    colQtd: 'Proposals', colValor: 'Open', colPond: 'Weighted', colLucro: 'Forecast profit',
+    prevMatrizSub: 'row by row: open value, what the ruler forecasts and the margin each one carries',
+    colQtd: 'Proposals', colValor: 'Open', colPond: 'Weighted', colLucro: 'Forecast margin (R$)',
     colMargem: 'Avg margin', colComExp: 'With date',
-    regraPrev: 'Open proposals for {g}. Weighted is value × stage weight; forecast profit is value × the BR budgeted margin.',
+    regraPrev: 'Open proposals for {g}. Weighted is value × stage weight; forecast margin is value × the BR budgeted margin.',
     pgDeduzido: 'PG inferred from the product group for {n} proposals — the type is only recorded once the item becomes an order, so on a proposal it is inferred from history.',
     rankTitulo: 'Customer ranking — sales orders over recent years',
     rankSub: 'sales orders since 2023 · current year annualized against last year · stopped buying = no order in 18 months',
@@ -3966,7 +3966,7 @@ const TXT = {
     dscMargemMin: 'Margin above', dscEstagios: 'Stage', dscDesconto: 'Price discount',
     dscProjetos: 'Proposals in filter', dscValorHoje: 'Current price', dscValorNovo: 'New price',
     dscAbreMao: 'Given up', dscLucroDepois: 'Profit after', dscMargemDepois: 'Margin after',
-    dscMargemHoje: 'Margin today', dscNegativo: '{n} proposals would end up with NEGATIVE profit at this discount — the price would fall below budgeted cost.',
+    dscMargemHoje: 'Margin today', dscNegativo: '{n} proposals would end up with NEGATIVE margin at this discount — the price would fall below budgeted cost.',
     dscExplica: 'A $100 proposal at 50% margin has $50 of cost. A 10% discount takes it to $90 and margin down to 44.4%, not to 40% — the cost stays the same.',
     dscVazio: 'No proposal in this filter. Lower the minimum margin or include other stages.',
     dscAvisoSemClass: 'With stage Medium or Low only {n} proposals show up ({v}), because {p}% of the pipeline is still unclassified. The {ns} unclassified proposals above the margin filter add up to {vs} — tick "Unclassified" above to see them.',
@@ -6492,6 +6492,18 @@ function FollowUpComercial({ currentUser }) {
   // margem, o Follow Up não. O dado continua carregado; para voltar a mostrar
   // a coluna "Margin" e o quadro de candidatas a desconto, trocar para true.
   const MOSTRAR_MARGEM = false;
+  // Tabela: os perdidos podem ser ocultados (os cartões e as barras já não os somam)
+  const [ocultarPerdidos, setOcultarPerdidos] = useState(false);
+  // Itens da proposta ao clicar no BR (v_comercial_itens_br: orçamento e pedido)
+  const [itensAberto, setItensAberto] = useState(null);
+  const [itensBr, setItensBr] = useState({});
+  const abrirItens = async (br) => {
+    if (itensAberto === br) { setItensAberto(null); return; }
+    setItensAberto(br);
+    if (itensBr[br]) return;
+    const { data } = await supabase.from('v_comercial_itens_br').select('*').eq('br', br);
+    setItensBr(x => ({ ...x, [br]: data || [] }));
+  };
   // Filtros por coluna, como no Excel. Texto para BR e Cliente, lista para
   // Vendedor e os dois estagios.
   const [filtros, setFiltros] = useState({ br: '', cliente: '', vendedor: '', estC: '', estV: '' });
@@ -7447,7 +7459,7 @@ function FollowUpComercial({ currentUser }) {
                     { t: 'Preço de hoje', v: moeda(tot.valor), c: T.inkDim },
                     { t: 'Novo preço', v: moeda(tot.novoValor), c: T.terracotta },
                     { t: 'Abre mão de', v: moeda(tot.valor - tot.novoValor), c: T.rustText },
-                    { t: 'Lucro depois', v: moeda(tot.novoLucro), c: tot.novoLucro > 0 ? T.oliveText : T.rustText },
+                    { t: 'Margem R$ depois', v: moeda(tot.novoLucro), c: tot.novoLucro > 0 ? T.oliveText : T.rustText },
                   ].map(k => (
                     <div key={k.t} style={{ background: T.panelAlt, borderRadius: 7, padding: '8px 11px' }}>
                       <div style={{ fontSize: 10, color: T.inkFaint }}>{k.t}</div>
@@ -7467,7 +7479,7 @@ function FollowUpComercial({ currentUser }) {
                 <div style={{ overflowX: 'auto', maxHeight: 380, overflowY: 'auto' }}>
                   <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 740 }}>
                     <thead style={{ position: 'sticky', top: 0, zIndex: 1 }}><tr style={{ background: T.panelAlt }}>
-                      {['BR', 'Cliente', 'Dias', 'Margem hoje', 'Preço de hoje', 'Novo preço', 'Margem depois', 'Lucro depois'].map((h, i) => (
+                      {['BR', 'Cliente', 'Dias', 'Margem hoje', 'Preço de hoje', 'Novo preço', 'Margem depois', 'Margem R$ depois'].map((h, i) => (
                         <th key={h} style={{ padding: '8px 10px', fontSize: 11, fontWeight: 600,
                           color: T.inkFaint, textAlign: i <= 1 ? 'left' : 'right', whiteSpace: 'nowrap' }}>{h}</th>
                       ))}
@@ -7609,9 +7621,11 @@ function FollowUpComercial({ currentUser }) {
             border: `1px solid ${T.line}`, background: T.panel, color: T.ink }}>
           {vendedores.map(v => <option key={v} value={v}>{v === 'Todos' ? 'Todos os vendedores' : v}</option>)}
         </select>
-        <span style={{ fontSize: 11.5, color: T.inkFaint }}>
-          {base.filter(l => l.situacao === 'perdido').length} perdido(s) incluído(s) na lista
-        </span>
+        <label style={{ fontSize: 11.5, color: T.inkFaint, display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer' }}
+          title="Os cartões e as barras por vendedor já descontam os perdidos — isto só tira as linhas da tabela">
+          <input type="checkbox" checked={ocultarPerdidos} onChange={e => setOcultarPerdidos(e.target.checked)} />
+          ocultar os {base.filter(l => l.situacao === 'perdido').length} perdido(s) da tabela
+        </label>
         {Object.values(filtros).some(Boolean) && (
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 11.5, color: T.terracotta }}>
             {lista.length} {lista.length === 1 ? 'linha' : 'linhas'} no filtro
@@ -7678,7 +7692,7 @@ function FollowUpComercial({ currentUser }) {
                 <tr><td colSpan={11} style={{ padding: 28, textAlign: 'center', color: T.inkFaint }}>
                   Nenhum BR aqui ainda. Eles aparecem assim que forem criados na tela Criar BR.
                 </td></tr>
-              ) : lista.map((l, iLinha) => {
+              ) : lista.filter(l => !ocultarPerdidos || l.situacao !== 'perdido').map((l, iLinha) => {
                 return (
                   // chave com a posição: BR repetido na base não pode deixar linha
                   // "fantasma" de um filtro anterior na tela
@@ -7687,8 +7701,10 @@ function FollowUpComercial({ currentUser }) {
                       background: ['faturado','pedido confirmado'].includes(l.situacao) ? `${T.oliveSoft}44`
                                : l.situacao === 'perdido' ? T.panelAlt : 'transparent',
                       opacity: l.situacao === 'perdido' ? 0.6 : 1 }}>
-                      <td style={{ padding: '8px 12px', fontSize: 12.5, fontWeight: 600 }}>
-                        {l.br}
+                      <td onClick={() => abrirItens(l.br)} title="Clique para ver os itens da proposta"
+                        style={{ padding: '8px 12px', fontSize: 12.5, fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                        <span style={{ color: T.inkFaint, fontSize: 10, marginRight: 4 }}>{itensAberto === l.br ? '▾' : '▸'}</span>
+                        <span style={{ borderBottom: `1px dotted ${T.inkFaint}` }}>{l.br}</span>
                         {l.situacao === 'faturado' && <span style={{ marginLeft: 6, fontSize: 9.5, color: T.oliveText }}>faturado</span>}
                       </td>
                       <td style={{ padding: '8px 12px', fontSize: 12, color: T.inkDim, maxWidth: 190,
@@ -7786,6 +7802,48 @@ function FollowUpComercial({ currentUser }) {
                         </div>
                       </td>
                     </tr>
+                    {itensAberto === l.br && (
+                      <tr><td colSpan={11} style={{ padding: '10px 14px', background: T.panelAlt, borderBottom: `1px solid ${T.line}`, borderLeft: `3px solid ${T.ink}` }}>
+                        {!itensBr[l.br] ? <div style={{ fontSize: 12, color: T.inkFaint }}>Carregando os itens…</div> : (() => {
+                          const grupos = [['orcamento', 'Itens da proposta (orçamento no Sankhya)'], ['pedido', 'Itens do pedido de venda']]
+                            .map(([k, r]) => ({ k, r, itens: itensBr[l.br].filter(x => x.origem === k) })).filter(g => g.itens.length);
+                          if (!grupos.length) return <div style={{ fontSize: 12, color: T.inkFaint }}>Nenhum item cadastrado para este BR no Sankhya ainda.</div>;
+                          return grupos.map(g => {
+                            const tot = g.itens.reduce((s, x) => s + (Number(x.valor) || 0), 0);
+                            return (
+                              <div key={g.k} style={{ marginBottom: 8 }}>
+                                <div style={{ fontSize: 11.5, fontWeight: 700, marginBottom: 4 }}>
+                                  {g.r} <span style={{ fontWeight: 400, color: T.inkFaint }}>· {g.itens.length} {g.itens.length === 1 ? 'item' : 'itens'} · {moeda(tot)}</span>
+                                </div>
+                                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11.5, background: T.panel, borderRadius: 6 }}>
+                                  <thead><tr>
+                                    {['Código', 'Descrição', 'Un.', 'Quantidade', 'Valor unitário', 'Valor total'].map((h, i) => (
+                                      <th key={h} style={{ padding: '5px 8px', fontSize: 10, fontWeight: 600, color: T.inkFaint, textAlign: i >= 3 ? 'right' : 'left' }}>{h}</th>
+                                    ))}
+                                  </tr></thead>
+                                  <tbody>
+                                    {g.itens.slice().sort((a, b2) => (Number(b2.valor) || 0) - (Number(a.valor) || 0)).map((x, j) => (
+                                      <tr key={j} style={{ borderTop: `1px solid ${T.lineSoft}` }}>
+                                        <td style={{ padding: '5px 8px', color: T.inkFaint, whiteSpace: 'nowrap' }}>{x.cod_produto}</td>
+                                        <td style={{ padding: '5px 8px' }}>{x.descricao}</td>
+                                        <td style={{ padding: '5px 8px', color: T.inkDim }}>{x.unidade}</td>
+                                        <td style={{ padding: '5px 8px', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{(Number(x.quantidade) || 0).toLocaleString('pt-BR', { maximumFractionDigits: 3 })}</td>
+                                        <td style={{ padding: '5px 8px', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                                          {Number(x.quantidade) ? (Number(x.valor) / Number(x.quantidade)).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) : '—'}
+                                        </td>
+                                        <td style={{ padding: '5px 8px', textAlign: 'right', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>
+                                          {(Number(x.valor) || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                                        </td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            );
+                          });
+                        })()}
+                      </td></tr>
+                    )}
                     {obsVendAberta === l.br && l.observacao_vendedor && (
                       <tr><td colSpan={11} style={{ padding: '10px 14px', background: T.blueSoft,
                         borderBottom: `1px solid ${T.line}`, borderLeft: `3px solid ${T.blueText}` }}>
@@ -19541,8 +19599,8 @@ function MargemProduto({ dados, placar, param, onParam }) {
       {pl && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 12 }}>
           {[
-            { l: 'No lucro', v: String(pl.no_lucro), c: T.oliveText, sub: `de ${pl.produtos} produtos` },
-            { l: 'No prejuízo', v: String(pl.no_prejuizo), c: T.rustText, sub: `${100 - pl.pct_lucro}% do total` },
+            { l: 'Margem positiva', v: String(pl.no_lucro), c: T.oliveText, sub: `de ${pl.produtos} produtos` },
+            { l: 'Margem negativa', v: String(pl.no_prejuizo), c: T.rustText, sub: `${100 - pl.pct_lucro}% do total` },
             { l: 'Ganho dos positivos', v: moeda(pl.ganho), c: T.oliveText },
             { l: 'Perda dos negativos', v: moeda(pl.perda), c: T.rustText },
             { l: 'Custo que foi p/ estoque', v: moeda(pl.custo_em_estoque), c: T.blueText,
@@ -19565,7 +19623,7 @@ function MargemProduto({ dados, placar, param, onParam }) {
                    borderRadius: 6, background: T.panel, color: T.ink }}>
           {comps.map(c => <option key={c} value={c}>{c}</option>)}
         </select>
-        {[['todos', 'Todos'], ['prejuizo', 'Só prejuízo'], ['lucro', 'Só lucro']].map(([k, r]) => (
+        {[['todos', 'Todos'], ['prejuizo', 'Só margem negativa'], ['lucro', 'Só margem positiva']].map(([k, r]) => (
           <button key={k} onClick={() => setFoco(k)} style={{
             fontFamily: 'inherit', fontSize: 11.5, cursor: 'pointer', padding: '5px 12px', borderRadius: 5,
             border: `1px solid ${foco === k ? T.ink : T.line}`,
@@ -19652,7 +19710,7 @@ function MargemProduto({ dados, placar, param, onParam }) {
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
               <tr style={{ background: T.panelAlt }}>
-                {['Competência', 'Produtos', 'No lucro', 'No prejuízo', '% lucro',
+                {['Competência', 'Produtos', 'Margem positiva', 'Margem negativa', '% positiva',
                   'Receita líquida', 'Custo', 'Resultado'].map((h, i) => (
                   <th key={h} style={{ padding: '9px 12px', fontSize: 11, fontWeight: 600, color: T.inkFaint,
                     textAlign: i >= 1 ? 'right' : 'left', borderBottom: `1px solid ${T.line}` }}>{h}</th>
