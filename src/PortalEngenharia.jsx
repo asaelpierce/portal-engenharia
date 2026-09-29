@@ -5817,7 +5817,7 @@ IMPORTANTE: Responda SOMENTE com base nos dados acima. Se a pergunta pede algo q
           ...(pp.semMes.length ? [{ k: 'sem mês', mes: 'sem', lista: pp.semMes, valor: soma(pp.semMes), n: pp.semMes.length, semData: true }] : [])];
         const maxV = Math.max(1, ...colunas.map(c => c.valor));
         const ALT = 170;
-        const regra = (e) => `${e.n} propostas em ${e.rotulo} × ${Math.round(e.p * 100)}% de chance = ${e.n * e.p} → arredonda para ${e.k} que fecham, com o valor cheio. `
+        const regra = (e) => `${e.n} propostas em ${e.rotulo} × ${Math.round(e.p * 100)}% de chance = ${(e.n * e.p).toFixed(1).replace('.', ',')} → arredonda para ${e.k} que fecham, com o valor cheio. `
           + `Ordem: nota do cliente (maior primeiro); empate pela quantidade de pedidos em 36 meses, depois pelo valor. As ${e.k} primeiras fecham; `
           + `a nota de corte (${e.corte ?? '—'}) é a nota da ${e.k}ª. Nota = 100 × (0,5 × R + 0,3 × C + 0,2 × T): `
           + `R = pedidos de venda do cliente nos últimos 36 meses ÷ 12 (máx. 1); C = propostas ganhas ÷ (ganhas + perdidas), 0,5 sem histórico; `
