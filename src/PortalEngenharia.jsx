@@ -21154,41 +21154,47 @@ function CusteioPorOP() {
 }
 
 /* ============================================================================
-   CRM — substitui o Agendor (28/09/2026)
-   Dois pipelines: Vendas (sobre os BRs, com oportunidade antes do BR) e
-   Pós-vendas (nasce da nota faturada). Tabelas crm_*; sincronização de hora
-   em hora (fn_crm_sincronizar); mover card = fn_crm_mover, que grava o
+   CRM — substitui o Agendor (fase 1 concluída em 29/09/2026)
+   Três pipelines: Leads (lead → qualificação → contato → convertido), Vendas
+   (sobre os BRs, com oportunidade antes do BR) e Pós-vendas (nasce da nota
+   faturada). Tabelas crm_*; sincronização de hora em hora (fn_crm_sincronizar
+   + fn_crm_enriquecer_empresas); mover card = fn_crm_mover, que grava o
    estágio do vendedor no Follow Up (uma verdade só). Ganho vem do Sankhya.
+   Acesso: vendedor vê só os seus (v_crm_usuario); gestor vê tudo.
 ============================================================================ */
 const CRM_TIPOS_ATIV = [
   { v: 'ligacao', r: 'Ligação' }, { v: 'visita', r: 'Visita' }, { v: 'reuniao', r: 'Reunião' },
-  { v: 'email', r: 'E-mail' }, { v: 'whatsapp', r: 'WhatsApp' }, { v: 'tarefa', r: 'Tarefa' },
+  { v: 'email', r: 'E-mail' }, { v: 'whatsapp', r: 'WhatsApp' }, { v: 'followup', r: 'Follow-up' }, { v: 'tarefa', r: 'Tarefa' },
 ];
+const CRM_FONTES = ['Site', 'WhatsApp', 'LinkedIn', 'Indicação', 'Feira', 'E-mail', 'Telemarketing', 'Visita', 'Cliente ativo'];
 const crmRotuloTipo = (t) => (CRM_TIPOS_ATIV.find(x => x.v === t) || { r: t }).r;
+const crmNum = (v) => { const n = Number(String(v ?? '').replace(/\./g, '').replace(',', '.')); return Number.isFinite(n) && String(v ?? '').trim() !== '' ? n : null; };
 
 function CRM({ currentUser }) {
   const autor = currentUser?.nome || currentUser?.email || 'portal';
   const [aba, setAba] = useState('funil');
   const [pipeline, setPipeline] = useState('vendas');
+  const [visao, setVisao] = useState('quadro');
   const [etapas, setEtapas] = useState([]);
   const [negocios, setNegocios] = useState([]);
   const [empresas, setEmpresas] = useState([]);
   const [atividades, setAtividades] = useState([]);
   const [vendedores, setVendedores] = useState([]);
+  const [perfil, setPerfil] = useState({ ve_tudo: true, vendedor: null });
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState(null);
   const [aviso, setAviso] = useState(null);
   const [resp, setResp] = useState('');
   const [busca, setBusca] = useState('');
   const [mostrarFechados, setMostrarFechados] = useState(false);
+  const [ordem, setOrdem] = useState({ c: 'valor', asc: false });
   const [abertoId, setAbertoId] = useState(null);
   const [empresaAberta, setEmpresaAberta] = useState(null);
-  const [perda, setPerda] = useState(null);          // { negocio, etapa } aguardando motivo
-  const [novoNeg, setNovoNeg] = useState(null);      // formulário de oportunidade
+  const [perda, setPerda] = useState(null);
+  const [novoNeg, setNovoNeg] = useState(null);
   const [arrastando, setArrastando] = useState(null);
   const moeda = (v) => fmtMoedaCompacta(v);
   const fmtDH = (d) => d ? new Date(d).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
-  const fmtD = (d) => d ? new Date(d).toLocaleDateString('pt-BR') : '—';
   const diasDesde = (d) => d ? Math.max(0, Math.floor((Date.now() - new Date(d).getTime()) / 86400000)) : null;
 
   const lerTudo = async (tabela, aplicar) => {
@@ -21206,19 +21212,21 @@ function CRM({ currentUser }) {
 
   const carregar = useCallback(async () => {
     try {
-      const [et, ng, em, at, vd] = await Promise.all([
+      const [et, ng, em, at, vd, pu] = await Promise.all([
         lerTudo('crm_etapa', q => q.order('ordem')),
         lerTudo('crm_negocio'),
         lerTudo('crm_empresa'),
-        lerTudo('crm_atividade', q => q.is('concluida_em', null)),
+        lerTudo('crm_atividade', q => q.is('concluida_em', null).is('cancelada_em', null)),
         supabase.from('comercial_vendedor_email').select('vendedor,ativo,em_copia').then(r => r.data || []),
+        currentUser?.email ? supabase.from('v_crm_usuario').select('*').ilike('email', currentUser.email).maybeSingle().then(r => r.data) : Promise.resolve(null),
       ]);
       setEtapas(et); setNegocios(ng); setEmpresas(em); setAtividades(at);
       setVendedores(vd.filter(v => v.ativo && !v.em_copia).map(v => v.vendedor).sort());
+      if (pu && !pu.ve_tudo && pu.vendedor) { setPerfil({ ve_tudo: false, vendedor: pu.vendedor }); setResp(pu.vendedor); }
       setErro(null);
     } catch (e) { setErro(e.message || String(e)); }
     setLoading(false);
-  }, []);
+  }, [currentUser?.email]);
   useEffect(() => { carregar(); }, [carregar]);
 
   const empPorId = useMemo(() => Object.fromEntries(empresas.map(e => [e.id, e])), [empresas]);
@@ -21226,6 +21234,7 @@ function CRM({ currentUser }) {
   const pendPorNeg = useMemo(() => {
     const m = {};
     atividades.forEach(a => { if (a.negocio_id) (m[a.negocio_id] = m[a.negocio_id] || []).push(a); });
+    Object.values(m).forEach(l => l.sort((a, b) => new Date(a.vencimento || '2999-01-01') - new Date(b.vencimento || '2999-01-01')));
     return m;
   }, [atividades]);
 
@@ -21235,7 +21244,9 @@ function CRM({ currentUser }) {
     if (et.tipo === 'perdido' && !motivo) { setPerda({ negocio: neg, etapa: codigo, motivo: '' }); return; }
     const { data, error } = await supabase.rpc('fn_crm_mover', { p_negocio: neg.id, p_etapa: codigo, p_autor: autor, p_motivo: motivo });
     if (error || !data?.ok) { setAviso({ tipo: 'erro', t: error?.message || data?.erro || 'Não foi possível mover.' }); return; }
-    setAviso(data.nova_oportunidade ? { tipo: 'ok', t: 'Card movido. Uma oportunidade de reposição foi aberta no pipeline de Vendas.' } : null);
+    setAviso(data.nova_oportunidade
+      ? { tipo: 'ok', t: neg.pipeline_id === 'leads' ? 'Lead convertido: a oportunidade foi aberta no pipeline de Vendas.' : 'Card movido. Uma oportunidade de reposição foi aberta em Vendas.' }
+      : null);
     await carregar();
   };
 
@@ -21243,15 +21254,16 @@ function CRM({ currentUser }) {
   if (erro) return <div style={{ padding: 20, color: T.rustText }}>Erro ao carregar o CRM: {erro}</div>;
 
   const termo = busca.trim().toLowerCase();
-  const casaBusca = (n) => !termo || [n.titulo, n.br, empPorId[n.empresa_id]?.nome, n.responsavel].some(x => String(x ?? '').toLowerCase().includes(termo));
-  const etapasPipe = etapas.filter(e => e.pipeline_id === pipeline)
-    .filter(e => mostrarFechados || e.tipo === 'aberta');
+  const casaBusca = (n) => !termo || [n.titulo, n.br, empPorId[n.empresa_id]?.nome, n.responsavel, n.concorrente].some(x => String(x ?? '').toLowerCase().includes(termo));
+  const etapasPipe = etapas.filter(e => e.pipeline_id === pipeline).filter(e => mostrarFechados || e.tipo === 'aberta');
   const doPipe = negocios.filter(n => n.pipeline_id === pipeline && (!resp || n.responsavel === resp) && casaBusca(n));
+  const probDe = (n) => n.probabilidade ?? etapaPorId[n.etapa_id]?.probabilidade ?? null;
+  const valorDe = (n) => Number(n.pipeline_id === 'leads' ? n.potencial : n.valor) || 0;
   const botao = (ativo) => ({ fontFamily: 'inherit', fontSize: 12, padding: '6px 12px', borderRadius: 6, cursor: 'pointer',
     border: `1px solid ${ativo ? T.ink : T.line}`, background: ativo ? T.ink : T.panel, color: ativo ? T.panel : T.inkDim });
   const campo = { fontFamily: 'inherit', fontSize: 12.5, padding: '6px 10px', borderRadius: 6, border: `1px solid ${T.line}`, background: T.panel };
-
   const negAberto = abertoId ? negocios.find(n => n.id === abertoId) : null;
+  const nomePipe = { leads: 'Leads', vendas: 'Vendas', posvendas: 'Pós-vendas' };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12, paddingTop: 14 }}>
@@ -21260,11 +21272,12 @@ function CRM({ currentUser }) {
           <button key={k} onClick={() => setAba(k)} style={botao(aba === k)}>{r}</button>
         ))}
         <span style={{ flex: 1 }} />
-        <select value={resp} onChange={e => setResp(e.target.value)} style={campo}>
+        <select value={resp} onChange={e => setResp(e.target.value)} disabled={!perfil.ve_tudo} style={campo}
+          title={perfil.ve_tudo ? '' : 'Vendedor vê os próprios negócios'}>
           <option value="">Todos os responsáveis</option>
           {vendedores.map(v => <option key={v} value={v}>{v}</option>)}
         </select>
-        <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="buscar BR, empresa, título" style={{ ...campo, minWidth: 200 }} />
+        <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="buscar BR, empresa, título, concorrente" style={{ ...campo, minWidth: 220 }} />
       </div>
 
       {aviso && (
@@ -21277,68 +21290,143 @@ function CRM({ currentUser }) {
       {aba === 'funil' && (
         <>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-            <button onClick={() => setPipeline('vendas')} style={botao(pipeline === 'vendas')}>Vendas</button>
-            <button onClick={() => setPipeline('posvendas')} style={botao(pipeline === 'posvendas')}>Pós-vendas</button>
+            {['leads', 'vendas', 'posvendas'].map(p => (
+              <button key={p} onClick={() => setPipeline(p)} style={botao(pipeline === p)}>{nomePipe[p]}</button>
+            ))}
+            <span style={{ width: 1, height: 20, background: T.line, margin: '0 4px' }} />
+            <button onClick={() => setVisao('quadro')} style={botao(visao === 'quadro')}>Quadro</button>
+            <button onClick={() => setVisao('lista')} style={botao(visao === 'lista')}>Lista</button>
             <label style={{ fontSize: 12, color: T.inkDim, display: 'flex', alignItems: 'center', gap: 5, marginLeft: 6 }}>
               <input type="checkbox" checked={mostrarFechados} onChange={e => setMostrarFechados(e.target.checked)} />
-              mostrar {pipeline === 'vendas' ? 'ganhos e perdidos' : 'reposição e encerrados'}
+              mostrar {pipeline === 'vendas' ? 'ganhos e perdidos' : pipeline === 'leads' ? 'convertidos e descartados' : 'reposição e encerrados'}
             </label>
             <span style={{ flex: 1 }} />
-            {pipeline === 'vendas' && (
-              <button onClick={() => setNovoNeg({ titulo: '', empresa_id: '', valor: '', responsavel: resp || '', previsao: '' })}
-                style={{ ...botao(false), borderColor: T.terracotta || T.rust, color: T.rustText, fontWeight: 600 }}>+ Oportunidade</button>
+            {pipeline !== 'posvendas' && (
+              <button onClick={() => setNovoNeg({ pipeline, titulo: '', empresa_id: '', empresa_nova: '', valor: '', potencial: '', responsavel: resp || '',
+                  previsao: '', fonte: '', interesse: '', score: '', concorrente: '', proxima: '' })}
+                style={{ ...botao(false), borderColor: T.rust, color: T.rustText, fontWeight: 600 }}>
+                {pipeline === 'leads' ? '+ Lead' : '+ Oportunidade'}
+              </button>
             )}
           </div>
 
-          <div style={{ overflowX: 'auto', paddingBottom: 8 }}>
-            <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start', minWidth: etapasPipe.length * 250 }}>
-              {etapasPipe.map(et => {
-                const cards = doPipe.filter(n => n.etapa_id === et.id)
-                  .sort((a, b) => (Number(b.valor) || 0) - (Number(a.valor) || 0));
-                return (
-                  <div key={et.id}
-                    onDragOver={e => { e.preventDefault(); }}
-                    onDrop={e => { e.preventDefault(); if (arrastando && arrastando.etapa_id !== et.id) mover(arrastando, et.codigo); setArrastando(null); }}
-                    style={{ flex: '1 0 240px', maxWidth: 300, background: T.panelAlt, borderRadius: 10, border: `1px solid ${T.line}`,
-                      display: 'flex', flexDirection: 'column', maxHeight: '72vh' }}>
-                    <div style={{ padding: '9px 11px', borderBottom: `3px solid ${et.cor || T.line}` }}>
-                      <div style={{ fontSize: 12, fontWeight: 700 }}>{et.nome}</div>
-                      <div style={{ fontSize: 11, color: T.inkFaint }}>{cards.length} · {moeda(cards.reduce((s, n) => s + (Number(n.valor) || 0), 0))}</div>
+          {visao === 'quadro' ? (
+            <div style={{ overflowX: 'auto', paddingBottom: 8 }}>
+              <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start', minWidth: etapasPipe.length * 250 }}>
+                {etapasPipe.map(et => {
+                  const cards = doPipe.filter(n => n.etapa_id === et.id).sort((a, b) => valorDe(b) - valorDe(a));
+                  return (
+                    <div key={et.id} onDragOver={e => e.preventDefault()}
+                      onDrop={e => { e.preventDefault(); if (arrastando && arrastando.etapa_id !== et.id) mover(arrastando, et.codigo); setArrastando(null); }}
+                      style={{ flex: '1 0 240px', maxWidth: 300, background: T.panelAlt, borderRadius: 10, border: `1px solid ${T.line}`, display: 'flex', flexDirection: 'column', maxHeight: '72vh' }}>
+                      <div style={{ padding: '9px 11px', borderBottom: `3px solid ${et.cor || T.line}` }}>
+                        <div style={{ fontSize: 12, fontWeight: 700 }}>{et.nome}{et.probabilidade != null ? <span style={{ fontWeight: 400, color: T.inkFaint }}> · {et.probabilidade}%</span> : ''}</div>
+                        <div style={{ fontSize: 11, color: T.inkFaint }}>{cards.length} · {moeda(cards.reduce((s, n) => s + valorDe(n), 0))}</div>
+                      </div>
+                      <div style={{ overflowY: 'auto', padding: 8, display: 'flex', flexDirection: 'column', gap: 7 }}>
+                        {cards.slice(0, 150).map(n => {
+                          const pend = pendPorNeg[n.id] || [];
+                          const atrasada = pend.some(a => a.vencimento && new Date(a.vencimento) < new Date());
+                          const dias = diasDesde(n.etapa_desde);
+                          return (
+                            <div key={n.id} draggable onDragStart={() => setArrastando(n)} onClick={() => setAbertoId(n.id)}
+                              style={{ background: T.panel, borderRadius: 8, border: `1px solid ${T.line}`, padding: '8px 10px', cursor: 'pointer',
+                                borderLeft: `3px solid ${atrasada ? T.rust : pend.length ? T.gold : 'transparent'}` }}>
+                              <div style={{ fontSize: 12, fontWeight: 700, lineHeight: 1.3 }}>{n.br || n.titulo}</div>
+                              <div style={{ fontSize: 11, color: T.inkDim, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                {empPorId[n.empresa_id]?.nome || (n.br ? n.titulo.replace(`${n.br} · `, '') : '—')}
+                              </div>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 5, fontSize: 11 }}>
+                                <span style={{ fontWeight: 700 }}>{valorDe(n) ? moeda(valorDe(n)) : '—'}</span>
+                                <span style={{ color: T.inkFaint }}>
+                                  {n.pipeline_id === 'leads' ? (n.score != null ? `score ${n.score}` : n.fonte || '') : (n.previsao_fechamento || (dias != null ? `${dias}d na etapa` : ''))}
+                                </span>
+                              </div>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 3, fontSize: 10.5, color: T.inkFaint }}>
+                                <span>{n.responsavel || 'sem responsável'}{n.concorrente ? ` · vs ${n.concorrente}` : ''}</span>
+                                {pend.length > 0 && <span style={{ color: atrasada ? T.rustText : T.amberText }}>{pend.length} tarefa{pend.length > 1 ? 's' : ''}{atrasada ? ' · atrasada' : ''}</span>}
+                              </div>
+                            </div>
+                          );
+                        })}
+                        {cards.length > 150 && <div style={{ fontSize: 11, color: T.inkFaint, textAlign: 'center' }}>+{cards.length - 150} — use a busca</div>}
+                      </div>
                     </div>
-                    <div style={{ overflowY: 'auto', padding: 8, display: 'flex', flexDirection: 'column', gap: 7 }}>
-                      {cards.slice(0, 150).map(n => {
-                        const pend = pendPorNeg[n.id] || [];
-                        const atrasada = pend.some(a => a.vencimento && new Date(a.vencimento) < new Date());
-                        const dias = diasDesde(n.etapa_desde);
+                  );
+                })}
+              </div>
+            </div>
+          ) : (() => {
+            const COLS = [
+              { c: 'titulo', t: pipeline === 'leads' ? 'Lead' : 'Negócio' }, { c: 'empresa', t: 'Empresa' }, { c: 'etapa', t: 'Etapa' },
+              { c: 'valor', t: pipeline === 'leads' ? 'Potencial' : 'Valor', r: true }, { c: 'prob', t: pipeline === 'leads' ? 'Score' : 'Prob.', r: true },
+              { c: 'ponderado', t: 'Ponderado', r: true }, { c: 'previsao', t: pipeline === 'leads' ? 'Origem' : 'Previsão' },
+              { c: 'responsavel', t: 'Responsável' }, { c: 'concorrente', t: 'Concorrente' }, { c: 'proxima', t: 'Próxima tarefa' }, { c: 'dias', t: 'Dias na etapa', r: true },
+            ];
+            const linhasL = doPipe.filter(n => etapasPipe.some(e => e.id === n.etapa_id)).map(n => {
+              const prox = (pendPorNeg[n.id] || [])[0];
+              const prob = n.pipeline_id === 'leads' ? n.score : probDe(n);
+              return { n, titulo: n.br || n.titulo, empresa: empPorId[n.empresa_id]?.nome || '', etapa: etapaPorId[n.etapa_id]?.ordem ?? 0,
+                valor: valorDe(n), prob: prob ?? -1, ponderado: n.pipeline_id === 'leads' ? null : valorDe(n) * (probDe(n) ?? 0) / 100,
+                previsao: n.pipeline_id === 'leads' ? (n.fonte || '') : (n.previsao_fechamento || ''), responsavel: n.responsavel || '',
+                concorrente: n.concorrente || '', proxima: prox ? new Date(prox.vencimento || '2999-01-01').getTime() : Infinity, prox,
+                dias: diasDesde(n.etapa_desde) ?? 0 };
+            }).sort((a, b) => {
+              const va = a[ordem.c], vb = b[ordem.c];
+              const r = typeof va === 'number' && typeof vb === 'number' ? va - vb : String(va ?? '').localeCompare(String(vb ?? ''));
+              return ordem.asc ? r : -r;
+            });
+            return (
+              <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                    <thead><tr style={{ background: T.panelAlt }}>
+                      {COLS.map(col => (
+                        <th key={col.c} onClick={() => setOrdem(o => ({ c: col.c, asc: o.c === col.c ? !o.asc : false }))}
+                          style={{ padding: '8px 10px', fontSize: 10.5, fontWeight: 600, color: ordem.c === col.c ? T.ink : T.inkFaint,
+                            textAlign: col.r ? 'right' : 'left', whiteSpace: 'nowrap', cursor: 'pointer' }}>
+                          {col.t}{ordem.c === col.c ? (ordem.asc ? ' ▲' : ' ▼') : ''}
+                        </th>
+                      ))}
+                    </tr></thead>
+                    <tbody>
+                      {linhasL.slice(0, 500).map(({ n, prox, ...l }) => {
+                        const et = etapaPorId[n.etapa_id];
+                        const atras = prox && prox.vencimento && new Date(prox.vencimento) < new Date();
                         return (
-                          <div key={n.id} draggable onDragStart={() => setArrastando(n)} onClick={() => setAbertoId(n.id)}
-                            style={{ background: T.panel, borderRadius: 8, border: `1px solid ${T.line}`, padding: '8px 10px', cursor: 'pointer',
-                              borderLeft: `3px solid ${atrasada ? T.rust : pend.length ? T.gold : 'transparent'}` }}>
-                            <div style={{ fontSize: 12, fontWeight: 700, lineHeight: 1.3 }}>{n.br || n.titulo}</div>
-                            <div style={{ fontSize: 11, color: T.inkDim, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                              {empPorId[n.empresa_id]?.nome || (n.br ? n.titulo.replace(`${n.br} · `, '') : '—')}
-                            </div>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 5, fontSize: 11 }}>
-                              <span style={{ fontWeight: 700 }}>{n.valor ? moeda(Number(n.valor)) : '—'}</span>
-                              <span style={{ color: T.inkFaint }}>{n.previsao_fechamento || (dias != null ? `${dias}d na etapa` : '')}</span>
-                            </div>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 3, fontSize: 10.5, color: T.inkFaint }}>
-                              <span>{n.responsavel || 'sem responsável'}</span>
-                              {pend.length > 0 && <span style={{ color: atrasada ? T.rustText : T.amberText }}>{pend.length} tarefa{pend.length > 1 ? 's' : ''}{atrasada ? ' · atrasada' : ''}</span>}
-                            </div>
-                          </div>
+                          <tr key={n.id} onClick={() => setAbertoId(n.id)} style={{ borderTop: `1px solid ${T.lineSoft}`, cursor: 'pointer' }}>
+                            <td style={{ padding: '7px 10px', fontWeight: 600, maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.titulo}</td>
+                            <td style={{ padding: '7px 10px', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.empresa || '—'}</td>
+                            <td style={{ padding: '7px 10px', whiteSpace: 'nowrap' }}>
+                              <span style={{ fontSize: 10.5, padding: '2px 7px', borderRadius: 10, background: `${et?.cor || T.inkFaint}22`, color: et?.cor || T.inkDim }}>{et?.nome}</span>
+                            </td>
+                            <td style={{ padding: '7px 10px', textAlign: 'right' }}>{l.valor ? moeda(l.valor) : '—'}</td>
+                            <td style={{ padding: '7px 10px', textAlign: 'right' }}>{l.prob >= 0 ? (pipeline === 'leads' ? l.prob : `${l.prob}%`) : '—'}</td>
+                            <td style={{ padding: '7px 10px', textAlign: 'right', color: T.inkDim }}>{l.ponderado ? moeda(l.ponderado) : '—'}</td>
+                            <td style={{ padding: '7px 10px', color: T.inkDim }}>{l.previsao || '—'}</td>
+                            <td style={{ padding: '7px 10px', color: T.inkDim, whiteSpace: 'nowrap' }}>{l.responsavel || '—'}</td>
+                            <td style={{ padding: '7px 10px', color: T.inkDim }}>{l.concorrente || '—'}</td>
+                            <td style={{ padding: '7px 10px', color: atras ? T.rustText : T.inkDim, whiteSpace: 'nowrap', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                              {prox ? `${prox.vencimento ? new Date(prox.vencimento).toLocaleDateString('pt-BR') + ' · ' : ''}${prox.titulo}` : '—'}
+                            </td>
+                            <td style={{ padding: '7px 10px', textAlign: 'right', color: T.inkDim }}>{l.dias}</td>
+                          </tr>
                         );
                       })}
-                      {cards.length > 150 && <div style={{ fontSize: 11, color: T.inkFaint, textAlign: 'center' }}>+{cards.length - 150} — use a busca</div>}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
+                    </tbody>
+                  </table>
+                </div>
+                <div style={{ padding: '7px 12px', fontSize: 11, color: T.inkFaint, borderTop: `1px solid ${T.line}` }}>
+                  {linhasL.length} {pipeline === 'leads' ? 'leads' : 'negócios'} · {moeda(linhasL.reduce((s, l) => s + (l.valor || 0), 0))}
+                  {pipeline !== 'leads' ? ` · ponderado ${moeda(linhasL.reduce((s, l) => s + (l.ponderado || 0), 0))}` : ''}
+                </div>
+              </div>
+            );
+          })()}
           <div style={{ fontSize: 11, color: T.inkFaint }}>
-            Arraste o card para mudar de etapa. Nos BRs, a negociação (Baixo a Avançado) é a mesma do Follow Up e da planilha do vendedor.
-            {pipeline === 'vendas' ? ' Ganho entra sozinho quando o pedido de venda chega no Sankhya.' : ' Levar para Reposição abre uma oportunidade nova em Vendas.'}
+            {pipeline === 'leads' && 'Leve o lead até "Convertido em oportunidade" para abrir o negócio em Vendas, com os mesmos dados.'}
+            {pipeline === 'vendas' && 'Arraste para mudar de etapa. Nos BRs, a negociação (Baixo a Avançado) é a mesma do Follow Up. Ganho entra sozinho com o pedido no Sankhya.'}
+            {pipeline === 'posvendas' && 'Levar para Reposição abre uma oportunidade nova em Vendas.'}
           </div>
         </>
       )}
@@ -21348,7 +21436,7 @@ function CRM({ currentUser }) {
         const amanha = new Date(hoje); amanha.setDate(amanha.getDate() + 1);
         const semana = new Date(hoje); semana.setDate(semana.getDate() + 8);
         const minhas = atividades.filter(a => !resp || a.responsavel === resp)
-          .filter(a => { const n = negocios.find(x => x.id === a.negocio_id); return !termo || !n || casaBusca(n) || a.titulo.toLowerCase().includes(termo); })
+          .filter(a => { const n = negocios.find(x => x.id === a.negocio_id); return !termo || (n && casaBusca(n)) || a.titulo.toLowerCase().includes(termo); })
           .sort((a, b) => new Date(a.vencimento || '2999-01-01') - new Date(b.vencimento || '2999-01-01'));
         const grupos = [
           ['Atrasadas', minhas.filter(a => a.vencimento && new Date(a.vencimento) < hoje), T.rustText],
@@ -21357,10 +21445,10 @@ function CRM({ currentUser }) {
           ['Depois', minhas.filter(a => a.vencimento && new Date(a.vencimento) >= semana), T.inkDim],
           ['Sem data', minhas.filter(a => !a.vencimento), T.inkFaint],
         ];
-        const concluir = async (a) => {
-          await supabase.from('crm_atividade').update({ concluida_em: new Date().toISOString() }).eq('id', a.id);
+        const fechar = async (a, cancelar) => {
+          await supabase.from('crm_atividade').update(cancelar ? { cancelada_em: new Date().toISOString() } : { concluida_em: new Date().toISOString() }).eq('id', a.id);
           await supabase.from('crm_historico').insert({ negocio_id: a.negocio_id, empresa_id: a.empresa_id, tipo: 'atividade',
-            texto: `${crmRotuloTipo(a.tipo)} concluída: ${a.titulo}`, autor });
+            texto: `${crmRotuloTipo(a.tipo)} ${cancelar ? 'cancelada' : 'concluída'}: ${a.titulo}`, autor });
           carregar();
         };
         return (
@@ -21372,12 +21460,14 @@ function CRM({ currentUser }) {
                   const n = negocios.find(x => x.id === a.negocio_id);
                   return (
                     <div key={a.id} style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '7px 12px', borderTop: `1px solid ${T.lineSoft}`, fontSize: 12, flexWrap: 'wrap' }}>
-                      <input type="checkbox" onChange={() => concluir(a)} title="Concluir" />
+                      <input type="checkbox" onChange={() => fechar(a, false)} title="Concluir" />
                       <span style={{ fontSize: 10.5, padding: '2px 7px', borderRadius: 4, background: T.panelAlt, color: T.inkDim }}>{crmRotuloTipo(a.tipo)}</span>
                       <span style={{ fontWeight: 600, flex: '1 1 240px' }}>{a.titulo}</span>
                       {n && <span onClick={() => setAbertoId(n.id)} style={{ color: T.blueText, cursor: 'pointer' }}>{n.br || n.titulo}</span>}
                       <span style={{ color: T.inkDim, minWidth: 110 }}>{a.responsavel || '—'}</span>
                       <span style={{ color: cor, minWidth: 110, textAlign: 'right' }}>{a.vencimento ? fmtDH(a.vencimento) : ''}</span>
+                      <button onClick={() => fechar(a, true)} title="Cancelar a tarefa"
+                        style={{ fontFamily: 'inherit', fontSize: 10.5, padding: '2px 8px', borderRadius: 5, border: `1px solid ${T.line}`, background: T.panel, color: T.inkFaint, cursor: 'pointer' }}>cancelar</button>
                     </div>
                   );
                 })}
@@ -21389,11 +21479,11 @@ function CRM({ currentUser }) {
       })()}
 
       {aba === 'empresas' && (() => {
-        const abertos = negocios.filter(n => n.pipeline_id === 'vendas' && etapaPorId[n.etapa_id]?.tipo === 'aberta');
+        const abertos = negocios.filter(n => n.pipeline_id !== 'posvendas' && etapaPorId[n.etapa_id]?.tipo === 'aberta');
         const lista = empresas
-          .filter(e => !termo || [e.nome, e.cnpj, e.cidade].some(x => String(x ?? '').toLowerCase().includes(termo)))
+          .filter(e => !termo || [e.nome, e.razao_social, e.cnpj, e.cidade, e.segmento].some(x => String(x ?? '').toLowerCase().includes(termo)))
           .map(e => { const ab = abertos.filter(n => n.empresa_id === e.id && (!resp || n.responsavel === resp));
-                      return { ...e, nAb: ab.length, vAb: ab.reduce((s, n) => s + (Number(n.valor) || 0), 0) }; })
+                      return { ...e, nAb: ab.length, vAb: ab.reduce((s, n) => s + valorDe(n), 0) }; })
           .filter(e => !resp || e.nAb > 0)
           .sort((a, b) => b.vAb - a.vAb || a.nome.localeCompare(b.nome));
         return (
@@ -21401,14 +21491,17 @@ function CRM({ currentUser }) {
             <div style={{ overflowX: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                 <thead><tr style={{ background: T.panelAlt }}>
-                  {['Empresa', 'Cidade', 'CNPJ', 'Negócios abertos', 'Valor aberto'].map((h, i) => (
-                    <th key={h} style={{ padding: '8px 12px', fontSize: 10.5, fontWeight: 600, color: T.inkFaint, textAlign: i >= 3 ? 'right' : 'left' }}>{h}</th>
+                  {['Empresa', 'Segmento', 'Região', 'Cidade', 'CNPJ', 'Negócios abertos', 'Valor aberto'].map((h, i) => (
+                    <th key={h} style={{ padding: '8px 12px', fontSize: 10.5, fontWeight: 600, color: T.inkFaint, textAlign: i >= 5 ? 'right' : 'left' }}>{h}</th>
                   ))}
                 </tr></thead>
                 <tbody>
-                  {lista.slice(0, 300).map(e => (
+                  {lista.slice(0, 400).map(e => (
                     <tr key={e.id} onClick={() => setEmpresaAberta(e.id)} style={{ borderTop: `1px solid ${T.lineSoft}`, cursor: 'pointer' }}>
-                      <td style={{ padding: '7px 12px', fontWeight: 600 }}>{e.nome}</td>
+                      <td style={{ padding: '7px 12px' }}><div style={{ fontWeight: 600 }}>{e.nome}</div>
+                        {e.razao_social && e.razao_social !== e.nome && <div style={{ fontSize: 10.5, color: T.inkFaint }}>{e.razao_social}</div>}</td>
+                      <td style={{ padding: '7px 12px', color: T.inkDim }}>{e.segmento || '—'}</td>
+                      <td style={{ padding: '7px 12px', color: T.inkDim }}>{e.regiao || '—'}</td>
                       <td style={{ padding: '7px 12px', color: T.inkDim }}>{[e.cidade, e.uf].filter(Boolean).join(' / ') || '—'}</td>
                       <td style={{ padding: '7px 12px', color: T.inkDim, whiteSpace: 'nowrap' }}>{e.cnpj && e.cnpj !== '—' ? e.cnpj : '—'}</td>
                       <td style={{ padding: '7px 12px', textAlign: 'right' }}>{e.nAb || '—'}</td>
@@ -21434,10 +21527,14 @@ function CRM({ currentUser }) {
       {perda && (
         <div onClick={() => setPerda(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(20,18,15,0.45)', zIndex: 80, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
           <div onClick={e => e.stopPropagation()} style={{ background: T.panel, borderRadius: 10, padding: 18, width: '100%', maxWidth: 440 }}>
-            <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 4 }}>Por que perdeu {perda.negocio.br || perda.negocio.titulo}?</div>
-            <div style={{ fontSize: 11.5, color: T.inkFaint, marginBottom: 10 }}>O motivo é obrigatório e fica no histórico do negócio.</div>
+            <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 4 }}>
+              {perda.negocio.pipeline_id === 'leads' ? 'Por que descartar' : 'Por que perdeu'} {perda.negocio.br || perda.negocio.titulo}?
+            </div>
+            <div style={{ fontSize: 11.5, color: T.inkFaint, marginBottom: 10 }}>O motivo é obrigatório e fica no histórico.</div>
             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
-              {['Preço', 'Prazo de entrega', 'Perdeu para concorrente', 'Cliente desistiu / adiou', 'Especificação técnica', 'Sem retorno do cliente'].map(m => (
+              {(perda.negocio.pipeline_id === 'leads'
+                ? ['Sem perfil', 'Sem orçamento', 'Sem retorno', 'Já é cliente de concorrente', 'Duplicado']
+                : ['Preço', 'Prazo de entrega', 'Perdeu para concorrente', 'Cliente desistiu / adiou', 'Especificação técnica', 'Sem retorno do cliente']).map(m => (
                 <button key={m} onClick={() => setPerda(p => ({ ...p, motivo: m }))} style={botao(perda.motivo === m)}>{m}</button>
               ))}
             </div>
@@ -21446,52 +21543,88 @@ function CRM({ currentUser }) {
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 10 }}>
               <button onClick={() => setPerda(null)} style={botao(false)}>Cancelar</button>
               <button disabled={!perda.motivo.trim()} onClick={async () => { const p = perda; setPerda(null); await mover(p.negocio, p.etapa, p.motivo.trim()); }}
-                style={{ ...botao(true), opacity: perda.motivo.trim() ? 1 : 0.5 }}>Marcar como perdido</button>
+                style={{ ...botao(true), opacity: perda.motivo.trim() ? 1 : 0.5 }}>Confirmar</button>
             </div>
           </div>
         </div>
       )}
 
-      {novoNeg && (
-        <div onClick={() => setNovoNeg(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(20,18,15,0.45)', zIndex: 80, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
-          <div onClick={e => e.stopPropagation()} style={{ background: T.panel, borderRadius: 10, padding: 18, width: '100%', maxWidth: 480, display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <div style={{ fontSize: 14, fontWeight: 700 }}>Nova oportunidade</div>
-            <div style={{ fontSize: 11.5, color: T.inkFaint }}>Para o que ainda não tem BR: visita, contato, indicação. Quando a proposta sair, é só ligar o BR na ficha.</div>
-            <input value={novoNeg.titulo} onChange={e => setNovoNeg(v => ({ ...v, titulo: e.target.value }))} placeholder="O que é (ex.: revestimento das calhas da britagem)" style={campo} />
-            <select value={novoNeg.empresa_id} onChange={e => setNovoNeg(v => ({ ...v, empresa_id: e.target.value }))} style={campo}>
-              <option value="">Empresa…</option>
-              {empresas.slice().sort((a, b) => a.nome.localeCompare(b.nome)).map(e => <option key={e.id} value={e.id}>{e.nome}{e.cidade ? ` — ${e.cidade}/${e.uf || ''}` : ''}</option>)}
-            </select>
-            <div style={{ display: 'flex', gap: 8 }}>
-              <input value={novoNeg.valor} onChange={e => setNovoNeg(v => ({ ...v, valor: e.target.value }))} placeholder="Valor estimado (R$)" inputMode="decimal" style={{ ...campo, flex: 1 }} />
-              <input value={novoNeg.previsao} onChange={e => setNovoNeg(v => ({ ...v, previsao: e.target.value }))} placeholder="Previsão (MM/AAAA)" style={{ ...campo, flex: 1 }} />
-            </div>
-            <select value={novoNeg.responsavel} onChange={e => setNovoNeg(v => ({ ...v, responsavel: e.target.value }))} style={campo}>
-              <option value="">Responsável…</option>
-              {vendedores.map(v => <option key={v} value={v}>{v}</option>)}
-            </select>
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 4 }}>
-              <button onClick={() => setNovoNeg(null)} style={botao(false)}>Cancelar</button>
-              <button disabled={!novoNeg.titulo.trim() || !novoNeg.empresa_id} onClick={async () => {
-                  const v = novoNeg; setNovoNeg(null);
-                  const etO = etapas.find(e => e.pipeline_id === 'vendas' && e.codigo === 'oportunidade');
-                  const valor = Number(String(v.valor).replace(/\./g, '').replace(',', '.')) || null;
-                  const { data, error } = await supabase.from('crm_negocio').insert({ pipeline_id: 'vendas', etapa_id: etO.id, titulo: v.titulo.trim(),
-                    empresa_id: Number(v.empresa_id), valor, responsavel: v.responsavel || null, previsao_fechamento: v.previsao || null,
-                    origem: 'manual', criado_por: autor }).select('id').single();
-                  if (error) { setAviso({ tipo: 'erro', t: error.message }); return; }
-                  await supabase.from('crm_historico').insert({ negocio_id: data.id, empresa_id: Number(v.empresa_id), tipo: 'sistema', texto: 'Oportunidade criada', autor });
-                  await carregar(); setAbertoId(data.id);
-                }} style={{ ...botao(true), opacity: novoNeg.titulo.trim() && novoNeg.empresa_id ? 1 : 0.5 }}>Criar</button>
+      {novoNeg && (() => {
+        const ehLead = novoNeg.pipeline === 'leads';
+        const set = (k, v) => setNovoNeg(x => ({ ...x, [k]: v }));
+        const pode = novoNeg.titulo.trim() && (novoNeg.empresa_id || novoNeg.empresa_nova.trim());
+        const criar = async () => {
+          const v = novoNeg; setNovoNeg(null);
+          let empresaId = v.empresa_id ? Number(v.empresa_id) : null;
+          if (!empresaId) {
+            const { data: ne, error: ee } = await supabase.from('crm_empresa').insert({ nome: v.empresa_nova.trim(), origem: 'portal' }).select('id').single();
+            if (ee) { setAviso({ tipo: 'erro', t: ee.message }); return; }
+            empresaId = ne.id;
+          }
+          const etapa0 = etapas.find(e => e.pipeline_id === v.pipeline && e.codigo === (ehLead ? 'lead' : 'oportunidade'));
+          const { data, error } = await supabase.from('crm_negocio').insert({
+            pipeline_id: v.pipeline, etapa_id: etapa0.id, titulo: v.titulo.trim(), empresa_id: empresaId,
+            valor: ehLead ? null : crmNum(v.valor), potencial: ehLead ? crmNum(v.potencial) : null,
+            responsavel: v.responsavel || null, previsao_fechamento: v.previsao || null,
+            fonte: v.fonte || null, interesse: v.interesse || null, score: crmNum(v.score),
+            concorrente: v.concorrente || null, origem: ehLead ? 'lead' : 'manual', criado_por: autor,
+          }).select('id').single();
+          if (error) { setAviso({ tipo: 'erro', t: error.message }); return; }
+          await supabase.from('crm_historico').insert({ negocio_id: data.id, empresa_id: empresaId, tipo: 'sistema',
+            texto: ehLead ? `Lead criado${v.fonte ? ` (origem: ${v.fonte})` : ''}` : 'Oportunidade criada', autor });
+          if (v.proxima.trim()) await supabase.from('crm_atividade').insert({ negocio_id: data.id, empresa_id: empresaId, tipo: 'followup',
+            titulo: v.proxima.trim(), responsavel: v.responsavel || null, criado_por: autor,
+            vencimento: new Date(Date.now() + 2 * 86400000).toISOString() });
+          await carregar(); setAbertoId(data.id);
+        };
+        return (
+          <div onClick={() => setNovoNeg(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(20,18,15,0.45)', zIndex: 80, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+            <div onClick={e => e.stopPropagation()} style={{ background: T.panel, borderRadius: 10, padding: 18, width: '100%', maxWidth: 520, display: 'flex', flexDirection: 'column', gap: 8, maxHeight: '90vh', overflowY: 'auto' }}>
+              <div style={{ fontSize: 14, fontWeight: 700 }}>{ehLead ? 'Novo lead' : 'Nova oportunidade'}</div>
+              <div style={{ fontSize: 11.5, color: T.inkFaint }}>
+                {ehLead ? 'Contato que ainda precisa ser qualificado. Quando virar negócio, leve até "Convertido".'
+                        : 'Para o que ainda não tem BR: visita, contato, indicação. Quando a proposta sair, é só ligar o BR na ficha.'}
+              </div>
+              <input value={novoNeg.titulo} onChange={e => set('titulo', e.target.value)} placeholder="O que é (ex.: revestimento das calhas da britagem)" style={campo} />
+              <select value={novoNeg.empresa_id} onChange={e => set('empresa_id', e.target.value)} style={campo}>
+                <option value="">Empresa já cadastrada…</option>
+                {empresas.slice().sort((a, b) => a.nome.localeCompare(b.nome)).map(e => <option key={e.id} value={e.id}>{e.nome}{e.cidade ? ` — ${e.cidade}/${e.uf || ''}` : ''}</option>)}
+              </select>
+              {!novoNeg.empresa_id && <input value={novoNeg.empresa_nova} onChange={e => set('empresa_nova', e.target.value)} placeholder="…ou o nome de uma empresa nova" style={campo} />}
+              {ehLead && (
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <select value={novoNeg.fonte} onChange={e => set('fonte', e.target.value)} style={{ ...campo, flex: 1 }}>
+                    <option value="">Origem…</option>
+                    {CRM_FONTES.map(f => <option key={f} value={f}>{f}</option>)}
+                  </select>
+                  <input value={novoNeg.score} onChange={e => set('score', e.target.value)} placeholder="Score 0–100" inputMode="numeric" style={{ ...campo, width: 110 }} />
+                </div>
+              )}
+              {ehLead && <input value={novoNeg.interesse} onChange={e => set('interesse', e.target.value)} placeholder="Interesse (produto, aplicação, problema)" style={campo} />}
+              <div style={{ display: 'flex', gap: 8 }}>
+                <input value={ehLead ? novoNeg.potencial : novoNeg.valor} onChange={e => set(ehLead ? 'potencial' : 'valor', e.target.value)}
+                  placeholder={ehLead ? 'Potencial (R$)' : 'Valor estimado (R$)'} inputMode="decimal" style={{ ...campo, flex: 1 }} />
+                {!ehLead && <input value={novoNeg.previsao} onChange={e => set('previsao', e.target.value)} placeholder="Previsão (MM/AAAA)" style={{ ...campo, flex: 1 }} />}
+              </div>
+              {!ehLead && <input value={novoNeg.concorrente} onChange={e => set('concorrente', e.target.value)} placeholder="Concorrente (se houver)" style={campo} />}
+              <select value={novoNeg.responsavel} onChange={e => set('responsavel', e.target.value)} disabled={!perfil.ve_tudo} style={campo}>
+                <option value="">Responsável…</option>
+                {vendedores.map(v => <option key={v} value={v}>{v}</option>)}
+              </select>
+              <input value={novoNeg.proxima} onChange={e => set('proxima', e.target.value)} placeholder="Próxima ação (vira um follow-up para daqui a 2 dias)" style={campo} />
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 4 }}>
+                <button onClick={() => setNovoNeg(null)} style={botao(false)}>Cancelar</button>
+                <button disabled={!pode} onClick={criar} style={{ ...botao(true), opacity: pode ? 1 : 0.5 }}>Criar</button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
     </div>
   );
 }
 
-// Ficha do negócio: etapa, dados, tarefas, anotação, histórico e contatos
+// Ficha do negócio/lead: etapa, dados editáveis, tarefas, anotação, contatos, histórico
 function CRMFichaNegocio({ negocio: n, etapas, empresa, vendedores, autor, onFechar, onMover, onMudou }) {
   const [ativs, setAtivs] = useState([]);
   const [hist, setHist] = useState([]);
@@ -21500,11 +21633,14 @@ function CRMFichaNegocio({ negocio: n, etapas, empresa, vendedores, autor, onFec
   const [nova, setNova] = useState({ tipo: 'ligacao', titulo: '', vencimento: '', responsavel: n.responsavel || '' });
   const [brLigar, setBrLigar] = useState('');
   const [novoCtt, setNovoCtt] = useState(null);
+  const [dados, setDados] = useState(null);
   const moeda = (v) => fmtMoedaCompacta(v);
   const fmtDH = (d) => d ? new Date(d).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
   const campo = { fontFamily: 'inherit', fontSize: 12.5, padding: '6px 9px', borderRadius: 6, border: `1px solid ${T.line}`, background: T.panel };
   const botao = (forte) => ({ fontFamily: 'inherit', fontSize: 12, padding: '6px 12px', borderRadius: 6, cursor: 'pointer',
     border: `1px solid ${forte ? T.ink : T.line}`, background: forte ? T.ink : T.panel, color: forte ? T.panel : T.inkDim });
+  const ehLead = n.pipeline_id === 'leads';
+  const doBr = n.pipeline_id === 'vendas' && n.origem === 'br';
 
   const carregar = useCallback(async () => {
     const [a, h, c] = await Promise.all([
@@ -21515,30 +21651,41 @@ function CRMFichaNegocio({ negocio: n, etapas, empresa, vendedores, autor, onFec
     setAtivs(a.data || []); setHist(h.data || []); setContatos(c.data || []);
   }, [n.id, n.empresa_id]);
   useEffect(() => { carregar(); }, [carregar]);
+  useEffect(() => {
+    setDados({ valor: n.valor ?? '', potencial: n.potencial ?? '', previsao: n.previsao_fechamento ?? '', probabilidade: n.probabilidade ?? '',
+      concorrente: n.concorrente ?? '', fonte: n.fonte ?? '', interesse: n.interesse ?? '', score: n.score ?? '',
+      responsavel: n.responsavel ?? '', observacoes: n.observacoes ?? '' });
+  }, [n.id, n.atualizado_em]);
 
   const etapasPipe = etapas.filter(e => e.pipeline_id === n.pipeline_id);
   const etAtual = etapas.find(e => e.id === n.etapa_id);
   const registrar = async (tipo, texto) => {
     await supabase.from('crm_historico').insert({ negocio_id: n.id, empresa_id: n.empresa_id, tipo, texto, autor });
   };
+  const salvarDados = async () => {
+    const upd = { concorrente: dados.concorrente || null, observacoes: dados.observacoes || null,
+      probabilidade: crmNum(dados.probabilidade), atualizado_em: new Date().toISOString() };
+    if (ehLead) Object.assign(upd, { fonte: dados.fonte || null, interesse: dados.interesse || null, potencial: crmNum(dados.potencial),
+      score: crmNum(dados.score), responsavel: dados.responsavel || null });
+    else if (!doBr) Object.assign(upd, { valor: crmNum(dados.valor), previsao_fechamento: dados.previsao || null, responsavel: dados.responsavel || null });
+    const { error } = await supabase.from('crm_negocio').update(upd).eq('id', n.id);
+    if (error) { alert(error.message); return; }
+    await registrar('sistema', 'Dados do negócio atualizados'); onMudou();
+  };
 
   return (
     <div onClick={onFechar} style={{ position: 'fixed', inset: 0, background: 'rgba(20,18,15,0.35)', zIndex: 70, display: 'flex', justifyContent: 'flex-end' }}>
-      <div onClick={e => e.stopPropagation()} style={{ background: T.panel, width: 'min(600px, 100vw)', height: '100%', overflowY: 'auto', boxShadow: '-8px 0 30px rgba(0,0,0,0.2)' }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: T.panel, width: 'min(620px, 100vw)', height: '100%', overflowY: 'auto', boxShadow: '-8px 0 30px rgba(0,0,0,0.2)' }}>
         <div style={{ padding: '14px 18px', borderBottom: `1px solid ${T.line}`, position: 'sticky', top: 0, background: T.panel, zIndex: 1 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10 }}>
             <div>
-              <div style={{ fontSize: 11, color: T.inkFaint }}>{n.pipeline_id === 'vendas' ? 'Vendas' : 'Pós-vendas'} · {n.origem === 'br' ? 'do BR' : n.origem === 'faturamento' ? 'da nota faturada' : n.origem === 'reposicao' ? 'reposição' : 'oportunidade'}</div>
+              <div style={{ fontSize: 11, color: T.inkFaint }}>
+                {{ leads: 'Leads', vendas: 'Vendas', posvendas: 'Pós-vendas' }[n.pipeline_id]} · {{ br: 'do BR', faturamento: 'da nota faturada', reposicao: 'reposição', lead: 'veio de lead', agendor: 'importado do Agendor', manual: 'oportunidade' }[n.origem] || n.origem}
+              </div>
               <div style={{ fontSize: 16, fontWeight: 700 }}>{n.br || n.titulo}</div>
-              <div style={{ fontSize: 12.5, color: T.inkDim }}>{empresa?.nome || '—'}{empresa?.cidade ? ` · ${empresa.cidade}/${empresa.uf || ''}` : ''}</div>
+              <div style={{ fontSize: 12.5, color: T.inkDim }}>{empresa?.nome || '—'}{empresa?.cidade ? ` · ${empresa.cidade}/${empresa.uf || ''}` : ''}{empresa?.segmento ? ` · ${empresa.segmento}` : ''}</div>
             </div>
-            <button onClick={onFechar} style={botao(false)}>Fechar</button>
-          </div>
-          <div style={{ display: 'flex', gap: 14, marginTop: 8, fontSize: 12, flexWrap: 'wrap' }}>
-            <span><span style={{ color: T.inkFaint }}>Valor </span><strong>{n.valor ? moeda(Number(n.valor)) : '—'}</strong></span>
-            <span><span style={{ color: T.inkFaint }}>Responsável </span>{n.responsavel || '—'}</span>
-            {n.previsao_fechamento && <span><span style={{ color: T.inkFaint }}>Previsão </span>{n.previsao_fechamento}</span>}
-            {n.data_faturamento && <span><span style={{ color: T.inkFaint }}>Faturado em </span>{new Date(n.data_faturamento + 'T00:00:00').toLocaleDateString('pt-BR')}</span>}
+            <button onClick={onFechar} style={{ ...botao(false), height: 30 }}>Fechar</button>
           </div>
           <div style={{ display: 'flex', gap: 5, marginTop: 10, flexWrap: 'wrap' }}>
             {etapasPipe.map(e => (
@@ -21551,10 +21698,56 @@ function CRMFichaNegocio({ negocio: n, etapas, empresa, vendedores, autor, onFec
               </button>
             ))}
           </div>
-          {etAtual?.tipo === 'perdido' && n.motivo_perda && <div style={{ fontSize: 11.5, color: T.rustText, marginTop: 6 }}>Motivo da perda: {n.motivo_perda}</div>}
+          {etAtual?.tipo === 'perdido' && n.motivo_perda && <div style={{ fontSize: 11.5, color: T.rustText, marginTop: 6 }}>Motivo: {n.motivo_perda}</div>}
         </div>
 
         <div style={{ padding: '12px 18px', display: 'flex', flexDirection: 'column', gap: 16 }}>
+          {dados && (
+            <div>
+              <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 6 }}>Dados</div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 8 }}>
+                {ehLead ? (
+                  <>
+                    <label style={{ fontSize: 11, color: T.inkFaint }}>Origem
+                      <select value={dados.fonte} onChange={e => setDados(d => ({ ...d, fonte: e.target.value }))} style={{ ...campo, width: '100%' }}>
+                        <option value="">—</option>{CRM_FONTES.map(f => <option key={f} value={f}>{f}</option>)}
+                      </select></label>
+                    <label style={{ fontSize: 11, color: T.inkFaint }}>Potencial (R$)
+                      <input value={dados.potencial} onChange={e => setDados(d => ({ ...d, potencial: e.target.value }))} style={{ ...campo, width: '100%', boxSizing: 'border-box' }} /></label>
+                    <label style={{ fontSize: 11, color: T.inkFaint }}>Score (0–100)
+                      <input value={dados.score} onChange={e => setDados(d => ({ ...d, score: e.target.value }))} style={{ ...campo, width: '100%', boxSizing: 'border-box' }} /></label>
+                    <label style={{ fontSize: 11, color: T.inkFaint, gridColumn: '1 / -1' }}>Interesse
+                      <input value={dados.interesse} onChange={e => setDados(d => ({ ...d, interesse: e.target.value }))} style={{ ...campo, width: '100%', boxSizing: 'border-box' }} /></label>
+                  </>
+                ) : (
+                  <>
+                    <label style={{ fontSize: 11, color: T.inkFaint }}>Valor (R$){doBr && ' — vem do BR'}
+                      <input value={dados.valor} disabled={doBr} onChange={e => setDados(d => ({ ...d, valor: e.target.value }))} style={{ ...campo, width: '100%', boxSizing: 'border-box' }} /></label>
+                    <label style={{ fontSize: 11, color: T.inkFaint }}>Previsão (MM/AAAA){doBr && ' — do Follow Up'}
+                      <input value={dados.previsao} disabled={doBr} onChange={e => setDados(d => ({ ...d, previsao: e.target.value }))} style={{ ...campo, width: '100%', boxSizing: 'border-box' }} /></label>
+                    <label style={{ fontSize: 11, color: T.inkFaint }}>Probabilidade (%)
+                      <input value={dados.probabilidade} placeholder={etAtual?.probabilidade != null ? `${etAtual.probabilidade} (da etapa)` : ''}
+                        onChange={e => setDados(d => ({ ...d, probabilidade: e.target.value }))} style={{ ...campo, width: '100%', boxSizing: 'border-box' }} /></label>
+                    <label style={{ fontSize: 11, color: T.inkFaint }}>Concorrente
+                      <input value={dados.concorrente} onChange={e => setDados(d => ({ ...d, concorrente: e.target.value }))} style={{ ...campo, width: '100%', boxSizing: 'border-box' }} /></label>
+                  </>
+                )}
+                {!doBr && (
+                  <label style={{ fontSize: 11, color: T.inkFaint }}>Responsável
+                    <select value={dados.responsavel} onChange={e => setDados(d => ({ ...d, responsavel: e.target.value }))} style={{ ...campo, width: '100%' }}>
+                      <option value="">—</option>{vendedores.map(v => <option key={v} value={v}>{v}</option>)}
+                    </select></label>
+                )}
+                <label style={{ fontSize: 11, color: T.inkFaint, gridColumn: '1 / -1' }}>Observações
+                  <textarea value={dados.observacoes} rows={2} onChange={e => setDados(d => ({ ...d, observacoes: e.target.value }))} style={{ ...campo, width: '100%', boxSizing: 'border-box', resize: 'vertical' }} /></label>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 6, gap: 8, flexWrap: 'wrap' }}>
+                <span style={{ fontSize: 11, color: T.inkFaint }}>{doBr ? 'Valor, previsão e responsável vêm do BR e do Follow Up.' : ''}</span>
+                <button onClick={salvarDados} style={botao(true)}>Salvar dados</button>
+              </div>
+            </div>
+          )}
+
           {n.pipeline_id === 'vendas' && !n.br && (
             <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', fontSize: 12 }}>
               <span style={{ color: T.inkDim }}>A proposta já saiu?</span>
@@ -21572,15 +21765,20 @@ function CRMFichaNegocio({ negocio: n, etapas, empresa, vendedores, autor, onFec
             <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 6 }}>Tarefas</div>
             {ativs.map(a => (
               <div key={a.id} style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 12, padding: '4px 0', borderTop: `1px solid ${T.lineSoft}`,
-                opacity: a.concluida_em ? 0.55 : 1 }}>
-                <input type="checkbox" checked={!!a.concluida_em} onChange={async () => {
+                opacity: a.concluida_em || a.cancelada_em ? 0.55 : 1 }}>
+                <input type="checkbox" checked={!!a.concluida_em} disabled={!!a.cancelada_em} onChange={async () => {
                     await supabase.from('crm_atividade').update({ concluida_em: a.concluida_em ? null : new Date().toISOString() }).eq('id', a.id);
                     if (!a.concluida_em) await registrar('atividade', `${crmRotuloTipo(a.tipo)} concluída: ${a.titulo}`);
                     carregar(); onMudou();
                   }} />
                 <span style={{ fontSize: 10.5, padding: '1px 6px', borderRadius: 4, background: T.panelAlt, color: T.inkDim }}>{crmRotuloTipo(a.tipo)}</span>
-                <span style={{ flex: 1, textDecoration: a.concluida_em ? 'line-through' : 'none' }}>{a.titulo}</span>
-                <span style={{ color: !a.concluida_em && a.vencimento && new Date(a.vencimento) < new Date() ? T.rustText : T.inkFaint, whiteSpace: 'nowrap' }}>{fmtDH(a.vencimento)}</span>
+                <span style={{ flex: 1, textDecoration: a.concluida_em || a.cancelada_em ? 'line-through' : 'none' }}>{a.titulo}{a.cancelada_em ? ' (cancelada)' : ''}</span>
+                <span style={{ color: !a.concluida_em && !a.cancelada_em && a.vencimento && new Date(a.vencimento) < new Date() ? T.rustText : T.inkFaint, whiteSpace: 'nowrap' }}>{fmtDH(a.vencimento)}</span>
+                {!a.concluida_em && !a.cancelada_em && (
+                  <button onClick={async () => { await supabase.from('crm_atividade').update({ cancelada_em: new Date().toISOString() }).eq('id', a.id);
+                      await registrar('atividade', `${crmRotuloTipo(a.tipo)} cancelada: ${a.titulo}`); carregar(); onMudou(); }}
+                    style={{ fontFamily: 'inherit', fontSize: 10, padding: '1px 6px', borderRadius: 4, border: `1px solid ${T.line}`, background: T.panel, color: T.inkFaint, cursor: 'pointer' }}>cancelar</button>
+                )}
               </div>
             ))}
             <div style={{ display: 'flex', gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
@@ -21614,28 +21812,33 @@ function CRMFichaNegocio({ negocio: n, etapas, empresa, vendedores, autor, onFec
           <div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
               <div style={{ fontSize: 12.5, fontWeight: 700 }}>Contatos da empresa</div>
-              {n.empresa_id && <button onClick={() => setNovoCtt({ nome: '', cargo: '', email: '', celular: '' })} style={botao(false)}>+ contato</button>}
+              {n.empresa_id && <button onClick={() => setNovoCtt({ nome: '', cargo: '', email: '', celular: '', whatsapp: '', linkedin: '' })} style={botao(false)}>+ contato</button>}
             </div>
             {contatos.length === 0 && !novoCtt && <div style={{ fontSize: 12, color: T.inkFaint }}>Nenhum contato cadastrado.</div>}
-            {contatos.map(c => (
-              <div key={c.id} style={{ fontSize: 12, padding: '4px 0', borderTop: `1px solid ${T.lineSoft}` }}>
-                <strong>{c.nome}</strong>{c.cargo ? ` · ${c.cargo}` : ''}
-                <div style={{ color: T.inkDim }}>
-                  {c.celular && <a href={`https://wa.me/55${String(c.celular).replace(/\D/g, '')}`} target="_blank" rel="noreferrer" style={{ color: T.oliveText, marginRight: 10 }}>{c.celular}</a>}
-                  {c.telefone && <a href={`tel:${c.telefone}`} style={{ color: T.inkDim, marginRight: 10 }}>{c.telefone}</a>}
-                  {c.email && <a href={`mailto:${c.email}`} style={{ color: T.blueText }}>{c.email}</a>}
+            {contatos.map(c => {
+              const zap = String(c.whatsapp || c.celular || '').replace(/\D/g, '');
+              return (
+                <div key={c.id} style={{ fontSize: 12, padding: '4px 0', borderTop: `1px solid ${T.lineSoft}` }}>
+                  <strong>{c.nome}</strong>{c.cargo ? ` · ${c.cargo}` : ''}
+                  <div style={{ color: T.inkDim, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                    {zap && <a href={`https://wa.me/${zap.startsWith('55') ? zap : '55' + zap}`} target="_blank" rel="noreferrer" style={{ color: T.oliveText }}>WhatsApp {c.whatsapp || c.celular}</a>}
+                    {c.telefone && <a href={`tel:${c.telefone}`} style={{ color: T.inkDim }}>{c.telefone}</a>}
+                    {c.email && <a href={`mailto:${c.email}`} style={{ color: T.blueText }}>{c.email}</a>}
+                    {c.linkedin && <a href={c.linkedin.startsWith('http') ? c.linkedin : `https://${c.linkedin}`} target="_blank" rel="noreferrer" style={{ color: T.blueText }}>LinkedIn</a>}
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
             {novoCtt && (
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
-                {[['nome', 'Nome'], ['cargo', 'Cargo'], ['celular', 'Celular'], ['email', 'E-mail']].map(([k, r]) => (
-                  <input key={k} value={novoCtt[k]} onChange={e => setNovoCtt(v => ({ ...v, [k]: e.target.value }))} placeholder={r} style={{ ...campo, flex: '1 1 120px' }} />
+                {[['nome', 'Nome'], ['cargo', 'Cargo'], ['celular', 'Celular'], ['whatsapp', 'WhatsApp'], ['email', 'E-mail'], ['linkedin', 'LinkedIn (endereço)']].map(([k, r]) => (
+                  <input key={k} value={novoCtt[k]} onChange={e => setNovoCtt(v => ({ ...v, [k]: e.target.value }))} placeholder={r} style={{ ...campo, flex: '1 1 130px' }} />
                 ))}
                 <button onClick={() => setNovoCtt(null)} style={botao(false)}>Cancelar</button>
                 <button disabled={!novoCtt.nome.trim()} onClick={async () => {
                     await supabase.from('crm_contato').insert({ empresa_id: n.empresa_id, nome: novoCtt.nome.trim(), cargo: novoCtt.cargo || null,
-                      celular: novoCtt.celular || null, email: novoCtt.email || null, criado_por: autor });
+                      celular: novoCtt.celular || null, whatsapp: novoCtt.whatsapp || null, email: novoCtt.email || null,
+                      linkedin: novoCtt.linkedin || null, criado_por: autor });
                     await registrar('contato', `Contato cadastrado: ${novoCtt.nome.trim()}`); setNovoCtt(null); carregar();
                   }} style={botao(true)}>Salvar</button>
               </div>
@@ -21657,30 +21860,39 @@ function CRMFichaNegocio({ negocio: n, etapas, empresa, vendedores, autor, onFec
   );
 }
 
-// Ficha da empresa: dados do Sankhya, contatos e negócios
+// Ficha da empresa: dados do Sankhya, contatos, negócios e histórico da empresa
 function CRMFichaEmpresa({ empresa: e, negocios, etapaPorId, autor, onFechar, onAbrirNegocio, onMudou }) {
   const [contatos, setContatos] = useState([]);
+  const [hist, setHist] = useState([]);
   const moeda = (v) => fmtMoedaCompacta(v);
   useEffect(() => {
+    if (!e) return;
     supabase.from('crm_contato').select('*').eq('empresa_id', e.id).eq('ativo', true).order('nome').then(r => setContatos(r.data || []));
-  }, [e.id]);
+    supabase.from('crm_historico').select('*').eq('empresa_id', e.id).is('negocio_id', null).order('em', { ascending: false }).limit(60).then(r => setHist(r.data || []));
+  }, [e?.id]);
   if (!e) return null;
+  const linha = (rot, v) => v ? <div style={{ fontSize: 12, color: T.inkDim }}><span style={{ color: T.inkFaint }}>{rot} </span>{v}</div> : null;
   return (
     <div onClick={onFechar} style={{ position: 'fixed', inset: 0, background: 'rgba(20,18,15,0.35)', zIndex: 70, display: 'flex', justifyContent: 'flex-end' }}>
-      <div onClick={ev => ev.stopPropagation()} style={{ background: T.panel, width: 'min(560px, 100vw)', height: '100%', overflowY: 'auto', padding: '14px 18px', boxShadow: '-8px 0 30px rgba(0,0,0,0.2)' }}>
+      <div onClick={ev => ev.stopPropagation()} style={{ background: T.panel, width: 'min(580px, 100vw)', height: '100%', overflowY: 'auto', padding: '14px 18px', boxShadow: '-8px 0 30px rgba(0,0,0,0.2)' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10 }}>
           <div>
             <div style={{ fontSize: 16, fontWeight: 700 }}>{e.nome}</div>
-            <div style={{ fontSize: 12, color: T.inkDim }}>{[e.cidade, e.uf].filter(Boolean).join(' / ')}{e.cnpj && e.cnpj !== '—' ? ` · CNPJ ${e.cnpj}` : ''}</div>
-            <div style={{ fontSize: 12, color: T.inkDim }}>{[e.telefone, e.email].filter(Boolean).join(' · ')}</div>
+            {linha('Razão social', e.razao_social !== e.nome ? e.razao_social : null)}
+            {linha('CNPJ', e.cnpj && e.cnpj !== '—' ? e.cnpj : null)}
+            {linha('Segmento', e.segmento)}
+            {linha('Local', [e.cidade, e.uf].filter(Boolean).join(' / ') + (e.regiao ? ` · ${e.regiao}` : ''))}
+            {linha('Contato', [e.telefone, e.email].filter(Boolean).join(' · '))}
+            {e.site && <div style={{ fontSize: 12 }}><a href={e.site.startsWith('http') ? e.site : `https://${e.site}`} target="_blank" rel="noreferrer" style={{ color: T.blueText }}>{e.site}</a></div>}
+            {linha('Código Sankhya', e.cod_parceiro)}
           </div>
           <button onClick={onFechar} style={{ fontFamily: 'inherit', fontSize: 12, padding: '6px 12px', borderRadius: 6, border: `1px solid ${T.line}`, background: T.panel, cursor: 'pointer', height: 30 }}>Fechar</button>
         </div>
         <div style={{ fontSize: 12.5, fontWeight: 700, margin: '14px 0 6px' }}>Negócios ({negocios.length})</div>
         {negocios.slice().sort((a, b) => new Date(b.criado_em) - new Date(a.criado_em)).map(n => (
           <div key={n.id} onClick={() => onAbrirNegocio(n.id)} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 12, padding: '6px 0', borderTop: `1px solid ${T.lineSoft}`, cursor: 'pointer' }}>
-            <span><strong>{n.br || n.titulo}</strong> <span style={{ color: T.inkFaint }}>· {n.pipeline_id === 'vendas' ? 'Vendas' : 'Pós-vendas'}</span></span>
-            <span style={{ color: etapaPorId[n.etapa_id]?.cor || T.inkDim, whiteSpace: 'nowrap' }}>{etapaPorId[n.etapa_id]?.nome} · {n.valor ? moeda(Number(n.valor)) : '—'}</span>
+            <span><strong>{n.br || n.titulo}</strong> <span style={{ color: T.inkFaint }}>· {{ leads: 'Lead', vendas: 'Vendas', posvendas: 'Pós-vendas' }[n.pipeline_id]}</span></span>
+            <span style={{ color: etapaPorId[n.etapa_id]?.cor || T.inkDim, whiteSpace: 'nowrap' }}>{etapaPorId[n.etapa_id]?.nome} · {n.valor || n.potencial ? moeda(Number(n.valor || n.potencial)) : '—'}</span>
           </div>
         ))}
         <div style={{ fontSize: 12.5, fontWeight: 700, margin: '14px 0 6px' }}>Contatos ({contatos.length})</div>
@@ -21688,9 +21900,20 @@ function CRMFichaEmpresa({ empresa: e, negocios, etapaPorId, autor, onFechar, on
         {contatos.map(c => (
           <div key={c.id} style={{ fontSize: 12, padding: '5px 0', borderTop: `1px solid ${T.lineSoft}` }}>
             <strong>{c.nome}</strong>{c.cargo ? ` · ${c.cargo}` : ''}
-            <div style={{ color: T.inkDim }}>{[c.celular, c.telefone, c.email].filter(Boolean).join(' · ')}</div>
+            <div style={{ color: T.inkDim }}>{[c.whatsapp || c.celular, c.telefone, c.email].filter(Boolean).join(' · ')}</div>
           </div>
         ))}
+        {hist.length > 0 && (
+          <>
+            <div style={{ fontSize: 12.5, fontWeight: 700, margin: '14px 0 6px' }}>Histórico da empresa</div>
+            {hist.map(h => (
+              <div key={h.id} style={{ fontSize: 12, padding: '5px 0', borderTop: `1px solid ${T.lineSoft}` }}>
+                <div style={{ fontSize: 10.5, color: T.inkFaint }}>{h.em ? new Date(h.em).toLocaleDateString('pt-BR') : ''} · {h.autor || '—'}</div>
+                <div style={{ color: T.inkDim }}>{h.texto}</div>
+              </div>
+            ))}
+          </>
+        )}
       </div>
     </div>
   );
