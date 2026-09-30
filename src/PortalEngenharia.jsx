@@ -22336,6 +22336,141 @@ function CusteioVendaCusto({ H, moeda, num }) {
   );
 }
 
+// Custeio por OP > Como funciona: explicação de cada número, conta e aba da tela.
+// Texto fixo, escrito a partir das views do banco (v_custeio_op_mes, v_custeio_op_producao,
+// v_custeio_hora_rateada, v_custeio_hora_custo_medio, v_custeio_op_servico_pool_mes,
+// v_custeio_op_produto_custo, v_custeio_op_produto_venda). Mudou uma regra? Atualize aqui.
+function CusteioExplicacao() {
+  const secoes = [
+    { id: 'visao', t: 'A ideia geral', c: (<>
+      <p>O custeio por OP responde: <strong>quanto custou fazer cada OP e cada peça</strong>. A conta de uma OP é sempre a mesma soma:</p>
+      <Formula>Custo da OP = Material + Mão de obra + Overhead + Frete e serviços (rateio)</Formula>
+      <Formula>Custo por peça = Custo da OP ÷ peças produzidas</Formula>
+      <p>Material e mão de obra são <strong>diretos</strong>: vêm do que foi lançado na própria OP. Overhead, frete e serviços são <strong>indiretos</strong>: são custos do mês que não dá para ligar a uma OP, então são divididos (rateados) entre as OPs que trabalharam naquele mês.</p>
+      <p>Período: <strong>só 2026</strong>. Horas e consumos de antes de janeiro/2026 não entram.</p>
+    </>) },
+    { id: 'material', t: 'Material consumido', c: (<>
+      <p>É o valor das <strong>notas de consumo da OP no Sankhya</strong> (a matéria-prima que a produção baixou para a OP), pelo custo do item na nota.</p>
+      <Formula>Material = soma do valor dos itens consumidos na OP</Formula>
+      <p>As mesmas notas dizem quantas <strong>peças foram produzidas</strong> (o lançamento de produto acabado). Por isso a quantidade pode sair fracionada: se uma peça foi feita por duas OPs, cada uma fica com uma parte (ex.: 0,43 e 0,57).</p>
+      <p><strong>Previsto × consumido</strong>: o previsto é a lista de materiais do produto no Sankhya × a quantidade a produzir da OP. A tabela compara item a item e classifica: <em>conforme</em> (bateu), <em>consumiu a mais</em>, <em>consumiu a menos</em>, <em>não consumido</em> (estava na lista e não foi usado) e <em>não previsto</em> (consumiu algo que não estava na lista). “R$ desvio” = diferença de quantidade × custo unitário.</p>
+      <p><strong>Saída × apontado × sobra</strong>: compara o que saiu do estoque para a OP, o que a produção apontou como usado e o que voltou. “Apontado sem saída” é material que aparece como usado mas não teve saída lançada para aquela OP (em geral saiu para outra OP ou por outro tipo de nota).</p>
+    </>) },
+    { id: 'mo', t: 'Mão de obra', c: (<>
+      <p>Vem dos <strong>apontamentos de hora</strong> no Sankhya (quem trabalhou, em que OP, de que horas a que horas).</p>
+      <ol>
+        <li><strong>Horas do dia da pessoa</strong> = do primeiro início ao último fim do dia, menos <strong>1 h de almoço</strong> quando o dia passa de 6 h. Apontamento acima de 14 h no mesmo registro é descartado como erro.</li>
+        <li>Essas horas são <strong>divididas entre as OPs</strong> que a pessoa apontou no dia, na proporção do que foi apontado em cada uma. Assim, hora sobreposta ou lançada em duplicidade não conta duas vezes.</li>
+        <li><strong>Custo da hora do mês</strong> = folha dos setores produtivos (salário + encargos + provisões de férias e 13º) ÷ horas de todas as pessoas no mês.</li>
+      </ol>
+      <Formula>Mão de obra da OP = horas da OP no mês × custo da hora do mês</Formula>
+      <p><strong>Dias de trabalho</strong> = horas da OP ÷ 8,8 h (jornada de um dia). <strong>Duração da OP</strong> = dias corridos entre o início e o término no Sankhya — são coisas diferentes: uma OP pode durar 40 dias e ter só 3 dias de trabalho.</p>
+    </>) },
+    { id: 'ociosa', t: 'Horas ociosas (BR9595/22)', c: (<>
+      <p>O BR9595/22 existe para lançar a <strong>hora ociosa</strong>: o tempo do dia que não foi trabalho em OP (ninguém produz o tempo todo). Entram as OPs de lançamento “PROD-LANCA” (geral, prensa, misturador, stud welding, CNC, corte) e qualquer hora lançada nesse projeto.</p>
+      <p>Essas horas <strong>não entram em nenhuma OP</strong> nem nas bases de rateio. Ficam à parte na aba <em>Horas ociosas</em>, com o custo e a % do tempo apontado.</p>
+    </>) },
+    { id: 'overhead', t: 'Overhead (custos indiretos de fabricação)', c: (<>
+      <p>É o custo de <strong>manter a fábrica funcionando</strong> no mês, que não pertence a nenhuma OP específica. O “bolo” do mês tem três partes:</p>
+      <ul>
+        <li><strong>CIF da contabilidade</strong>: aluguel dos galpões, energia, limpeza, manutenção de máquinas, aluguel de veículos e equipamentos da produção, IPTU etc.</li>
+        <li><strong>Benefícios da produção</strong>: transporte de empregados, alimentação e assistência médica.</li>
+        <li><strong>Insumos</strong>: consumíveis do mês (discos, eletrodos, EPIs…) — descontado o que já foi lançado direto nas OPs como material, para não contar duas vezes.</li>
+      </ul>
+      <p>O bolo é dividido entre as OPs do mês por uma de duas bases (botão “Overhead por” no topo):</p>
+      <Formula>Por horas: overhead da OP = bolo do mês × (horas da OP ÷ horas de todas as OPs no mês)</Formula>
+      <Formula>Por material + MO: overhead da OP = bolo do mês × ((material + MO da OP) ÷ (material + MO de todas as OPs no mês))</Formula>
+      <p><strong>Por horas</strong> é o padrão: quem ocupa mais a fábrica paga mais. <strong>Por material + MO</strong> joga mais overhead em OP de material caro, mesmo que rápida. OP sem hora apontada recebe <strong>zero</strong> de overhead na base horas.</p>
+    </>) },
+    { id: 'servicos', t: 'Frete, industrialização, autoclave e outros serviços', c: (<>
+      <p>São despesas com terceiros do mês, tiradas do financeiro do Sankhya:</p>
+      <ul>
+        <li><strong>Frete</strong>: naturezas 510601 (frete de matéria-prima) e 510604 (frete de processamento).</li>
+        <li><strong>Serviços de terceiros</strong> (natureza 180313), separados pelo fornecedor: <em>industrialização</em>, <em>autoclave</em>, <em>outros serviços de produção</em>, <em>fora da produção</em> (não entra) e <em>a classificar</em> (ainda não entra — fornecedor sem classificação).</li>
+      </ul>
+      <Formula>Frete da OP = frete do mês × (material da OP ÷ material de todas as OPs no mês)</Formula>
+      <Formula>Industrialização / autoclave / outros = total do mês × ((material + MO da OP) ÷ (material + MO de todas as OPs))</Formula>
+      <p>OP <strong>cancelada</strong> não recebe esses rateios. Na conta da OP, clique em cada linha para ver o mês, o total, a base, o peso da OP e os títulos por fornecedor.</p>
+    </>) },
+    { id: 'produto', t: 'Por produto, mediana e OPs irmãs', c: (<>
+      <p>A aba <em>Por produto</em> junta as OPs de 2026 de cada produto (fora canceladas e as sem peça produzida):</p>
+      <Formula>Custo por peça do produto = soma do custo das OPs ÷ soma das peças produzidas</Formula>
+      <p>A <strong>mediana</strong> é o custo por peça da OP “do meio”: não se deixa levar por uma OP muito fora da curva. Se a média e a mediana estão muito diferentes, tem OP estranha no produto.</p>
+      <p><strong>OPs irmãs</strong>: no detalhe da OP aparecem as outras OPs do mesmo produto e a conta somada. Serve para o caso em que a peça foi feita por mais de uma OP — por exemplo, as horas numa OP suspensa e o material numa finalizada. Nesse caso cada uma sozinha dá um custo errado; o certo é a soma.</p>
+    </>) },
+    { id: 'venda', t: 'Venda × custo e preço ideal', c: (<>
+      <p><strong>Vendas</strong>: notas de 2026 com TOP de venda (sem brinde, remessa etc.).</p>
+      <Formula>Receita líquida = receita bruta − ICMS − IPI − ISS − PIS/COFINS</Formula>
+      <p>ICMS, IPI e ISS usam a <strong>alíquota efetiva do próprio produto</strong> no ano (imposto registrado ÷ faturado). PIS/COFINS é uma premissa de <strong>9,25%</strong> da bruta, porque esses tributos não vêm nos itens do Sankhya.</p>
+      <Formula>Custo do vendido = custo por peça do produto × peças vendidas</Formula>
+      <Formula>Resultado = receita líquida − custo do vendido    ·    Margem = resultado ÷ receita líquida</Formula>
+      <Formula>Preço ideal líquido = custo por peça ÷ (1 − margem-alvo)</Formula>
+      <Formula>Preço ideal bruto = preço ideal líquido ÷ (1 − impostos do produto)</Formula>
+      <p>Exemplo com custo de R$ 946, margem-alvo de 30% e 34,9% de impostos: 946 ÷ 0,70 = R$ 1.352 líquido; 1.352 ÷ 0,651 = <strong>R$ 2.076 bruto por peça</strong>.</p>
+      <p><strong>Praticado × ideal</strong> compara o líquido por peça que se vendeu com o líquido ideal: −20% = vendeu 20% abaixo do ideal. A margem-alvo (padrão 30%) muda na própria aba e recalcula tudo.</p>
+    </>) },
+    { id: 'abas', t: 'O que cada aba mostra', c: (<ul>
+      <li><strong>OPs</strong>: cada OP com material, horas, custos e custo por peça. Clique para abrir o detalhe (previsto × consumido, conta da OP clicável, horas por setor, saída × apontado, OPs irmãs).</li>
+      <li><strong>Por produto</strong>: custo por peça médio e mediano de cada produto, horas por peça e duração.</li>
+      <li><strong>Desvios de material</strong>: itens consumidos a mais ou fora da lista, com desvio de pelo menos R$ 200.</li>
+      <li><strong>Rateio e conferência</strong>: mês a mês, o total de cada bolo (overhead, frete, serviços) contra o que foi distribuído nas OPs — os dois têm que bater; e a classificação dos fornecedores de serviço.</li>
+      <li><strong>Horas ociosas</strong>: o BR9595/22 por mês, lançamento e setor.</li>
+      <li><strong>Venda × custo</strong>: vendas, receita líquida, custo, margem e preço ideal por produto; clique para ver a formação de cada número.</li>
+    </ul>) },
+    { id: 'limites', t: 'Cuidados na leitura (limitações conhecidas)', c: (<ul>
+      <li><strong>Hora em OP suspensa ou cancelada</strong>: quando cancelam/suspendem a OP e abrem outra, a hora pode ficar na antiga e o material na nova. A nova sai barata e a antiga cara. Olhe as OPs irmãs.</li>
+      <li><strong>OP sem hora apontada</strong> fica sem mão de obra e, na base horas, sem overhead — o custo sai subestimado.</li>
+      <li><strong>Venda de estoque antigo</strong>: peça produzida antes de 2026 e vendida agora usa o custo de 2026 do mesmo produto.</li>
+      <li><strong>Peça fracionada</strong>: quando a produção de uma peça é dividida entre OPs, o custo por peça de cada OP isolada não significa muito — use o custo do produto.</li>
+      <li><strong>Serviços “a classificar”</strong> ainda não entram em nenhum rateio até o fornecedor ser classificado (aba Rateio e conferência).</li>
+      <li><strong>PIS/COFINS</strong> é premissa (9,25%), não valor da nota; <strong>IPI</strong> entra como imposto sobre a bruta.</li>
+    </ul>) },
+    { id: 'glossario', t: 'Glossário rápido', c: (<dl style={{ margin: 0 }}>
+      {[
+        ['OP', 'Ordem de produção do Sankhya.'],
+        ['Situação da OP', 'Finalizada (F), aberta (A), suspensa (S) ou cancelada (C), como está no Sankhya.'],
+        ['Rateio', 'Divisão de um custo do mês entre as OPs, por uma base (horas, material ou material + MO).'],
+        ['Base de rateio', 'O que decide quanto cada OP recebe: a parte dela no total do mês.'],
+        ['Overhead / CIF', 'Custo indireto de fabricação: aluguel, energia, manutenção, benefícios, insumos.'],
+        ['Custo da hora', 'Folha produtiva do mês (com encargos e provisões) ÷ horas apontadas no mês.'],
+        ['Receita líquida', 'O que sobra da venda depois dos impostos sobre ela.'],
+        ['Margem', 'Resultado ÷ receita líquida.'],
+        ['Margem-alvo', 'A margem que se quer ter; define o preço ideal.'],
+        ['Mediana', 'O valor do meio da lista; resiste a valores fora da curva.'],
+      ].map(([a, b]) => (
+        <div key={a} style={{ display: 'flex', gap: 10, padding: '4px 0', borderTop: `1px solid ${T.lineSoft}` }}>
+          <dt style={{ minWidth: 150, fontWeight: 700, fontSize: 12.5 }}>{a}</dt><dd style={{ margin: 0, fontSize: 12.5, color: T.inkDim }}>{b}</dd>
+        </div>
+      ))}
+    </dl>) },
+  ];
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(180px, 220px) 1fr', gap: 16, alignItems: 'flex-start' }} className="grid-2col">
+      <div style={{ position: 'sticky', top: 10, background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: 12 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: T.inkFaint, marginBottom: 6 }}>NESTA PÁGINA</div>
+        {secoes.map(s => (
+          <a key={s.id} href={`#cx-${s.id}`} onClick={e => { e.preventDefault(); document.getElementById(`cx-${s.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}
+            style={{ display: 'block', fontSize: 12.5, color: T.blueText, textDecoration: 'none', padding: '4px 0' }}>{s.t}</a>
+        ))}
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        {secoes.map(s => (
+          <section key={s.id} id={`cx-${s.id}`} style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '14px 18px', scrollMarginTop: 12 }}>
+            <h3 style={{ margin: '0 0 8px', fontSize: 15, fontFamily: FONT_DISPLAY }}>{s.t}</h3>
+            <div style={{ fontSize: 13, color: T.ink, lineHeight: 1.65 }} className="cx-texto">{s.c}</div>
+          </section>
+        ))}
+      </div>
+    </div>
+  );
+}
+function Formula({ children }) {
+  return (
+    <div style={{ fontFamily: "'JetBrains Mono', ui-monospace, monospace", fontSize: 12.5, background: T.panelAlt, border: `1px solid ${T.line}`,
+      borderLeft: `3px solid ${T.terracotta}`, borderRadius: 6, padding: '8px 12px', margin: '8px 0', overflowX: 'auto', whiteSpace: 'nowrap' }}>{children}</div>
+  );
+}
+
 function CusteioHorasOciosas({ linhas, setLinhas, mesAberto, setMesAberto, moeda, num }) {
   useEffect(() => {
     if (linhas) return;
@@ -22569,7 +22704,7 @@ function CusteioPorOP() {
       </div>
 
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-        {[['ops', 'OPs'], ['produto', 'Por produto'], ['desvios', 'Desvios de material'], ['rateio', 'Rateio e conferência'], ['ociosas', 'Horas ociosas'], ['venda', 'Venda × custo']].map(([k, r]) => (
+        {[['ops', 'OPs'], ['produto', 'Por produto'], ['desvios', 'Desvios de material'], ['rateio', 'Rateio e conferência'], ['ociosas', 'Horas ociosas'], ['venda', 'Venda × custo'], ['explica', '📘 Como funciona']].map(([k, r]) => (
           <button key={k} onClick={() => setAba(k)} style={botao(aba === k)}>{r}</button>
         ))}
         <span style={{ width: 1, height: 20, background: T.line, margin: '0 4px' }} />
@@ -23070,6 +23205,7 @@ function CusteioPorOP() {
         );
       })()}
 
+      {aba === 'explica' && <CusteioExplicacao />}
       {aba === 'venda' && <CusteioVendaCusto H={H} moeda={moeda} num={num} />}
       {aba === 'ociosas' && <CusteioHorasOciosas linhas={ociosas} setLinhas={setOciosas} mesAberto={ociosaMes} setMesAberto={setOciosaMes} moeda={moeda} num={num} />}
       {aba === 'rateio' && (() => {
