@@ -1,6 +1,8 @@
 import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import ReactDOM from 'react-dom';
 import { createClient } from '@supabase/supabase-js';
+import QRCode from 'qrcode';
+import jsQR from 'jsqr';
 import {
   LayoutGrid, FileStack, ClipboardCheck, Gauge, SlidersHorizontal, Workflow,
   Plus, Search, UploadCloud, AlertTriangle, Clock3, Check, X, LogOut,
@@ -8531,6 +8533,408 @@ function FunilVisualSVG({ segmentos, total, ativo, onClick }) {
   );
 }
 
+/* ============================================================================
+   FLUXO DE MATERIAIS — ETIQUETAS QR, LEITOR NO TABLET E ENTREGA COMPROVADA
+   (30/09/2026). Cada etiqueta é um "volume" (almox_volume): o material de uma
+   OP que sai do Ponto de Estoque. O QR leva "KDB-V:<código>". Ler o QR no
+   tablet abre o volume; entregar ou mover para outro setor pede quem recebeu
+   e a foto do material (e, se quiser, a foto do documento) e grava tudo em
+   almox_entrega + almoxarifado_movimentacoes (fn_almox_registrar_entrega).
+============================================================================ */
+const ALMOX_SETORES = ['Ponto de Estoque', 'Corte', 'Vulcanização', 'Pintura', 'Caldeiraria', 'Revestimento', 'Expedição', 'Material 100% em produção', 'Projeto Faturado'];
+const ALMOX_ETIQUETAS = { '50x30': { w: 50, h: 30, qr: 24 }, '60x40': { w: 60, h: 40, qr: 32 }, '100x50': { w: 100, h: 50, qr: 42 } };
+
+// reduz a foto antes de enviar (lado maior 1600 px, JPEG 0,8)
+async function almoxComprimirFoto(file) {
+  const img = await new Promise((res, rej) => {
+    const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = URL.createObjectURL(file);
+  });
+  const esc = Math.min(1, 1600 / Math.max(img.width, img.height));
+  const c = document.createElement('canvas');
+  c.width = Math.round(img.width * esc); c.height = Math.round(img.height * esc);
+  c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+  URL.revokeObjectURL(img.src);
+  return await new Promise(res => c.toBlob(res, 'image/jpeg', 0.8));
+}
+async function almoxEnviarFoto(file, pasta) {
+  const blob = await almoxComprimirFoto(file);
+  const caminho = `${pasta}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jpg`;
+  const { error } = await supabase.storage.from('almoxarifado-entregas').upload(caminho, blob, { contentType: 'image/jpeg' });
+  if (error) throw error;
+  return caminho;
+}
+
+// janela de impressão com uma etiqueta por página, no tamanho da etiqueta
+async function almoxImprimirEtiquetas(volumes, tamanho) {
+  const t = ALMOX_ETIQUETAS[tamanho] || ALMOX_ETIQUETAS['60x40'];
+  const qrs = await Promise.all(volumes.map(v => QRCode.toDataURL(`KDB-V:${v.codigo}`, { margin: 0, width: 400, errorCorrectionLevel: 'M' })));
+  const esc = (s) => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const pequeno = t.w <= 50;
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Etiquetas</title><style>
+    @page { size: ${t.w}mm ${t.h}mm; margin: 0; }
+    * { box-sizing: border-box; } body { margin: 0; font-family: Arial, Helvetica, sans-serif; color: #000; }
+    .et { width: ${t.w}mm; height: ${t.h}mm; padding: 1.5mm; display: flex; gap: 1.5mm; align-items: center; page-break-after: always; overflow: hidden; }
+    .et img { width: ${t.qr}mm; height: ${t.qr}mm; flex-shrink: 0; }
+    .tx { flex: 1; min-width: 0; line-height: 1.15; }
+    .cod { font-size: ${pequeno ? 9 : 12}pt; font-weight: 700; }
+    .op { font-size: ${pequeno ? 7 : 9}pt; font-weight: 700; }
+    .mat { font-size: ${pequeno ? 6 : 7.5}pt; max-height: ${pequeno ? 3 : 4}em; overflow: hidden; }
+    .rod { font-size: ${pequeno ? 5.5 : 6.5}pt; margin-top: 0.6mm; }
+  </style></head><body>
+  ${volumes.map((v, i) => `<div class="et"><img src="${qrs[i]}"><div class="tx">
+    <div class="cod">${esc(v.codigo)}</div>
+    <div class="op">OP ${esc(v.op)}${v.br ? ' · ' + esc(v.br) : ''}</div>
+    <div class="mat">${esc(v.material)}</div>
+    <div class="rod">${v.quantidade != null ? 'Qtd ' + esc(v.quantidade) + (v.unidade ? ' ' + esc(v.unidade) : '') + ' · ' : ''}${new Date(v.criado_em || Date.now()).toLocaleDateString('pt-BR')}</div>
+  </div></div>`).join('')}
+  <script>window.onload = () => setTimeout(() => window.print(), 250);</script></body></html>`;
+  const w = window.open('', '_blank');
+  if (!w) { alert('O navegador bloqueou a janela de impressão. Libere pop-ups para o portal.'); return; }
+  w.document.write(html); w.document.close();
+  await supabase.from('almox_volume').update({ impresso_em: new Date().toISOString() }).in('id', volumes.map(v => v.id));
+}
+
+// leitor de QR pela câmera (funciona em Android e iPad: jsQR, sem API nativa)
+function AlmoxLeitorQR({ onLido, ativo = true }) {
+  const videoRef = useRef(null);
+  const [erro, setErro] = useState(null);
+  const [manual, setManual] = useState('');
+  useEffect(() => {
+    if (!ativo) return;
+    let stream = null, raf = null, parado = false;
+    const canvas = document.createElement('canvas'); const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    (async () => {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment', width: { ideal: 1280 } }, audio: false });
+        const v = videoRef.current; if (!v) return;
+        v.srcObject = stream; v.setAttribute('playsinline', 'true'); await v.play();
+        const passo = () => {
+          if (parado) return;
+          if (v.readyState === v.HAVE_ENOUGH_DATA) {
+            const esc = Math.min(1, 720 / v.videoWidth);
+            canvas.width = Math.round(v.videoWidth * esc); canvas.height = Math.round(v.videoHeight * esc);
+            ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
+            const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            const r = jsQR(img.data, img.width, img.height, { inversionAttempts: 'dontInvert' });
+            if (r && r.data) { parado = true; if (navigator.vibrate) navigator.vibrate(80); onLido(r.data); return; }
+          }
+          raf = requestAnimationFrame(passo);
+        };
+        raf = requestAnimationFrame(passo);
+      } catch (e) {
+        setErro(e?.name === 'NotAllowedError' ? 'A câmera foi bloqueada. Libere o acesso à câmera para o portal nas configurações do navegador.'
+          : `Não consegui abrir a câmera: ${e?.message || e}`);
+      }
+    })();
+    return () => { parado = true; if (raf) cancelAnimationFrame(raf); if (stream) stream.getTracks().forEach(t => t.stop()); };
+  }, [ativo, onLido]);
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10, alignItems: 'center' }}>
+      {erro ? <div style={{ color: T.rustText, fontSize: 13, padding: 16, textAlign: 'center' }}>{erro}</div> : (
+        <div style={{ position: 'relative', width: '100%', maxWidth: 520, aspectRatio: '4 / 3', background: '#000', borderRadius: 12, overflow: 'hidden' }}>
+          <video ref={videoRef} muted playsInline style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+          <div style={{ position: 'absolute', inset: '18%', border: '3px solid rgba(255,255,255,0.85)', borderRadius: 14, boxShadow: '0 0 0 2000px rgba(0,0,0,0.25)' }} />
+          <div style={{ position: 'absolute', bottom: 10, left: 0, right: 0, textAlign: 'center', color: '#fff', fontSize: 13, fontWeight: 600 }}>Aponte para o QR da etiqueta</div>
+        </div>
+      )}
+      <div style={{ display: 'flex', gap: 8, width: '100%', maxWidth: 520 }}>
+        <input value={manual} onChange={e => setManual(e.target.value.toUpperCase())} placeholder="ou digite o código (ex.: V000123)"
+          style={{ flex: 1, fontSize: 16, padding: '10px 12px', borderRadius: 8, border: `1px solid ${T.line}` }} />
+        <button onClick={() => manual.trim() && onLido(manual.trim())} style={{ fontSize: 15, fontWeight: 700, padding: '10px 18px', borderRadius: 8, border: 'none', background: T.ink, color: T.panel }}>Abrir</button>
+      </div>
+    </div>
+  );
+}
+
+// entrega / movimentação com comprovação (foto do material obrigatória, documento opcional)
+function AlmoxEntregaModal({ volume, destinoPadrao, currentUser, onFechar, onFeito }) {
+  const [para, setPara] = useState(destinoPadrao || '');
+  const [recebido, setRecebido] = useState('');
+  const [obs, setObs] = useState('');
+  const [fotoMat, setFotoMat] = useState(null);
+  const [fotoDoc, setFotoDoc] = useState(null);
+  const [nomes, setNomes] = useState([]);
+  const [salvando, setSalvando] = useState(false);
+  const [erro, setErro] = useState(null);
+  const [hist, setHist] = useState([]);
+  useEffect(() => {
+    supabase.from('colaboradores').select('nome').order('nome').then(r => setNomes((r.data || []).map(x => x.nome).filter(Boolean)));
+    supabase.from('almox_entrega').select('*').eq('volume_id', volume.id).order('criado_em', { ascending: false }).then(r => setHist(r.data || []));
+  }, [volume.id]);
+  const prev = (f) => f ? URL.createObjectURL(f) : null;
+  const confirmar = async () => {
+    setErro(null);
+    if (!para) { setErro('Escolha para onde o material vai.'); return; }
+    if (!recebido.trim()) { setErro('Informe quem recebeu o material.'); return; }
+    if (!fotoMat) { setErro('Tire a foto do material entregue.'); return; }
+    setSalvando(true);
+    try {
+      const pasta = `op-${volume.op}/${volume.codigo}`;
+      const cMat = await almoxEnviarFoto(fotoMat, pasta);
+      const cDoc = fotoDoc ? await almoxEnviarFoto(fotoDoc, pasta) : null;
+      const { data, error } = await supabase.rpc('fn_almox_registrar_entrega', {
+        p_volume_id: volume.id, p_para_setor: para, p_recebido_por: recebido.trim(), p_entregue_por: currentUser?.nome || null,
+        p_foto_material: cMat, p_foto_documento: cDoc, p_observacao: obs, p_tipo: volume.setor_atual === 'Ponto de Estoque' ? 'entrega' : 'movimentacao' });
+      if (error || !data?.ok) throw new Error(error?.message || data?.erro || 'Não foi possível registrar');
+      onFeito && onFeito();
+    } catch (e) { setErro(e.message || String(e)); }
+    setSalvando(false);
+  };
+  const campoFoto = (rot, obrig, valor, set) => (
+    <label style={{ flex: '1 1 220px', border: `2px dashed ${valor ? T.oliveText : obrig ? T.rust : T.line}`, borderRadius: 10, padding: 10,
+      display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, cursor: 'pointer', background: valor ? T.oliveSoft : T.panelAlt, minHeight: 150, justifyContent: 'center' }}>
+      <input type="file" accept="image/*" capture="environment" style={{ display: 'none' }} onChange={e => set(e.target.files?.[0] || null)} />
+      {valor ? <img src={prev(valor)} alt="" style={{ maxWidth: '100%', maxHeight: 160, borderRadius: 6 }} />
+             : <span style={{ fontSize: 34 }}>📷</span>}
+      <span style={{ fontSize: 13, fontWeight: 700, color: valor ? T.oliveText : T.ink }}>{valor ? 'Trocar foto' : rot}</span>
+      <span style={{ fontSize: 11, color: T.inkFaint }}>{obrig ? 'obrigatória' : 'opcional'}</span>
+    </label>
+  );
+  return (
+    <div onClick={onFechar} style={{ position: 'fixed', inset: 0, background: 'rgba(20,18,15,0.5)', zIndex: 90, display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '24px 12px', overflowY: 'auto' }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: T.panel, borderRadius: 14, width: '100%', maxWidth: 640, padding: 18, display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10 }}>
+          <div>
+            <div style={{ fontSize: 12, color: T.inkFaint }}>Etiqueta {volume.codigo} · está em <strong>{volume.setor_atual}</strong></div>
+            <div style={{ fontSize: 19, fontWeight: 800 }}>OP {volume.op}{volume.br ? ` · ${volume.br}` : ''}</div>
+            <div style={{ fontSize: 14, color: T.inkDim }}>{volume.material}{volume.quantidade != null ? ` · qtd ${volume.quantidade}` : ''}</div>
+          </div>
+          <button onClick={onFechar} style={{ fontSize: 14, padding: '6px 12px', height: 36, borderRadius: 8, border: `1px solid ${T.line}`, background: T.panel }}>Fechar</button>
+        </div>
+        {volume.status !== 'ativo' && <div style={{ background: T.amberSoft, color: T.amberText, padding: 10, borderRadius: 8, fontSize: 13 }}>Esta etiqueta já está {volume.status}.</div>}
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6 }}>Para onde vai</div>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            {ALMOX_SETORES.filter(s => s !== volume.setor_atual).map(s => (
+              <button key={s} onClick={() => setPara(s)} style={{ fontSize: 14, padding: '10px 14px', borderRadius: 9, cursor: 'pointer', fontWeight: 600,
+                border: `2px solid ${para === s ? T.ink : T.line}`, background: para === s ? T.ink : T.panel, color: para === s ? T.panel : T.ink }}>{s}</button>
+            ))}
+          </div>
+        </div>
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6 }}>Quem recebeu</div>
+          <input list="almox-nomes" value={recebido} onChange={e => setRecebido(e.target.value)} placeholder="nome de quem pegou o material"
+            style={{ width: '100%', boxSizing: 'border-box', fontSize: 16, padding: '11px 12px', borderRadius: 8, border: `1px solid ${T.line}` }} />
+          <datalist id="almox-nomes">{nomes.map(n => <option key={n} value={n} />)}</datalist>
+        </div>
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+          {campoFoto('Foto do material', true, fotoMat, setFotoMat)}
+          {campoFoto('Foto do documento', false, fotoDoc, setFotoDoc)}
+        </div>
+        <textarea value={obs} onChange={e => setObs(e.target.value)} rows={2} placeholder="observação (opcional)"
+          style={{ fontSize: 15, padding: '10px 12px', borderRadius: 8, border: `1px solid ${T.line}`, resize: 'vertical' }} />
+        {erro && <div style={{ color: T.rustText, fontSize: 13, fontWeight: 600 }}>{erro}</div>}
+        <button onClick={confirmar} disabled={salvando || volume.status !== 'ativo'}
+          style={{ fontSize: 17, fontWeight: 800, padding: '14px', borderRadius: 10, border: 'none', background: T.oliveText, color: '#fff', opacity: salvando ? 0.6 : 1 }}>
+          {salvando ? 'Enviando fotos e registrando…' : `✓ Confirmar ${volume.setor_atual === 'Ponto de Estoque' ? 'entrega' : 'movimentação'}${para ? ` para ${para}` : ''}`}
+        </button>
+        {hist.length > 0 && (
+          <div style={{ fontSize: 12, color: T.inkDim }}>
+            <div style={{ fontWeight: 700, marginBottom: 4 }}>Por onde esta etiqueta já passou</div>
+            {hist.map(h => <div key={h.id}>{new Date(h.criado_em).toLocaleString('pt-BR')} · {h.de_setor} → <strong>{h.para_setor}</strong> · recebido por {h.recebido_por}</div>)}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// as três abas novas do Fluxo de Materiais
+function AlmoxQR({ modo, currentUser }) {
+  const [ops, setOps] = useState([]);
+  const [buscaOp, setBuscaOp] = useState('');
+  const [opSel, setOpSel] = useState(null);
+  const [materiais, setMateriais] = useState([]);
+  const [marcados, setMarcados] = useState({});
+  const [volumes, setVolumes] = useState([]);
+  const [tamanho, setTamanho] = useState(() => { try { return localStorage.getItem('almox_etiqueta') || '60x40'; } catch { return '60x40'; } });
+  const [selVol, setSelVol] = useState({});
+  const [volumeAberto, setVolumeAberto] = useState(null);
+  const [aviso, setAviso] = useState(null);
+  const [lendo, setLendo] = useState(true);
+  const [entregas, setEntregas] = useState([]);
+  const [fotosUrl, setFotosUrl] = useState({});
+  const [buscaEnt, setBuscaEnt] = useState('');
+  const campo = { fontFamily: 'inherit', fontSize: 13, padding: '8px 10px', borderRadius: 7, border: `1px solid ${T.line}`, background: T.panel };
+  const botao = (forte) => ({ fontFamily: 'inherit', fontSize: 13, fontWeight: 600, padding: '8px 14px', borderRadius: 7, cursor: 'pointer',
+    border: `1px solid ${forte ? T.ink : T.line}`, background: forte ? T.ink : T.panel, color: forte ? T.panel : T.inkDim });
+
+  const carregarVolumes = useCallback(async () => {
+    const { data } = await supabase.from('almox_volume').select('*').order('criado_em', { ascending: false }).limit(300);
+    setVolumes(data || []);
+  }, []);
+  useEffect(() => {
+    if (modo === 'etiquetas') {
+      supabase.from('v_almoxarifado_ops_andamento').select('*').then(r => setOps(r.data || []));
+      carregarVolumes();
+    }
+    if (modo === 'entregas') {
+      (async () => {
+        const { data } = await supabase.from('almox_entrega').select('*').order('criado_em', { ascending: false }).limit(200);
+        setEntregas(data || []);
+        const caminhos = (data || []).flatMap(e => [e.foto_material, e.foto_documento]).filter(Boolean);
+        if (caminhos.length) {
+          const { data: urls } = await supabase.storage.from('almoxarifado-entregas').createSignedUrls(caminhos, 3600);
+          setFotosUrl(Object.fromEntries((urls || []).map(u => [u.path, u.signedUrl])));
+        }
+      })();
+    }
+  }, [modo, carregarVolumes]);
+
+  const abrirOp = async (o) => {
+    setOpSel(o); setMarcados({});
+    const { data } = await supabase.from('almoxarifado_op_materiais').select('*').eq('op', o.op).order('materia_prima_descricao');
+    setMateriais(data || []);
+  };
+  const gerar = async () => {
+    const itens = materiais.filter(m => marcados[m.id]?.on);
+    if (!itens.length) return;
+    const linhas = itens.map(m => ({ br: m.br || opSel.br || null, op: m.op, cod_materia_prima: m.cod_materia_prima, material: m.materia_prima_descricao,
+      quantidade: marcados[m.id]?.qtd !== undefined && marcados[m.id]?.qtd !== '' ? Number(String(marcados[m.id].qtd).replace(',', '.')) : m.quantidade_mp,
+      criado_por: currentUser?.nome || null }));
+    const { data, error } = await supabase.from('almox_volume').insert(linhas).select();
+    if (error) { setAviso({ erro: true, t: error.message }); return; }
+    setAviso({ t: `${data.length} etiqueta(s) gerada(s). A janela de impressão vai abrir.` });
+    setMarcados({});
+    await almoxImprimirEtiquetas(data, tamanho);
+    carregarVolumes();
+  };
+  const lido = useCallback(async (texto) => {
+    const codigo = String(texto).trim().toUpperCase().replace(/^KDB-V:/, '');
+    const { data } = await supabase.from('almox_volume').select('*').eq('codigo', codigo).maybeSingle();
+    if (!data) { setAviso({ erro: true, t: `Etiqueta "${codigo}" não encontrada.` }); setLendo(false); setTimeout(() => setLendo(true), 1500); return; }
+    setAviso(null); setLendo(false); setVolumeAberto(data);
+  }, []);
+
+  if (modo === 'leitor') return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12, alignItems: 'center', padding: '6px 0' }}>
+      <div style={{ fontSize: 13, color: T.inkDim, textAlign: 'center', maxWidth: 520 }}>
+        Leia a etiqueta do material. Na tela seguinte escolha para onde ele vai, quem recebeu e tire a foto — a entrega fica registrada com a comprovação.
+      </div>
+      {aviso && <div style={{ fontSize: 14, fontWeight: 600, color: aviso.erro ? T.rustText : T.oliveText }}>{aviso.t}</div>}
+      {lendo && !volumeAberto && <AlmoxLeitorQR onLido={lido} ativo />}
+      {!lendo && !volumeAberto && <button onClick={() => setLendo(true)} style={{ ...botao(true), fontSize: 16, padding: '12px 22px' }}>Ler outra etiqueta</button>}
+      {volumeAberto && (
+        <AlmoxEntregaModal volume={volumeAberto} currentUser={currentUser}
+          onFechar={() => { setVolumeAberto(null); setLendo(true); }}
+          onFeito={() => { setAviso({ t: `✓ Registrado: etiqueta ${volumeAberto.codigo}.` }); setVolumeAberto(null); setLendo(true); }} />
+      )}
+    </div>
+  );
+
+  if (modo === 'entregas') {
+    const t = buscaEnt.trim().toLowerCase();
+    const lista = entregas.filter(e => !t || [e.op, e.br, e.material, e.recebido_por, e.entregue_por, e.para_setor].some(x => String(x ?? '').toLowerCase().includes(t)));
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <input value={buscaEnt} onChange={e => setBuscaEnt(e.target.value)} placeholder="buscar OP, BR, material, pessoa ou setor" style={{ ...campo, maxWidth: 360 }} />
+        {lista.length === 0 && <div style={{ color: T.inkFaint, fontSize: 13, padding: 16 }}>Nenhuma entrega registrada ainda.</div>}
+        {lista.map(e => (
+          <div key={e.id} style={{ display: 'flex', gap: 12, background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: 10, flexWrap: 'wrap' }}>
+            {[e.foto_material, e.foto_documento].filter(Boolean).map(c => fotosUrl[c] ? (
+              <a key={c} href={fotosUrl[c]} target="_blank" rel="noreferrer"><img src={fotosUrl[c]} alt="" style={{ width: 110, height: 110, objectFit: 'cover', borderRadius: 8 }} /></a>
+            ) : <div key={c} style={{ width: 110, height: 110, background: T.panelAlt, borderRadius: 8 }} />)}
+            <div style={{ flex: 1, minWidth: 220, fontSize: 13 }}>
+              <div style={{ fontWeight: 800 }}>OP {e.op}{e.br ? ` · ${e.br}` : ''} <span style={{ fontWeight: 400, color: T.inkFaint }}>· {new Date(e.criado_em).toLocaleString('pt-BR')}</span></div>
+              <div style={{ color: T.inkDim }}>{e.material}{e.quantidade != null ? ` · qtd ${e.quantidade}` : ''}</div>
+              <div style={{ marginTop: 4 }}>{e.de_setor} → <strong>{e.para_setor}</strong> · {e.tipo}</div>
+              <div style={{ color: T.inkDim }}>entregue por {e.entregue_por || '—'} · <strong>recebido por {e.recebido_por}</strong></div>
+              {e.observacao && <div style={{ color: T.inkDim, marginTop: 2 }}>{e.observacao}</div>}
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  // modo === 'etiquetas'
+  const tOp = buscaOp.trim().toLowerCase();
+  const opsF = ops.filter(o => !tOp || String(o.op).includes(tOp) || String(o.br || '').toLowerCase().includes(tOp)).slice(0, 80);
+  const nSel = Object.values(marcados).filter(x => x?.on).length;
+  const volSel = volumes.filter(v => selVol[v.id]);
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 12.5, color: T.inkDim }}>Tamanho da etiqueta:</span>
+        {Object.keys(ALMOX_ETIQUETAS).map(k => (
+          <button key={k} onClick={() => { setTamanho(k); try { localStorage.setItem('almox_etiqueta', k); } catch {} }} style={botao(tamanho === k)}>{k.replace('x', ' × ')} mm</button>
+        ))}
+      </div>
+      {aviso && <div style={{ fontSize: 13, fontWeight: 600, color: aviso.erro ? T.rustText : T.oliveText }}>{aviso.t}</div>}
+      <div style={{ display: 'grid', gap: 14, gridTemplateColumns: 'minmax(240px, 320px) 1fr' }}>
+        <Panel title="OPs em andamento" subtitle="escolha a OP para gerar as etiquetas">
+          <input value={buscaOp} onChange={e => setBuscaOp(e.target.value)} placeholder="buscar OP ou BR" style={{ ...campo, width: '100%', boxSizing: 'border-box', marginBottom: 8 }} />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 460, overflowY: 'auto' }}>
+            {opsF.map(o => (
+              <button key={o.op} onClick={() => abrirOp(o)} style={{ textAlign: 'left', padding: '8px 10px', borderRadius: 7, cursor: 'pointer', fontSize: 12.5,
+                border: `1px solid ${opSel?.op === o.op ? T.terracotta : T.line}`, background: opSel?.op === o.op ? T.rustSoft : T.panelAlt }}>
+                <strong>OP {o.op}</strong> · {o.br || 'sem BR'} <span style={{ color: T.inkFaint }}>· {o.qtd_materiais} itens</span>
+              </button>
+            ))}
+          </div>
+        </Panel>
+        <Panel title={opSel ? `OP ${opSel.op}${opSel.br ? ` · ${opSel.br}` : ''}` : 'Materiais da OP'} subtitle="marque os materiais separados e ajuste a quantidade de cada etiqueta">
+          {!opSel ? <div style={{ color: T.inkFaint, fontSize: 12.5, padding: 20 }}>← Escolha uma OP</div> : (
+            <>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+                <thead><tr>{['', 'Código', 'Material', 'Qtd da OP', 'Qtd na etiqueta'].map((h, i) => (
+                  <th key={i} style={{ padding: '6px 8px', fontSize: 11, color: T.inkFaint, textAlign: i >= 3 ? 'right' : 'left' }}>{h}</th>
+                ))}</tr></thead>
+                <tbody>
+                  {materiais.map(m => (
+                    <tr key={m.id} style={{ borderTop: `1px solid ${T.lineSoft}` }}>
+                      <td style={{ padding: '6px 8px' }}><input type="checkbox" checked={!!marcados[m.id]?.on}
+                        onChange={e => setMarcados(x => ({ ...x, [m.id]: { ...(x[m.id] || {}), on: e.target.checked } }))} /></td>
+                      <td style={{ padding: '6px 8px', color: T.inkFaint }}>{m.cod_materia_prima}</td>
+                      <td style={{ padding: '6px 8px' }}>{m.materia_prima_descricao}</td>
+                      <td style={{ padding: '6px 8px', textAlign: 'right' }}>{m.quantidade_mp}</td>
+                      <td style={{ padding: '6px 8px', textAlign: 'right' }}>
+                        <input value={marcados[m.id]?.qtd ?? ''} placeholder={String(m.quantidade_mp ?? '')} inputMode="decimal"
+                          onChange={e => setMarcados(x => ({ ...x, [m.id]: { ...(x[m.id] || {}), on: true, qtd: e.target.value } }))}
+                          style={{ ...campo, width: 90, textAlign: 'right', padding: '5px 8px' }} />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 10 }}>
+                <button disabled={!nSel} onClick={gerar} style={{ ...botao(true), opacity: nSel ? 1 : 0.5 }}>Gerar e imprimir {nSel || ''} etiqueta(s)</button>
+              </div>
+            </>
+          )}
+        </Panel>
+      </div>
+      <Panel title="Etiquetas geradas" subtitle="marque para reimprimir · o setor atual muda a cada leitura no tablet">
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
+          <button disabled={!volSel.length} onClick={() => almoxImprimirEtiquetas(volSel, tamanho)} style={{ ...botao(false), opacity: volSel.length ? 1 : 0.5 }}>Reimprimir {volSel.length || ''}</button>
+        </div>
+        <div style={{ maxHeight: 420, overflowY: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+            <thead><tr>{['', 'Etiqueta', 'OP', 'BR', 'Material', 'Qtd', 'Onde está', 'Situação', 'Gerada'].map((h, i) => (
+              <th key={i} style={{ padding: '6px 8px', fontSize: 11, color: T.inkFaint, textAlign: 'left', position: 'sticky', top: 0, background: T.panel }}>{h}</th>
+            ))}</tr></thead>
+            <tbody>
+              {volumes.map(v => (
+                <tr key={v.id} style={{ borderTop: `1px solid ${T.lineSoft}` }}>
+                  <td style={{ padding: '6px 8px' }}><input type="checkbox" checked={!!selVol[v.id]} onChange={e => setSelVol(x => ({ ...x, [v.id]: e.target.checked }))} /></td>
+                  <td style={{ padding: '6px 8px', fontWeight: 700 }}>{v.codigo}</td>
+                  <td style={{ padding: '6px 8px' }}>{v.op}</td>
+                  <td style={{ padding: '6px 8px', color: T.inkDim }}>{v.br || '—'}</td>
+                  <td style={{ padding: '6px 8px', maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={v.material}>{v.material}</td>
+                  <td style={{ padding: '6px 8px' }}>{v.quantidade ?? '—'}</td>
+                  <td style={{ padding: '6px 8px', fontWeight: 600 }}>{v.setor_atual}</td>
+                  <td style={{ padding: '6px 8px', color: v.status === 'ativo' ? T.oliveText : T.inkFaint }}>{v.status}</td>
+                  <td style={{ padding: '6px 8px', color: T.inkFaint, whiteSpace: 'nowrap' }}>{new Date(v.criado_em).toLocaleDateString('pt-BR')}{v.impresso_em ? ' · impressa' : ''}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Panel>
+    </div>
+  );
+}
+
 function AlmoxarifadoFluxo({ currentUser }) {
   // fmtData local (sombreia a global) -- a global só aceita data simples
   // ("2026-08-31"), quebra em "Invalid Date" com timestamp completo
@@ -8966,7 +9370,7 @@ function AlmoxarifadoFluxo({ currentUser }) {
       </div>
 
       <div style={{ display: 'flex', gap: 4, borderBottom: `1px solid ${T.line}`, flexWrap: 'wrap' }}>
-        {[{ id: 'visao_geral', label: 'Visão Geral' }, { id: 'registrar', label: 'Registrar / Situação atual' }, { id: 'fila_atendimento', label: 'Fila de Atendimento' }, { id: 'reservas', label: `Reservas por Projeto${reservas.filter(r => r.ja_faturado).length ? ` (${reservas.filter(r => r.ja_faturado).length})` : ''}` }, { id: 'detalhado', label: `Detalhado (${detalhado.length})` }, { id: 'faturado_mes', label: 'Faturado por Mês' }, { id: 'produtividade_produto', label: 'Produtividade por Produto' }, { id: 'projetos', label: `Projetos (${projetos.length})` }, { id: 'perdas', label: `Perdas (${perdas.length})` }].map(aba => (
+        {[{ id: 'visao_geral', label: 'Visão Geral' }, { id: 'registrar', label: 'Registrar / Situação atual' }, { id: 'fila_atendimento', label: 'Fila de Atendimento' }, { id: 'qr_leitor', label: '📷 Leitor (tablet)' }, { id: 'qr_etiquetas', label: 'Etiquetas QR' }, { id: 'qr_entregas', label: 'Entregas registradas' }, { id: 'reservas', label: `Reservas por Projeto${reservas.filter(r => r.ja_faturado).length ? ` (${reservas.filter(r => r.ja_faturado).length})` : ''}` }, { id: 'detalhado', label: `Detalhado (${detalhado.length})` }, { id: 'faturado_mes', label: 'Faturado por Mês' }, { id: 'produtividade_produto', label: 'Produtividade por Produto' }, { id: 'projetos', label: `Projetos (${projetos.length})` }, { id: 'perdas', label: `Perdas (${perdas.length})` }].map(aba => (
           <button key={aba.id} onClick={() => setAbaAtiva(aba.id)}
             style={{
               background: 'none', border: 'none', cursor: 'pointer', padding: '10px 16px', fontSize: 13, fontWeight: 600,
@@ -9213,6 +9617,10 @@ function AlmoxarifadoFluxo({ currentUser }) {
             </Panel>
         </>
       )}
+
+      {abaAtiva === 'qr_leitor' && <AlmoxQR modo="leitor" currentUser={currentUser} />}
+      {abaAtiva === 'qr_etiquetas' && <AlmoxQR modo="etiquetas" currentUser={currentUser} />}
+      {abaAtiva === 'qr_entregas' && <AlmoxQR modo="entregas" currentUser={currentUser} />}
 
       {abaAtiva === 'fila_atendimento' && (
         <FilaAtendimentoAlmoxarifado currentUser={currentUser} />
@@ -14793,6 +15201,28 @@ function FilaAtendimentoAlmoxarifado({ currentUser }) {
     await carregar();
   };
 
+  // entrega para um setor: abre a comprovação (quem recebeu + foto). Usa a
+  // etiqueta da solicitação, ou cria uma na hora.
+  const [entregaVol, setEntregaVol] = useState(null);
+  const entregarComComprovacao = async (solic) => {
+    let { data: vol } = await supabase.from('almox_volume').select('*').eq('solicitacao_id', solic.id).eq('status', 'ativo').maybeSingle();
+    if (!vol) {
+      const r = await supabase.from('almox_volume').insert({ br: solic.br, op: solic.op, cod_materia_prima: solic.cod_materia_prima, material: solic.material,
+        quantidade: solic.quantidade_solicitada ?? solic.quantidade_total_prevista, solicitacao_id: solic.id, criado_por: currentUser?.nome || null }).select().single();
+      vol = r.data;
+    }
+    if (vol) setEntregaVol({ vol, destino: solic.setor_destino });
+  };
+  const gerarEtiquetaSolic = async (solic) => {
+    let { data: vol } = await supabase.from('almox_volume').select('*').eq('solicitacao_id', solic.id).eq('status', 'ativo').maybeSingle();
+    if (!vol) {
+      const r = await supabase.from('almox_volume').insert({ br: solic.br, op: solic.op, cod_materia_prima: solic.cod_materia_prima, material: solic.material,
+        quantidade: solic.quantidade_solicitada ?? solic.quantidade_total_prevista, solicitacao_id: solic.id, criado_por: currentUser?.nome || null }).select().single();
+      vol = r.data;
+    }
+    if (vol) await almoxImprimirEtiquetas([vol], (() => { try { return localStorage.getItem('almox_etiqueta') || '60x40'; } catch { return '60x40'; } })());
+  };
+
   const cancelarSolicitacao = async (solic) => {
     await supabase.from('solicitacoes_movimentacao_almoxarifado').update({ status: 'cancelado' }).eq('id', solic.id);
     await carregar();
@@ -14802,6 +15232,10 @@ function FilaAtendimentoAlmoxarifado({ currentUser }) {
 
   return (
     <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+      {entregaVol && (
+        <AlmoxEntregaModal volume={entregaVol.vol} destinoPadrao={entregaVol.destino} currentUser={currentUser}
+          onFechar={() => setEntregaVol(null)} onFeito={() => { setEntregaVol(null); carregar(); }} />
+      )}
       <div style={{ fontSize: 12.5, color: T.inkFaint, background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 8, padding: '10px 14px' }}>
         Aqui aparecem os pedidos da coordenação — vai buscar/entregar o material de verdade e clica em <strong>"Confirmar atendimento"</strong> quando terminar.
       </div>
@@ -14874,10 +15308,22 @@ function FilaAtendimentoAlmoxarifado({ currentUser }) {
                     onChange={e => setPendenteItem(p => ({ ...p, [s.id]: e.target.value }))}
                     style={{ ...inputStyle(), fontSize: 10.5, padding: '4px 8px', flex: 1, minWidth: 160 }} />
                 </div>
-                <div style={{ display: 'flex', gap: 8 }}>
-                  <button onClick={() => marcarAtendido(s)} disabled={atendendo === s.id}
-                    style={{ fontSize: 12, fontWeight: 700, color: '#fff', background: T.oliveText, border: 'none', borderRadius: 6, padding: '8px 16px', cursor: 'pointer', opacity: atendendo === s.id ? 0.6 : 1 }}>
-                    {atendendo === s.id ? 'Confirmando…' : '✓ Confirmar atendimento'}
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  {s.tipo === 'para_setor' ? (
+                    <button onClick={() => entregarComComprovacao(s)}
+                      style={{ fontSize: 12, fontWeight: 700, color: '#fff', background: T.oliveText, border: 'none', borderRadius: 6, padding: '8px 16px', cursor: 'pointer' }}
+                      title="Pede quem recebeu e a foto do material (e do documento, se quiser)">
+                      📷 Entregar com comprovação
+                    </button>
+                  ) : (
+                    <button onClick={() => marcarAtendido(s)} disabled={atendendo === s.id}
+                      style={{ fontSize: 12, fontWeight: 700, color: '#fff', background: T.oliveText, border: 'none', borderRadius: 6, padding: '8px 16px', cursor: 'pointer', opacity: atendendo === s.id ? 0.6 : 1 }}>
+                      {atendendo === s.id ? 'Confirmando…' : '✓ Confirmar atendimento'}
+                    </button>
+                  )}
+                  <button onClick={() => gerarEtiquetaSolic(s)}
+                    style={{ fontSize: 12, fontWeight: 600, color: T.ink, background: T.panel, border: `1px solid ${T.line}`, borderRadius: 6, padding: '8px 14px', cursor: 'pointer' }}>
+                    🏷 Etiqueta
                   </button>
                   <button onClick={() => cancelarSolicitacao(s)} disabled={atendendo === s.id}
                     style={{ fontSize: 12, fontWeight: 600, color: T.inkFaint, background: 'transparent', border: `1px solid ${T.line}`, borderRadius: 6, padding: '8px 14px', cursor: 'pointer' }}>
