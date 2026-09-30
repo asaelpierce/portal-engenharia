@@ -9036,6 +9036,26 @@ function AlmoxEntregaModal({ volume, destinoPadrao, currentUser, onFechar, onFei
 function AlmoxQR({ modo, currentUser, codigoInicial }) {
   const [ops, setOps] = useState([]);
   const [buscaOp, setBuscaOp] = useState('');
+  // a busca também acha OPs que saíram da lista (finalizadas, canceladas ou com tudo entregue)
+  const [opsFora, setOpsFora] = useState([]);
+  useEffect(() => {
+    const t = buscaOp.trim();
+    if (t.length < 3) { setOpsFora([]); return; }
+    const id = setTimeout(async () => {
+      const termo = t.replace(/[%_,()]/g, '');
+      const { data } = await supabase.from('almoxarifado_op_materiais').select('op, br, situacao_op')
+        .or(`op.ilike.%${termo}%,br.ilike.%${termo}%`).limit(500);
+      const naLista = new Set(ops.map(o => String(o.op)));
+      const porOp = {};
+      (data || []).forEach(r => {
+        if (naLista.has(String(r.op))) return;
+        const x = porOp[r.op] || (porOp[r.op] = { op: r.op, br: r.br, situacao_op: r.situacao_op, qtd_materiais: 0, fora: true });
+        x.qtd_materiais += 1; if (!x.br && r.br) x.br = r.br;
+      });
+      setOpsFora(Object.values(porOp).sort((a, b) => String(b.op).localeCompare(String(a.op), undefined, { numeric: true })).slice(0, 40));
+    }, 300);
+    return () => clearTimeout(id);
+  }, [buscaOp, ops]);
   const [opSel, setOpSel] = useState(null);
   const [materiais, setMateriais] = useState([]);
   const [marcados, setMarcados] = useState({});
@@ -9164,6 +9184,7 @@ function AlmoxQR({ modo, currentUser, codigoInicial }) {
   // modo === 'etiquetas'
   const tOp = buscaOp.trim().toLowerCase();
   const opsF = ops.filter(o => !tOp || String(o.op).includes(tOp) || String(o.br || '').toLowerCase().includes(tOp)).slice(0, 80);
+  const motivoFora = (o) => ['Finalizado', 'F'].includes(o.situacao_op) ? 'finalizada' : ['C', 'Cancelado'].includes(o.situacao_op) ? 'cancelada/concluída' : 'itens já entregues';
   const nSel = Object.values(marcados).filter(x => x?.on).length;
   const volSel = volumes.filter(v => selVol[v.id]);
   return (
@@ -9225,6 +9246,19 @@ function AlmoxQR({ modo, currentUser, codigoInicial }) {
                 {o.situacao_op === 'S' && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: T.amberText, background: T.amberSoft, padding: '1px 6px', borderRadius: 8 }}>Sankhya: S</span>}
               </button>
             ))}
+            {opsFora.length > 0 && (
+              <div style={{ fontSize: 11, fontWeight: 700, color: T.inkFaint, margin: '8px 2px 2px' }}>Fora da lista — achadas pela busca</div>
+            )}
+            {opsFora.map(o => (
+              <button key={'f' + o.op} onClick={() => abrirOp(o)} style={{ textAlign: 'left', padding: '8px 10px', borderRadius: 7, cursor: 'pointer', fontSize: 12.5,
+                border: `1px dashed ${opSel?.op === o.op ? T.terracotta : T.line}`, background: opSel?.op === o.op ? T.rustSoft : T.panel, color: T.inkDim }}>
+                <strong>OP {o.op}</strong> · {o.br || 'sem BR'} <span style={{ color: T.inkFaint }}>· {o.qtd_materiais} itens</span>
+                <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: T.inkDim, background: T.panelAlt, border: `1px solid ${T.line}`, padding: '1px 6px', borderRadius: 8 }}>{motivoFora(o)}</span>
+              </button>
+            ))}
+            {tOp && !opsF.length && !opsFora.length && (
+              <div style={{ fontSize: 12, color: T.inkFaint, padding: '6px 2px' }}>{buscaOp.trim().length < 3 ? 'Digite pelo menos 3 caracteres para buscar fora da lista.' : 'Nenhuma OP encontrada.'}</div>
+            )}
           </div>
         </Panel>
         <Panel title={opSel ? `OP ${opSel.op}${opSel.br ? ` · ${opSel.br}` : ''}` : 'Materiais da OP'} subtitle="marque os materiais separados e ajuste a quantidade de cada etiqueta">
