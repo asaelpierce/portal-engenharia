@@ -28861,14 +28861,20 @@ function CriarBR({ currentUser }) {
 // Fonte: v_comercial_cp_conferencia. BR não achado no e-mail -> tenta pela OC no
 // KdB; se ainda assim faltar, corrige aqui (fn_cp_definir_br).
 function ConferenciaConhecimentoPedido({ currentUser }) {
+  // Três datas: solicitação da abertura (e-mail do Power Automate), proposta
+  // (orçamento do Sankhya) e pedido de venda (Sankhya). Valores só LÍQUIDO x
+  // LÍQUIDO, os dois do sistema: proposta = VALOR_PROPOSTA_LIQUIDO do orçamento;
+  // pedido = VLRNOTA menos impostos (pedidos_itens.valor_liquido_real).
+  // Sem pedido de venda: linha vermelha, com os dias desde a solicitação.
   const [linhas, setLinhas] = useState([]);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState(null);
   const [desde, setDesde] = useState('');
   const [vendedor, setVendedor] = useState('Todos');
   const [busca, setBusca] = useState('');
-  const [editando, setEditando] = useState({});   // id -> BR digitado
-  const [aberto, setAberto] = useState(null);     // id com o JSON à mostra
+  const [soSemPedido, setSoSemPedido] = useState(false);
+  const [editando, setEditando] = useState({});
+  const [aberto, setAberto] = useState(null);
   const [verComo, setVerComo] = useState(false);
 
   const carregar = useCallback(async () => {
@@ -28895,27 +28901,28 @@ function ConferenciaConhecimentoPedido({ currentUser }) {
     return linhas.filter(l =>
       (!desde || String(l.data_solicitacao).slice(0, 10) >= desde) &&
       (vendedor === 'Todos' || l.vendedor === vendedor) &&
-      (!b || [l.br, l.cliente, l.numero_pedido_cliente, l.assunto].some(x => String(x || '').toLowerCase().includes(b))));
-  }, [linhas, desde, vendedor, busca]);
+      (!soSemPedido || !l.tem_pedido_venda) &&
+      (!b || [l.br, l.cliente, l.numero_pedido_cliente, l.nunota_pedido_venda, l.assunto].some(x => String(x || '').toLowerCase().includes(b))));
+  }, [linhas, desde, vendedor, busca, soSemPedido]);
 
   const resumo = useMemo(() => {
     const med = (campo) => {
       const d = filtradas.map(l => l[campo]).filter(x => x != null).sort((a, b) => a - b);
       return d.length ? (d.length % 2 ? d[(d.length - 1) / 2] : (d[d.length / 2 - 1] + d[d.length / 2]) / 2) : null;
     };
-    // mesma base: proposta líquida x net value do KdB (o PDF do cliente vem com impostos)
-    const comValor = filtradas.filter(l => l.valor_proposta != null && l.net_value_kdb != null);
+    const comValor = filtradas.filter(l => l.diferenca_valor != null);
     return {
-      n: filtradas.length, medOcSol: med('dias_pedido_cliente_ate_solicitacao'), medPropOc: med('dias_proposta_ate_pedido_cliente'),
+      n: filtradas.length,
+      semPedido: filtradas.filter(l => !l.tem_pedido_venda).length,
+      medPropSol: med('dias_proposta_ate_solicitacao'), medSolPed: med('dias_solicitacao_ate_pedido_venda'),
       proposta: comValor.reduce((s, l) => s + Number(l.valor_proposta), 0),
-      pedido: comValor.reduce((s, l) => s + Number(l.net_value_kdb), 0), nComValor: comValor.length,
-      semBR: filtradas.filter(l => !l.br).length,
-      semProposta: filtradas.filter(l => l.br && l.data_proposta == null).length,
+      pedido: comValor.reduce((s, l) => s + Number(l.valor_pedido_venda_liquido), 0), nComValor: comValor.length,
     };
   }, [filtradas]);
 
   const dataHora = (ts) => ts ? new Date(ts).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
   const dataCurta = (d) => d ? String(d).slice(0, 10).split('-').reverse().join('/') : '—';
+  const dias = (n) => n == null ? '—' : `${n} ${Math.abs(n) === 1 ? 'dia' : 'dias'}`;
   const th = { textAlign: 'left', padding: '8px 10px', fontSize: 11, fontWeight: 700, color: T.inkFaint, borderBottom: `1px solid ${T.line}`, whiteSpace: 'nowrap', background: T.panelAlt };
   const td = { padding: '8px 10px', fontSize: 12.5, color: T.ink, borderBottom: `1px solid ${T.lineSoft}`, verticalAlign: 'top' };
   const sub = { fontSize: 11, color: T.inkFaint };
@@ -28930,7 +28937,7 @@ function ConferenciaConhecimentoPedido({ currentUser }) {
 
   return (
     <Panel title="Conferência do conhecimento de pedido"
-      subtitle="Cada pedido de abertura enviado pelo fluxo do Power Automate, comparado com a proposta do BR (última revisão) e com o lançamento no Painel KdB."
+      subtitle="Quando pediram a abertura do conhecimento, quando foi feita a proposta e quando entrou o pedido de venda no Sankhya. Valores líquidos, os dois do sistema."
       right={<div style={{ display: 'flex', gap: 8 }}>
         <button onClick={() => setVerComo(v => !v)} style={{ ...ghostBtn(T.inkDim), cursor: 'pointer' }}>{verComo ? 'Fechar' : 'Como o fluxo envia'}</button>
         <button onClick={carregar} style={{ ...ghostBtn(T.inkDim), cursor: 'pointer' }}>Atualizar</button>
@@ -28940,23 +28947,27 @@ function ConferenciaConhecimentoPedido({ currentUser }) {
           No fluxo, logo depois do <em>Enviar um email (V2)</em>, uma ação <strong>HTTP</strong>: método <strong>POST</strong>, URL{' '}
           <code style={{ fontSize: 11.5 }}>{SUPABASE_URL}/functions/v1/conhecimento-pedido-receber</code>, cabeçalhos{' '}
           <code>Content-Type: application/json</code> e <code>x-chave-fluxo</code> (a chave fica com o administrador do portal).
-          No corpo vai o que o fluxo tiver: o assunto do e-mail, o e-mail do vendedor e o JSON dos grupos (comercial, fiscal, engenharia).
-          O BR é procurado no JSON e no assunto; o valor do pedido sai de <code>valor_total_projeto</code> e a OC de <code>numero_pedido</code>.
+          No corpo: o assunto do e-mail, o e-mail do vendedor e o JSON dos grupos. O BR é procurado no JSON e no assunto.
         </div>
       )}
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 14 }}>
-        {card('Solicitações', resumo.n, resumo.semBR ? `${resumo.semBR} sem BR` : null, resumo.semBR ? T.rustText : null)}
-        {card('OC do cliente → pedido de abertura', resumo.medOcSol == null ? '—' : `${resumo.medOcSol} ${resumo.medOcSol === 1 ? 'dia' : 'dias'}`, 'mediana, da emissão da OC até o e-mail')}
-        {card('Proposta → OC do cliente', resumo.medPropOc == null ? '—' : `${resumo.medPropOc} dias`, 'mediana (negativo = orçamento lançado depois da OC)', resumo.medPropOc != null && resumo.medPropOc < 0 ? T.amberText : null)}
-        {card('Proposta × KdB (net)', resumo.nComValor ? fmtMoeda(dif) : '—', resumo.nComValor ? `${fmtMoeda(resumo.proposta)} → ${fmtMoeda(resumo.pedido)} (${(100 * dif / resumo.proposta).toFixed(1).replace('.', ',')}%) em ${resumo.nComValor} BR` : 'nenhum BR com proposta e KdB', dif < 0 ? T.rustText : dif > 0 ? T.oliveText : null)}
-        {card('Sem proposta', resumo.semProposta, 'BR sem proposta no portal nem orçamento no Sankhya', resumo.semProposta ? T.amberText : null)}
+        {card('Solicitações de abertura', resumo.n, null)}
+        {card('Sem pedido de venda', resumo.semPedido, resumo.semPedido ? 'abertura pedida e pedido ainda não lançado no Sankhya' : 'todas já têm pedido de venda', resumo.semPedido ? T.rustText : T.oliveText)}
+        {card('Proposta → solicitação', dias(resumo.medPropSol), 'mediana')}
+        {card('Solicitação → pedido de venda', dias(resumo.medSolPed), 'mediana')}
+        {card('Proposta × pedido (líquido)', resumo.nComValor ? fmtMoeda(dif) : '—',
+          resumo.nComValor ? `${fmtMoeda(resumo.proposta)} → ${fmtMoeda(resumo.pedido)} (${(100 * dif / resumo.proposta).toFixed(1).replace('.', ',')}%) em ${resumo.nComValor} BR` : 'nenhum BR com proposta e pedido',
+          dif < 0 ? T.rustText : dif > 0 ? T.oliveText : null)}
       </div>
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 12, alignItems: 'center' }}>
         <label style={{ fontSize: 12, color: T.inkDim }}>desde <input type="date" value={desde} onChange={e => setDesde(e.target.value)} style={{ ...inputStyle(), width: 150, padding: '6px 8px' }} /></label>
         <select value={vendedor} onChange={e => setVendedor(e.target.value)} style={{ ...inputStyle(), width: 200, padding: '6px 8px' }}>
           {vendedores.map(v => <option key={v} value={v}>{v}</option>)}
         </select>
-        <input placeholder="buscar BR, cliente, OC…" value={busca} onChange={e => setBusca(e.target.value)} style={{ ...inputStyle(), width: 240, padding: '6px 8px' }} />
+        <input placeholder="buscar BR, cliente, OC, nº do pedido…" value={busca} onChange={e => setBusca(e.target.value)} style={{ ...inputStyle(), width: 250, padding: '6px 8px' }} />
+        <label style={{ fontSize: 12.5, color: T.inkDim, display: 'inline-flex', gap: 6, alignItems: 'center', cursor: 'pointer' }}>
+          <input type="checkbox" checked={soSemPedido} onChange={e => setSoSemPedido(e.target.checked)} /> só sem pedido de venda
+        </label>
       </div>
       {erro && <div style={{ color: T.rustText, fontSize: 13, marginBottom: 10 }}>Erro: {erro}</div>}
       {carregando ? (
@@ -28969,18 +28980,19 @@ function ConferenciaConhecimentoPedido({ currentUser }) {
         <div style={{ overflowX: 'auto', border: `1px solid ${T.line}`, borderRadius: 8 }}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead><tr>
-              <th style={th}>Pedido de abertura</th><th style={th}>BR</th><th style={th}>Cliente / vendedor</th>
-              <th style={th}>Proposta</th><th style={th}>OC do cliente (c/ impostos)</th><th style={th} title="proposta → OC · OC → pedido de abertura">Dias</th>
-              <th style={th}>Painel KdB (net)</th><th style={th} title="net value do KdB menos a proposta">Diferença</th><th style={th}></th>
+              <th style={th}>Solicitou a abertura</th><th style={th}>BR</th><th style={th}>Cliente / vendedor</th>
+              <th style={th}>Proposta (líquido)</th><th style={th}>Pedido de venda (líquido)</th>
+              <th style={th}>Prazos</th><th style={th} title="pedido de venda líquido menos proposta líquida">Diferença</th><th style={th}></th>
             </tr></thead>
             <tbody>
               {filtradas.map(l => {
-                const alerta = !l.br ? T.rustSoft : l.data_proposta == null ? T.amberSoft : null;
+                const semPedido = !l.tem_pedido_venda;
                 const d = l.diferenca_valor == null ? null : Number(l.diferenca_valor);
                 return (
                   <React.Fragment key={l.id}>
-                    <tr style={{ background: alerta || 'transparent' }}>
-                      <td style={{ ...td, whiteSpace: 'nowrap' }}>{dataHora(l.data_solicitacao)}</td>
+                    <tr style={{ background: !l.br || semPedido ? T.rustSoft : 'transparent' }}>
+                      <td style={{ ...td, whiteSpace: 'nowrap' }}>{dataHora(l.data_solicitacao)}
+                        {l.numero_pedido_cliente && <div style={sub}>OC {l.numero_pedido_cliente}{l.data_emissao_pedido ? ` · ${dataCurta(l.data_emissao_pedido)}` : ''}</div>}</td>
                       <td style={{ ...td, whiteSpace: 'nowrap' }}>
                         {editando[l.id] !== undefined ? (
                           <span style={{ display: 'inline-flex', gap: 4 }}>
@@ -28993,26 +29005,33 @@ function ConferenciaConhecimentoPedido({ currentUser }) {
                             <strong>{l.br || 'sem BR'}</strong>{' '}
                             <button onClick={() => setEditando(x => ({ ...x, [l.id]: l.br || '' }))} title="corrigir o BR"
                               style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.inkFaint, fontSize: 11, textDecoration: 'underline', padding: 0 }}>corrigir</button>
-                            {l.br_origem && l.br_origem !== 'e-mail' && <div style={sub}>{l.br_origem}</div>}
+                            {l.br_origem === 'manual' && <div style={sub}>corrigido na tela</div>}
                           </span>
                         )}
                       </td>
                       <td style={td}>{l.cliente || '—'}<div style={sub}>{l.vendedor || '—'}</div></td>
-                      <td style={{ ...td, whiteSpace: 'nowrap' }}>{l.data_proposta ? <>{dataCurta(l.data_proposta)}<div style={sub}>{fmtMoeda(l.valor_proposta)}{l.fonte_proposta === 'Sankhya' ? ' · Sankhya' : ''}</div></> : <span style={sub}>sem proposta</span>}</td>
-                      <td style={{ ...td, whiteSpace: 'nowrap' }}>{fmtMoeda(l.valor_pedido)}<div style={sub}>{l.numero_pedido_cliente ? `OC ${l.numero_pedido_cliente}` : ''}{l.data_emissao_pedido ? ` · ${dataCurta(l.data_emissao_pedido)}` : ''}</div></td>
+                      <td style={{ ...td, whiteSpace: 'nowrap' }}>{l.data_proposta ? <>{dataCurta(l.data_proposta)}<div style={sub}>{fmtMoeda(l.valor_proposta)}{l.fonte_proposta === 'portal' ? ' · portal' : ''}</div></> : <span style={{ ...sub, color: T.amberText, fontWeight: 700 }}>sem proposta</span>}</td>
                       <td style={{ ...td, whiteSpace: 'nowrap' }}>
-                        <span title="da proposta até a emissão da OC do cliente" style={{ color: l.dias_proposta_ate_pedido_cliente < 0 ? T.amberText : T.ink }}>{l.dias_proposta_ate_pedido_cliente ?? '—'}</span>
-                        <div style={sub} title="da emissão da OC até o e-mail de abertura">OC → e-mail: {l.dias_pedido_cliente_ate_solicitacao ?? '—'}</div>
+                        {semPedido ? (
+                          <span style={{ display: 'inline-block', background: T.rust, color: '#fff', fontWeight: 700, fontSize: 11.5, borderRadius: 6, padding: '3px 8px' }}>
+                            NÃO LANÇADO{l.dias_sem_pedido_venda != null ? ` · há ${dias(l.dias_sem_pedido_venda)}` : ''}
+                          </span>
+                        ) : (
+                          <>{dataCurta(l.data_pedido_venda)}<div style={sub}>{l.liquido_pendente ? 'líquido sendo calculado…' : fmtMoeda(l.valor_pedido_venda_liquido)}{l.nunota_pedido_venda ? ` · nº ${l.nunota_pedido_venda}` : ''}</div></>
+                        )}
                       </td>
-                      <td style={{ ...td, whiteSpace: 'nowrap' }}>{l.net_value_kdb != null ? <>{fmtMoeda(l.net_value_kdb)}<div style={sub}>{l.competencia_kdb ? l.competencia_kdb.split('-').reverse().join('/') : ''}</div></> : <span style={sub}>ainda não</span>}</td>
+                      <td style={{ ...td, whiteSpace: 'nowrap' }}>
+                        <div title="da proposta até o pedido de abertura">proposta → pedido de abertura: <strong>{dias(l.dias_proposta_ate_solicitacao)}</strong></div>
+                        <div title="do pedido de abertura até o pedido de venda no Sankhya" style={{ marginTop: 2 }}>abertura → pedido de venda: <strong>{semPedido ? '—' : dias(l.dias_solicitacao_ate_pedido_venda)}</strong></div>
+                      </td>
                       <td style={{ ...td, whiteSpace: 'nowrap', color: d == null ? T.inkFaint : d < 0 ? T.rustText : d > 0 ? T.oliveText : T.ink, fontWeight: 600 }}>
                         {d == null ? '—' : <>{fmtMoeda(d)}<div style={{ fontSize: 11 }}>{l.diferenca_pct != null ? `${String(l.diferenca_pct).replace('.', ',')}%` : ''}</div></>}
                       </td>
                       <td style={td}><button onClick={() => setAberto(a => a === l.id ? null : l.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.inkFaint, fontSize: 11, textDecoration: 'underline' }}>{aberto === l.id ? 'fechar' : 'ver dados'}</button></td>
                     </tr>
                     {aberto === l.id && (
-                      <tr><td colSpan={9} style={{ ...td, background: T.panelAlt }}>
-                        <div style={{ ...sub, marginBottom: 4 }}>{l.assunto || ''}{l.br_manual ? ` · BR corrigido na tela` : ''}</div>
+                      <tr><td colSpan={8} style={{ ...td, background: T.panelAlt }}>
+                        <div style={{ ...sub, marginBottom: 4 }}>{l.assunto || ''}{l.valor_pedido_venda_bruto != null ? ` · pedido de venda bruto (com impostos): ${fmtMoeda(l.valor_pedido_venda_bruto)}` : ''}</div>
                         <pre style={{ margin: 0, fontSize: 11, whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 320, overflow: 'auto' }}>{JSON.stringify(l.payload, null, 2)}</pre>
                       </td></tr>
                     )}
@@ -29024,8 +29043,8 @@ function ConferenciaConhecimentoPedido({ currentUser }) {
         </div>
       )}
       <div style={{ ...sub, marginTop: 8 }}>
-        Diferença = net value do KdB menos a proposta (os dois sem impostos); o valor da OC do cliente vem com impostos e fica só como referência.
-        Proposta: a do portal; se não houver, o último orçamento do Sankhya. Dias em amarelo: o orçamento foi lançado depois da OC do cliente. Linha vermelha: sem BR; amarela: sem proposta.
+        Proposta: valor líquido do orçamento no Sankhya (o que virou o pedido; senão o último do BR). Pedido de venda: valor da nota menos os impostos, no Sankhya.
+        Diferença = pedido líquido menos proposta líquida. Linha vermelha: pedido de venda ainda não lançado (ou sem BR).
       </div>
     </Panel>
   );
