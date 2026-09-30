@@ -22046,6 +22046,10 @@ function CusteioPorOP() {
   const [ordem, setOrdem] = useState({ c: 'custo', asc: false });
   const [aberta, setAberta] = useState(null);
   const [det, setDet] = useState(null);
+  // detalhe clicável da "Conta da OP": qual linha está aberta, o rateio mês a mês e os títulos
+  const [contaK, setContaK] = useState(null);
+  const [rateioOp, setRateioOp] = useState(null);      // { op, linhas }
+  const [titulos, setTitulos] = useState({});           // 'comp|tipo' -> linhas (ou 'carregando')
   const [prodAberto, setProdAberto] = useState(null);
   const [desvios, setDesvios] = useState(null);
   const moeda = (v) => fmtMoedaCompacta(v);
@@ -22108,13 +22112,29 @@ function CusteioPorOP() {
 
   const abrir = async (op) => {
     if (aberta === op) { setAberta(null); setDet(null); return; }
-    setAberta(op); setDet(null);
+    setAberta(op); setDet(null); setContaK(null); setRateioOp(null); setTitulos({});
     const [px, mo, mv] = await Promise.all([
       supabase.from('v_custeio_op_previsto_x_real').select('*').eq('op', op),
       supabase.from('v_custeio_mao_de_obra').select('competencia,setor_nome,horas,pessoas,custo_mao_obra').eq('idiproc', op),
       supabase.from('v_custeio_op_movimento_x_apontado').select('*').eq('op', op),
     ]);
     setDet({ px: (px.data || []).sort((a, b) => Math.abs(Number(b.valor_desvio) || 0) - Math.abs(Number(a.valor_desvio) || 0)), mo: mo.data || [], mov: mv.data || [] });
+  };
+  const abrirConta = async (op, k) => {
+    if (contaK === k) { setContaK(null); return; }
+    setContaK(k);
+    if (['overhead', 'frete', 'industrializacao', 'autoclave', 'outro'].includes(k) && rateioOp?.op !== op) {
+      setRateioOp({ op, linhas: null });
+      const { data } = await supabase.from('v_custeio_op_rateio_detalhe').select('*').eq('op', op).order('comp');
+      setRateioOp({ op, linhas: data || [] });
+    }
+  };
+  const abrirTitulos = async (comp, tipo) => {
+    const ch = `${comp}|${tipo}`;
+    if (titulos[ch]) { setTitulos(t => { const n = { ...t }; delete n[ch]; return n; }); return; }
+    setTitulos(t => ({ ...t, [ch]: 'carregando' }));
+    const { data } = await supabase.from('v_custeio_servico_titulos_mes').select('*').eq('comp', comp).eq('tipo', tipo).order('valor', { ascending: false });
+    setTitulos(t => ({ ...t, [ch]: data || [] }));
   };
 
   if (loading) return <div style={{ padding: 40, textAlign: 'center', color: T.inkFaint }}>Carregando as OPs…</div>;
@@ -22331,22 +22351,25 @@ function CusteioPorOP() {
                               <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 8, padding: 10 }}>
                                 <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}>Conta da OP</div>
                                 {[
-                                  ['Material consumido', moeda(Number(l.material) || 0)],
-                                  ['Mão de obra', l.sem_horas ? 'nenhuma hora apontada' : `${num(l.horas)} h = ${moeda(Number(l.mao_obra) || 0)}`],
-                                  [`Overhead (por ${H ? 'horas' : 'material + MO'})`, moeda(l._ovh)],
-                                  ['Frete (rateio do mês, pelo material)', moeda(Number(l.rateio_frete) || 0)],
-                                  ['Industrialização (rateio, material + MO)', moeda(Number(l.rateio_industrializacao) || 0)],
-                                  ['Autoclave (rateio, material + MO)', moeda(Number(l.rateio_autoclave) || 0)],
-                                  ...(Number(l.rateio_outro_servico) ? [['Outros serviços de produção (rateio)', moeda(Number(l.rateio_outro_servico))]] : []),
+                                  ['Material consumido', moeda(Number(l.material) || 0), 'material'],
+                                  ['Mão de obra', l.sem_horas ? 'nenhuma hora apontada' : `${num(l.horas)} h = ${moeda(Number(l.mao_obra) || 0)}`, l.sem_horas ? null : 'mo'],
+                                  [`Overhead (por ${H ? 'horas' : 'material + MO'})`, moeda(l._ovh), 'overhead'],
+                                  ['Frete (rateio do mês, pelo material)', moeda(Number(l.rateio_frete) || 0), 'frete'],
+                                  ['Industrialização (rateio, material + MO)', moeda(Number(l.rateio_industrializacao) || 0), 'industrializacao'],
+                                  ['Autoclave (rateio, material + MO)', moeda(Number(l.rateio_autoclave) || 0), 'autoclave'],
+                                  ...(Number(l.rateio_outro_servico) ? [['Outros serviços de produção (rateio)', moeda(Number(l.rateio_outro_servico)), 'outro']] : []),
                                   ['= Custo total', moeda(l._custo)],
                                   ['Custo por peça', l._cu ? moeda(l._cu) : '—'],
                                   ['Duração da OP', Number(l.duracao_dias) > 0 ? `${num(l.duracao_dias, 1)} dias corridos` : '—'],
                                   ['Dias de trabalho', l.sem_horas ? '—' : `${num(Number(l.horas) / 8.8, 1)} dias (${num(l.horas)} h ÷ 8,8 h)`],
                                   ['Mediana do produto', medianaProd[l.cod_produto] ? moeda(medianaProd[l.cod_produto]) : '—'],
-                                ].map(([a, b]) => (
-                                  <div key={a} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11.5, padding: '3px 0',
-                                    fontWeight: a.startsWith('=') ? 700 : 400, borderTop: a.startsWith('=') ? `1px solid ${T.line}` : 'none' }}>
-                                    <span style={{ color: T.inkDim }}>{a}</span><span>{b}</span>
+                                ].map(([a, b, k]) => (
+                                  <div key={a} onClick={k ? () => abrirConta(l.op, k) : undefined}
+                                    title={k ? 'clique para ver como este valor foi formado' : undefined}
+                                    style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11.5, padding: '3px 4px', margin: '0 -4px', borderRadius: 4,
+                                      cursor: k ? 'pointer' : 'default', background: k && contaK === k ? T.rustSoft : 'transparent',
+                                      fontWeight: a.startsWith('=') ? 700 : 400, borderTop: a.startsWith('=') ? `1px solid ${T.line}` : 'none' }}>
+                                    <span style={{ color: k ? T.blueText : T.inkDim, textDecoration: k ? 'underline dotted' : 'none' }}>{k ? (contaK === k ? '▾ ' : '▸ ') : ''}{a}</span><span>{b}</span>
                                   </div>
                                 ))}
                                 <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 6 }}>
@@ -22371,6 +22394,133 @@ function CusteioPorOP() {
                                     </div>
                                   ))}
                               </div>
+                              {contaK && (() => {
+                                const TIT = { material: 'Material consumido — item a item', mo: 'Mão de obra — horas por setor e mês',
+                                  overhead: `Overhead — rateio mês a mês (${H ? 'pelas horas' : 'pelo material + MO'})`, frete: 'Frete — rateio mês a mês (pelo material)',
+                                  industrializacao: 'Industrialização — rateio mês a mês (material + MO)', autoclave: 'Autoclave — rateio mês a mês (material + MO)',
+                                  outro: 'Outros serviços de produção — rateio mês a mês (material + MO)' };
+                                const caixa = { background: T.panel, border: `1px solid ${T.terracotta}`, borderRadius: 8, padding: 10, gridColumn: '1 / -1' };
+                                const th = (j, dir) => ({ padding: '4px 6px', fontSize: 10, color: T.inkFaint, fontWeight: 600, textAlign: dir ? 'right' : 'left', position: 'sticky', top: 0, background: T.panel });
+                                const tdr = { padding: '4px 6px', textAlign: 'right', fontVariantNumeric: 'tabular-nums' };
+                                const cab = (
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+                                    <span style={{ fontSize: 12, fontWeight: 700, color: T.terracotta }}>{TIT[contaK]}</span>
+                                    <button onClick={() => setContaK(null)} style={{ fontFamily: 'inherit', fontSize: 13, lineHeight: 1, padding: '2px 7px', borderRadius: 5, cursor: 'pointer', border: `1px solid ${T.line}`, background: 'transparent', color: T.inkFaint }}>×</button>
+                                  </div>
+                                );
+                                if (contaK === 'material') {
+                                  const its = det.px.filter(x => Number(x.qtd_real) > 0 || Number(x.valor_real) > 0).sort((a, b) => (Number(b.valor_real) || 0) - (Number(a.valor_real) || 0));
+                                  const tot = its.reduce((s2, x) => s2 + (Number(x.valor_real) || 0), 0);
+                                  return (
+                                    <div style={caixa}>{cab}
+                                      <div style={{ maxHeight: 320, overflowY: 'auto' }}>
+                                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+                                          <thead><tr>{['Item', 'Qtd consumida', 'Custo unitário', 'R$ consumido', '% do material'].map((h, j) => <th key={j} style={th(j, j > 0)}>{h}</th>)}</tr></thead>
+                                          <tbody>
+                                            {its.map((x, j) => (
+                                              <tr key={j} style={{ borderTop: `1px solid ${T.lineSoft}` }}>
+                                                <td style={{ padding: '4px 6px', maxWidth: 360, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={x.descr}>
+                                                  {x.descr || x.cod_prod}{x.situacao === 'não previsto' && <span style={{ fontSize: 9.5, color: T.rustText }}> · não previsto</span>}
+                                                </td>
+                                                <td style={tdr}>{num(x.qtd_real, 2)}</td>
+                                                <td style={tdr}>{x.vlr_unit != null ? moeda(Number(x.vlr_unit)) : '—'}</td>
+                                                <td style={{ ...tdr, fontWeight: 600 }}>{moeda(Number(x.valor_real) || 0)}</td>
+                                                <td style={{ ...tdr, color: T.inkFaint }}>{tot ? `${num((Number(x.valor_real) || 0) / tot * 100, 1)}%` : '—'}</td>
+                                              </tr>
+                                            ))}
+                                            <tr style={{ borderTop: `1px solid ${T.line}`, fontWeight: 700 }}>
+                                              <td style={{ padding: '4px 6px' }}>Total ({its.length} itens)</td><td /><td /><td style={tdr}>{moeda(tot)}</td><td />
+                                            </tr>
+                                          </tbody>
+                                        </table>
+                                      </div>
+                                      {Math.abs(tot - (Number(l.material) || 0)) > 1 && (
+                                        <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 6 }}>A conta usa {moeda(Number(l.material) || 0)} (notas de consumo da OP); a soma por item dá {moeda(tot)} — a diferença vem de itens com custo lançado sem quantidade ou de arredondamento.</div>
+                                      )}
+                                    </div>
+                                  );
+                                }
+                                if (contaK === 'mo') {
+                                  const tot = det.mo.reduce((s2, h) => s2 + (Number(h.custo_mao_obra) || 0), 0);
+                                  return (
+                                    <div style={caixa}>{cab}
+                                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+                                        <thead><tr>{['Mês', 'Setor', 'Pessoas', 'Horas', 'Custo'].map((h, j) => <th key={j} style={th(j, j > 1)}>{h}</th>)}</tr></thead>
+                                        <tbody>
+                                          {det.mo.map((h, j) => (
+                                            <tr key={j} style={{ borderTop: `1px solid ${T.lineSoft}` }}>
+                                              <td style={{ padding: '4px 6px' }}>{h.competencia}</td><td style={{ padding: '4px 6px' }}>{h.setor_nome || '—'}</td>
+                                              <td style={tdr}>{h.pessoas ?? '—'}</td><td style={tdr}>{num(h.horas)} h</td><td style={{ ...tdr, fontWeight: 600 }}>{moeda(Number(h.custo_mao_obra) || 0)}</td>
+                                            </tr>
+                                          ))}
+                                          <tr style={{ borderTop: `1px solid ${T.line}`, fontWeight: 700 }}><td style={{ padding: '4px 6px' }} colSpan={4}>Total</td><td style={tdr}>{moeda(tot)}</td></tr>
+                                        </tbody>
+                                      </table>
+                                    </div>
+                                  );
+                                }
+                                // rateios mês a mês
+                                const R = rateioOp?.op === l.op ? rateioOp.linhas : null;
+                                const CFG = {
+                                  frete: { pool: 'frete_mes', base: 'material_mes', peso: 'pct_material', parte: 'material', val: 'rateio_frete', tipo: 'frete', rotBase: 'material de todas as OPs', rotParte: 'material da OP' },
+                                  industrializacao: { pool: 'industrializacao_mes', base: 'direto_mes', peso: 'pct_direto', parte: 'direto', val: 'rateio_industrializacao', tipo: 'industrializacao', rotBase: 'material + MO de todas as OPs', rotParte: 'material + MO da OP' },
+                                  autoclave: { pool: 'autoclave_mes', base: 'direto_mes', peso: 'pct_direto', parte: 'direto', val: 'rateio_autoclave', tipo: 'autoclave', rotBase: 'material + MO de todas as OPs', rotParte: 'material + MO da OP' },
+                                  outro: { pool: 'outro_servico_mes', base: 'direto_mes', peso: 'pct_direto', parte: 'direto', val: 'rateio_outro_servico', tipo: 'outro_producao', rotBase: 'material + MO de todas as OPs', rotParte: 'material + MO da OP' },
+                                  overhead: H
+                                    ? { pool: 'overhead_mes', base: 'horas_mes', peso: 'pct_horas', parte: 'horas', val: 'overhead_horas', rotBase: 'horas de todas as OPs', rotParte: 'horas da OP', horas: true }
+                                    : { pool: 'overhead_mes', base: 'base_mes', peso: 'pct_base', parte: 'direto', val: 'overhead', rotBase: 'material + MO de todas as OPs', rotParte: 'material + MO da OP' },
+                                }[contaK];
+                                if (!R) return <div style={caixa}>{cab}<div style={{ fontSize: 11.5, color: T.inkFaint }}>Calculando o rateio mês a mês…</div></div>;
+                                const parteDe = (r) => CFG.parte === 'direto' ? (Number(r.material) || 0) + (Number(r.mo) || 0) : Number(r[CFG.parte]) || 0;
+                                const fmtBase = (v) => CFG.horas ? `${num(v)} h` : moeda(v);
+                                const tot = R.reduce((s2, r) => s2 + (Number(r[CFG.val]) || 0), 0);
+                                return (
+                                  <div style={caixa}>{cab}
+                                    <div style={{ fontSize: 10.5, color: T.inkDim, marginBottom: 6 }}>
+                                      Em cada mês: <strong>total do mês × ({CFG.rotParte} ÷ {CFG.rotBase})</strong>. {R.some(r => r.cancelada) ? 'OP cancelada não recebe rateio de serviços.' : ''}
+                                    </div>
+                                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+                                      <thead><tr>{['Mês', 'Total do mês', `Base (${CFG.rotBase})`, `Parte da OP (${CFG.rotParte})`, 'Peso', '= Rateio da OP', ''].map((h, j) => <th key={j} style={th(j, j > 0 && j < 6)}>{h}</th>)}</tr></thead>
+                                      <tbody>
+                                        {R.map((r, j) => {
+                                          const ch = `${r.comp}|${CFG.tipo}`, tl = titulos[ch];
+                                          return (
+                                            <React.Fragment key={j}>
+                                              <tr style={{ borderTop: `1px solid ${T.lineSoft}` }}>
+                                                <td style={{ padding: '4px 6px', fontWeight: 600 }}>{r.comp}</td>
+                                                <td style={tdr}>{moeda(Number(r[CFG.pool]) || 0)}</td>
+                                                <td style={tdr}>{fmtBase(Number(r[CFG.base]) || 0)}</td>
+                                                <td style={tdr}>{fmtBase(parteDe(r))}</td>
+                                                <td style={tdr}>{r[CFG.peso] != null ? `${num(r[CFG.peso], 2)}%` : '—'}</td>
+                                                <td style={{ ...tdr, fontWeight: 700 }}>{moeda(Number(r[CFG.val]) || 0)}</td>
+                                                <td style={{ padding: '4px 6px' }}>
+                                                  {CFG.tipo && Number(r[CFG.pool]) > 0 && (
+                                                    <button onClick={() => abrirTitulos(r.comp, CFG.tipo)} style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: T.blueText, textDecoration: 'underline', fontSize: 10.5, fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
+                                                      {tl ? 'fechar títulos' : 'ver títulos do mês'}
+                                                    </button>
+                                                  )}
+                                                </td>
+                                              </tr>
+                                              {tl && (
+                                                <tr><td colSpan={7} style={{ padding: '4px 10px 8px', background: T.panelAlt }}>
+                                                  {tl === 'carregando' ? <span style={{ fontSize: 11, color: T.inkFaint }}>Carregando…</span> : tl.length === 0 ? <span style={{ fontSize: 11, color: T.inkFaint }}>Nenhum título.</span> : tl.map((f, i) => (
+                                                    <div key={i} style={{ display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 11, padding: '2px 0', borderTop: i ? `1px solid ${T.lineSoft}` : 'none' }}>
+                                                      <span style={{ minWidth: 0 }}><strong>{f.nomeparc || '—'}</strong> <span style={{ color: T.inkFaint }}>· {f.titulos} título(s){f.historicos ? ` · ${String(f.historicos).slice(0, 120)}` : ''}</span></span>
+                                                      <span style={{ whiteSpace: 'nowrap', fontWeight: 600 }}>{moeda(Number(f.valor) || 0)}</span>
+                                                    </div>
+                                                  ))}
+                                                </td></tr>
+                                              )}
+                                            </React.Fragment>
+                                          );
+                                        })}
+                                        <tr style={{ borderTop: `1px solid ${T.line}`, fontWeight: 700 }}><td style={{ padding: '4px 6px' }} colSpan={5}>Total da OP</td><td style={tdr}>{moeda(tot)}</td><td /></tr>
+                                      </tbody>
+                                    </table>
+                                    {CFG.tipo === 'frete' && <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 6 }}>Frete = naturezas 510601 (frete de matéria-prima) e 510604 (frete de processamento).</div>}
+                                  </div>
+                                );
+                              })()}
                             </div>
                           )}
                         </td></tr>
