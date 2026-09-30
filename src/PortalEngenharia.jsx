@@ -8557,8 +8557,8 @@ const ALMOX_ETIQUETAS = { '50x30': { w: 50, h: 30 }, '60x40': { w: 60, h: 40 }, 
 // impressora do estoque: Argox OS-214 plus (térmica, 203 dpi, até 104 mm de largura)
 // etiqueta do estoque: 100 x 50 mm (padrão)
 const almoxConfigEtiqueta = () => {
-  try { return { w: 100, h: 50, dx: 0, dy: 0, ...(JSON.parse(localStorage.getItem('almox_etiqueta_cfg_v2') || '{}')) }; }
-  catch { return { w: 100, h: 50, dx: 0, dy: 0 }; }
+  try { return { w: 100, h: 50, dx: 0, dy: 0, giro: 90, ...(JSON.parse(localStorage.getItem('almox_etiqueta_cfg_v2') || '{}')) }; }
+  catch { return { w: 100, h: 50, dx: 0, dy: 0, giro: 90 }; }
 };
 const almoxSalvarConfigEtiqueta = (cfg) => { try { localStorage.setItem('almox_etiqueta_cfg_v2', JSON.stringify(cfg)); } catch {} };
 
@@ -8593,6 +8593,11 @@ async function almoxImprimirEtiquetas(volumes, cfgArg) {
   const cfg = typeof cfgArg === 'object' && cfgArg ? cfgArg
     : (ALMOX_ETIQUETAS[cfgArg] ? { ...almoxConfigEtiqueta(), ...ALMOX_ETIQUETAS[cfgArg] } : almoxConfigEtiqueta());
   const w = Number(cfg.w) || 60, h = Number(cfg.h) || 40, dx = Number(cfg.dx) || 0, dy = Number(cfg.dy) || 0;
+  // giro: quando o driver da impressora está com a página em pé, o portal manda
+  // a página em pé (h × w) e gira a etiqueta dentro dela -- sai deitada no rolo
+  const giro = [90, 270].includes(Number(cfg.giro)) ? Number(cfg.giro) : 0;
+  const pgW = giro ? h : w, pgH = giro ? w : h;
+  const girar = giro === 90 ? `translate(${h}mm, 0) rotate(90deg)` : giro === 270 ? `translate(0, ${w}mm) rotate(-90deg)` : '';
   const qrMm = Math.max(15, Math.min(28, h - 8, w * 0.3));
   const k = Math.max(0.75, Math.min(1.45, h / 40));   // escala das letras pela altura
   const svgs = await Promise.all(volumes.map(v => QRCode.toString(almoxLinkEtiqueta(v.codigo), { type: 'svg', margin: 2, errorCorrectionLevel: 'M', color: { dark: '#000000', light: '#ffffff' } })));
@@ -8603,12 +8608,13 @@ async function almoxImprimirEtiquetas(volumes, cfgArg) {
   const brs = [...new Set(volumes.map(v => v.br).filter(Boolean))].join(' ');
   const titulo = `Etiquetas ${opsTxt}${brs ? ' - ' + brs.replace(/\//g, '-') : ''} - ${new Date().toLocaleDateString('pt-BR').replace(/\//g, '-')}`;
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>${esc(titulo)}</title><style>
-    @page { size: ${w}mm ${h}mm; margin: 0; }
+    @page { size: ${pgW}mm ${pgH}mm; margin: 0; }
     * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     html, body { margin: 0; padding: 0; font-family: Arial, Helvetica, sans-serif; color: #000; }
-    .et { width: ${w}mm; height: ${h}mm; padding: ${pequeno ? 1.4 : 2.5}mm; display: flex; gap: ${pequeno ? 1.4 : 3}mm; align-items: stretch; page-break-after: always; overflow: hidden;
-          transform: translate(${dx}mm, ${dy}mm); }
-    .et:last-child { page-break-after: auto; }
+    .pg { width: ${pgW}mm; height: ${pgH}mm; position: relative; overflow: hidden; page-break-after: always; }
+    .pg:last-child { page-break-after: auto; }
+    .et { width: ${w}mm; height: ${h}mm; padding: ${pequeno ? 1.4 : 2.5}mm; display: flex; gap: ${pequeno ? 1.4 : 3}mm; align-items: stretch; overflow: hidden;
+          position: absolute; top: 0; left: 0; transform-origin: 0 0; transform: translate(${dx}mm, ${dy}mm) ${girar}; }
     .tx { flex: 1; min-width: 0; line-height: 1.12; display: flex; flex-direction: column; }
     .op { font-size: ${(pequeno ? 11 : 15 * k).toFixed(1)}pt; font-weight: 700; }
     .br { font-size: ${(pequeno ? 7 : 9 * k).toFixed(1)}pt; font-weight: 700; }
@@ -8619,7 +8625,7 @@ async function almoxImprimirEtiquetas(volumes, cfgArg) {
     .qr svg { width: 100%; height: 100%; display: block; shape-rendering: crispEdges; }
     .cod { font-size: ${(pequeno ? 6 : 7 * k).toFixed(1)}pt; font-weight: 700; margin-top: 0.4mm; }
   </style></head><body>
-  ${volumes.map((v, i) => `<div class="et">
+  ${volumes.map((v, i) => `<div class="pg"><div class="et">
     <div class="tx">
       <div class="op">OP ${esc(v.op)}</div>
       <div class="br">${esc(v.br || 'sem BR')}</div>
@@ -8627,7 +8633,7 @@ async function almoxImprimirEtiquetas(volumes, cfgArg) {
       <div class="rod"><span>${v.quantidade != null ? 'QTD ' + esc(v.quantidade) + (v.unidade ? ' ' + esc(v.unidade) : '') : ''}</span><span>${v.setor_destino ? '→ ' + esc(v.setor_destino) : ''}</span></div>
     </div>
     <div class="lado"><div class="qr">${svgs[i]}</div><div class="cod">${esc(v.codigo)}</div></div>
-  </div>`).join('')}
+  </div></div>`).join('')}
   <script>window.onload = () => setTimeout(() => window.print(), 300);</script></body></html>`;
   const janela = window.open('', '_blank');
   if (!janela) { alert('O navegador bloqueou a janela de impressão. Libere pop-ups para o portal.'); return; }
@@ -8921,6 +8927,10 @@ function AlmoxQR({ modo, currentUser, codigoInicial }) {
           <label style={{ fontSize: 12, color: T.inkDim }}>altura <input value={cfgEt.h} onChange={e => mudarCfg('h', e.target.value)} inputMode="decimal" style={{ ...campo, width: 58, padding: '5px 6px' }} /> mm</label>
           <label style={{ fontSize: 12, color: T.inkDim }} title="se a impressão sair deslocada: + vai para a direita">ajuste ↔ <input value={cfgEt.dx} onChange={e => mudarCfg('dx', e.target.value)} inputMode="decimal" style={{ ...campo, width: 50, padding: '5px 6px' }} /> mm</label>
           <label style={{ fontSize: 12, color: T.inkDim }} title="se a impressão sair deslocada: + desce">ajuste ↕ <input value={cfgEt.dy} onChange={e => mudarCfg('dy', e.target.value)} inputMode="decimal" style={{ ...campo, width: 50, padding: '5px 6px' }} /> mm</label>
+          <span style={{ fontSize: 12, color: T.inkDim, marginLeft: 6 }} title="se a etiqueta sair em pé ou de lado, gire">giro</span>
+          {[[0, 'nenhum'], [90, '90°'], [270, '270°']].map(([g, r]) => (
+            <button key={g} onClick={() => mudarCfg('giro', g)} style={botao(Number(cfgEt.giro || 0) === g)}>{r}</button>
+          ))}
           <span style={{ flex: 1 }} />
           <button onClick={() => almoxImprimirEtiquetas([{ codigo: 'V000000', op: '0000', br: 'BR00000/26', material: 'ETIQUETA DE TESTE — CONFIRA SE O QR LÊ NO TABLET', quantidade: 1, criado_em: new Date().toISOString() }], cfgEt)}
             style={botao(false)}>Imprimir etiqueta de teste</button>
@@ -8940,7 +8950,8 @@ function AlmoxQR({ modo, currentUser, codigoInicial }) {
               <li><em>Mais configurações</em> → margens <strong>Nenhuma</strong>, escala <strong>Padrão (100%)</strong>, desmarcar <strong>Cabeçalhos e rodapés</strong>.</li>
               <li>O Chrome lembra essas escolhas para a próxima vez.</li>
             </ol>
-            Imprima uma <strong>etiqueta de teste</strong> e leia no tablet. Se sair cortada ou deslocada, corrija com o ajuste ↔ ↕ (em mm) e teste de novo.
+            Imprima uma <strong>etiqueta de teste</strong> e leia no tablet. Se sair <strong>em pé ou de lado</strong>, troque o giro (90° ou 270°) —
+            o driver da Argox costuma estar com a página em pé. Se sair cortada ou deslocada, corrija com o ajuste ↔ ↕ (em mm) e teste de novo.
           </div>
         )}
       </div>
