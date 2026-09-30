@@ -8656,6 +8656,22 @@ function almoxDesenharEtiqueta(v, { w, h, giro }) {
   return r.toDataURL('image/png');
 }
 
+// Arquivo para o BarTender (programa da Argox no estoque): um CSV com uma linha
+// por etiqueta. O modelo .btw é montado UMA vez no BarTender ligado a este arquivo
+// (Banco de dados -> Arquivo de texto, delimitado por vírgula, 1ª linha = nomes);
+// o QR usa o campo LINK. Nome fixo: é só substituir o arquivo na pasta e imprimir.
+function almoxBaixarCsvBarTender(volumes) {
+  const cols = ['CODIGO', 'LINK', 'OP', 'BR', 'COD_MP', 'MATERIAL', 'QTD', 'UNIDADE', 'DESTINO'];
+  const q = (x) => `"${String(x ?? '').replace(/"/g, '""').replace(/[\r\n]+/g, ' ')}"`;
+  const linhas = volumes.map(v => [v.codigo, almoxLinkEtiqueta(v.codigo), v.op, v.br || '', v.cod_materia_prima || '', v.material || '',
+    v.quantidade != null ? String(v.quantidade).replace('.', ',') : '', v.unidade || '', v.setor_destino || ''].map(q).join(','));
+  const blob = new Blob(['\ufeff' + [cols.join(','), ...linhas].join('\r\n') + '\r\n'], { type: 'text/csv;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = 'etiquetas_portal.csv';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+
 async function almoxImprimirEtiquetas(volumes, cfgArg) {
   const cfg = typeof cfgArg === 'object' && cfgArg ? cfgArg
     : (ALMOX_ETIQUETAS[cfgArg] ? { ...almoxConfigEtiqueta(), ...ALMOX_ETIQUETAS[cfgArg] } : almoxConfigEtiqueta());
@@ -8891,17 +8907,25 @@ function AlmoxQR({ modo, currentUser, codigoInicial }) {
     const { data } = await supabase.from('almoxarifado_op_materiais').select('*').eq('op', o.op).order('materia_prima_descricao');
     setMateriais(data || []);
   };
-  const gerar = async () => {
+  // um item de OP = um código: gerar de novo reaproveita o código ativo do item
+  // (fn_almox_volumes_obter) e só atualiza quantidade/destino
+  const gerar = async (saida = 'imprimir') => {
     const itens = materiais.filter(m => marcados[m.id]?.on);
     if (!itens.length) return;
     const linhas = itens.map(m => ({ br: m.br || opSel.br || null, op: m.op, cod_materia_prima: m.cod_materia_prima, material: m.materia_prima_descricao,
       quantidade: marcados[m.id]?.qtd !== undefined && marcados[m.id]?.qtd !== '' ? Number(String(marcados[m.id].qtd).replace(',', '.')) : m.quantidade_mp,
-      setor_destino: destinoLote || null, criado_por: currentUser?.nome || null }));
-    const { data, error } = await supabase.from('almox_volume').insert(linhas).select();
+      setor_destino: destinoLote || null }));
+    const { data, error } = await supabase.rpc('fn_almox_volumes_obter', { p_itens: linhas, p_usuario: currentUser?.nome || null });
     if (error) { setAviso({ erro: true, t: error.message }); return; }
-    setAviso({ t: `${data.length} etiqueta(s) gerada(s). A janela de impressão vai abrir.` });
+    const reap = data.filter(v => v.reaproveitado).length, novos = data.length - reap;
+    const partes = [novos && `${novos} código(s) novo(s)`, reap && `${reap} já tinha(m) código — mesmo QR, quantidade atualizada`].filter(Boolean).join(' · ');
+    setAviso({ t: `${partes}. ${saida === 'bartender' ? 'Arquivo etiquetas_portal.csv baixado para o BarTender.' : 'A janela de impressão vai abrir.'}` });
     setMarcados({});
-    await almoxImprimirEtiquetas(data, cfgEt);
+    if (saida === 'bartender') {
+      almoxBaixarCsvBarTender(data);
+      const ids = data.map(v => v.id);
+      if (ids.length) await supabase.from('almox_volume').update({ impresso_em: new Date().toISOString() }).in('id', ids);
+    } else await almoxImprimirEtiquetas(data, cfgEt);
     carregarVolumes();
   };
   const lido = useCallback(async (texto) => {
@@ -9066,7 +9090,9 @@ function AlmoxQR({ modo, currentUser, codigoInicial }) {
                 </div>
               )}
               <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 10 }}>
-                <button disabled={!nSel} onClick={gerar} style={{ ...botao(true), opacity: nSel ? 1 : 0.5 }}>Gerar e imprimir {nSel || ''} etiqueta(s)</button>
+                <button disabled={!nSel} onClick={() => gerar('bartender')} style={{ ...botao(false), opacity: nSel ? 1 : 0.5, marginRight: 8 }}
+                  title="baixa etiquetas_portal.csv para imprimir pelo BarTender">Arquivo p/ BarTender</button>
+                <button disabled={!nSel} onClick={() => gerar('imprimir')} style={{ ...botao(true), opacity: nSel ? 1 : 0.5 }}>Gerar e imprimir {nSel || ''} etiqueta(s)</button>
               </div>
             </>
           )}
@@ -9074,6 +9100,8 @@ function AlmoxQR({ modo, currentUser, codigoInicial }) {
       </div>
       <Panel title="Etiquetas geradas" subtitle="marque para reimprimir · o setor atual muda a cada leitura no tablet">
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
+          <button disabled={!volSel.length} onClick={() => almoxBaixarCsvBarTender(volSel)} style={{ ...botao(false), opacity: volSel.length ? 1 : 0.5, marginRight: 8 }}
+            title="baixa etiquetas_portal.csv para imprimir pelo BarTender">Arquivo p/ BarTender</button>
           <button disabled={!volSel.length} onClick={() => almoxImprimirEtiquetas(volSel, cfgEt)} style={{ ...botao(false), opacity: volSel.length ? 1 : 0.5 }}>Reimprimir {volSel.length || ''}</button>
         </div>
         <div style={{ maxHeight: 420, overflowY: 'auto' }}>
