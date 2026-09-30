@@ -3884,7 +3884,10 @@ const TXT = {
     diasAtePedido: 'Da proposta ao pedido', diasAteFaturar: 'Do pedido ao faturamento',
     convMedia: 'Média mensal (valor)',
     convDecididos: 'Ganho × perdido (valor)',
-    explicaConv: 'Por VALOR: quanto do valor proposto virou pedido (em carteira ou já faturado), pelo valor da proposta. Média mensal = a mesma conta mês a mês, pela data da proposta. Ganho × perdido = só entre as propostas já decididas.',
+    convMetaCot: 'Vendas (KdB) × meta de cotações {a}',
+    convMetaRitmo: 'Vendas {a} no Painel KdB (incoming orders): {v} de {m} da meta anual de cotações. No ritmo do ano, a meta até hoje seria {mh}: {p}% dela.',
+    explicaConv: 'Por VALOR: quanto do valor proposto virou pedido (em carteira ou já faturado), pelo valor da proposta. Média mensal = a mesma conta mês a mês, pela data da proposta. Ganho × perdido = só entre as propostas já decididas. Vendas × meta = vendas do ano no Painel KdB (net value) sobre a meta anual de abertura de cotações.',
+    verLista: 'ver lista', fecharLista: 'fechar lista',
     explicaPrev: 'Soma das propostas em aberto, cada uma multiplicada pelo fator do seu estágio no cenário escolhido.',
     explicaCenario: 'os fatores por estágio são editáveis — a regra de vocês ainda está sendo definida',
     explicaPrevisaoMes: 'pelo mês que o vendedor espera fechar, não pelo mês da proposta · barra cheia = valor bruto, barra escura = cenário',
@@ -4085,7 +4088,10 @@ const TXT = {
     diasAtePedido: 'Proposal to order', diasAteFaturar: 'Order to invoice',
     convMedia: 'Monthly average (value)',
     convDecididos: 'Won × lost (value)',
-    explicaConv: 'By VALUE: how much of the proposed value became an order (backlog or invoiced). Monthly average = same ratio month by month, by proposal date. Won × lost = only among decided proposals.',
+    convMetaCot: 'Sales (KdB) × {a} quotation target',
+    convMetaRitmo: '{a} sales in the KdB panel (incoming orders): {v} of the {m} annual quotation target. At the year\'s pace the target to date would be {mh}: {p}% of it.',
+    explicaConv: 'By VALUE: how much of the proposed value became an order (backlog or invoiced). Monthly average = same ratio month by month, by proposal date. Won × lost = only among decided proposals. Sales × target = year sales in the KdB panel (net value) over the annual quotation target.',
+    verLista: 'show list', fecharLista: 'hide list',
     explicaPrev: 'Open proposals, each multiplied by its stage factor in the chosen scenario.',
     explicaCenario: 'stage factors are editable — the final rule is still being defined',
     explicaPrevisaoMes: 'by the month the salesperson expects to close, not the proposal month · light bar = full value, dark bar = scenario',
@@ -4950,6 +4956,18 @@ function PainelDiretoria() {
     return meses.length ? meses.reduce((s, x) => s + x.ganho / x.total, 0) / meses.length * 100 : null;
   })();
   const receitaFat = soma(faturados, 'receita_faturada');
+  // Meta anual de ABERTURA DE COTAÇÕES (Ricardo, 30/09/2026): 2026 = R$ 143.200.000.
+  // Conversão pedida: vendas do ano no Painel KdB (incoming orders, net value) ÷ meta.
+  const metaCot = (() => {
+    const METAS_COTACOES = { 2026: 143200000 };
+    const ano = new Date().getFullYear(), meta = METAS_COTACOES[ano];
+    const vk = vendaKdb.find(x => Number(x.ano) === ano);
+    if (!meta || !vk) return null;
+    const vendido = Number(vk.vendido) || 0;
+    const ini = new Date(ano, 0, 1), fim = new Date(ano + 1, 0, 1);
+    const metaHoje = meta * ((Date.now() - ini) / (fim - ini));
+    return { ano, meta, vendido, pct: (vendido / meta) * 100, metaHoje, pctHoje: (vendido / metaHoje) * 100 };
+  })();
   // Regra oficial do pipeline: valor × peso do estágio; sem classificação = 0.
   const somaPonderado = soma(abertos, 'valor_ponderado');
 
@@ -5897,22 +5915,26 @@ IMPORTANTE: Responda SOMENTE com base nos dados acima. Se a pergunta pede algo q
 
       <div style={{ display: 'grid', gap: 9, gridTemplateColumns: 'repeat(auto-fit, minmax(158px, 1fr))' }}>
         {[
-          { t: t.emAberto, bruto: soma(abertos), n: `${abertos.length} ${t.propostas}`, p: G.ambar },
+          { t: t.emAberto, bruto: soma(abertos), n: `${abertos.length} ${t.propostas}`, p: G.ambar,
+            lista: ['card:aberto', t.regraSituacao.replace('{s}', t.emAberto), abertos] },
           { t: `${t.prevAteDez}${previsaoPed.anoAtual.slice(2)}`, bruto: soma(previsaoPed.ateDez),
             n: `${previsaoPed.ateDez.length} ${t.pedidosPrevistos} · total ${val(soma(previsaoPed.escolhidas))}`,
-            p: G.ciano, ajuda: t.explicaPrevNova },
-          { t: t.paradoMais90, bruto: valor90, n: `${abertos90.length} ${t.propostas}`, p: G.vermelho, ajuda: t.explicaAging },
+            p: G.ciano, ajuda: t.explicaPrevNova, lista: ['card:prev', t.explicaPrevNova, previsaoPed.ateDez] },
+          { t: t.paradoMais90, bruto: valor90, n: `${abertos90.length} ${t.propostas}`, p: G.vermelho, ajuda: t.explicaAging,
+            lista: ['card:90', t.explicaAging, abertos90] },
           ...(() => {
             const vk = vendaKdb.find(x => Number(x.ano) === new Date().getFullYear());
             return vk ? [{ t: t.vendidoKdb, bruto: Number(vk.vendido) || 0, n: `${vk.entradas} ${t.entradasKdb}`, p: G.roxo, ajuda: t.explicaVendidoKdb }] : [];
           })(),
-          { t: t.pedido, bruto: soma(pedidos), n: `${pedidos.length} ${t.brs}`, p: G.azul, ajuda: t.explicaPedidoKdb },
+          { t: t.pedido, bruto: soma(pedidos), n: `${pedidos.length} ${t.brs}`, p: G.azul, ajuda: t.explicaPedidoKdb,
+            lista: ['card:ped', t.explicaPedidoKdb, pedidos] },
           { t: t.faturado, bruto: receitaFat, n: `${faturados.length} ${t.brs}`, p: G.verde, ajuda: t.explicaFaturado },
           { t: t.diasAtePedido, txt: diasPedido == null ? '—' : `${diasPedido} ${t.dias}`, n: t.medio, p: G.ciano },
           { t: t.diasAteFaturar, txt: diasFat == null ? '—' : `${diasFat} ${t.dias}`, n: t.medio, p: G.rosa },
         ].map((k, i) => (
-          <div key={k.t} title={k.ajuda || ''} className="g-card g-linha"
-            style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 11,
+          <div key={k.t} title={k.ajuda || ''} className={`g-card g-linha${k.lista ? ' g-clicavel' : ''}`}
+            onClick={k.lista ? () => abrir(k.lista[0], k.t, k.lista[1], k.lista[2], soma(k.lista[2])) : undefined}
+            style={{ background: T.panel, border: `1px solid ${k.lista && detalhe?.chave === k.lista[0] ? T.terracotta : T.line}`, borderRadius: 11,
               padding: '13px 14px', position: 'relative', overflow: 'hidden',
               animationDelay: `${i * 55}ms` }}>
             <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 3,
@@ -5925,9 +5947,13 @@ IMPORTANTE: Responda SOMENTE com base nos dados acima. Se a pergunta pede algo q
               {k.txt != null ? k.txt : <Contador valor={k.bruto} formata={val} />}
             </div>
             <div style={{ fontSize: 10, color: T.inkFaint, marginTop: 3 }}>{k.n}</div>
+            {k.lista && <div style={{ fontSize: 10, fontWeight: 700, color: k.p[1], marginTop: 5 }}>
+              {detalhe?.chave === k.lista[0] ? `▴ ${t.fecharLista}` : `▾ ${t.verLista}`}</div>}
           </div>
         ))}
       </div>
+
+      {gavetaDe('card:')}
 
       {alertas.length > 0 && (
         <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 11, padding: 15 }}>
@@ -6184,14 +6210,21 @@ IMPORTANTE: Responda SOMENTE com base nos dados acima. Se a pergunta pede algo q
       {gavetaDe('aging:', 'fat:')}
 
       <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))' }}>
-        {painel(t.conversao, (
+        {painel(t.conversao, (<>
           <div style={{ display: 'flex', justifyContent: 'space-around', alignItems: 'flex-start',
             flexWrap: 'wrap', gap: 18, paddingTop: 6 }}>
             <Medidor pct={convPctValor} par={G.roxo} rotulo={`${val(valorGanho)} ${t.de} ${val(valorProposto)}`} />
             {convMensalValor != null && <Medidor pct={convMensalValor} par={G.verde} rotulo={t.convMedia} />}
             {convDecididosValor != null && <Medidor pct={convDecididosValor} par={G.ambar} rotulo={t.convDecididos} />}
+            {metaCot && <Medidor pct={metaCot.pct} par={G.azul} rotulo={t.convMetaCot.replace('{a}', metaCot.ano)} />}
           </div>
-        ), t.explicaConv)}
+          {metaCot && (
+            <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 10, lineHeight: 1.55, textAlign: 'center' }}>
+              {t.convMetaRitmo.replace('{a}', metaCot.ano).replace('{v}', val(metaCot.vendido)).replace('{m}', val(metaCot.meta))
+                .replace('{mh}', val(metaCot.metaHoje)).replace('{p}', metaCot.pctHoje.toFixed(0))}
+            </div>
+          )}
+        </>), t.explicaConv)}
         {painel(t.fatTitulo, (
           <>
             <Rosca dados={roscaOrigem} tamanho={165} espessura={26} centro={val(totalFat)} />
