@@ -28792,7 +28792,198 @@ const CAMPO_LABEL = {
    mantendo a thread do e-mail (Outlook/Power Automate) depende de uma
    integração à parte que ainda não está configurada neste portal.
 ============================================================================ */
+// "Criar BR" com duas abas: o formulário de criação e a Conferência das
+// solicitações de abertura de conhecimento de pedido (vindas do Power Automate).
 function CriarBR({ currentUser }) {
+  const [aba, setAba] = useState('criar');
+  return (
+    <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <div style={{ display: 'flex', gap: 2, borderBottom: `1px solid ${T.line}` }}>
+        {[{ id: 'criar', label: 'Criar BR' }, { id: 'conferencia', label: 'Conferência' }].map(ab => (
+          <button key={ab.id} onClick={() => setAba(ab.id)} style={{
+            background: 'none', border: 'none', cursor: 'pointer', padding: '9px 16px',
+            fontSize: 13, fontFamily: 'inherit',
+            fontWeight: aba === ab.id ? 700 : 500,
+            color: aba === ab.id ? T.terracotta : T.inkFaint,
+            borderBottom: `2px solid ${aba === ab.id ? T.terracotta : 'transparent'}`,
+            marginBottom: -1,
+          }}>{ab.label}</button>
+        ))}
+      </div>
+      {aba === 'criar' ? <CriarBRForm currentUser={currentUser} /> : <ConferenciaConhecimentoPedido currentUser={currentUser} />}
+    </div>
+  );
+}
+
+// Conferência: cada solicitação de abertura de conhecimento de pedido (e-mail do
+// Power Automate + HTTP para conhecimento-pedido-receber) ao lado da proposta do
+// BR (última revisão: data e valor) e do lançamento no Painel KdB.
+// Fonte: v_comercial_cp_conferencia. BR não achado no e-mail -> tenta pela OC no
+// KdB; se ainda assim faltar, corrige aqui (fn_cp_definir_br).
+function ConferenciaConhecimentoPedido({ currentUser }) {
+  const [linhas, setLinhas] = useState([]);
+  const [carregando, setCarregando] = useState(true);
+  const [erro, setErro] = useState(null);
+  const [desde, setDesde] = useState('');
+  const [vendedor, setVendedor] = useState('Todos');
+  const [busca, setBusca] = useState('');
+  const [editando, setEditando] = useState({});   // id -> BR digitado
+  const [aberto, setAberto] = useState(null);     // id com o JSON à mostra
+  const [verComo, setVerComo] = useState(false);
+
+  const carregar = useCallback(async () => {
+    setCarregando(true); setErro(null);
+    const { data, error } = await supabase.from('v_comercial_cp_conferencia').select('*')
+      .order('data_solicitacao', { ascending: false }).limit(2000);
+    if (error) setErro(error.message); else setLinhas(data || []);
+    setCarregando(false);
+  }, []);
+  useEffect(() => { carregar(); }, [carregar]);
+
+  const salvarBR = async (id) => {
+    const br = (editando[id] || '').trim().toUpperCase();
+    if (br && !/^BR\d{4,6}\/\d{2}$/.test(br)) { alert('Use o formato BR00000/00.'); return; }
+    const { error } = await supabase.rpc('fn_cp_definir_br', { p_id: id, p_br: br, p_usuario: currentUser?.nome || null });
+    if (error) { alert('Não deu para salvar: ' + error.message); return; }
+    setEditando(e => { const n = { ...e }; delete n[id]; return n; });
+    carregar();
+  };
+
+  const vendedores = useMemo(() => ['Todos', ...[...new Set(linhas.map(l => l.vendedor).filter(Boolean))].sort()], [linhas]);
+  const filtradas = useMemo(() => {
+    const b = busca.trim().toLowerCase();
+    return linhas.filter(l =>
+      (!desde || String(l.data_solicitacao).slice(0, 10) >= desde) &&
+      (vendedor === 'Todos' || l.vendedor === vendedor) &&
+      (!b || [l.br, l.cliente, l.numero_pedido_cliente, l.assunto].some(x => String(x || '').toLowerCase().includes(b))));
+  }, [linhas, desde, vendedor, busca]);
+
+  const resumo = useMemo(() => {
+    const dias = filtradas.map(l => l.dias_proposta_ate_solicitacao).filter(d => d != null).sort((a, b) => a - b);
+    const mediana = dias.length ? (dias.length % 2 ? dias[(dias.length - 1) / 2] : (dias[dias.length / 2 - 1] + dias[dias.length / 2]) / 2) : null;
+    const comValor = filtradas.filter(l => l.valor_proposta != null && (l.valor_pedido != null || l.net_value_kdb != null));
+    return {
+      n: filtradas.length, mediana,
+      proposta: comValor.reduce((s, l) => s + Number(l.valor_proposta), 0),
+      pedido: comValor.reduce((s, l) => s + Number(l.valor_pedido ?? l.net_value_kdb), 0),
+      semBR: filtradas.filter(l => !l.br).length,
+      semProposta: filtradas.filter(l => l.br && l.data_proposta == null).length,
+    };
+  }, [filtradas]);
+
+  const dataHora = (ts) => ts ? new Date(ts).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
+  const dataCurta = (d) => d ? String(d).slice(0, 10).split('-').reverse().join('/') : '—';
+  const th = { textAlign: 'left', padding: '8px 10px', fontSize: 11, fontWeight: 700, color: T.inkFaint, borderBottom: `1px solid ${T.line}`, whiteSpace: 'nowrap', background: T.panelAlt };
+  const td = { padding: '8px 10px', fontSize: 12.5, color: T.ink, borderBottom: `1px solid ${T.lineSoft}`, verticalAlign: 'top' };
+  const sub = { fontSize: 11, color: T.inkFaint };
+  const card = (rotulo, valor, detalhe, cor) => (
+    <div style={{ flex: '1 1 150px', background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 10, padding: '10px 14px' }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: T.inkFaint }}>{rotulo}</div>
+      <div style={{ fontSize: 20, fontWeight: 700, color: cor || T.ink, marginTop: 2 }}>{valor}</div>
+      {detalhe && <div style={sub}>{detalhe}</div>}
+    </div>
+  );
+  const dif = resumo.pedido - resumo.proposta;
+
+  return (
+    <Panel title="Conferência do conhecimento de pedido"
+      subtitle="Cada pedido de abertura enviado pelo fluxo do Power Automate, comparado com a proposta do BR (última revisão) e com o lançamento no Painel KdB."
+      right={<div style={{ display: 'flex', gap: 8 }}>
+        <button onClick={() => setVerComo(v => !v)} style={{ ...ghostBtn(T.inkDim), cursor: 'pointer' }}>{verComo ? 'Fechar' : 'Como o fluxo envia'}</button>
+        <button onClick={carregar} style={{ ...ghostBtn(T.inkDim), cursor: 'pointer' }}>Atualizar</button>
+      </div>}>
+      {verComo && (
+        <div style={{ fontSize: 12.5, color: T.inkDim, lineHeight: 1.55, background: T.panelAlt, borderRadius: 8, padding: '10px 12px', marginBottom: 14 }}>
+          No fluxo, logo depois do <em>Enviar um email (V2)</em>, uma ação <strong>HTTP</strong>: método <strong>POST</strong>, URL{' '}
+          <code style={{ fontSize: 11.5 }}>{SUPABASE_URL}/functions/v1/conhecimento-pedido-receber</code>, cabeçalhos{' '}
+          <code>Content-Type: application/json</code> e <code>x-chave-fluxo</code> (a chave fica com o administrador do portal).
+          No corpo vai o que o fluxo tiver: o assunto do e-mail, o e-mail do vendedor e o JSON dos grupos (comercial, fiscal, engenharia).
+          O BR é procurado no JSON e no assunto; o valor do pedido sai de <code>valor_total_projeto</code> e a OC de <code>numero_pedido</code>.
+        </div>
+      )}
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 14 }}>
+        {card('Solicitações', resumo.n, resumo.semBR ? `${resumo.semBR} sem BR` : null, resumo.semBR ? T.rustText : null)}
+        {card('Proposta → pedido de abertura', resumo.mediana == null ? '—' : `${resumo.mediana} dias`, 'mediana')}
+        {card('Proposta × pedido', fmtMoeda(dif), resumo.proposta ? `${fmtMoeda(resumo.proposta)} → ${fmtMoeda(resumo.pedido)} (${(100 * dif / resumo.proposta).toFixed(1).replace('.', ',')}%)` : 'sem valores para comparar', dif < 0 ? T.rustText : dif > 0 ? T.oliveText : null)}
+        {card('Sem proposta no portal', resumo.semProposta, 'BR achado, mas sem proposta registrada', resumo.semProposta ? T.amberText : null)}
+      </div>
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 12, alignItems: 'center' }}>
+        <label style={{ fontSize: 12, color: T.inkDim }}>desde <input type="date" value={desde} onChange={e => setDesde(e.target.value)} style={{ ...inputStyle(), width: 150, padding: '6px 8px' }} /></label>
+        <select value={vendedor} onChange={e => setVendedor(e.target.value)} style={{ ...inputStyle(), width: 200, padding: '6px 8px' }}>
+          {vendedores.map(v => <option key={v} value={v}>{v}</option>)}
+        </select>
+        <input placeholder="buscar BR, cliente, OC…" value={busca} onChange={e => setBusca(e.target.value)} style={{ ...inputStyle(), width: 240, padding: '6px 8px' }} />
+      </div>
+      {erro && <div style={{ color: T.rustText, fontSize: 13, marginBottom: 10 }}>Erro: {erro}</div>}
+      {carregando ? (
+        <div style={{ padding: 20, textAlign: 'center', color: T.inkFaint }}>Carregando…</div>
+      ) : !filtradas.length ? (
+        <div style={{ padding: 20, textAlign: 'center', color: T.inkFaint, fontSize: 13 }}>
+          {linhas.length ? 'Nenhuma solicitação com esses filtros.' : 'Nenhuma solicitação recebida ainda. Elas aparecem aqui assim que o fluxo do Power Automate enviar o HTTP.'}
+        </div>
+      ) : (
+        <div style={{ overflowX: 'auto', border: `1px solid ${T.line}`, borderRadius: 8 }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead><tr>
+              <th style={th}>Pedido de abertura</th><th style={th}>BR</th><th style={th}>Cliente / vendedor</th>
+              <th style={th}>Proposta</th><th style={th}>Pedido do cliente</th><th style={th}>Dias</th>
+              <th style={th}>Painel KdB</th><th style={th}>Diferença</th><th style={th}></th>
+            </tr></thead>
+            <tbody>
+              {filtradas.map(l => {
+                const alerta = !l.br ? T.rustSoft : l.data_proposta == null ? T.amberSoft : null;
+                const d = l.diferenca_valor == null ? null : Number(l.diferenca_valor);
+                return (
+                  <React.Fragment key={l.id}>
+                    <tr style={{ background: alerta || 'transparent' }}>
+                      <td style={{ ...td, whiteSpace: 'nowrap' }}>{dataHora(l.data_solicitacao)}</td>
+                      <td style={{ ...td, whiteSpace: 'nowrap' }}>
+                        {editando[l.id] !== undefined ? (
+                          <span style={{ display: 'inline-flex', gap: 4 }}>
+                            <input autoFocus value={editando[l.id]} onChange={e => setEditando(x => ({ ...x, [l.id]: e.target.value }))}
+                              onKeyDown={e => e.key === 'Enter' && salvarBR(l.id)} placeholder="BR00000/00" style={{ ...inputStyle(), width: 110, padding: '4px 6px' }} />
+                            <button onClick={() => salvarBR(l.id)} style={{ ...ghostBtn(T.oliveText), cursor: 'pointer', padding: '4px 8px' }}>ok</button>
+                          </span>
+                        ) : (
+                          <span>
+                            <strong>{l.br || 'sem BR'}</strong>{' '}
+                            <button onClick={() => setEditando(x => ({ ...x, [l.id]: l.br || '' }))} title="corrigir o BR"
+                              style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.inkFaint, fontSize: 11, textDecoration: 'underline', padding: 0 }}>corrigir</button>
+                            {l.br_origem && l.br_origem !== 'e-mail' && <div style={sub}>{l.br_origem}</div>}
+                          </span>
+                        )}
+                      </td>
+                      <td style={td}>{l.cliente || '—'}<div style={sub}>{l.vendedor || '—'}</div></td>
+                      <td style={{ ...td, whiteSpace: 'nowrap' }}>{l.data_proposta ? <>{dataCurta(l.data_proposta)}<div style={sub}>{fmtMoeda(l.valor_proposta)}</div></> : <span style={sub}>sem proposta</span>}</td>
+                      <td style={{ ...td, whiteSpace: 'nowrap' }}>{fmtMoeda(l.valor_pedido)}<div style={sub}>{l.numero_pedido_cliente ? `OC ${l.numero_pedido_cliente}` : ''}{l.data_emissao_pedido ? ` · ${dataCurta(l.data_emissao_pedido)}` : ''}</div></td>
+                      <td style={{ ...td, whiteSpace: 'nowrap' }} title="da proposta até o pedido de abertura">{l.dias_proposta_ate_solicitacao ?? '—'}{l.dias_solicitacao_ate_kdb != null && <div style={sub} title="do pedido de abertura até a data do CP no KdB">KdB +{l.dias_solicitacao_ate_kdb}</div>}</td>
+                      <td style={{ ...td, whiteSpace: 'nowrap' }}>{l.data_cp_kdb ? <>{dataCurta(l.data_cp_kdb)}<div style={sub}>{fmtMoeda(l.net_value_kdb)}</div></> : <span style={sub}>ainda não</span>}</td>
+                      <td style={{ ...td, whiteSpace: 'nowrap', color: d == null ? T.inkFaint : d < 0 ? T.rustText : d > 0 ? T.oliveText : T.ink, fontWeight: 600 }}>
+                        {d == null ? '—' : <>{fmtMoeda(d)}<div style={{ fontSize: 11 }}>{l.diferenca_pct != null ? `${String(l.diferenca_pct).replace('.', ',')}%` : ''}</div></>}
+                      </td>
+                      <td style={td}><button onClick={() => setAberto(a => a === l.id ? null : l.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.inkFaint, fontSize: 11, textDecoration: 'underline' }}>{aberto === l.id ? 'fechar' : 'ver dados'}</button></td>
+                    </tr>
+                    {aberto === l.id && (
+                      <tr><td colSpan={9} style={{ ...td, background: T.panelAlt }}>
+                        <div style={{ ...sub, marginBottom: 4 }}>{l.assunto || ''}{l.br_manual ? ` · BR corrigido na tela` : ''}</div>
+                        <pre style={{ margin: 0, fontSize: 11, whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 320, overflow: 'auto' }}>{JSON.stringify(l.payload, null, 2)}</pre>
+                      </td></tr>
+                    )}
+                  </React.Fragment>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <div style={{ ...sub, marginTop: 8 }}>
+        Diferença = pedido do cliente (ou net value do KdB, se o e-mail não trouxe valor) menos a proposta. Vermelho: sem BR; amarelo: BR sem proposta no portal.
+      </div>
+    </Panel>
+  );
+}
+
+function CriarBRForm({ currentUser }) {
   const [sugestao, setSugestao] = useState(null);   // { codproj, identificacao }
   const [carregandoSug, setCarregandoSug] = useState(true);
   const [codproj, setCodproj] = useState('');
