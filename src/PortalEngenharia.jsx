@@ -22722,14 +22722,15 @@ function CusteioExplicacao() {
       <p>Essas horas <strong>não entram em nenhuma OP</strong>, mas <strong>entram na divisão do overhead</strong>: o bolo do mês é dividido pelas horas de OP + ociosas, e a fatia das ociosas fica como overhead da ociosidade. Na aba <em>Horas ociosas</em> aparecem as horas, o custo da mão de obra ociosa e o overhead da ociosidade.</p>
     </>) },
     { id: 'extra', t: 'Hora extra', c: (<>
-      <p>Expediente da produção: <strong>segunda a quinta das 7h às 17h</strong> e <strong>sexta das 7h às 16h</strong>. Todo apontamento fora disso é hora extra:</p>
+      <p>Expediente do 1º turno: <strong>segunda a quinta das 7h às 17h</strong> e <strong>sexta das 7h às 16h</strong>. Todo apontamento fora do turno é hora extra:</p>
       <ul>
         <li><strong>Dia útil</strong> antes das 7h ou depois do fim do expediente: <strong>+65%</strong>.</li>
         <li><strong>Sábado</strong>: <strong>+65%</strong> (o dia todo).</li>
         <li><strong>Domingo</strong>: <strong>+100%</strong> (o dia todo).</li>
       </ul>
       <Formula>Adicional = horas extras × custo da hora do mês × 65% (ou 100% no domingo)</Formula>
-      <p>A hora em si já entra na mão de obra da OP; o <strong>adicional</strong> é o que ela custou a mais por ser extra. Se a mesma pessoa tem apontamentos sobrepostos no dia, o tempo conta uma vez só. Apontamento que vira a noite conta em cada dia. Feriados ainda não são tratados. O turno 15h30–1h30 da Vulcanização aparece à parte (parece um 2º turno) e só entra nos totais se marcado.</p>
+      <p>A hora em si já entra na mão de obra da OP; o <strong>adicional</strong> é o que ela custou a mais por ser extra. Se a mesma pessoa tem apontamentos sobrepostos no dia, o tempo conta uma vez só. Apontamento que vira a noite conta em cada dia. Feriados ainda não são tratados.</p>
+      <p><strong>2º turno</strong> (segunda a sexta, 15h30 à 1h30 do dia seguinte): apontamento que começa a partir das 15h e vira a noite segue esse horário. Extra é o que ficar antes das 15h30 ou depois da 1h30, e o turno que começar no sábado (+65%) ou no domingo (+100%).</p>
     </>) },
     { id: 'overhead', t: 'Overhead (custos indiretos de fabricação)', c: (<>
       <p>É o custo de <strong>manter a fábrica funcionando</strong> no mês, que não pertence a nenhuma OP específica. O “bolo” do mês tem três partes:</p>
@@ -22839,7 +22840,7 @@ function Formula({ children }) {
 function CusteioHoraExtra({ moeda, num }) {
   const [linhas, setLinhas] = useState(null);
   const [produtos, setProdutos] = useState({});
-  const [comTurno, setComTurno] = useState(false);
+  const [comTurno, setComTurno] = useState(true);
   const [comOciosa, setComOciosa] = useState(true);
   const [opAberta, setOpAberta] = useState(null);
   const [mesSel, setMesSel] = useState(null);
@@ -22947,12 +22948,12 @@ function CusteioHoraExtra({ moeda, num }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       <div style={{ fontSize: 12.5, color: T.inkDim, background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 8, padding: '10px 14px', lineHeight: 1.6 }}>
-        Expediente: <strong>seg a qui 7h–17h</strong> e <strong>sex 7h–16h</strong>. Tudo o que foi apontado fora disso é hora extra: <strong>dia útil e sábado +65%</strong>, <strong>domingo +100%</strong>.
+        Expediente: <strong>1º turno seg a qui 7h–17h e sex 7h–16h</strong>; <strong>2º turno seg a sex 15h30–1h30</strong>. Tudo o que foi apontado fora do turno é hora extra: <strong>dia útil e sábado +65%</strong>, <strong>domingo +100%</strong>.
         O tempo da mesma pessoa não conta duas vezes no dia. O adicional usa o custo da hora do mês (o mesmo da mão de obra das OPs): a hora em si já está na OP; o <strong>adicional</strong> é o que a OP custou a mais por ser hora extra. Feriados ainda não são tratados.
         <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginTop: 8 }}>
           <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', cursor: 'pointer' }}>
             <input type="checkbox" checked={comTurno} onChange={e => setComTurno(e.target.checked)} />
-            incluir o turno <strong>15h30–1h30</strong> ({linhas.filter(l => l.turno_noite).length} apontamentos da Vulcanização — parece 2º turno)
+            incluir o <strong>2º turno</strong> (só o que passou do horário 15h30–1h30 ou caiu no fim de semana)
           </label>
           <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', cursor: 'pointer' }}>
             <input type="checkbox" checked={comOciosa} onChange={e => setComOciosa(e.target.checked)} /> incluir hora extra lançada como ociosa (BR9595/22)
