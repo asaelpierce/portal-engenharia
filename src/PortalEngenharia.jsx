@@ -22719,7 +22719,7 @@ function CusteioExplicacao() {
     </>) },
     { id: 'ociosa', t: 'Horas ociosas (BR9595/22)', c: (<>
       <p>O BR9595/22 existe para lançar a <strong>hora ociosa</strong>: o tempo do dia que não foi trabalho em OP (ninguém produz o tempo todo). Entram as OPs de lançamento “PROD-LANCA” (geral, prensa, misturador, stud welding, CNC, corte) e qualquer hora lançada nesse projeto.</p>
-      <p>Essas horas <strong>não entram em nenhuma OP</strong> nem nas bases de rateio. Ficam à parte na aba <em>Horas ociosas</em>, com o custo e a % do tempo apontado.</p>
+      <p>Essas horas <strong>não entram em nenhuma OP</strong>, mas <strong>entram na divisão do overhead</strong>: o bolo do mês é dividido pelas horas de OP + ociosas, e a fatia das ociosas fica como overhead da ociosidade. Na aba <em>Horas ociosas</em> aparecem as horas, o custo da mão de obra ociosa e o overhead da ociosidade.</p>
     </>) },
     { id: 'overhead', t: 'Overhead (custos indiretos de fabricação)', c: (<>
       <p>É o custo de <strong>manter a fábrica funcionando</strong> no mês, que não pertence a nenhuma OP específica. O “bolo” do mês tem três partes:</p>
@@ -22729,8 +22729,10 @@ function CusteioExplicacao() {
         <li><strong>Insumos</strong>: consumíveis do mês (discos, eletrodos, EPIs…) — descontado o que já foi lançado direto nas OPs como material, para não contar duas vezes.</li>
       </ul>
       <p>O bolo é dividido entre as OPs do mês por uma de duas bases (botão “Overhead por” no topo):</p>
-      <Formula>Por horas: overhead da OP = bolo do mês × (horas da OP ÷ horas de todas as OPs no mês)</Formula>
-      <Formula>Por material + MO: overhead da OP = bolo do mês × ((material + MO da OP) ÷ (material + MO de todas as OPs no mês))</Formula>
+      <Formula>Por horas: overhead da OP = bolo do mês × (horas da OP ÷ (horas de todas as OPs + horas ociosas do mês))</Formula>
+      <Formula>Por material + MO: overhead da OP = bolo do mês × ((material + MO da OP) ÷ (material + MO de todas as OPs + MO ociosa do mês))</Formula>
+      <p><strong>A hora ociosa entra na divisão</strong>: ela também ocupa a fábrica. A fatia do bolo que corresponde às horas ociosas não vai para nenhuma OP — fica como <strong>overhead da ociosidade</strong> (aba Horas ociosas). Assim cada OP paga só pelo tempo que usou de verdade.</p>
+      <p>Uma OP que dura vários meses recebe uma fatia do bolo de <strong>cada mês</strong> em que teve hora, do tamanho da parte dela nas horas daquele mês.</p>
       <p><strong>Por horas</strong> é o padrão: quem ocupa mais a fábrica paga mais. <strong>Por material + MO</strong> joga mais overhead em OP de material caro, mesmo que rápida. OP sem hora apontada recebe <strong>zero</strong> de overhead na base horas.</p>
     </>) },
     { id: 'servicos', t: 'Frete, industrialização, autoclave e outros serviços', c: (<>
@@ -22823,10 +22825,13 @@ function Formula({ children }) {
 }
 
 function CusteioHorasOciosas({ linhas, setLinhas, mesAberto, setMesAberto, moeda, num }) {
+  const [ovh, setOvh] = useState([]);
   useEffect(() => {
     if (linhas) return;
     supabase.from('v_custeio_horas_ociosas').select('*').order('competencia').then(r => setLinhas(r.data || []));
   }, [linhas, setLinhas]);
+  useEffect(() => { supabase.from('v_custeio_overhead_ociosidade').select('*').then(r => setOvh(r.data || [])); }, []);
+  const ovhDe = (m) => Number(ovh.find(o => o.competencia === m)?.ociosidade_base_horas) || 0;
   if (!linhas) return <div style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Carregando as horas ociosas…</div>;
   const meses = [...new Set(linhas.map(l => l.competencia))].sort();
   const porMes = meses.map(m => {
@@ -22836,6 +22841,7 @@ function CusteioHorasOciosas({ linhas, setLinhas, mesAberto, setMesAberto, moeda
     return { m, d, h, c, tot, pct: tot ? h / tot * 100 : null };
   });
   const H = porMes.reduce((s, x) => s + x.h, 0), C = porMes.reduce((s, x) => s + x.c, 0), TOT = porMes.reduce((s, x) => s + x.tot, 0);
+  const OV = porMes.reduce((s, x) => s + ovhDe(x.m), 0);
   const agrupa = (campo) => Object.values(linhas.reduce((a, l) => {
     const k = l[campo] || '—'; a[k] = a[k] || { k, h: 0, c: 0 }; a[k].h += Number(l.horas) || 0; a[k].c += Number(l.custo) || 0; return a;
   }, {})).sort((x, y) => y.h - x.h);
@@ -22863,16 +22869,18 @@ function CusteioHorasOciosas({ linhas, setLinhas, mesAberto, setMesAberto, moeda
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       <div style={{ fontSize: 12.5, color: T.inkDim, background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 8, padding: '10px 14px' }}>
         O <strong>BR9595/22</strong> existe para lançar a hora ociosa — o tempo do dia que não é trabalho em OP (ninguém produz o tempo todo). Entram as OPs de lançamento (PROD-LANCA — geral, prensa, misturador, stud welding, CNC, corte) e qualquer hora lançada nesse projeto.
-        Essas horas ficam à parte: <strong>não entram em nenhuma OP</strong> nem nas bases de rateio do overhead e dos serviços.
+        Essas horas ficam à parte: <strong>não entram em nenhuma OP</strong>, mas <strong>entram na divisão do overhead</strong> — a fatia do bolo que cabe a elas é o overhead da ociosidade.
       </div>
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
         {card('Horas ociosas no ano', `${num(H, 0)} h`, `${porMes.length} meses`)}
-        {card('Custo das horas ociosas', moeda(C), 'mão de obra dessas horas')}
+        {card('Mão de obra ociosa', moeda(C), 'custo dessas horas')}
+        {card('Overhead da ociosidade', moeda(OV), 'fatia do overhead das horas ociosas')}
+        {card('Custo total da ociosidade', moeda(C + OV), 'mão de obra + overhead')}
         {card('Ociosidade', TOT ? `${num(H / TOT * 100, 1)}%` : '—', `de ${num(TOT, 0)} h apontadas no ano`)}
       </div>
       <Panel title="Por mês" subtitle="clique no mês para ver os lançamentos">
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-          <thead><tr><th style={th()}>Mês</th><th style={th(1)}>Horas ociosas</th><th style={th(1)}>Horas apontadas no mês</th><th style={th(1)}>Ociosidade</th><th style={th(1)}>Custo</th></tr></thead>
+          <thead><tr><th style={th()}>Mês</th><th style={th(1)}>Horas ociosas</th><th style={th(1)}>Horas apontadas no mês</th><th style={th(1)}>Ociosidade</th><th style={th(1)}>Mão de obra ociosa</th><th style={th(1)}>Overhead da ociosidade</th><th style={th(1)}>Total</th></tr></thead>
           <tbody>
             {porMes.map(x => (
               <React.Fragment key={x.m}>
@@ -22880,12 +22888,12 @@ function CusteioHorasOciosas({ linhas, setLinhas, mesAberto, setMesAberto, moeda
                   <td style={{ ...td(), fontWeight: 700 }}>{mesAberto === x.m ? '▾' : '▸'} {x.m}</td>
                   <td style={td(1)}>{num(x.h)} h</td><td style={td(1)}>{num(x.tot)} h</td>
                   <td style={{ ...td(1), fontWeight: 700 }}>{x.pct != null ? `${num(x.pct, 1)}%` : '—'}</td>
-                  <td style={td(1)}>{moeda(x.c)}</td>
+                  <td style={td(1)}>{moeda(x.c)}</td><td style={td(1)}>{moeda(ovhDe(x.m))}</td><td style={{ ...td(1), fontWeight: 700 }}>{moeda(x.c + ovhDe(x.m))}</td>
                 </tr>
                 {mesAberto === x.m && x.d.sort((a, b) => (Number(b.horas) || 0) - (Number(a.horas) || 0)).map((l, j) => (
                   <tr key={j} style={{ background: T.panelAlt }}>
                     <td style={{ ...td(), paddingLeft: 26, fontSize: 11.5 }}>OP {l.op} · {l.lancamento || '—'}<span style={{ color: T.inkFaint }}> · {l.setor_nome || 'sem setor'}</span></td>
-                    <td style={{ ...td(1), fontSize: 11.5 }}>{num(l.horas)} h</td><td style={td(1)} /><td style={td(1)} /><td style={{ ...td(1), fontSize: 11.5 }}>{moeda(Number(l.custo) || 0)}</td>
+                    <td style={{ ...td(1), fontSize: 11.5 }}>{num(l.horas)} h</td><td style={td(1)} /><td style={td(1)} /><td style={{ ...td(1), fontSize: 11.5 }}>{moeda(Number(l.custo) || 0)}</td><td style={td(1)} /><td style={td(1)} />
                   </tr>
                 ))}
               </React.Fragment>
@@ -23397,8 +23405,8 @@ function CusteioPorOP() {
                                   autoclave: { pool: 'autoclave_mes', base: 'direto_mes', peso: 'pct_direto', parte: 'direto', val: 'rateio_autoclave', tipo: 'autoclave', rotBase: 'material + MO de todas as OPs', rotParte: 'material + MO da OP' },
                                   outro: { pool: 'outro_servico_mes', base: 'direto_mes', peso: 'pct_direto', parte: 'direto', val: 'rateio_outro_servico', tipo: 'outro_producao', rotBase: 'material + MO de todas as OPs', rotParte: 'material + MO da OP' },
                                   overhead: H
-                                    ? { pool: 'overhead_mes', base: 'horas_mes', peso: 'pct_horas', parte: 'horas', val: 'overhead_horas', rotBase: 'horas de todas as OPs', rotParte: 'horas da OP', horas: true }
-                                    : { pool: 'overhead_mes', base: 'base_mes', peso: 'pct_base', parte: 'direto', val: 'overhead', rotBase: 'material + MO de todas as OPs', rotParte: 'material + MO da OP' },
+                                    ? { pool: 'overhead_mes', base: 'horas_mes', peso: 'pct_horas', parte: 'horas', val: 'overhead_horas', rotBase: 'horas do mês: OPs + ociosas', rotParte: 'horas da OP', horas: true }
+                                    : { pool: 'overhead_mes', base: 'base_mes', peso: 'pct_base', parte: 'direto', val: 'overhead', rotBase: 'material + MO do mês: OPs + MO ociosa', rotParte: 'material + MO da OP' },
                                 }[contaK];
                                 if (!R) return <div style={caixa}>{cab}<div style={{ fontSize: 11.5, color: T.inkFaint }}>Calculando o rateio mês a mês…</div></div>;
                                 const parteDe = (r) => CFG.parte === 'direto' ? (Number(r.material) || 0) + (Number(r.mo) || 0) : Number(r[CFG.parte]) || 0;
@@ -23408,6 +23416,7 @@ function CusteioPorOP() {
                                   <div style={caixa}>{cab}
                                     <div style={{ fontSize: 10.5, color: T.inkDim, marginBottom: 6 }}>
                                       Em cada mês: <strong>total do mês × ({CFG.rotParte} ÷ {CFG.rotBase})</strong>. {R.some(r => r.cancelada) ? 'OP cancelada não recebe rateio de serviços.' : ''}
+                                      {contaK === 'overhead' && ' As horas ociosas (BR9595/22) entram na base: a fatia delas fica como overhead da ociosidade, fora das OPs.'}
                                     </div>
                                     <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
                                       <thead><tr>{['Mês', 'Total do mês', `Base (${CFG.rotBase})`, `Parte da OP (${CFG.rotParte})`, 'Peso', '= Rateio da OP', ''].map((h, j) => <th key={j} style={th(j, j > 0 && j < 6)}>{h}</th>)}</tr></thead>
