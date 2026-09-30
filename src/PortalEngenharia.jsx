@@ -22038,6 +22038,171 @@ function ApontarHoras({ setores, apontamentos, onSalvo }) {
 // Custeio por OP > Venda × custo: por produto, o que foi vendido em 2026, a receita líquida,
 // o custo do vendido (custo por peça do Custeio por OP × qtd vendida) e o preço ideal para
 // atingir a margem-alvo sobre a receita líquida. Fonte: v_custeio_op_produto_venda.
+// Detalhe de um produto em Venda × custo: de onde sai cada número (notas de venda,
+// impostos, OPs que formam o custo por peça, a conta do preço ideal) e os motivos.
+function VendaCustoDetalhe({ l, H, alvo, moeda, num }) {
+  const [d, setD] = useState(null);
+  useEffect(() => {
+    let vivo = true;
+    (async () => {
+      const [n, t, o] = await Promise.all([
+        supabase.from('nota_venda_itens').select('nunota,nro_interno_sankhya,data_faturamento,cliente_nome,br,quantidade,valor_bruto,codtipoper,vendedor_nome')
+          .eq('cod_produto', l.cod_produto).gte('data_faturamento', '2026-01-01').order('data_faturamento'),
+        supabase.from('sankhya_tops_venda').select('codtipoper'),
+        // mesmo filtro de v_custeio_op_produto_custo: 2026, não cancelada, com peça produzida
+        supabase.from('v_custeio_op_producao').select('*').eq('cod_produto', l.cod_produto).gte('competencia', '2026-01')
+          .neq('situacao', 'cancelada').gt('qtd_produzida', 0).not('custo_unitario', 'is', null).order('op'),
+      ]);
+      const tops = new Set((t.data || []).map(x => Number(x.codtipoper)));
+      if (vivo) setD({ notas: (n.data || []).filter(x => tops.has(Number(x.codtipoper))), ops: o.data || [] });
+    })();
+    return () => { vivo = false; };
+  }, [l.cod_produto]);
+  const caixa = { background: T.panel, border: `1px solid ${T.line}`, borderRadius: 8, padding: 10 };
+  const tit = { fontSize: 12, fontWeight: 700, marginBottom: 6 };
+  const th = (dir) => ({ padding: '4px 6px', fontSize: 10, color: T.inkFaint, fontWeight: 600, textAlign: dir ? 'right' : 'left', whiteSpace: 'nowrap' });
+  const tdc = (dir) => ({ padding: '4px 6px', fontSize: 11, textAlign: dir ? 'right' : 'left', borderTop: `1px solid ${T.lineSoft}`, fontVariantNumeric: 'tabular-nums' });
+  const linha = (a, b, forte) => (
+    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, fontSize: 11.5, padding: '3px 0', fontWeight: forte ? 700 : 400, borderTop: forte ? `1px solid ${T.line}` : 'none' }}>
+      <span style={{ color: forte ? T.ink : T.inkDim }}>{a}</span><span style={{ fontVariantNumeric: 'tabular-nums' }}>{b}</span>
+    </div>
+  );
+  if (!d) return <div style={{ padding: 14, fontSize: 12, color: T.inkFaint }}>Montando o detalhe do produto…</div>;
+  const fmtD = (x) => x ? String(x).slice(0, 10).split('-').reverse().join('/') : '—';
+  const tI = Number(l.taxa_icms_ipi_iss) || 0, tP = Number(l.taxa_pis_cofins) || 0;
+  const ST = { F: 'finalizada', C: 'cancelada', S: 'suspensa', A: 'aberta' };
+  // custo das OPs (mesma base da tela)
+  const ops = d.ops.map(o => {
+    const ovh = Number(H ? o.overhead_horas : o.overhead) || 0;
+    const serv = (Number(o.rateio_frete) || 0) + (Number(o.rateio_industrializacao) || 0) + (Number(o.rateio_autoclave) || 0) + (Number(o.rateio_outro_servico) || 0);
+    const tot = Number(H ? o.custo_total_horas : o.custo_total) || 0, q = Number(o.qtd_produzida) || 0;
+    return { ...o, ovh, serv, tot, q, cu: q > 0 ? tot / q : null };
+  });
+  const S = (f) => ops.reduce((s, o) => s + (Number(typeof f === 'function' ? f(o) : o[f]) || 0), 0);
+  const qProd = S('q'), cTot = S('tot');
+  const partes = [['Material', S('material')], ['Mão de obra', S('mao_obra')], [`Overhead (${H ? 'horas' : 'material + MO'})`, S('ovh')], ['Frete e serviços (rateio)', S('serv')]];
+  const maior = [...partes].sort((a, b) => b[1] - a[1])[0];
+  const precos = d.notas.filter(n => Number(n.quantidade) > 0).map(n => Number(n.valor_bruto) / Number(n.quantidade));
+  const pMin = precos.length ? Math.min(...precos) : null, pMax = precos.length ? Math.max(...precos) : null;
+  const cus = ops.filter(o => o.cu != null && o.q >= 0.05).map(o => o.cu);
+  // motivos automáticos
+  const motivos = [];
+  if (l.q > 0) {
+    if (l.res < 0) motivos.push(`Vendeu a ${moeda(l.liqPeca)} líquido por peça e a peça custou ${moeda(l.cu)} — ${moeda(l.cu - l.liqPeca)} de prejuízo por peça.`);
+    else if (l.gap != null && l.gap < 0) motivos.push(`Deu lucro, mas o preço líquido (${moeda(l.liqPeca)}) ficou ${num(-l.gap, 1)}% abaixo do ideal para ${num(alvo * 100, 0)}% de margem (${moeda(l.idealLiq)}).`);
+    else motivos.push(`Preço líquido de ${moeda(l.liqPeca)} por peça, acima do ideal de ${moeda(l.idealLiq)} para ${num(alvo * 100, 0)}% de margem.`);
+  }
+  if (cTot > 0 && maior) motivos.push(`O que mais pesa no custo é ${maior[0].toLowerCase()}: ${moeda(maior[1])}, ${num(maior[1] / cTot * 100, 0)}% do custo das OPs.`);
+  if (cus.length > 1 && Math.min(...cus) > 0 && Math.max(...cus) / Math.min(...cus) > 1.5)
+    motivos.push(`O custo por peça varia muito entre as OPs: de ${moeda(Math.min(...cus))} a ${moeda(Math.max(...cus))}. Vale ver a OP mais cara (tabela abaixo).`);
+  const semH = ops.filter(o => o.sem_horas), comHorasFora = ops.filter(o => ['S', 'C'].includes(o.status) && !o.sem_horas);
+  if (semH.length) motivos.push(`${semH.length} OP(s) sem hora apontada (${semH.map(o => o.op).join(', ')}) — se a hora foi para outra OP, o custo dessa sai baixo e o da outra, alto.`);
+  if (comHorasFora.length) motivos.push(`OP(s) suspensa/cancelada com horas entrando no custo: ${comHorasFora.map(o => `${o.op} (${ST[o.status]})`).join(', ')}.`);
+  if (l.q > qProd * 1.1 && qProd > 0) motivos.push(`Vendeu ${num(l.q, 2)} e as OPs de 2026 produziram ${num(qProd, 2)}: parte saiu de estoque antigo, com o custo de 2026.`);
+  if (pMin && pMax && pMax / pMin > 1.3) motivos.push(`O preço de venda variou entre as notas: de ${moeda(pMin)} a ${moeda(pMax)} bruto por peça.`);
+  if (l.taxa_estimada) motivos.push('Não há imposto registrado para este produto em 2026: a receita líquida desconta só PIS/COFINS.');
+  const brutoN = d.notas.reduce((s, n) => s + (Number(n.valor_bruto) || 0), 0);
+  return (
+    <div style={{ padding: 12, display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fit, minmax(330px, 1fr))', background: T.panelAlt }}>
+      <div style={{ ...caixa, gridColumn: '1 / -1', borderColor: l.res < 0 ? T.rust : T.line }}>
+        <div style={tit}>Por que este resultado</div>
+        {motivos.map((m, i) => <div key={i} style={{ fontSize: 12, padding: '2px 0', color: T.ink }}>• {m}</div>)}
+      </div>
+
+      <div style={caixa}>
+        <div style={tit}>1. Receita — de R$ bruto a R$ líquido</div>
+        {linha(`Receita bruta (${d.notas.length} nota(s) com TOP de venda)`, moeda(l.bruta))}
+        {linha(`− ICMS + IPI + ISS (${num(tI * 100, 2)}% efetivo do produto)`, `− ${moeda(l.bruta * tI)}`)}
+        {linha(`− PIS/COFINS (${num(tP * 100, 2)}%)`, `− ${moeda(l.bruta * tP)}`)}
+        {linha('= Receita líquida', moeda(l.liq), true)}
+        {linha(`÷ ${num(l.q, 2)} peça(s) vendida(s)`, `${moeda(l.liqPeca)} líquido por peça`)}
+        {Math.abs(brutoN - l.bruta) > 1 && <div style={{ fontSize: 10.5, color: T.amberText, marginTop: 4 }}>As notas abaixo somam {moeda(brutoN)}.</div>}
+      </div>
+
+      <div style={caixa}>
+        <div style={tit}>2. Custo — de onde sai o custo por peça</div>
+        {partes.map(([a, v]) => linha(a, `${moeda(v)}${cTot ? ` · ${num(v / cTot * 100, 0)}%` : ''}`))}
+        {linha(`= Custo das ${ops.length} OP(s)`, moeda(cTot), true)}
+        {linha(`÷ ${num(qProd, 2)} peça(s) produzida(s)`, `${moeda(l.cu)} por peça`)}
+        {linha(`× ${num(l.q, 2)} vendida(s) = custo do vendido`, moeda(l.custoVend), true)}
+      </div>
+
+      <div style={caixa}>
+        <div style={tit}>3. Resultado e preço ideal</div>
+        {linha('Receita líquida', moeda(l.liq))}
+        {linha('− Custo do vendido', `− ${moeda(l.custoVend)}`)}
+        {linha(`= Resultado (margem ${l.marg == null ? '—' : `${num(l.marg, 1)}%`})`, moeda(l.res), true)}
+        <div style={{ height: 8 }} />
+        {linha('Custo por peça', moeda(l.cu))}
+        {linha(`÷ (1 − ${num(alvo * 100, 0)}% de margem-alvo)`, `${moeda(l.idealLiq)} líquido`)}
+        {linha(`÷ (1 − ${num(l.taxa * 100, 2)}% de impostos)`, `${moeda(l.idealBruto)} bruto`, true)}
+        {linha('Praticado (média das notas)', `${moeda(l.brutoPeca)} bruto · ${moeda(l.liqPeca)} líquido`)}
+        {linha('Praticado × ideal', l.gap == null ? '—' : `${l.gap > 0 ? '+' : ''}${num(l.gap, 1)}%`, true)}
+      </div>
+
+      <div style={{ ...caixa, gridColumn: '1 / -1' }}>
+        <div style={tit}>OPs que formam o custo</div>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead><tr>{['OP', 'Situação', 'Período', 'Peças', 'Material', 'Horas', 'Mão de obra', 'Overhead', 'Frete e serviços', 'Custo total', 'Custo / peça'].map((h, j) => <th key={j} style={th(j > 2)}>{h}</th>)}</tr></thead>
+            <tbody>
+              {ops.map(o => (
+                <tr key={o.op} style={{ background: o.cu != null && cus.length > 1 && o.cu === Math.max(...cus) ? T.amberSoft : 'transparent' }}>
+                  <td style={{ ...tdc(), fontWeight: 700 }}>{o.op}</td>
+                  <td style={tdc()}>{ST[o.status] || o.status || '—'}</td>
+                  <td style={{ ...tdc(), color: T.inkFaint, whiteSpace: 'nowrap' }}>{fmtD(o.inicio)}{o.termino ? ` a ${fmtD(o.termino)}` : ''}</td>
+                  <td style={tdc(1)}>{num(o.q, 2)}</td>
+                  <td style={tdc(1)}>{moeda(Number(o.material) || 0)}</td>
+                  <td style={{ ...tdc(1), color: o.sem_horas ? T.amberText : T.ink }}>{o.sem_horas ? 'nenhuma' : `${num(o.horas)} h`}</td>
+                  <td style={tdc(1)}>{moeda(Number(o.mao_obra) || 0)}</td>
+                  <td style={tdc(1)}>{moeda(o.ovh)}</td>
+                  <td style={tdc(1)}>{moeda(o.serv)}</td>
+                  <td style={{ ...tdc(1), fontWeight: 600 }}>{moeda(o.tot)}</td>
+                  <td style={{ ...tdc(1), fontWeight: 700 }}>{o.cu != null ? moeda(o.cu) : '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 4 }}>Em amarelo, a OP com o maior custo por peça. O detalhe de cada OP (item a item e rateios) está na aba OPs.</div>
+      </div>
+
+      <div style={{ ...caixa, gridColumn: '1 / -1' }}>
+        <div style={tit}>Notas de venda de 2026</div>
+        {!d.notas.length ? <div style={{ fontSize: 11.5, color: T.inkFaint }}>Nenhuma nota com TOP de venda em 2026.</div> : (
+          <div style={{ overflowX: 'auto', maxHeight: 300, overflowY: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead><tr>{['Data', 'Nota', 'Cliente', 'BR', 'Qtd', 'Bruto', 'Bruto / peça', 'Impostos (est.)', 'Líquido', 'Líquido / peça', 'Custo', 'Resultado'].map((h, j) => <th key={j} style={th(j > 3)}>{h}</th>)}</tr></thead>
+              <tbody>
+                {d.notas.map((n, j) => {
+                  const b = Number(n.valor_bruto) || 0, q = Number(n.quantidade) || 0, liq = b * (1 - tI - tP), cst = l.cu * q;
+                  return (
+                    <tr key={j}>
+                      <td style={{ ...tdc(), whiteSpace: 'nowrap' }}>{fmtD(n.data_faturamento)}</td>
+                      <td style={tdc()}>{n.nro_interno_sankhya || n.nunota}</td>
+                      <td style={{ ...tdc(), maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={n.cliente_nome}>{n.cliente_nome}</td>
+                      <td style={tdc()}>{n.br || '—'}</td>
+                      <td style={tdc(1)}>{num(q, 2)}</td>
+                      <td style={tdc(1)}>{moeda(b)}</td>
+                      <td style={tdc(1)}>{q ? moeda(b / q) : '—'}</td>
+                      <td style={tdc(1)}>{moeda(b * (tI + tP))}</td>
+                      <td style={tdc(1)}>{moeda(liq)}</td>
+                      <td style={tdc(1)}>{q ? moeda(liq / q) : '—'}</td>
+                      <td style={tdc(1)}>{moeda(cst)}</td>
+                      <td style={{ ...tdc(1), fontWeight: 700, color: liq - cst < 0 ? T.rustText : T.oliveText }}>{moeda(liq - cst)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+        <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 4 }}>Impostos por nota estimados pela alíquota efetiva do produto no ano; o custo por nota usa o custo por peça médio das OPs.</div>
+      </div>
+    </div>
+  );
+}
+
 function CusteioVendaCusto({ H, moeda, num }) {
   const [linhas, setLinhas] = useState(null);
   const [alvo, setAlvo] = useState(0.30);
@@ -22045,6 +22210,7 @@ function CusteioVendaCusto({ H, moeda, num }) {
   const [busca, setBusca] = useState('');
   const [soVendidos, setSoVendidos] = useState(true);
   const [ordem, setOrdem] = useState('receita');
+  const [abertoProd, setAbertoProd] = useState(null);
   useEffect(() => {
     (async () => {
       const [v, p] = await Promise.all([
@@ -22136,10 +22302,13 @@ function CusteioVendaCusto({ H, moeda, num }) {
           <tbody>
             {filtradas.map(l => {
               const aviso = l.q > 0 && Number(l.qtd_produzida) > 0 && l.q > Number(l.qtd_produzida) * 1.1;
+              const ab = abertoProd === l.cod_produto;
               return (
-                <tr key={l.cod_produto} style={{ background: l.q > 0 && l.res < 0 ? T.rustSoft : 'transparent' }}>
+                <React.Fragment key={l.cod_produto}>
+                <tr onClick={() => setAbertoProd(x => x === l.cod_produto ? null : l.cod_produto)} title="clique para ver como cada número foi formado"
+                  style={{ cursor: 'pointer', background: ab ? T.blueSoft : l.q > 0 && l.res < 0 ? T.rustSoft : 'transparent' }}>
                   <td style={{ ...td(), maxWidth: 340 }}>
-                    <div style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={l.produto}>{l.cod_produto} · {l.produto}</div>
+                    <div style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={l.produto}>{ab ? '▾' : '▸'} {l.cod_produto} · {l.produto}</div>
                     <div style={sub}>{l.ops} OP(s) · {num(l.qtd_produzida, 2)} produzida(s){aviso ? ' · vendeu mais do que produziu em 2026 (parte veio de estoque)' : ''}{l.taxa_estimada ? ' · sem imposto registrado' : ''}</div>
                   </td>
                   <td style={td(1)}>{l.q ? num(l.q, 2) : '—'}{l.q > 0 && <div style={sub}>{l.notas} nota(s) · {l.clientes} cliente(s)</div>}</td>
@@ -22152,13 +22321,15 @@ function CusteioVendaCusto({ H, moeda, num }) {
                   <td style={td(1)}>{l.idealBruto != null ? <><strong>{moeda(l.idealBruto)}</strong><div style={sub}>bruto · líquido {moeda(l.idealLiq)}</div></> : '—'}</td>
                   <td style={{ ...td(1), fontWeight: 700, color: l.gap == null ? T.inkFaint : l.gap < 0 ? T.rustText : T.oliveText }}>{pctF(l.gap)}</td>
                 </tr>
+                {ab && <tr><td colSpan={10} style={{ padding: 0, borderBottom: `2px solid ${T.blueText}` }}><VendaCustoDetalhe l={l} H={H} alvo={alvo} moeda={moeda} num={num} /></td></tr>}
+                </React.Fragment>
               );
             })}
           </tbody>
         </table>
       </div>
       <div style={sub}>
-        Linha vermelha: vendeu abaixo do custo. Praticado × ideal compara o preço líquido por peça com o líquido ideal (negativo = vendeu abaixo do ideal).
+        Clique no produto para ver a formação de cada número e os motivos. Linha vermelha: vendeu abaixo do custo. Praticado × ideal compara o preço líquido por peça com o líquido ideal (negativo = vendeu abaixo do ideal).
         O custo por peça é o das OPs de 2026; peça vendida de estoque antigo usa o custo de 2026 do mesmo produto.
       </div>
     </div>
