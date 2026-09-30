@@ -609,7 +609,7 @@ function PortalConteudo({ currentUser, session }) {
           {renderTab('custeio_op', <TabErrorBoundary tab="Custeio por OP"><CusteioPorOP /></TabErrorBoundary>)}
           {renderTab('custeio_plano', <TabErrorBoundary tab="Custeio - Plano"><CusteioPlano /></TabErrorBoundary>)}
           {renderTab('estoque_ocs', <TabErrorBoundary tab="Estoque x OCs"><RelatorioEstoqueOCs /></TabErrorBoundary>)}
-          {renderTab('almoxarifado', <TabErrorBoundary tab="Almoxarifado"><Almoxarifado currentUser={currentUser} /></TabErrorBoundary>)}
+          {renderTab('almoxarifado', <TabErrorBoundary tab="Estoque"><Almoxarifado currentUser={currentUser} /></TabErrorBoundary>)}
           {renderTab('equipamentos', <TabErrorBoundary tab="Equipamentos de Terceiros"><EquipamentosTerceiros /></TabErrorBoundary>)}
           {renderTab('recebimento_terceiros', <TabErrorBoundary tab="Validação de Recebimento"><ValidacaoRecebimento currentUser={currentUser} /></TabErrorBoundary>)}
           {renderTab('acompanhamento_servico', <TabErrorBoundary tab="Acompanhamento de Serviço"><AcompanhamentoServico /></TabErrorBoundary>)}
@@ -675,7 +675,7 @@ function Sidebar({ view, setView, pendCount, papel, telasPermitidas }) {
     { id: 'custeio_op',    label: 'Custeio por OP (teste)', icon: DollarSign },
     { id: 'custeio_plano', label: 'Custeio — Plano',      icon: ClipboardList },
     { id: 'estoque_ocs',  label: 'Estoque x OCs',        icon: Package },
-    { id: 'almoxarifado', label: 'Almoxarifado',           icon: Package },
+    { id: 'almoxarifado', label: 'Estoque',                icon: Package },
     { id: 'equipamentos', label: 'Equip. Terceiros',       icon: Webhook },
     { id: 'recebimento_terceiros', label: 'Validação de Recebimento', icon: ClipboardCheck },
     { id: 'acompanhamento_servico', label: 'Falta Nota de Serviço', icon: AlertTriangle },
@@ -784,7 +784,7 @@ const VIEW_TITLES = {
   comercial: 'Painel Comercial — Faturamento do Mês',
   produtividade: 'Produtividade da equipe', faturamento: 'Faturamento (Sankhya)',
   consumo_mp: 'Consumo de Matéria-Prima — SGQ',
-  almoxarifado: 'Almoxarifado — Estoque & Movimentação',
+  almoxarifado: 'Estoque & Movimentação',
   equipamentos: 'Equipamentos de Terceiros',
   pedidosvale: 'Pedidos Vale', integracao: 'Integrações', admin: 'Administração',
 };
@@ -28931,7 +28931,7 @@ const TELAS_CATALOGO = [
   { id: 'custeio_op', label: 'Custeio por OP (teste)' },
   { id: 'custeio_plano', label: 'Custeio — Plano' },
   { id: 'estoque_ocs', label: 'Estoque x OCs' },
-  { id: 'almoxarifado', label: 'Almoxarifado' },
+  { id: 'almoxarifado', label: 'Estoque' },
   { id: 'equipamentos', label: 'Equip. Terceiros' },
   { id: 'recebimento_terceiros', label: 'Validação de Recebimento' },
   { id: 'acompanhamento_servico', label: 'Falta Nota de Serviço' },
