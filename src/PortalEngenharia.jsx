@@ -3884,9 +3884,9 @@ const TXT = {
     diasAtePedido: 'Da proposta ao pedido', diasAteFaturar: 'Do pedido ao faturamento',
     convMedia: 'Média mensal (valor)',
     convDecididos: 'Ganho × perdido (valor)',
-    convMetaCot: 'Vendas (KdB) × meta de cotações {a}',
-    convMetaRitmo: 'Vendas {a} no Painel KdB (incoming orders): {v} de {m} da meta anual de cotações. No ritmo do ano, a meta até hoje seria {mh}: {p}% dela.',
-    explicaConv: 'Por VALOR: quanto do valor proposto virou pedido (em carteira ou já faturado), pelo valor da proposta. Média mensal = a mesma conta mês a mês, pela data da proposta. Ganho × perdido = só entre as propostas já decididas. Vendas × meta = vendas do ano no Painel KdB (net value) sobre a meta anual de abertura de cotações.',
+    convMetaCot: 'Cotado × meta de cotações {a}',
+    convMetaRitmo: 'Cotado em {a} (valor cheio de todas as propostas: em aberto, pedido, faturado e perdido): {v} de {m} da meta anual. No ritmo do ano, a meta até hoje seria {mh}: {p}% dela.',
+    explicaConv: 'Por VALOR: quanto do valor proposto virou pedido (em carteira ou já faturado), pelo valor da proposta. Média mensal = a mesma conta mês a mês, pela data da proposta. Ganho × perdido = só entre as propostas já decididas. Cotado × meta = valor cheio de tudo o que foi cotado no ano (em aberto, pedido, faturado e perdido) sobre a meta anual de abertura de cotações.',
     verLista: 'ver lista', fecharLista: 'fechar lista',
     explicaPrev: 'Soma das propostas em aberto, cada uma multiplicada pelo fator do seu estágio no cenário escolhido.',
     explicaCenario: 'os fatores por estágio são editáveis — a regra de vocês ainda está sendo definida',
@@ -4088,9 +4088,9 @@ const TXT = {
     diasAtePedido: 'Proposal to order', diasAteFaturar: 'Order to invoice',
     convMedia: 'Monthly average (value)',
     convDecididos: 'Won × lost (value)',
-    convMetaCot: 'Sales (KdB) × {a} quotation target',
-    convMetaRitmo: '{a} sales in the KdB panel (incoming orders): {v} of the {m} annual quotation target. At the year\'s pace the target to date would be {mh}: {p}% of it.',
-    explicaConv: 'By VALUE: how much of the proposed value became an order (backlog or invoiced). Monthly average = same ratio month by month, by proposal date. Won × lost = only among decided proposals. Sales × target = year sales in the KdB panel (net value) over the annual quotation target.',
+    convMetaCot: 'Quoted × {a} quotation target',
+    convMetaRitmo: 'Quoted in {a} (full value of all proposals: open, won, invoiced and lost): {v} of the {m} annual target. At the year\'s pace the target to date would be {mh}: {p}% of it.',
+    explicaConv: 'By VALUE: how much of the proposed value became an order (backlog or invoiced). Monthly average = same ratio month by month, by proposal date. Won × lost = only among decided proposals. Quoted × target = full value of everything quoted in the year (open, won, invoiced and lost) over the annual quotation target.',
     verLista: 'show list', fecharLista: 'hide list',
     explicaPrev: 'Open proposals, each multiplied by its stage factor in the chosen scenario.',
     explicaCenario: 'stage factors are editable — the final rule is still being defined',
@@ -4957,13 +4957,15 @@ function PainelDiretoria() {
   })();
   const receitaFat = soma(faturados, 'receita_faturada');
   // Meta anual de ABERTURA DE COTAÇÕES (Ricardo, 30/09/2026): 2026 = R$ 143.200.000.
-  // Conversão pedida: vendas do ano no Painel KdB (incoming orders, net value) ÷ meta.
+  // Comparação (regra do Asael): o valor CHEIO de tudo o que foi cotado no ano --
+  // em aberto, pedido, faturado e perdido -- sobre a meta de cotação.
   const metaCot = (() => {
     const METAS_COTACOES = { 2026: 143200000 };
     const ano = new Date().getFullYear(), meta = METAS_COTACOES[ano];
-    const vk = vendaKdb.find(x => Number(x.ano) === ano);
-    if (!meta || !vk) return null;
-    const vendido = Number(vk.vendido) || 0;
+    if (!meta) return null;
+    const doAno = dados.filter(d => String(d.competencia || '').startsWith(String(ano)));
+    if (!doAno.length) return null;
+    const vendido = soma(doAno);   // aqui: valor cotado no ano
     const ini = new Date(ano, 0, 1), fim = new Date(ano + 1, 0, 1);
     const metaHoje = meta * ((Date.now() - ini) / (fim - ini));
     return { ano, meta, vendido, pct: (vendido / meta) * 100, metaHoje, pctHoje: (vendido / metaHoje) * 100 };
