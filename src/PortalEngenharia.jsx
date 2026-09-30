@@ -3884,6 +3884,8 @@ const TXT = {
     diasAtePedido: 'Da proposta ao pedido', diasAteFaturar: 'Do pedido ao faturamento',
     convMedia: 'Média mensal (valor)',
     convDecididos: 'Ganho × perdido (valor)',
+    convMetaVendas: 'Conversão: vendas (KdB) ÷ meta de cotações {a}',
+    convMetaVendasTxt: 'Conversão {a}: vendas realizadas no Painel KdB (incoming orders) {v} sobre a meta de cotações de {m} = {p}%.',
     convMetaCot: 'Cotado × meta de cotações {a}',
     convMetaRitmo: 'Cotado em {a} (valor cheio de todas as propostas: em aberto, pedido, faturado e perdido): {v} de {m} da meta anual. No ritmo do ano, a meta até hoje seria {mh}: {p}% dela.',
     explicaConv: 'Por VALOR: quanto do valor proposto virou pedido (em carteira ou já faturado), pelo valor da proposta. Média mensal = a mesma conta mês a mês, pela data da proposta. Ganho × perdido = só entre as propostas já decididas. Cotado × meta = valor cheio de tudo o que foi cotado no ano (em aberto, pedido, faturado e perdido) sobre a meta anual de abertura de cotações.',
@@ -4088,6 +4090,8 @@ const TXT = {
     diasAtePedido: 'Proposal to order', diasAteFaturar: 'Order to invoice',
     convMedia: 'Monthly average (value)',
     convDecididos: 'Won × lost (value)',
+    convMetaVendas: 'Conversion: sales (KdB) ÷ {a} quotation target',
+    convMetaVendasTxt: '{a} conversion: sales in the KdB panel (incoming orders) {v} over the {m} quotation target = {p}%.',
     convMetaCot: 'Quoted × {a} quotation target',
     convMetaRitmo: 'Quoted in {a} (full value of all proposals: open, won, invoiced and lost): {v} of the {m} annual target. At the year\'s pace the target to date would be {mh}: {p}% of it.',
     explicaConv: 'By VALUE: how much of the proposed value became an order (backlog or invoiced). Monthly average = same ratio month by month, by proposal date. Won × lost = only among decided proposals. Quoted × target = full value of everything quoted in the year (open, won, invoiced and lost) over the annual quotation target.',
@@ -4964,11 +4968,15 @@ function PainelDiretoria() {
     const ano = new Date().getFullYear(), meta = METAS_COTACOES[ano];
     if (!meta) return null;
     const doAno = dados.filter(d => String(d.competencia || '').startsWith(String(ano)));
-    if (!doAno.length) return null;
-    const vendido = soma(doAno);   // aqui: valor cotado no ano
+    const vk = vendaKdb.find(x => Number(x.ano) === ano);
+    if (!doAno.length && !vk) return null;
+    // taxa de conversão pedida pelo Ricardo: vendas realizadas (incoming orders, Painel KdB) ÷ meta
+    const vendas = Number(vk?.vendido) || 0;
+    const vendido = soma(doAno);   // valor cotado no ano (referência: quanto da meta já foi cotado)
     const ini = new Date(ano, 0, 1), fim = new Date(ano + 1, 0, 1);
     const metaHoje = meta * ((Date.now() - ini) / (fim - ini));
-    return { ano, meta, vendido, pct: (vendido / meta) * 100, metaHoje, pctHoje: (vendido / metaHoje) * 100 };
+    return { ano, meta, vendido, pct: (vendido / meta) * 100, metaHoje, pctHoje: (vendido / metaHoje) * 100,
+             vendas, pctVendas: (vendas / meta) * 100, pctVendasHoje: (vendas / metaHoje) * 100 };
   })();
   // Regra oficial do pipeline: valor × peso do estágio; sem classificação = 0.
   const somaPonderado = soma(abertos, 'valor_ponderado');
@@ -6218,10 +6226,13 @@ IMPORTANTE: Responda SOMENTE com base nos dados acima. Se a pergunta pede algo q
             <Medidor pct={convPctValor} par={G.roxo} rotulo={`${val(valorGanho)} ${t.de} ${val(valorProposto)}`} />
             {convMensalValor != null && <Medidor pct={convMensalValor} par={G.verde} rotulo={t.convMedia} />}
             {convDecididosValor != null && <Medidor pct={convDecididosValor} par={G.ambar} rotulo={t.convDecididos} />}
+            {metaCot && <Medidor pct={metaCot.pctVendas} par={G.roxo} rotulo={t.convMetaVendas.replace('{a}', metaCot.ano)} />}
             {metaCot && <Medidor pct={metaCot.pct} par={G.azul} rotulo={t.convMetaCot.replace('{a}', metaCot.ano)} />}
           </div>
           {metaCot && (
             <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 10, lineHeight: 1.55, textAlign: 'center' }}>
+              {t.convMetaVendasTxt.replace(/\{a\}/g, metaCot.ano).replace('{v}', val(metaCot.vendas)).replace('{m}', val(metaCot.meta))
+                .replace('{p}', metaCot.pctVendas.toFixed(1).replace('.', ','))}{' '}
               {t.convMetaRitmo.replace('{a}', metaCot.ano).replace('{v}', val(metaCot.vendido)).replace('{m}', val(metaCot.meta))
                 .replace('{mh}', val(metaCot.metaHoje)).replace('{p}', metaCot.pctHoje.toFixed(0))}
             </div>
