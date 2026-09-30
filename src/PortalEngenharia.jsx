@@ -22040,6 +22040,71 @@ function ApontarHoras({ setores, apontamentos, onSalvo }) {
 // atingir a margem-alvo sobre a receita líquida. Fonte: v_custeio_op_produto_venda.
 // Detalhe de um produto em Venda × custo: de onde sai cada número (notas de venda,
 // impostos, OPs que formam o custo por peça, a conta do preço ideal) e os motivos.
+// Gráfico mensal em SVG (barras agrupadas ou empilhadas + linha opcional no eixo da direita).
+// Clique numa coluna chama aoClicar(indice). Sem biblioteca: mesmo padrão dos gráficos do portal.
+function GraficoMensal({ meses, barras = [], empilhar = false, linha = null, fmt = (v) => v, fmtLinha = (v) => v, altura = 240, aoClicar, ativo }) {
+  const W = 900, H = altura, m = { t: 16, r: linha ? 56 : 16, b: 34, l: 64 };
+  const iw = W - m.l - m.r, ih = H - m.t - m.b, n = meses.length || 1;
+  const somaCol = (i) => barras.reduce((s, b) => s + Math.max(0, Number(b.valores[i]) || 0), 0);
+  const vals = barras.flatMap(b => b.valores.map(Number).filter(Number.isFinite));
+  let maxV = empilhar ? Math.max(0, ...meses.map((_, i) => somaCol(i))) : Math.max(0, ...vals);
+  const minV = empilhar ? 0 : Math.min(0, ...vals);
+  if (maxV === minV) maxV = minV + 1;
+  const y = (v) => m.t + ih - ((v - minV) / (maxV - minV)) * ih;
+  const lv = linha ? linha.valores.map(Number).filter(Number.isFinite) : [];
+  const lMax = lv.length ? Math.max(...lv, 0) : 1, lMin = lv.length ? Math.min(...lv, 0) : 0;
+  const yl = (v) => m.t + ih - ((v - lMin) / ((lMax - lMin) || 1)) * ih;
+  const colW = iw / n, gap = colW * 0.22, bw = empilhar ? colW - gap : (colW - gap) / Math.max(1, barras.length);
+  const ticks = [0, 0.25, 0.5, 0.75, 1].map(f => minV + (maxV - minV) * f);
+  const rot = (s) => { const [a, mm] = String(s).split('-'); return mm ? `${['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'][Number(mm) - 1]}/${a.slice(2)}` : s; };
+  return (
+    <div>
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 'auto', display: 'block' }}>
+        {ticks.map((t, i) => (
+          <g key={i}>
+            <line x1={m.l} x2={W - m.r} y1={y(t)} y2={y(t)} stroke={T.lineSoft} />
+            <text x={m.l - 6} y={y(t) + 4} textAnchor="end" fontSize="11" fill={T.inkFaint}>{fmt(t)}</text>
+          </g>
+        ))}
+        {minV < 0 && <line x1={m.l} x2={W - m.r} y1={y(0)} y2={y(0)} stroke={T.inkFaint} />}
+        {meses.map((mes, i) => {
+          const x0 = m.l + i * colW + gap / 2;
+          let acum = 0;
+          return (
+            <g key={mes} onClick={aoClicar ? () => aoClicar(i) : undefined} style={{ cursor: aoClicar ? 'pointer' : 'default' }}>
+              <rect x={m.l + i * colW} y={m.t} width={colW} height={ih} fill={ativo === i ? T.rustSoft : 'transparent'} />
+              {barras.map((b, j) => {
+                const v = Number(b.valores[i]) || 0;
+                const cor = typeof b.cor === 'function' ? b.cor(v, i) : b.cor;
+                if (empilhar) {
+                  const y1 = y(acum + Math.max(0, v)), y0 = y(acum); acum += Math.max(0, v);
+                  return <rect key={j} x={x0} y={y1} width={bw} height={Math.max(0, y0 - y1)} fill={cor} rx="2"><title>{`${b.nome} · ${rot(mes)}: ${fmt(v)}`}</title></rect>;
+                }
+                const top = y(Math.max(0, v)), base = y(Math.min(0, v));
+                return <rect key={j} x={x0 + j * bw} y={top} width={Math.max(1, bw - 2)} height={Math.max(0, base - top)} fill={cor} rx="2"><title>{`${b.nome} · ${rot(mes)}: ${fmt(v)}`}</title></rect>;
+              })}
+              <text x={m.l + i * colW + colW / 2} y={H - m.b + 16} textAnchor="middle" fontSize="11.5" fill={ativo === i ? T.terracotta : T.inkDim} fontWeight={ativo === i ? 700 : 400}>{rot(mes)}</text>
+            </g>
+          );
+        })}
+        {linha && (
+          <g>
+            <polyline fill="none" stroke={linha.cor} strokeWidth="2.5" points={linha.valores.map((v, i) => Number.isFinite(Number(v)) ? `${m.l + i * colW + colW / 2},${yl(Number(v))}` : null).filter(Boolean).join(' ')} />
+            {linha.valores.map((v, i) => Number.isFinite(Number(v)) && (
+              <circle key={i} cx={m.l + i * colW + colW / 2} cy={yl(Number(v))} r="4" fill={linha.cor}><title>{`${linha.nome} · ${rot(meses[i])}: ${fmtLinha(Number(v))}`}</title></circle>
+            ))}
+            {[lMin, (lMin + lMax) / 2, lMax].map((t, i) => <text key={i} x={W - m.r + 6} y={yl(t) + 4} fontSize="11" fill={linha.cor}>{fmtLinha(t)}</text>)}
+          </g>
+        )}
+      </svg>
+      <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', fontSize: 11.5, color: T.inkDim, marginTop: 4 }}>
+        {barras.map(b => <span key={b.nome}><span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 2, background: typeof b.cor === 'function' ? b.cor(1) : b.cor, marginRight: 5 }} />{b.nome}</span>)}
+        {linha && <span><span style={{ display: 'inline-block', width: 14, height: 3, background: linha.cor, marginRight: 5, verticalAlign: 'middle' }} />{linha.nome} (eixo da direita)</span>}
+      </div>
+    </div>
+  );
+}
+
 function VendaCustoDetalhe({ l, H, alvo, moeda, num }) {
   const [d, setD] = useState(null);
   useEffect(() => {
@@ -22203,6 +22268,71 @@ function VendaCustoDetalhe({ l, H, alvo, moeda, num }) {
   );
 }
 
+const rotMesCurto = (s) => { const [a, m] = String(s || '').split('-'); return m ? `${['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'][Number(m) - 1]}/${a.slice(2)}` : (s || '—'); };
+// detalhe de um mês clicado no gráfico da Venda × custo
+function DetalheMesVenda({ x, k, cuDe, H, moeda, num, thx, tdx }) {
+  const [ops, setOps] = useState(null);
+  useEffect(() => {
+    if (k !== 'horas') return;
+    setOps(null);
+    supabase.from('v_custeio_mao_de_obra').select('idiproc,descr_prod,br,setor_nome,horas,pessoas,custo_mao_obra').eq('competencia', x.m).then(r => {
+      const a = {};
+      (r.data || []).forEach(l => { const c = l.idiproc; a[c] = a[c] || { op: c, prod: l.descr_prod, br: l.br, h: 0, c: 0, setores: new Set() }; a[c].h += Number(l.horas) || 0; a[c].c += Number(l.custo_mao_obra) || 0; if (l.setor_nome) a[c].setores.add(l.setor_nome); });
+      setOps(Object.values(a).sort((p, q) => q.h - p.h));
+    });
+  }, [k, x.m]);
+  const box = { marginTop: 12, paddingTop: 10, borderTop: `1px solid ${T.line}` };
+  if (k === 'horas') {
+    return (
+      <div style={box}>
+        <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 6 }}>{rotMesCurto(x.m)}: {num(x.hp + x.ho, 0)} h apontadas · {num(x.hp, 0)} h em {x.opsH} OPs · {num(x.ho, 0)} h ociosas ({x.hp + x.ho ? num(x.ho / (x.hp + x.ho) * 100, 1) : 0}%) · {x.dias} dias com apontamento · {x.pessoas} pessoas · {x.pd} pessoa-dias · {x.pd ? num((x.hp + x.ho) / x.pd, 1) : '—'} h por pessoa-dia</div>
+        {!ops ? <div style={{ fontSize: 11.5, color: T.inkFaint }}>Carregando as OPs do mês…</div> : (
+          <div style={{ maxHeight: 320, overflowY: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead><tr>{['OP', 'Produto', 'BR', 'Setores', 'Horas', 'Custo da MO'].map((h, j) => <th key={j} style={thx(j > 3)}>{h}</th>)}</tr></thead>
+              <tbody>{ops.map(o => (
+                <tr key={o.op} style={{ background: o.br === 'BR9595/22' ? T.panelAlt : 'transparent' }}>
+                  <td style={{ ...tdx(), fontWeight: 700 }}>{o.op}</td><td style={{ ...tdx(), maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={o.prod}>{o.prod}</td>
+                  <td style={tdx()}>{o.br === 'BR9595/22' ? 'ociosa' : (o.br || '—')}</td><td style={tdx()}>{[...o.setores].join(', ') || '—'}</td>
+                  <td style={tdx(1)}>{num(o.h, 1)} h</td><td style={tdx(1)}>{moeda(o.c)}</td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    );
+  }
+  const linhas = (k === 'abaixo' ? x.abx : x.rs).map(r => {
+    const pr = cuDe[String(r.cod_produto)] || {}; const q = Number(r.qtd_vendida) || 0, liq = Number(r.receita_liquida) || 0;
+    const custo = Number(H ? r.custo_vendido_horas : r.custo_vendido) || 0;
+    return { cod: r.cod_produto, prod: pr.produto, q, bruta: Number(r.receita_bruta) || 0, liq, custo, res: liq - custo, marg: liq > 0 ? (liq - custo) / liq * 100 : null,
+      liqPeca: q ? liq / q : null, ideal: pr.idealLiq, gap: q && pr.idealLiq ? (liq / q / pr.idealLiq - 1) * 100 : null };
+  }).sort((a, b) => k === 'custo' ? b.custo - a.custo : k === 'resultado' ? a.res - b.res : k === 'abaixo' ? (a.gap ?? 0) - (b.gap ?? 0) : b.liq - a.liq);
+  return (
+    <div style={box}>
+      <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 6 }}>
+        {rotMesCurto(x.m)}: receita líquida {moeda(x.liq)} (bruta {moeda(x.bruta)}) · custo do vendido {moeda(x.custo)} · resultado {moeda(x.res)}{x.marg != null ? ` (${num(x.marg, 1)}%)` : ''} · {x.vend} produtos vendidos, {x.abx.length} abaixo do ideal
+      </div>
+      <div style={{ maxHeight: 340, overflowY: 'auto' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead><tr>{['Produto', 'Qtd', 'Bruta', 'Líquida', 'Custo', 'Resultado', 'Margem', 'Líquido / peça', 'Ideal / peça', 'Praticado × ideal'].map((h, j) => <th key={j} style={thx(j > 0)}>{h}</th>)}</tr></thead>
+          <tbody>{linhas.map(l => (
+            <tr key={l.cod}>
+              <td style={{ ...tdx(), maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={l.prod}>{l.cod} · {l.prod}</td>
+              <td style={tdx(1)}>{num(l.q, 2)}</td><td style={tdx(1)}>{moeda(l.bruta)}</td><td style={tdx(1)}>{moeda(l.liq)}</td><td style={tdx(1)}>{moeda(l.custo)}</td>
+              <td style={{ ...tdx(1), fontWeight: 700, color: l.res < 0 ? T.rustText : T.oliveText }}>{moeda(l.res)}</td>
+              <td style={tdx(1)}>{l.marg == null ? '—' : `${num(l.marg, 1)}%`}</td><td style={tdx(1)}>{l.liqPeca != null ? moeda(l.liqPeca) : '—'}</td>
+              <td style={tdx(1)}>{l.ideal ? moeda(l.ideal) : '—'}</td>
+              <td style={{ ...tdx(1), fontWeight: 700, color: l.gap == null ? T.inkFaint : l.gap < 0 ? T.rustText : T.oliveText }}>{l.gap == null ? '—' : `${l.gap > 0 ? '+' : ''}${num(l.gap, 1)}%`}</td>
+            </tr>
+          ))}</tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 function CusteioVendaCusto({ H, moeda, num }) {
   const [linhas, setLinhas] = useState(null);
   const [alvo, setAlvo] = useState(0.30);
@@ -22211,16 +22341,45 @@ function CusteioVendaCusto({ H, moeda, num }) {
   const [soVendidos, setSoVendidos] = useState(true);
   const [ordem, setOrdem] = useState('receita');
   const [abertoProd, setAbertoProd] = useState(null);
+  // período (mês de/até) e gráficos mês a mês ao clicar nos cards
+  const [porMes, setPorMes] = useState([]);
+  const [horasMes, setHorasMes] = useState([]);
+  const [de, setDe] = useState('');
+  const [ate, setAte] = useState('');
+  const [grafico, setGrafico] = useState(null);
+  const [expandido, setExpandido] = useState(false);
+  const [mesSel, setMesSel] = useState(null);
   useEffect(() => {
     (async () => {
-      const [v, p] = await Promise.all([
+      const lerTodas = async (tab) => {
+        let out = [];
+        for (let i = 0; ; i += 1000) {
+          const { data } = await supabase.from(tab).select('*').range(i, i + 999);
+          out = out.concat(data || []); if (!data || data.length < 1000) break;
+        }
+        return out;
+      };
+      const [v, p, vm, hm] = await Promise.all([
         supabase.from('v_custeio_op_produto_venda').select('*'),
         supabase.from('custeio_parametro').select('*').eq('chave', 'margem_alvo_pct').maybeSingle(),
+        lerTodas('v_custeio_op_produto_venda_mes'),
+        supabase.from('v_custeio_horas_mes').select('*').order('competencia'),
       ]);
-      setLinhas(v.data || []);
+      setLinhas(v.data || []); setPorMes(vm); setHorasMes(hm.data || []);
       if (p.data?.valor != null) setAlvo(Number(p.data.valor));
     })();
   }, []);
+  const mesesDisp = useMemo(() => [...new Set([...porMes.map(x => x.competencia), ...horasMes.map(x => x.competencia)])].filter(Boolean).sort(), [porMes, horasMes]);
+  const deEf = de || mesesDisp[0] || '', ateEf = ate || mesesDisp[mesesDisp.length - 1] || '';
+  const mesesPer = mesesDisp.filter(m => m >= deEf && m <= ateEf);
+  const noPeriodo = useMemo(() => {
+    const a = {};
+    porMes.filter(x => x.competencia >= deEf && x.competencia <= ateEf).forEach(x => {
+      const k = String(x.cod_produto); a[k] = a[k] || { qtd: 0, bruta: 0, liq: 0, notas: 0 };
+      a[k].qtd += Number(x.qtd_vendida) || 0; a[k].bruta += Number(x.receita_bruta) || 0; a[k].liq += Number(x.receita_liquida) || 0; a[k].notas += Number(x.notas) || 0;
+    });
+    return a;
+  }, [porMes, deEf, ateEf]);
   const salvarAlvo = async () => {
     const x = Number(String(alvoTxt).replace(',', '.')) / 100;
     if (!(x > 0 && x < 0.95)) { alert('Informe a margem-alvo em %, entre 1 e 94.'); return; }
@@ -22229,14 +22388,16 @@ function CusteioVendaCusto({ H, moeda, num }) {
   };
   const calc = useMemo(() => (linhas || []).map(l => {
     const cu = Number(H ? l.custo_unit_horas : l.custo_unit) || 0;
-    const q = Number(l.qtd_vendida) || 0, liq = Number(l.receita_liquida) || 0, bruta = Number(l.receita_bruta) || 0;
+    const pp = noPeriodo[String(l.cod_produto)];
+    const q = pp ? pp.qtd : 0, liq = pp ? pp.liq : 0, bruta = pp ? pp.bruta : 0;
     const taxa = (Number(l.taxa_icms_ipi_iss) || 0) + (Number(l.taxa_pis_cofins) || 0);
     const custoVend = cu * q, res = liq - custoVend;
     const idealLiq = cu > 0 ? cu / (1 - alvo) : null, idealBruto = idealLiq != null && taxa < 1 ? idealLiq / (1 - taxa) : null;
     const liqPeca = q ? liq / q : null, brutoPeca = q ? bruta / q : null;
     return { ...l, cu, q, liq, bruta, taxa, custoVend, res, marg: liq > 0 ? res / liq * 100 : null,
-      idealLiq, idealBruto, liqPeca, brutoPeca, gap: liqPeca != null && idealLiq ? (liqPeca / idealLiq - 1) * 100 : null };
-  }), [linhas, H, alvo]);
+      idealLiq, idealBruto, liqPeca, brutoPeca, gap: liqPeca != null && idealLiq ? (liqPeca / idealLiq - 1) * 100 : null,
+      notas: pp ? pp.notas : 0, receita_bruta: bruta, receita_liquida: liq, qtd_vendida: q };
+  }), [linhas, H, alvo, noPeriodo]);
   const filtradas = useMemo(() => {
     const b = busca.trim().toLowerCase();
     const f = calc.filter(l => (!soVendidos || l.q > 0) && (!b || `${l.cod_produto} ${l.produto || ''}`.toLowerCase().includes(b)));
@@ -22273,16 +22434,105 @@ function CusteioVendaCusto({ H, moeda, num }) {
           <button onClick={salvarAlvo} disabled={!alvoTxt} style={{ ...ghostBtn(T.inkDim), cursor: 'pointer', opacity: alvoTxt ? 1 : 0.5 }}>Salvar</button>
         </div>
       </div>
-      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-        {card('Receita líquida', moeda(TL), `bruta ${moeda(TB)} · ${vend.length} produtos vendidos`)}
-        {card('Custo do vendido', moeda(TC), 'custo por peça × quantidade vendida')}
-        {card('Resultado', moeda(TL - TC), TL ? `margem ${num((TL - TC) / TL * 100, 1)}%` : null, TL - TC < 0 ? T.rustText : T.oliveText)}
-        {card('Abaixo do preço ideal', abaixo.length, `de ${vend.length} vendidos · ${prejuizo.length} com prejuízo`, abaixo.length ? T.amberText : T.oliveText)}
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', background: T.panel, border: `1px solid ${T.line}`, borderRadius: 8, padding: '8px 12px' }}>
+        <strong style={{ fontSize: 12.5 }}>Período</strong>
+        <select value={deEf} onChange={e => { setDe(e.target.value); if (e.target.value > ateEf) setAte(e.target.value); setMesSel(null); }} style={{ ...inputStyle(), width: 110, padding: '5px 8px' }}>
+          {mesesDisp.map(m => <option key={m} value={m}>{rotMesCurto(m)}</option>)}
+        </select>
+        <span style={{ fontSize: 12, color: T.inkDim }}>até</span>
+        <select value={ateEf} onChange={e => { setAte(e.target.value); if (e.target.value < deEf) setDe(e.target.value); setMesSel(null); }} style={{ ...inputStyle(), width: 110, padding: '5px 8px' }}>
+          {mesesDisp.map(m => <option key={m} value={m}>{rotMesCurto(m)}</option>)}
+        </select>
+        {[['ano', 'Ano todo'], ['tri', 'Últimos 3 meses'], ['mes', 'Último mês']].map(([k, r]) => (
+          <button key={k} onClick={() => { const u = mesesDisp[mesesDisp.length - 1]; setAte(u); setDe(k === 'ano' ? mesesDisp.find(m => m.startsWith(u.slice(0, 4))) : k === 'tri' ? mesesDisp[Math.max(0, mesesDisp.length - 3)] : u); setMesSel(null); }}
+            style={{ ...ghostBtn(T.inkDim), cursor: 'pointer', padding: '4px 10px' }}>{r}</button>
+        ))}
+        <span style={{ fontSize: 11.5, color: T.inkFaint }}>vale para os cards, os gráficos e a tabela · clique num card para ver mês a mês</span>
       </div>
+      {(() => {
+        // série mês a mês (produtos custeados), no período
+        const cuDe = Object.fromEntries(calc.map(l => [String(l.cod_produto), l]));
+        const serie = mesesPer.map(m => {
+          const rs = porMes.filter(x => x.competencia === m);
+          const bruta = rs.reduce((a, x) => a + (Number(x.receita_bruta) || 0), 0), liq = rs.reduce((a, x) => a + (Number(x.receita_liquida) || 0), 0);
+          const custo = rs.reduce((a, x) => a + (Number(H ? x.custo_vendido_horas : x.custo_vendido) || 0), 0);
+          const abx = rs.filter(x => { const pr = cuDe[String(x.cod_produto)]; const q = Number(x.qtd_vendida) || 0; return pr?.idealLiq && q > 0 && (Number(x.receita_liquida) || 0) / q < pr.idealLiq; });
+          const hm = horasMes.find(x => x.competencia === m) || {};
+          return { m, rs, bruta, liq, custo, res: liq - custo, marg: liq > 0 ? (liq - custo) / liq * 100 : null, vend: rs.length, abx,
+            hp: Number(hm.horas_produtivas) || 0, ho: Number(hm.horas_ociosas) || 0, dias: Number(hm.dias_com_apontamento) || 0, pessoas: Number(hm.pessoas) || 0,
+            pd: Number(hm.pessoa_dias) || 0, opsH: Number(hm.ops_com_hora) || 0 };
+        });
+        const S = (f) => serie.reduce((a, x) => a + (Number(f(x)) || 0), 0);
+        const HP = S(x => x.hp), HO = S(x => x.ho), PD = S(x => x.pd);
+        const cards = [
+          ['receita', 'Receita líquida', moeda(TL), `bruta ${moeda(TB)} · ${vend.length} produtos vendidos`],
+          ['custo', 'Custo do vendido', moeda(TC), 'custo por peça × quantidade vendida'],
+          ['resultado', 'Resultado', moeda(TL - TC), TL ? `margem ${num((TL - TC) / TL * 100, 1)}%` : null, TL - TC < 0 ? T.rustText : T.oliveText],
+          ['abaixo', 'Abaixo do preço ideal', abaixo.length, `de ${vend.length} vendidos · ${prejuizo.length} com prejuízo`, abaixo.length ? T.amberText : T.oliveText],
+          ['horas', 'Horas e dias trabalhados', `${num(HP + HO, 0)} h`, `${num(HP, 0)} h em OP · ${num(HO, 0)} h ociosas · ${num(PD, 0)} pessoa-dias`],
+        ];
+        const cfg = {
+          receita: { tit: 'Receita mês a mês', barras: [{ nome: 'Receita bruta', cor: '#C9D6E8', valores: serie.map(x => x.bruta) }, { nome: 'Receita líquida', cor: T.blueText, valores: serie.map(x => x.liq) }] },
+          custo: { tit: 'Custo do vendido × receita líquida', barras: [{ nome: 'Receita líquida', cor: T.blueText, valores: serie.map(x => x.liq) }, { nome: 'Custo do vendido', cor: T.terracotta, valores: serie.map(x => x.custo) }] },
+          resultado: { tit: 'Resultado e margem', barras: [{ nome: 'Resultado', cor: (v) => v < 0 ? T.rust : T.olive, valores: serie.map(x => x.res) }], linha: { nome: 'Margem', cor: T.amberText, valores: serie.map(x => x.marg) }, fmtLinha: (v) => `${num(v, 0)}%` },
+          abaixo: { tit: 'Produtos vendidos abaixo do preço ideal', barras: [{ nome: 'Vendidos no mês', cor: '#D8DEE6', valores: serie.map(x => x.vend) }, { nome: 'Abaixo do ideal', cor: T.amberText, valores: serie.map(x => x.abx.length) }], fmt: (v) => num(v, 0) },
+          horas: { tit: 'Horas apontadas e dias trabalhados', empilhar: true, barras: [{ nome: 'Horas em OP', cor: T.olive, valores: serie.map(x => x.hp) }, { nome: 'Horas ociosas (BR9595/22)', cor: '#C8C2B4', valores: serie.map(x => x.ho) }], linha: { nome: 'Pessoas no mês', cor: T.blueText, valores: serie.map(x => x.pessoas) }, fmt: (v) => `${num(v, 0)} h`, fmtLinha: (v) => num(v, 0) },
+        }[grafico];
+        const sel = mesSel != null ? serie[mesSel] : null;
+        const thx = (dir) => ({ padding: '5px 8px', fontSize: 10.5, color: T.inkFaint, fontWeight: 700, textAlign: dir ? 'right' : 'left', borderBottom: `1px solid ${T.line}`, whiteSpace: 'nowrap' });
+        const tdx = (dir) => ({ padding: '5px 8px', fontSize: 11.5, textAlign: dir ? 'right' : 'left', borderBottom: `1px solid ${T.lineSoft}`, fontVariantNumeric: 'tabular-nums' });
+        return (<>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+            {cards.map(([k, r, v, s2, cor]) => (
+              <div key={k} onClick={() => { setGrafico(g => g === k ? null : k); setMesSel(null); }} className="g-clicavel"
+                style={{ flex: '1 1 160px', background: grafico === k ? T.rustSoft : T.panelAlt, border: `1px solid ${grafico === k ? T.terracotta : T.line}`, borderRadius: 10, padding: '10px 14px', cursor: 'pointer' }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: T.inkFaint }}>{r}</div>
+                <div style={{ fontSize: 19, fontWeight: 800, marginTop: 2, color: cor || T.ink }}>{v}</div>
+                {s2 && <div style={sub}>{s2}</div>}
+                <div style={{ fontSize: 10.5, fontWeight: 700, color: T.blueText, marginTop: 4 }}>{grafico === k ? '▴ fechar gráfico' : '▾ ver mês a mês'}</div>
+              </div>
+            ))}
+          </div>
+          {cfg && (
+            <div style={{ background: T.panel, border: `1px solid ${T.terracotta}`, borderRadius: 10, padding: 14 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 6 }}>
+                <span style={{ fontSize: 13, fontWeight: 700, color: T.terracotta }}>{cfg.tit} · {rotMesCurto(deEf)} a {rotMesCurto(ateEf)}</span>
+                <span style={{ display: 'flex', gap: 6 }}>
+                  <button onClick={() => setExpandido(x => !x)} style={{ ...ghostBtn(T.inkDim), cursor: 'pointer' }}>{expandido ? 'Recolher' : '⤢ Expandir'}</button>
+                  <button onClick={() => { setGrafico(null); setMesSel(null); }} style={{ ...ghostBtn(T.inkDim), cursor: 'pointer' }}>×</button>
+                </span>
+              </div>
+              <div style={{ fontSize: 11, color: T.inkFaint, marginBottom: 4 }}>Clique numa coluna para ver o detalhe do mês.</div>
+              <GraficoMensal meses={serie.map(x => x.m)} barras={cfg.barras} empilhar={cfg.empilhar} linha={cfg.linha}
+                fmt={cfg.fmt || moeda} fmtLinha={cfg.fmtLinha} altura={expandido ? 420 : 240}
+                aoClicar={(i) => setMesSel(x => x === i ? null : i)} ativo={mesSel} />
+              {expandido && (
+                <div style={{ overflowX: 'auto', marginTop: 10 }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                    <thead><tr>{['Mês', 'Receita bruta', 'Receita líquida', 'Custo do vendido', 'Resultado', 'Margem', 'Vendidos', 'Abaixo do ideal', 'Horas em OP', 'Horas ociosas', 'Dias', 'Pessoas', 'Pessoa-dias', 'h por pessoa-dia'].map((h, j) => <th key={j} style={thx(j > 0)}>{h}</th>)}</tr></thead>
+                    <tbody>
+                      {serie.map((x, i) => (
+                        <tr key={x.m} onClick={() => setMesSel(i)} style={{ cursor: 'pointer', background: mesSel === i ? T.rustSoft : 'transparent' }}>
+                          <td style={{ ...tdx(), fontWeight: 700 }}>{rotMesCurto(x.m)}</td><td style={tdx(1)}>{moeda(x.bruta)}</td><td style={tdx(1)}>{moeda(x.liq)}</td>
+                          <td style={tdx(1)}>{moeda(x.custo)}</td><td style={{ ...tdx(1), color: x.res < 0 ? T.rustText : T.oliveText, fontWeight: 700 }}>{moeda(x.res)}</td>
+                          <td style={tdx(1)}>{x.marg == null ? '—' : `${num(x.marg, 1)}%`}</td><td style={tdx(1)}>{x.vend}</td><td style={tdx(1)}>{x.abx.length}</td>
+                          <td style={tdx(1)}>{num(x.hp, 0)}</td><td style={tdx(1)}>{num(x.ho, 0)}</td><td style={tdx(1)}>{x.dias}</td><td style={tdx(1)}>{x.pessoas}</td>
+                          <td style={tdx(1)}>{x.pd}</td><td style={tdx(1)}>{x.pd ? num((x.hp + x.ho) / x.pd, 1) : '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              {sel && <DetalheMesVenda x={sel} k={grafico} cuDe={cuDe} H={H} moeda={moeda} num={num} thx={thx} tdx={tdx} />}
+            </div>
+          )}
+        </>);
+      })()}
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
         <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="buscar produto ou código" style={{ ...inputStyle(), width: 260, padding: '6px 8px' }} />
         <label style={{ fontSize: 12.5, color: T.inkDim, display: 'inline-flex', gap: 6, alignItems: 'center' }}>
-          <input type="checkbox" checked={soVendidos} onChange={e => setSoVendidos(e.target.checked)} /> só produtos vendidos em 2026
+          <input type="checkbox" checked={soVendidos} onChange={e => setSoVendidos(e.target.checked)} /> só produtos vendidos no período
         </label>
         <span style={{ fontSize: 12, color: T.inkDim }}>ordenar por</span>
         <select value={ordem} onChange={e => setOrdem(e.target.value)} style={{ ...inputStyle(), width: 200, padding: '6px 8px' }}>
