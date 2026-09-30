@@ -22394,6 +22394,65 @@ function CusteioPorOP() {
                                     </div>
                                   ))}
                               </div>
+                              {(() => {
+                                // OUTRAS OPs DO MESMO PRODUTO (Asael, 30/09): a peça pode ter sido feita por mais de
+                                // uma OP -- ex.: produto 18195, OP 6969 suspensa com as horas e os apontamentos de MP,
+                                // OP 7458 finalizada com o material. Mostra as irmãs e a conta somada.
+                                const irmas = ops.filter(o => String(o.cod_produto) === String(l.cod_produto) && o.op !== l.op);
+                                if (!irmas.length) return null;
+                                const todas = [l, ...irmas];
+                                const soma = (f) => todas.reduce((s2, o) => s2 + (Number(typeof f === 'function' ? f(o) : o[f]) || 0), 0);
+                                const pecas = soma('qtd_produzida'), custoJunto = soma(custo);
+                                const ST = { F: 'finalizada', C: 'CANCELADA', S: 'suspensa', A: 'aberta' };
+                                const semHorasAqui = l.sem_horas && irmas.some(o => !o.sem_horas);
+                                return (
+                                  <div style={{ background: T.panel, border: `1px solid ${semHorasAqui ? T.amber : T.line}`, borderRadius: 8, padding: 10, gridColumn: '1 / -1' }}>
+                                    <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4 }}>Outras OPs do mesmo produto ({l.cod_produto})</div>
+                                    {semHorasAqui && (
+                                      <div style={{ fontSize: 11.5, color: T.amberText, fontWeight: 600, marginBottom: 6 }}>
+                                        Esta OP não tem horas, mas {irmas.filter(o => !o.sem_horas).map(o => `a OP ${o.op} (${ST[o.status] || o.status})`).join(' e ')} tem —
+                                        provavelmente a mesma peça foi feita pelas duas. Veja a conta somada abaixo.
+                                      </div>
+                                    )}
+                                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+                                      <thead><tr>{['OP', 'Situação', 'Período', 'Peças', 'Material', 'Horas', 'Mão de obra', 'Custo total'].map((h, j) => (
+                                        <th key={j} style={{ padding: '4px 6px', fontSize: 10, color: T.inkFaint, fontWeight: 600, textAlign: j > 2 ? 'right' : 'left' }}>{h}</th>))}</tr></thead>
+                                      <tbody>
+                                        {todas.map((o, j) => (
+                                          <tr key={o.op} style={{ borderTop: `1px solid ${T.lineSoft}`, fontWeight: o.op === l.op ? 700 : 400 }}>
+                                            <td style={{ padding: '4px 6px' }}>
+                                              {o.op === l.op ? `${o.op} (esta)` : (
+                                                <button onClick={() => { if (situ !== 'todas' && situ !== o.situacao) setSitu('todas'); abrir(o.op); }}
+                                                  style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: T.blueText, textDecoration: 'underline', fontSize: 11, fontFamily: 'inherit' }}>{o.op}</button>
+                                              )}
+                                            </td>
+                                            <td style={{ padding: '4px 6px' }}>{ST[o.status] || o.status || '—'}</td>
+                                            <td style={{ padding: '4px 6px', color: T.inkFaint }}>{fmtD(o.inicio)}{o.termino ? ` a ${fmtD(o.termino)}` : ' · sem término'}</td>
+                                            <td style={{ padding: '4px 6px', textAlign: 'right' }}>{num(o.qtd_produzida, 2)}</td>
+                                            <td style={{ padding: '4px 6px', textAlign: 'right' }}>{moeda(Number(o.material) || 0)}</td>
+                                            <td style={{ padding: '4px 6px', textAlign: 'right', color: o.sem_horas ? T.amberText : T.ink }}>{o.sem_horas ? 'nenhuma' : `${num(o.horas)} h`}</td>
+                                            <td style={{ padding: '4px 6px', textAlign: 'right' }}>{moeda(Number(o.mao_obra) || 0)}</td>
+                                            <td style={{ padding: '4px 6px', textAlign: 'right' }}>{moeda(custo(o))}</td>
+                                          </tr>
+                                        ))}
+                                        <tr style={{ borderTop: `1px solid ${T.line}`, fontWeight: 700 }}>
+                                          <td style={{ padding: '4px 6px' }} colSpan={3}>Somadas</td>
+                                          <td style={{ padding: '4px 6px', textAlign: 'right' }}>{num(pecas, 2)}</td>
+                                          <td style={{ padding: '4px 6px', textAlign: 'right' }}>{moeda(soma('material'))}</td>
+                                          <td style={{ padding: '4px 6px', textAlign: 'right' }}>{num(soma('horas'))} h</td>
+                                          <td style={{ padding: '4px 6px', textAlign: 'right' }}>{moeda(soma('mao_obra'))}</td>
+                                          <td style={{ padding: '4px 6px', textAlign: 'right' }}>{moeda(custoJunto)}</td>
+                                        </tr>
+                                      </tbody>
+                                    </table>
+                                    <div style={{ fontSize: 11, color: T.inkDim, marginTop: 6 }}>
+                                      Custo por peça somando as OPs: <strong>{pecas > 0 ? moeda(custoJunto / pecas) : '—'}</strong>
+                                      {pecas > 0 && Math.abs(pecas - Math.round(pecas)) < 0.02 ? ` (${num(pecas, 0)} peça${Math.round(pecas) === 1 ? '' : 's'} no total)` : ''}.
+                                      <span style={{ color: T.inkFaint }}> Só entram horas e consumos de 2026 (o custeio por OP começa em jan/26).</span>
+                                    </div>
+                                  </div>
+                                );
+                              })()}
                               {contaK && (() => {
                                 const TIT = { material: 'Material consumido — item a item', mo: 'Mão de obra — horas por setor e mês',
                                   overhead: `Overhead — rateio mês a mês (${H ? 'pelas horas' : 'pelo material + MO'})`, frete: 'Frete — rateio mês a mês (pelo material)',
