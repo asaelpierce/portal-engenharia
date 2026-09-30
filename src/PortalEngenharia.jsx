@@ -22721,6 +22721,16 @@ function CusteioExplicacao() {
       <p>O BR9595/22 existe para lançar a <strong>hora ociosa</strong>: o tempo do dia que não foi trabalho em OP (ninguém produz o tempo todo). Entram as OPs de lançamento “PROD-LANCA” (geral, prensa, misturador, stud welding, CNC, corte) e qualquer hora lançada nesse projeto.</p>
       <p>Essas horas <strong>não entram em nenhuma OP</strong>, mas <strong>entram na divisão do overhead</strong>: o bolo do mês é dividido pelas horas de OP + ociosas, e a fatia das ociosas fica como overhead da ociosidade. Na aba <em>Horas ociosas</em> aparecem as horas, o custo da mão de obra ociosa e o overhead da ociosidade.</p>
     </>) },
+    { id: 'extra', t: 'Hora extra', c: (<>
+      <p>Expediente da produção: <strong>segunda a quinta das 7h às 17h</strong> e <strong>sexta das 7h às 16h</strong>. Todo apontamento fora disso é hora extra:</p>
+      <ul>
+        <li><strong>Dia útil</strong> antes das 7h ou depois do fim do expediente: <strong>+65%</strong>.</li>
+        <li><strong>Sábado</strong>: <strong>+65%</strong> (o dia todo).</li>
+        <li><strong>Domingo</strong>: <strong>+100%</strong> (o dia todo).</li>
+      </ul>
+      <Formula>Adicional = horas extras × custo da hora do mês × 65% (ou 100% no domingo)</Formula>
+      <p>A hora em si já entra na mão de obra da OP; o <strong>adicional</strong> é o que ela custou a mais por ser extra. Se a mesma pessoa tem apontamentos sobrepostos no dia, o tempo conta uma vez só. Apontamento que vira a noite conta em cada dia. Feriados ainda não são tratados. O turno 15h30–1h30 da Vulcanização aparece à parte (parece um 2º turno) e só entra nos totais se marcado.</p>
+    </>) },
     { id: 'overhead', t: 'Overhead (custos indiretos de fabricação)', c: (<>
       <p>É o custo de <strong>manter a fábrica funcionando</strong> no mês, que não pertence a nenhuma OP específica. O “bolo” do mês tem três partes:</p>
       <ul>
@@ -22821,6 +22831,163 @@ function Formula({ children }) {
   return (
     <div style={{ fontFamily: "'JetBrains Mono', ui-monospace, monospace", fontSize: 12.5, background: T.panelAlt, border: `1px solid ${T.line}`,
       borderLeft: `3px solid ${T.terracotta}`, borderRadius: 6, padding: '8px 12px', margin: '8px 0', overflowX: 'auto', whiteSpace: 'nowrap' }}>{children}</div>
+  );
+}
+
+// Custeio por OP > Hora extra: apontamentos fora do expediente (seg–qui 7h–17h, sex 7h–16h).
+// Dia útil fora do horário e sábado +65%; domingo +100%. Fonte: v_custeio_hora_extra_apont.
+function CusteioHoraExtra({ moeda, num }) {
+  const [linhas, setLinhas] = useState(null);
+  const [produtos, setProdutos] = useState({});
+  const [comTurno, setComTurno] = useState(false);
+  const [comOciosa, setComOciosa] = useState(true);
+  const [opAberta, setOpAberta] = useState(null);
+  const [mesSel, setMesSel] = useState(null);
+  const [visao, setVisao] = useState('op');
+  useEffect(() => {
+    (async () => {
+      let out = [];
+      for (let i = 0; ; i += 1000) {
+        const { data } = await supabase.from('v_custeio_hora_extra_apont').select('*').order('inicio').range(i, i + 999);
+        out = out.concat(data || []); if (!data || data.length < 1000) break;
+      }
+      setLinhas(out);
+      const ops = [...new Set(out.map(l => l.op).filter(Boolean))];
+      const mapa = {};
+      for (let i = 0; i < ops.length; i += 300) {
+        const [p, c] = await Promise.all([
+          supabase.from('custeio_op_produto').select('idiproc,descr_prod').in('idiproc', ops.slice(i, i + 300)),
+          supabase.from('custeio_op_cabecalho').select('op,status').in('op', ops.slice(i, i + 300)),
+        ]);
+        (p.data || []).forEach(x => { mapa[x.idiproc] = { ...(mapa[x.idiproc] || {}), prod: x.descr_prod }; });
+        (c.data || []).forEach(x => { mapa[x.op] = { ...(mapa[x.op] || {}), status: x.status }; });
+      }
+      setProdutos(mapa);
+    })();
+  }, []);
+  if (!linhas) return <div style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Procurando as horas extras nos apontamentos…</div>;
+  const ativas = linhas.filter(l => (comTurno || !l.turno_noite) && (comOciosa || !l.ociosa));
+  const S = (arr, f) => arr.reduce((a, l) => a + (Number(typeof f === 'function' ? f(l) : l[f]) || 0), 0);
+  const h65u = S(ativas.filter(l => l.tipo === 'dia útil'), 'horas_extra_65'), h65s = S(ativas.filter(l => l.tipo === 'sábado'), 'horas_extra_65');
+  const h100 = S(ativas, 'horas_extra_100'), h65o = S(ativas.filter(l => l.tipo === 'domingo'), 'horas_extra_65');
+  const adic = S(ativas, 'custo_adicional'), tot = S(ativas, 'custo_extra_total');
+  const hOcio = S(ativas.filter(l => l.ociosa), l => (Number(l.horas_extra_65) || 0) + (Number(l.horas_extra_100) || 0));
+  const agrupa = (chave, rot) => Object.values(ativas.reduce((a, l) => {
+    const k = chave(l); if (k == null) return a;
+    a[k] = a[k] || { k, rot: rot(l), util: 0, sab: 0, dom: 0, adic: 0, tot: 0, pessoas: new Set(), dias: new Set(), ops: new Set(), linhas: [] };
+    const x = a[k]; const h65 = Number(l.horas_extra_65) || 0, h1 = Number(l.horas_extra_100) || 0;
+    if (l.tipo === 'sábado') x.sab += h65; else if (l.tipo === 'domingo') { x.dom += h1; x.sab += h65; } else x.util += h65;
+    x.adic += Number(l.custo_adicional) || 0; x.tot += Number(l.custo_extra_total) || 0;
+    x.pessoas.add(l.nome_usuario); x.dias.add(String(l.inicio).slice(0, 10)); x.ops.add(l.op); x.linhas.push(l);
+    return a;
+  }, {})).sort((p, q) => q.adic - p.adic);
+  const porOp = agrupa(l => l.op, l => l.ociosa ? 'ociosa (BR9595/22)' : (produtos[l.op]?.prod || '—'));
+  const porPessoa = agrupa(l => l.nome_usuario || l.cod_usuario, l => l.setor_nome);
+  const porSetor = agrupa(l => l.setor_nome, () => '');
+  const meses = [...new Set(linhas.map(l => l.competencia))].sort();
+  const serie = meses.map(m => {
+    const d = ativas.filter(l => l.competencia === m);
+    return { m, util: S(d.filter(l => l.tipo === 'dia útil'), 'horas_extra_65'), sab: S(d.filter(l => l.tipo !== 'dia útil'), 'horas_extra_65'), dom: S(d, 'horas_extra_100'), adic: S(d, 'custo_adicional'), d };
+  });
+  const DIAS = ['', 'seg', 'ter', 'qua', 'qui', 'sex', 'sáb', 'dom'];
+  const hora = (t) => String(t || '').slice(11, 16);
+  const dataBR = (t) => String(t || '').slice(0, 10).split('-').reverse().join('/');
+  const th = (dir) => ({ padding: '6px 8px', fontSize: 10.5, color: T.inkFaint, fontWeight: 700, textAlign: dir ? 'right' : 'left', borderBottom: `1px solid ${T.line}`, whiteSpace: 'nowrap', position: 'sticky', top: 0, background: T.panel });
+  const td = (dir) => ({ padding: '6px 8px', fontSize: 12, textAlign: dir ? 'right' : 'left', borderBottom: `1px solid ${T.lineSoft}`, fontVariantNumeric: 'tabular-nums', verticalAlign: 'top' });
+  const card = (r, v, s2, cor) => (
+    <div style={{ flex: '1 1 160px', background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 10, padding: '10px 14px' }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: T.inkFaint }}>{r}</div>
+      <div style={{ fontSize: 19, fontWeight: 800, marginTop: 2, color: cor || T.ink }}>{v}</div>
+      {s2 && <div style={{ fontSize: 10.5, color: T.inkFaint }}>{s2}</div>}
+    </div>
+  );
+  const tabelaApont = (ls) => (
+    <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+      <thead><tr>{['Dia', 'Pessoa', 'Setor', 'OP', 'Apontado', 'Horas', 'Extra 65%', 'Extra 100%', 'Tipo', 'Adicional', 'Custo da hora extra'].map((h, j) => <th key={j} style={th(j >= 5 && j !== 8)}>{h}</th>)}</tr></thead>
+      <tbody>{ls.map(l => (
+        <tr key={l.chave}>
+          <td style={{ ...td(), whiteSpace: 'nowrap' }}>{dataBR(l.inicio)} · {DIAS[l.dia_semana]}</td>
+          <td style={td()}>{l.nome_usuario}</td><td style={td()}>{l.setor_nome}</td>
+          <td style={td()}>{l.op}{l.ociosa ? ' · ociosa' : ''}</td>
+          <td style={{ ...td(), whiteSpace: 'nowrap' }}>{hora(l.inicio)}–{hora(l.fim)}{l.turno_noite ? ' · turno' : ''}</td>
+          <td style={td(1)}>{num(l.horas_apontadas, 2)}</td>
+          <td style={td(1)}>{Number(l.horas_extra_65) ? num(l.horas_extra_65, 2) : '—'}</td>
+          <td style={td(1)}>{Number(l.horas_extra_100) ? num(l.horas_extra_100, 2) : '—'}</td>
+          <td style={td()}>{l.tipo}</td>
+          <td style={{ ...td(1), fontWeight: 600 }}>{moeda(Number(l.custo_adicional) || 0)}</td>
+          <td style={td(1)}>{moeda(Number(l.custo_extra_total) || 0)}</td>
+        </tr>
+      ))}</tbody>
+    </table>
+  );
+  const tabelaGrupo = (lista, rotK, rotR, podeAbrir) => (
+    <div style={{ overflow: 'auto', maxHeight: 620, border: `1px solid ${T.line}`, borderRadius: 8 }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+        <thead><tr>{[rotK, rotR, 'Extra dia útil', 'Extra sábado', 'Extra domingo', 'Total extra', 'Pessoas', 'Dias', 'Adicional pago', 'Custo da hora extra'].filter(Boolean).map((h, j) => <th key={j} style={th(j >= (rotR ? 2 : 1))}>{h}</th>)}</tr></thead>
+        <tbody>{lista.map(x => {
+          const ab = podeAbrir && opAberta === x.k;
+          return (
+            <React.Fragment key={x.k}>
+              <tr onClick={podeAbrir ? () => setOpAberta(v => v === x.k ? null : x.k) : undefined} style={{ cursor: podeAbrir ? 'pointer' : 'default', background: ab ? T.rustSoft : 'transparent' }}>
+                <td style={{ ...td(), fontWeight: 700, whiteSpace: 'nowrap' }}>{podeAbrir ? (ab ? '▾ ' : '▸ ') : ''}{x.k}</td>
+                {rotR && <td style={{ ...td(), maxWidth: 360, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={x.rot}>{x.rot}{podeAbrir && produtos[x.k]?.status && produtos[x.k].status !== 'F' ? ` · ${{ S: 'suspensa', C: 'cancelada', A: 'aberta' }[produtos[x.k].status] || produtos[x.k].status}` : ''}</td>}
+                <td style={td(1)}>{x.util ? `${num(x.util, 1)} h` : '—'}</td><td style={td(1)}>{x.sab ? `${num(x.sab, 1)} h` : '—'}</td><td style={td(1)}>{x.dom ? `${num(x.dom, 1)} h` : '—'}</td>
+                <td style={{ ...td(1), fontWeight: 700 }}>{num(x.util + x.sab + x.dom, 1)} h</td>
+                <td style={td(1)}>{x.pessoas.size}</td><td style={td(1)}>{x.dias.size}</td>
+                <td style={{ ...td(1), fontWeight: 700, color: T.rustText }}>{moeda(x.adic)}</td><td style={td(1)}>{moeda(x.tot)}</td>
+              </tr>
+              {ab && <tr><td colSpan={10} style={{ padding: 10, background: T.panelAlt }}>{tabelaApont(x.linhas)}</td></tr>}
+            </React.Fragment>
+          );
+        })}</tbody>
+      </table>
+    </div>
+  );
+  const sel = mesSel != null ? serie[mesSel] : null;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <div style={{ fontSize: 12.5, color: T.inkDim, background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 8, padding: '10px 14px', lineHeight: 1.6 }}>
+        Expediente: <strong>seg a qui 7h–17h</strong> e <strong>sex 7h–16h</strong>. Tudo o que foi apontado fora disso é hora extra: <strong>dia útil e sábado +65%</strong>, <strong>domingo +100%</strong>.
+        O tempo da mesma pessoa não conta duas vezes no dia. O adicional usa o custo da hora do mês (o mesmo da mão de obra das OPs): a hora em si já está na OP; o <strong>adicional</strong> é o que a OP custou a mais por ser hora extra. Feriados ainda não são tratados.
+        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginTop: 8 }}>
+          <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', cursor: 'pointer' }}>
+            <input type="checkbox" checked={comTurno} onChange={e => setComTurno(e.target.checked)} />
+            incluir o turno <strong>15h30–1h30</strong> ({linhas.filter(l => l.turno_noite).length} apontamentos da Vulcanização — parece 2º turno)
+          </label>
+          <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', cursor: 'pointer' }}>
+            <input type="checkbox" checked={comOciosa} onChange={e => setComOciosa(e.target.checked)} /> incluir hora extra lançada como ociosa (BR9595/22)
+          </label>
+        </div>
+      </div>
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+        {card('Hora extra em dia útil (65%)', `${num(h65u, 0)} h`, 'antes das 7h ou depois do fim do expediente')}
+        {card('Hora extra no sábado (65%)', `${num(h65s + h65o, 0)} h`, null)}
+        {card('Hora extra no domingo (100%)', `${num(h100, 0)} h`, null)}
+        {card('Adicional pago', moeda(adic), `custo total das horas extras ${moeda(tot)}`, T.rustText)}
+        {card('OPs que precisaram', new Set(ativas.filter(l => !l.ociosa).map(l => l.op)).size, `${new Set(ativas.map(l => l.cod_usuario)).size} pessoas${hOcio ? ` · ${num(hOcio, 0)} h extras lançadas como ociosa` : ''}`)}
+      </div>
+      <Panel title="Hora extra mês a mês" subtitle="clique numa coluna para ver os apontamentos do mês">
+        <GraficoMensal meses={serie.map(x => x.m)} empilhar fmt={(v) => `${num(v, 0)} h`}
+          barras={[{ nome: 'Dia útil (65%)', cor: T.amberText, valores: serie.map(x => x.util) }, { nome: 'Sábado (65%)', cor: T.terracotta, valores: serie.map(x => x.sab) }, { nome: 'Domingo (100%)', cor: T.rust, valores: serie.map(x => x.dom) }]}
+          linha={{ nome: 'Adicional pago', cor: T.ink, valores: serie.map(x => x.adic) }} fmtLinha={moeda}
+          aoClicar={(i) => setMesSel(v => v === i ? null : i)} ativo={mesSel} />
+        {sel && (
+          <div style={{ marginTop: 10, maxHeight: 360, overflowY: 'auto' }}>
+            <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 6 }}>{rotMesCurto(sel.m)}: {num(sel.util + sel.sab + sel.dom, 1)} h extras · adicional {moeda(sel.adic)} · {sel.d.length} apontamentos</div>
+            {tabelaApont(sel.d)}
+          </div>
+        )}
+      </Panel>
+      <div style={{ display: 'flex', gap: 6 }}>
+        {[['op', 'Por OP'], ['pessoa', 'Por pessoa'], ['setor', 'Por setor']].map(([k, r]) => (
+          <button key={k} onClick={() => setVisao(k)} style={{ ...ghostBtn(visao === k ? T.terracotta : T.inkDim), cursor: 'pointer', fontWeight: visao === k ? 700 : 500 }}>{r}</button>
+        ))}
+      </div>
+      {visao === 'op' && tabelaGrupo(porOp, 'OP', 'Produto', true)}
+      {visao === 'pessoa' && tabelaGrupo(porPessoa, 'Pessoa', 'Setor', false)}
+      {visao === 'setor' && tabelaGrupo(porSetor, 'Setor', null, false)}
+      <div style={{ fontSize: 10.5, color: T.inkFaint }}>Clique na OP para ver cada apontamento: pessoa, dia, horário, horas extras e o adicional.</div>
+    </div>
   );
 }
 
@@ -23063,7 +23230,7 @@ function CusteioPorOP() {
       </div>
 
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-        {[['ops', 'OPs'], ['produto', 'Por produto'], ['desvios', 'Desvios de material'], ['rateio', 'Rateio e conferência'], ['ociosas', 'Horas ociosas'], ['venda', 'Venda × custo'], ['explica', '📘 Como funciona']].map(([k, r]) => (
+        {[['ops', 'OPs'], ['produto', 'Por produto'], ['desvios', 'Desvios de material'], ['rateio', 'Rateio e conferência'], ['ociosas', 'Horas ociosas'], ['extra', 'Hora extra'], ['venda', 'Venda × custo'], ['explica', '📘 Como funciona']].map(([k, r]) => (
           <button key={k} onClick={() => setAba(k)} style={botao(aba === k)}>{r}</button>
         ))}
         <span style={{ width: 1, height: 20, background: T.line, margin: '0 4px' }} />
@@ -23566,6 +23733,7 @@ function CusteioPorOP() {
       })()}
 
       {aba === 'explica' && <CusteioExplicacao />}
+      {aba === 'extra' && <CusteioHoraExtra moeda={moeda} num={num} />}
       {aba === 'venda' && <CusteioVendaCusto H={H} moeda={moeda} num={num} />}
       {aba === 'ociosas' && <CusteioHorasOciosas linhas={ociosas} setLinhas={setOciosas} mesAberto={ociosaMes} setMesAberto={setOciosaMes} moeda={moeda} num={num} />}
       {aba === 'rateio' && (() => {
