@@ -8555,12 +8555,14 @@ function FunilVisualSVG({ segmentos, total, ativo, onClick }) {
 const ALMOX_SETORES = ['Ponto de Estoque', 'Corte', 'Vulcanização', 'Pintura', 'Caldeiraria', 'Revestimento', 'Expedição', 'Material 100% em produção', 'Projeto Faturado'];
 const ALMOX_ETIQUETAS = { '50x30': { w: 50, h: 30 }, '60x40': { w: 60, h: 40 }, '100x50': { w: 100, h: 50 } };
 // impressora do estoque: Argox OS-214 plus (térmica, 203 dpi, até 104 mm de largura)
-// etiqueta do estoque: 100 x 50 mm (padrão)
+// etiqueta do estoque: 100 x 50 mm (padrão). O rolo já vem DEITADO: 100 mm
+// atravessando o rolo, 50 mm no sentido em que o papel sai -> sem giro.
+// (chave v3: descarta o giro de 90° que ficou salvo no computador do estoque)
 const almoxConfigEtiqueta = () => {
-  try { return { w: 100, h: 50, dx: 0, dy: 0, giro: 90, ...(JSON.parse(localStorage.getItem('almox_etiqueta_cfg_v2') || '{}')) }; }
-  catch { return { w: 100, h: 50, dx: 0, dy: 0, giro: 90 }; }
+  try { return { w: 100, h: 50, dx: 0, dy: 0, giro: 0, ...(JSON.parse(localStorage.getItem('almox_etiqueta_cfg_v3') || '{}')) }; }
+  catch { return { w: 100, h: 50, dx: 0, dy: 0, giro: 0 }; }
 };
-const almoxSalvarConfigEtiqueta = (cfg) => { try { localStorage.setItem('almox_etiqueta_cfg_v2', JSON.stringify(cfg)); } catch {} };
+const almoxSalvarConfigEtiqueta = (cfg) => { try { localStorage.setItem('almox_etiqueta_cfg_v3', JSON.stringify(cfg)); } catch {} };
 
 // reduz a foto antes de enviar (lado maior 1600 px, JPEG 0,8)
 async function almoxComprimirFoto(file) {
@@ -8941,7 +8943,7 @@ function AlmoxQR({ modo, currentUser, codigoInicial }) {
             <strong style={{ color: T.ink }}>Uma vez, no computador do estoque (Windows):</strong>
             <ol style={{ margin: '4px 0 8px 18px', padding: 0 }}>
               <li>Instalar o driver da <strong>Argox OS-214 plus</strong> (site da Argox, driver Windows "Seagull" da OS-214 plus).</li>
-              <li>Em <em>Impressoras</em> → Argox → <em>Preferências de impressão</em>: tamanho do papel igual à etiqueta do rolo (largura × altura em mm), tipo de mídia <em>etiqueta com espaço (gap)</em>, e <em>calibrar</em> a mídia.</li>
+              <li>Em <em>Impressoras</em> → Argox → <em>Preferências de impressão</em>: tamanho do papel <strong>largura 100 mm × altura 50 mm</strong> (largura = atravessando o rolo; altura = no sentido em que o papel sai), orientação <strong>Retrato</strong>, tipo de mídia <em>etiqueta com espaço (gap)</em>, e <em>calibrar</em> a mídia.</li>
               <li>Medir a etiqueta do rolo com a régua e colocar o mesmo tamanho aqui em cima.</li>
             </ol>
             <strong style={{ color: T.ink }}>Na janela de impressão do Chrome:</strong>
@@ -8950,8 +8952,9 @@ function AlmoxQR({ modo, currentUser, codigoInicial }) {
               <li><em>Mais configurações</em> → margens <strong>Nenhuma</strong>, escala <strong>Padrão (100%)</strong>, desmarcar <strong>Cabeçalhos e rodapés</strong>.</li>
               <li>O Chrome lembra essas escolhas para a próxima vez.</li>
             </ol>
-            Imprima uma <strong>etiqueta de teste</strong> e leia no tablet. Se sair <strong>em pé ou de lado</strong>, troque o giro (90° ou 270°) —
-            o driver da Argox costuma estar com a página em pé. Se sair cortada ou deslocada, corrija com o ajuste ↔ ↕ (em mm) e teste de novo.
+            Imprima uma <strong>etiqueta de teste</strong> e leia no tablet. O rolo do estoque já vem deitado, então o giro fica em <strong>nenhum</strong>;
+            se a etiqueta ocupar duas no rolo, o tamanho do papel no driver está diferente de 100 × 50. Se sair o nome da OP e "1/1" impressos, faltou desmarcar
+            <strong>Cabeçalhos e rodapés</strong>. Se sair cortada ou deslocada, corrija com o ajuste ↔ ↕ (em mm) e teste de novo.
           </div>
         )}
       </div>
