@@ -285,6 +285,13 @@ export default function PortalEngenharia() {
   }, []);
 
   const [session, setSession] = useState(undefined); // undefined = carregando, null = sem sessão
+  const [qrPublico] = useState(() => {
+    try {
+      const q = new URLSearchParams(window.location.search);
+      const e = (q.get('e') || '').trim().toUpperCase(), k = (q.get('k') || '').trim();
+      return e && k ? { codigo: e, chave: k } : null;
+    } catch { return null; }
+  });
   const [currentUser, setCurrentUser] = useState(null);
 
   useEffect(() => {
@@ -320,6 +327,10 @@ export default function PortalEngenharia() {
       });
   }, [session]);
 
+  // QR de etiqueta com chave (…/?e=V000123&k=…): página própria, sem login
+  if (qrPublico) {
+    return <AlmoxQrPublico codigo={qrPublico.codigo} chave={qrPublico.chave} nomeLogado={currentUser?.nome || null} />;
+  }
   if (session === undefined) {
     return <TelaCarregando />;
   }
@@ -331,6 +342,212 @@ export default function PortalEngenharia() {
   }
 
   return <PortalConteudo currentUser={currentUser} session={session} />;
+}
+
+// ============================================================================
+// Página do QR sem login (…/?e=V000123&k=<chave>): quem mexe no material no
+// estoque/produção não tem login. Mostra só aquela etiqueta e registra a
+// movimentação com o nome da pessoa (fn_almox_publico_*; a chave do link é
+// conferida no banco e nas fotos). Feita para celular e tablet.
+// ============================================================================
+function AlmoxQrPublico({ codigo, chave, nomeLogado }) {
+  const [dados, setDados] = useState(null);
+  const [erro, setErro] = useState(null);
+  const [carregando, setCarregando] = useState(true);
+  const [nome, setNome] = useState(() => { try { return localStorage.getItem('almox_meu_nome') || ''; } catch { return ''; } });
+  const [para, setPara] = useState('');
+  const [recebido, setRecebido] = useState('');
+  const [obs, setObs] = useState('');
+  const [fotoMat, setFotoMat] = useState(null);
+  const [fotoDoc, setFotoDoc] = useState(null);
+  const [salvando, setSalvando] = useState(false);
+  const [aviso, setAviso] = useState(null);
+  const [feito, setFeito] = useState(null);
+  const [verHist, setVerHist] = useState(false);
+
+  const carregar = useCallback(async () => {
+    setCarregando(true); setErro(null);
+    const { data, error } = await supabase.rpc('fn_almox_publico_volume', { p_codigo: codigo, p_chave: chave });
+    if (error || !data?.ok) setErro(error?.message || data?.erro || 'Não consegui abrir esta etiqueta.');
+    else {
+      setDados(data);
+      const v = data.volume;
+      setPara(v.setor_destino && v.setor_destino !== v.setor_atual ? v.setor_destino : '');
+    }
+    setCarregando(false);
+  }, [codigo, chave]);
+  useEffect(() => { carregar(); }, [carregar]);
+  useEffect(() => { if (nomeLogado && !nome) setNome(nomeLogado); }, [nomeLogado]);  // eslint-disable-line
+
+  const urlFoto = useMemo(() => ({ mat: fotoMat ? URL.createObjectURL(fotoMat) : null, doc: fotoDoc ? URL.createObjectURL(fotoDoc) : null }), [fotoMat, fotoDoc]);
+
+  const registrar = async () => {
+    setAviso(null);
+    if (!nome.trim()) { setAviso('Escreva o seu nome.'); return; }
+    if (!para) { setAviso('Escolha para onde o material vai.'); return; }
+    if (!recebido.trim()) { setAviso('Escreva quem recebeu o material.'); return; }
+    if (!fotoMat) { setAviso('Tire a foto do material.'); return; }
+    setSalvando(true);
+    try {
+      try { localStorage.setItem('almox_meu_nome', nome.trim()); } catch {}
+      const pasta = `publico/${dados.volume.codigo}/${chave}`;
+      const cMat = await almoxEnviarFoto(fotoMat, pasta);
+      const cDoc = fotoDoc ? await almoxEnviarFoto(fotoDoc, pasta) : null;
+      const { data, error } = await supabase.rpc('fn_almox_publico_registrar', {
+        p_codigo: codigo, p_chave: chave, p_nome: nome.trim(), p_para_setor: para, p_recebido_por: recebido.trim(),
+        p_foto_material: cMat, p_foto_documento: cDoc, p_observacao: obs.trim() || null });
+      if (error || !data?.ok) throw new Error(error?.message || data?.erro || 'Não foi possível registrar.');
+      setFeito({ para, recebido: recebido.trim(), hora: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) });
+      setFotoMat(null); setFotoDoc(null); setObs(''); setRecebido('');
+      if (navigator.vibrate) navigator.vibrate(120);
+    } catch (e) {
+      setAviso(/fetch|network|Failed/i.test(String(e?.message)) ? 'Sem internet no momento. Confira o sinal e tente de novo.' : (e.message || String(e)));
+    }
+    setSalvando(false);
+  };
+
+  const pagina = { minHeight: '100vh', background: T.bg, fontFamily: FONT_BODY, color: T.ink, WebkitTextSizeAdjust: '100%' };
+  const miolo = { maxWidth: 680, margin: '0 auto', padding: '14px 14px 120px', display: 'flex', flexDirection: 'column', gap: 14 };
+  const bloco = { background: T.panel, border: `1px solid ${T.line}`, borderRadius: 14, padding: 16 };
+  const titulo = { fontSize: 15, fontWeight: 800, marginBottom: 8 };
+  const entrada = { width: '100%', boxSizing: 'border-box', fontSize: 18, padding: '14px 14px', borderRadius: 10, border: `2px solid ${T.line}`, background: T.panel, color: T.ink, fontFamily: 'inherit' };
+  const topo = (
+    <div style={{ background: T.ink, color: T.panel, padding: '12px 16px', paddingTop: 'calc(12px + env(safe-area-inset-top, 0px))', fontWeight: 800, fontSize: 15, letterSpacing: '0.02em' }}>
+      KALENBORN · Fluxo de Materiais
+    </div>
+  );
+
+  if (carregando) return <div style={pagina}>{topo}<div style={{ ...miolo, alignItems: 'center', paddingTop: 60, color: T.inkFaint, fontSize: 17 }}>Abrindo a etiqueta {codigo}…</div></div>;
+  if (erro) return (
+    <div style={pagina}>{topo}
+      <div style={miolo}>
+        <div style={{ ...bloco, textAlign: 'center', padding: 28 }}>
+          <div style={{ fontSize: 44 }}>⚠️</div>
+          <div style={{ fontSize: 19, fontWeight: 800, margin: '8px 0' }}>{erro}</div>
+          <div style={{ fontSize: 15, color: T.inkDim }}>Etiqueta {codigo}. Se continuar, avise o estoque para reimprimir.</div>
+          <button onClick={carregar} style={{ marginTop: 16, fontSize: 17, fontWeight: 700, padding: '14px 22px', borderRadius: 10, border: 'none', background: T.ink, color: T.panel }}>Tentar de novo</button>
+        </div>
+      </div>
+    </div>
+  );
+
+  const v = dados.volume;
+  const ativo = v.status === 'ativo';
+  const setores = ALMOX_SETORES.filter(s => s !== v.setor_atual);
+  const dataHora = (ts) => new Date(ts).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+  const fotoCampo = (rot, obrig, valor, url, set) => (
+    <label style={{ flex: '1 1 240px', border: `2px dashed ${valor ? T.oliveText : obrig ? T.rust : T.line}`, borderRadius: 12, padding: 12, minHeight: 160,
+      display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 6, cursor: 'pointer', background: valor ? T.oliveSoft : T.panelAlt }}>
+      <input type="file" accept="image/*" capture="environment" style={{ display: 'none' }} onChange={e => set(e.target.files?.[0] || null)} />
+      {valor ? <img src={url} alt="" style={{ maxWidth: '100%', maxHeight: 180, borderRadius: 8 }} /> : <span style={{ fontSize: 44 }}>📷</span>}
+      <span style={{ fontSize: 16, fontWeight: 800, color: valor ? T.oliveText : T.ink }}>{valor ? 'Trocar foto' : rot}</span>
+      <span style={{ fontSize: 13, color: T.inkFaint }}>{obrig ? 'obrigatória' : 'opcional'}</span>
+    </label>
+  );
+
+  return (
+    <div style={pagina}>
+      {topo}
+      <datalist id="almox-nomes">{(dados.nomes || []).map(n => <option key={n} value={n} />)}</datalist>
+      <div style={miolo}>
+        {/* o material */}
+        <div style={bloco}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: T.inkFaint }}>Etiqueta {v.codigo}</div>
+          <div style={{ fontSize: 30, fontWeight: 900, lineHeight: 1.1, marginTop: 2 }}>OP {v.op}</div>
+          {v.br && <div style={{ fontSize: 18, fontWeight: 700, color: T.inkDim }}>{v.br}</div>}
+          <div style={{ fontSize: 17, fontWeight: 600, marginTop: 6 }}>{v.cod_materia_prima ? `${v.cod_materia_prima} · ` : ''}{v.material}</div>
+          {v.quantidade != null && <div style={{ fontSize: 16, color: T.inkDim, marginTop: 2 }}>Quantidade: <strong style={{ color: T.ink }}>{String(v.quantidade).replace('.', ',')}{v.unidade ? ` ${v.unidade}` : ''}</strong></div>}
+          <div style={{ display: 'inline-block', marginTop: 10, background: T.blueSoft, color: T.blueText, fontWeight: 800, fontSize: 15, borderRadius: 8, padding: '6px 10px' }}>
+            Está em: {v.setor_atual}
+          </div>
+        </div>
+
+        {feito && (
+          <div style={{ ...bloco, background: T.oliveSoft, borderColor: T.olive, textAlign: 'center' }}>
+            <div style={{ fontSize: 46, lineHeight: 1 }}>✅</div>
+            <div style={{ fontSize: 20, fontWeight: 900, color: T.oliveText, marginTop: 6 }}>Registrado às {feito.hora}</div>
+            <div style={{ fontSize: 16, marginTop: 4 }}>Foi para <strong>{feito.para}</strong>, recebido por <strong>{feito.recebido}</strong>.</div>
+            <div style={{ fontSize: 14, color: T.inkDim, marginTop: 8 }}>Pode fechar esta página.</div>
+            <button onClick={() => { setFeito(null); carregar(); }} style={{ marginTop: 12, fontSize: 16, fontWeight: 700, padding: '12px 18px', borderRadius: 10, border: `2px solid ${T.oliveText}`, background: T.panel, color: T.oliveText }}>
+              Registrar outra movimentação
+            </button>
+          </div>
+        )}
+
+        {!ativo && !feito && (
+          <div style={{ ...bloco, background: T.amberSoft, borderColor: T.amber, fontSize: 17, fontWeight: 700, color: T.amberText }}>
+            Esta etiqueta está {v.status}. Não dá mais para movimentar por ela.
+          </div>
+        )}
+
+        {ativo && !feito && (<>
+          <div style={bloco}>
+            <div style={titulo}>1. Seu nome</div>
+            <input value={nome} onChange={e => setNome(e.target.value)} list="almox-nomes" autoComplete="name" placeholder="Nome e sobrenome" style={entrada} />
+            <div style={{ fontSize: 13, color: T.inkFaint, marginTop: 6 }}>Fica salvo neste aparelho para a próxima leitura.</div>
+          </div>
+
+          <div style={bloco}>
+            <div style={titulo}>2. Para onde vai</div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 8 }}>
+              {setores.map(s => (
+                <button key={s} onClick={() => setPara(s)} style={{ minHeight: 56, fontSize: 16, fontWeight: 700, borderRadius: 10, cursor: 'pointer', padding: '8px 10px',
+                  border: `2px solid ${para === s ? T.ink : T.line}`, background: para === s ? T.ink : T.panel, color: para === s ? T.panel : T.ink }}>
+                  {s}{s === v.setor_destino ? ' ★' : ''}
+                </button>
+              ))}
+            </div>
+            {v.setor_destino && <div style={{ fontSize: 13, color: T.inkFaint, marginTop: 6 }}>★ destino previsto na etiqueta</div>}
+          </div>
+
+          <div style={bloco}>
+            <div style={titulo}>3. Quem recebeu</div>
+            <input value={recebido} onChange={e => setRecebido(e.target.value)} list="almox-nomes" placeholder="Nome de quem recebeu" style={entrada} />
+          </div>
+
+          <div style={bloco}>
+            <div style={titulo}>4. Fotos</div>
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+              {fotoCampo('Foto do material', true, fotoMat, urlFoto.mat, setFotoMat)}
+              {fotoCampo('Foto do documento', false, fotoDoc, urlFoto.doc, setFotoDoc)}
+            </div>
+          </div>
+
+          <div style={bloco}>
+            <div style={titulo}>Observação <span style={{ fontWeight: 500, color: T.inkFaint, fontSize: 13 }}>(opcional)</span></div>
+            <textarea value={obs} onChange={e => setObs(e.target.value)} rows={2} style={{ ...entrada, resize: 'vertical' }} />
+          </div>
+        </>)}
+
+        {(dados.historico || []).length > 0 && (
+          <div style={bloco}>
+            <button onClick={() => setVerHist(x => !x)} style={{ background: 'none', border: 'none', padding: 0, fontSize: 15, fontWeight: 800, color: T.ink, cursor: 'pointer', width: '100%', textAlign: 'left' }}>
+              {verHist ? '▾' : '▸'} Últimas movimentações ({dados.historico.length})
+            </button>
+            {verHist && dados.historico.map((h, i) => (
+              <div key={i} style={{ fontSize: 14, padding: '8px 0', borderTop: i ? `1px solid ${T.lineSoft}` : 'none', marginTop: i ? 0 : 8 }}>
+                <strong>{dataHora(h.criado_em)}</strong> · {h.de_setor} → <strong>{h.para_setor}</strong>
+                <div style={{ color: T.inkDim }}>{h.entregue_por || '—'} entregou · {h.recebido_por} recebeu</div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {ativo && !feito && (
+        <div style={{ position: 'fixed', left: 0, right: 0, bottom: 0, background: T.panel, borderTop: `1px solid ${T.line}`,
+          padding: '10px 14px', paddingBottom: 'calc(10px + env(safe-area-inset-bottom, 0px))', boxShadow: '0 -4px 16px rgba(0,0,0,0.08)' }}>
+          <div style={{ maxWidth: 680, margin: '0 auto' }}>
+            {aviso && <div style={{ color: T.rustText, fontWeight: 700, fontSize: 15, marginBottom: 8 }}>{aviso}</div>}
+            <button onClick={registrar} disabled={salvando} style={{ width: '100%', minHeight: 58, fontSize: 19, fontWeight: 900, borderRadius: 12, border: 'none',
+              background: salvando ? T.inkFaint : T.olive, color: '#fff', cursor: salvando ? 'wait' : 'pointer' }}>
+              {salvando ? 'Registrando…' : 'Registrar movimentação'}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 function TelaCarregando({ texto = 'Carregando…' }) {
@@ -8591,7 +8808,8 @@ async function almoxEnviarFoto(file, pasta) {
 // e abre direto o registro daquele material. QR em SVG (nítido na térmica),
 // margem de 2 módulos. O título da janela vira o nome do arquivo/trabalho de
 // impressão: diz de que OP e quantos itens são.
-const almoxLinkEtiqueta = (codigo) => `${window.location.origin}/?e=${codigo}`;
+// com a chave da etiqueta (&k=) o link abre a página sem login (AlmoxQrPublico)
+const almoxLinkEtiqueta = (codigo, chave) => `${window.location.origin}/?e=${codigo}${chave ? `&k=${chave}` : ''}`;
 // Arquivo para o BarTender (programa da Argox no estoque): um CSV com uma linha
 // por etiqueta. O modelo .btw é montado UMA vez no BarTender ligado a este arquivo
 // (Banco de dados -> Arquivo de texto, delimitado por vírgula, 1ª linha = nomes);
@@ -8599,7 +8817,7 @@ const almoxLinkEtiqueta = (codigo) => `${window.location.origin}/?e=${codigo}`;
 function almoxBaixarCsvBarTender(volumes) {
   const cols = ['CODIGO', 'LINK', 'OP', 'BR', 'COD_MP', 'MATERIAL', 'QTD', 'UNIDADE', 'DESTINO'];
   const q = (x) => `"${String(x ?? '').replace(/"/g, '""').replace(/[\r\n]+/g, ' ')}"`;
-  const linhas = volumes.map(v => [v.codigo, almoxLinkEtiqueta(v.codigo), v.op, v.br || '', v.cod_materia_prima || '', v.material || '',
+  const linhas = volumes.map(v => [v.codigo, almoxLinkEtiqueta(v.codigo, v.chave), v.op, v.br || '', v.cod_materia_prima || '', v.material || '',
     v.quantidade != null ? String(v.quantidade).replace('.', ',') : '', v.unidade || '', v.setor_destino || ''].map(q).join(','));
   const blob = new Blob(['\ufeff' + [cols.join(','), ...linhas].join('\r\n') + '\r\n'], { type: 'text/csv;charset=utf-8' });
   const a = document.createElement('a');
@@ -8626,7 +8844,7 @@ async function almoxImprimirEtiquetas(volumes, cfgArg) {
   const girar = giro === 90 ? `translate(${h}mm, 0) rotate(90deg)` : giro === 270 ? `translate(0, ${w}mm) rotate(-90deg)` : '';
   const qrMm = Math.max(15, Math.min(28, h - 8, w * 0.3));
   const k = Math.max(0.75, Math.min(1.45, h / 40));   // escala das letras pela altura
-  const svgs = await Promise.all(volumes.map(v => QRCode.toString(almoxLinkEtiqueta(v.codigo), { type: 'svg', margin: 2, errorCorrectionLevel: 'M', color: { dark: '#000000', light: '#ffffff' } })));
+  const svgs = await Promise.all(volumes.map(v => QRCode.toString(almoxLinkEtiqueta(v.codigo, v.chave), { type: 'svg', margin: 2, errorCorrectionLevel: 'M', color: { dark: '#000000', light: '#ffffff' } })));
   const esc = (s) => String(s ?? '').replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
   const pequeno = w < 55 || h < 32;
   const porOp = volumes.reduce((m, v) => { m[v.op] = (m[v.op] || 0) + 1; return m; }, {});
