@@ -28859,13 +28859,16 @@ function ConferenciaConhecimentoPedido({ currentUser }) {
   }, [linhas, desde, vendedor, busca]);
 
   const resumo = useMemo(() => {
-    const dias = filtradas.map(l => l.dias_proposta_ate_solicitacao).filter(d => d != null).sort((a, b) => a - b);
-    const mediana = dias.length ? (dias.length % 2 ? dias[(dias.length - 1) / 2] : (dias[dias.length / 2 - 1] + dias[dias.length / 2]) / 2) : null;
-    const comValor = filtradas.filter(l => l.valor_proposta != null && (l.valor_pedido != null || l.net_value_kdb != null));
+    const med = (campo) => {
+      const d = filtradas.map(l => l[campo]).filter(x => x != null).sort((a, b) => a - b);
+      return d.length ? (d.length % 2 ? d[(d.length - 1) / 2] : (d[d.length / 2 - 1] + d[d.length / 2]) / 2) : null;
+    };
+    // mesma base: proposta líquida x net value do KdB (o PDF do cliente vem com impostos)
+    const comValor = filtradas.filter(l => l.valor_proposta != null && l.net_value_kdb != null);
     return {
-      n: filtradas.length, mediana,
+      n: filtradas.length, medOcSol: med('dias_pedido_cliente_ate_solicitacao'), medPropOc: med('dias_proposta_ate_pedido_cliente'),
       proposta: comValor.reduce((s, l) => s + Number(l.valor_proposta), 0),
-      pedido: comValor.reduce((s, l) => s + Number(l.valor_pedido ?? l.net_value_kdb), 0),
+      pedido: comValor.reduce((s, l) => s + Number(l.net_value_kdb), 0), nComValor: comValor.length,
       semBR: filtradas.filter(l => !l.br).length,
       semProposta: filtradas.filter(l => l.br && l.data_proposta == null).length,
     };
@@ -28903,9 +28906,10 @@ function ConferenciaConhecimentoPedido({ currentUser }) {
       )}
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 14 }}>
         {card('Solicitações', resumo.n, resumo.semBR ? `${resumo.semBR} sem BR` : null, resumo.semBR ? T.rustText : null)}
-        {card('Proposta → pedido de abertura', resumo.mediana == null ? '—' : `${resumo.mediana} dias`, 'mediana')}
-        {card('Proposta × pedido', fmtMoeda(dif), resumo.proposta ? `${fmtMoeda(resumo.proposta)} → ${fmtMoeda(resumo.pedido)} (${(100 * dif / resumo.proposta).toFixed(1).replace('.', ',')}%)` : 'sem valores para comparar', dif < 0 ? T.rustText : dif > 0 ? T.oliveText : null)}
-        {card('Sem proposta no portal', resumo.semProposta, 'BR achado, mas sem proposta registrada', resumo.semProposta ? T.amberText : null)}
+        {card('OC do cliente → pedido de abertura', resumo.medOcSol == null ? '—' : `${resumo.medOcSol} ${resumo.medOcSol === 1 ? 'dia' : 'dias'}`, 'mediana, da emissão da OC até o e-mail')}
+        {card('Proposta → OC do cliente', resumo.medPropOc == null ? '—' : `${resumo.medPropOc} dias`, 'mediana (negativo = orçamento lançado depois da OC)', resumo.medPropOc != null && resumo.medPropOc < 0 ? T.amberText : null)}
+        {card('Proposta × KdB (net)', resumo.nComValor ? fmtMoeda(dif) : '—', resumo.nComValor ? `${fmtMoeda(resumo.proposta)} → ${fmtMoeda(resumo.pedido)} (${(100 * dif / resumo.proposta).toFixed(1).replace('.', ',')}%) em ${resumo.nComValor} BR` : 'nenhum BR com proposta e KdB', dif < 0 ? T.rustText : dif > 0 ? T.oliveText : null)}
+        {card('Sem proposta', resumo.semProposta, 'BR sem proposta no portal nem orçamento no Sankhya', resumo.semProposta ? T.amberText : null)}
       </div>
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 12, alignItems: 'center' }}>
         <label style={{ fontSize: 12, color: T.inkDim }}>desde <input type="date" value={desde} onChange={e => setDesde(e.target.value)} style={{ ...inputStyle(), width: 150, padding: '6px 8px' }} /></label>
@@ -28926,8 +28930,8 @@ function ConferenciaConhecimentoPedido({ currentUser }) {
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead><tr>
               <th style={th}>Pedido de abertura</th><th style={th}>BR</th><th style={th}>Cliente / vendedor</th>
-              <th style={th}>Proposta</th><th style={th}>Pedido do cliente</th><th style={th}>Dias</th>
-              <th style={th}>Painel KdB</th><th style={th}>Diferença</th><th style={th}></th>
+              <th style={th}>Proposta</th><th style={th}>OC do cliente (c/ impostos)</th><th style={th} title="proposta → OC · OC → pedido de abertura">Dias</th>
+              <th style={th}>Painel KdB (net)</th><th style={th} title="net value do KdB menos a proposta">Diferença</th><th style={th}></th>
             </tr></thead>
             <tbody>
               {filtradas.map(l => {
@@ -28954,10 +28958,13 @@ function ConferenciaConhecimentoPedido({ currentUser }) {
                         )}
                       </td>
                       <td style={td}>{l.cliente || '—'}<div style={sub}>{l.vendedor || '—'}</div></td>
-                      <td style={{ ...td, whiteSpace: 'nowrap' }}>{l.data_proposta ? <>{dataCurta(l.data_proposta)}<div style={sub}>{fmtMoeda(l.valor_proposta)}</div></> : <span style={sub}>sem proposta</span>}</td>
+                      <td style={{ ...td, whiteSpace: 'nowrap' }}>{l.data_proposta ? <>{dataCurta(l.data_proposta)}<div style={sub}>{fmtMoeda(l.valor_proposta)}{l.fonte_proposta === 'Sankhya' ? ' · Sankhya' : ''}</div></> : <span style={sub}>sem proposta</span>}</td>
                       <td style={{ ...td, whiteSpace: 'nowrap' }}>{fmtMoeda(l.valor_pedido)}<div style={sub}>{l.numero_pedido_cliente ? `OC ${l.numero_pedido_cliente}` : ''}{l.data_emissao_pedido ? ` · ${dataCurta(l.data_emissao_pedido)}` : ''}</div></td>
-                      <td style={{ ...td, whiteSpace: 'nowrap' }} title="da proposta até o pedido de abertura">{l.dias_proposta_ate_solicitacao ?? '—'}{l.dias_solicitacao_ate_kdb != null && <div style={sub} title="do pedido de abertura até a data do CP no KdB">KdB +{l.dias_solicitacao_ate_kdb}</div>}</td>
-                      <td style={{ ...td, whiteSpace: 'nowrap' }}>{l.data_cp_kdb ? <>{dataCurta(l.data_cp_kdb)}<div style={sub}>{fmtMoeda(l.net_value_kdb)}</div></> : <span style={sub}>ainda não</span>}</td>
+                      <td style={{ ...td, whiteSpace: 'nowrap' }}>
+                        <span title="da proposta até a emissão da OC do cliente" style={{ color: l.dias_proposta_ate_pedido_cliente < 0 ? T.amberText : T.ink }}>{l.dias_proposta_ate_pedido_cliente ?? '—'}</span>
+                        <div style={sub} title="da emissão da OC até o e-mail de abertura">OC → e-mail: {l.dias_pedido_cliente_ate_solicitacao ?? '—'}</div>
+                      </td>
+                      <td style={{ ...td, whiteSpace: 'nowrap' }}>{l.net_value_kdb != null ? <>{fmtMoeda(l.net_value_kdb)}<div style={sub}>{l.competencia_kdb ? l.competencia_kdb.split('-').reverse().join('/') : ''}</div></> : <span style={sub}>ainda não</span>}</td>
                       <td style={{ ...td, whiteSpace: 'nowrap', color: d == null ? T.inkFaint : d < 0 ? T.rustText : d > 0 ? T.oliveText : T.ink, fontWeight: 600 }}>
                         {d == null ? '—' : <>{fmtMoeda(d)}<div style={{ fontSize: 11 }}>{l.diferenca_pct != null ? `${String(l.diferenca_pct).replace('.', ',')}%` : ''}</div></>}
                       </td>
@@ -28977,7 +28984,8 @@ function ConferenciaConhecimentoPedido({ currentUser }) {
         </div>
       )}
       <div style={{ ...sub, marginTop: 8 }}>
-        Diferença = pedido do cliente (ou net value do KdB, se o e-mail não trouxe valor) menos a proposta. Vermelho: sem BR; amarelo: BR sem proposta no portal.
+        Diferença = net value do KdB menos a proposta (os dois sem impostos); o valor da OC do cliente vem com impostos e fica só como referência.
+        Proposta: a do portal; se não houver, o último orçamento do Sankhya. Dias em amarelo: o orçamento foi lançado depois da OC do cliente. Linha vermelha: sem BR; amarela: sem proposta.
       </div>
     </Panel>
   );
