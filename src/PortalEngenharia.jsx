@@ -9388,6 +9388,347 @@ function AlmoxQR({ modo, currentUser, codigoInicial }) {
   );
 }
 
+// ============================================================================
+// ESTOQUE > MOVIMENTAR (30/09/2026): tudo do material numa tela só, pelo item da
+// OP -- pedido (solicitação), entrada no estoque + QR, movimentação para os
+// setores (nome, quem recebeu, foto) e o histórico. Substitui as abas Registrar,
+// Fila de Atendimento, Leitor, Etiquetas QR e Entregas registradas.
+// Regras: tudo passa primeiro pelo Ponto de Estoque (a entrada cria a etiqueta);
+// um item de OP = um código; o pedido fecha sozinho quando o item é movimentado.
+// ============================================================================
+const almoxChaveItem = (op, cod, desc) => `${op}|${cod || desc || ''}`;
+
+function AlmoxMovimentar({ currentUser, codigoInicial }) {
+  const [ops, setOps] = useState([]);
+  const [buscaOp, setBuscaOp] = useState('');
+  const [opsFora, setOpsFora] = useState([]);
+  const [opSel, setOpSel] = useState(null);
+  const [itens, setItens] = useState([]);
+  const [vols, setVols] = useState([]);
+  const [solicOp, setSolicOp] = useState([]);
+  const [hist, setHist] = useState([]);
+  const [pendentes, setPendentes] = useState([]);
+  const [marc, setMarc] = useState({});
+  const [qtd, setQtd] = useState({});
+  const [aviso, setAviso] = useState(null);
+  const [movVol, setMovVol] = useState(null);
+  const [pedindo, setPedindo] = useState(null);
+  const [pedSetor, setPedSetor] = useState('');
+  const [pedQtd, setPedQtd] = useState('');
+  const [aberto, setAberto] = useState(null);
+  const [verLeitor, setVerLeitor] = useState(!!codigoInicial);
+  const [verCfg, setVerCfg] = useState(false);
+  const [cfgEt, setCfgEt] = useState(almoxConfigEtiqueta);
+  const [ocupado, setOcupado] = useState(false);
+  const [carregandoOp, setCarregandoOp] = useState(false);
+
+  const mudarCfg = (k, v) => setCfgEt(x => { const n = { ...x, [k]: v }; almoxSalvarConfigEtiqueta(n); return n; });
+  const carregarListas = useCallback(async () => {
+    const [o, p] = await Promise.all([
+      supabase.from('v_almox_fluxo_ops').select('*'),
+      supabase.from('solicitacoes_movimentacao_almoxarifado').select('*').eq('status', 'pendente').order('solicitado_em'),
+    ]);
+    setOps(o.data || []); setPendentes(p.data || []);
+  }, []);
+  useEffect(() => { carregarListas(); }, [carregarListas]);
+
+  const carregarOp = useCallback(async (o) => {
+    if (!o) return;
+    setCarregandoOp(true);
+    const [m, v, s, h] = await Promise.all([
+      supabase.from('almoxarifado_op_materiais').select('*').eq('op', o.op).order('materia_prima_descricao'),
+      supabase.from('almox_volume').select('*').eq('op', o.op).neq('status', 'cancelado').order('id'),
+      supabase.from('solicitacoes_movimentacao_almoxarifado').select('*').eq('op', o.op).eq('status', 'pendente').order('solicitado_em'),
+      supabase.from('almox_entrega').select('*').eq('op', o.op).order('criado_em', { ascending: false }).limit(300),
+    ]);
+    setItens(m.data || []); setVols(v.data || []); setSolicOp(s.data || []); setHist(h.data || []);
+    setCarregandoOp(false);
+  }, []);
+  const abrirOp = (o) => { setOpSel(o); setMarc({}); setQtd({}); setPedindo(null); setAberto(null); setAviso(null); carregarOp(o); };
+  const recarregar = async () => { await Promise.all([carregarListas(), carregarOp(opSel)]); };
+
+  // busca também fora da lista (finalizadas, canceladas, tudo entregue)
+  useEffect(() => {
+    const t = buscaOp.trim();
+    if (t.length < 3) { setOpsFora([]); return; }
+    const id = setTimeout(async () => {
+      const termo = t.replace(/[%_,()]/g, '');
+      const { data } = await supabase.from('almoxarifado_op_materiais').select('op, br, situacao_op')
+        .or(`op.ilike.%${termo}%,br.ilike.%${termo}%`).limit(500);
+      const naLista = new Set(ops.map(o => String(o.op)));
+      const porOp = {};
+      (data || []).forEach(r => {
+        if (naLista.has(String(r.op))) return;
+        const x = porOp[r.op] || (porOp[r.op] = { op: r.op, br: r.br, situacao_op: r.situacao_op, qtd_materiais: 0, fora: true });
+        x.qtd_materiais += 1; if (!x.br && r.br) x.br = r.br;
+      });
+      setOpsFora(Object.values(porOp).sort((a, b) => String(b.op).localeCompare(String(a.op), undefined, { numeric: true })).slice(0, 40));
+    }, 300);
+    return () => clearTimeout(id);
+  }, [buscaOp, ops]);
+
+  // itens da OP com etiqueta, pedidos e histórico
+  const linhas = useMemo(() => itens.map(m => {
+    const k = almoxChaveItem(m.op, m.cod_materia_prima, m.materia_prima_descricao);
+    const doItem = vols.filter(v => almoxChaveItem(v.op, v.cod_materia_prima, v.material) === k);
+    const vol = doItem.find(v => v.status === 'ativo') || doItem[doItem.length - 1] || null;
+    const peds = solicOp.filter(s => almoxChaveItem(s.op, s.cod_materia_prima, s.material) === k);
+    const h = hist.filter(e => doItem.some(v => v.id === e.volume_id) || almoxChaveItem(e.op, null, e.material) === almoxChaveItem(m.op, null, m.materia_prima_descricao));
+    return { m, k, vol, peds, h };
+  }), [itens, vols, solicOp, hist]);
+
+  const itemParaEtiqueta = (m) => ({ br: m.br || opSel?.br || null, op: m.op, cod_materia_prima: m.cod_materia_prima, material: m.materia_prima_descricao,
+    quantidade: qtd[almoxChaveItem(m.op, m.cod_materia_prima, m.materia_prima_descricao)] !== undefined && qtd[almoxChaveItem(m.op, m.cod_materia_prima, m.materia_prima_descricao)] !== ''
+      ? Number(String(qtd[almoxChaveItem(m.op, m.cod_materia_prima, m.materia_prima_descricao)]).replace(',', '.')) : m.quantidade_mp });
+
+  const darEntrada = async (lista) => {
+    if (!lista.length) return;
+    setOcupado(true); setAviso(null);
+    const { data, error } = await supabase.rpc('fn_almox_dar_entrada', { p_itens: lista.map(itemParaEtiqueta), p_usuario: currentUser?.nome || null });
+    setOcupado(false);
+    if (error) { setAviso({ erro: true, t: error.message }); return; }
+    const novos = data.filter(v => !v.reaproveitado).length;
+    setAviso({ t: `${novos ? `${novos} item(ns) com entrada no Ponto de Estoque` : 'Os itens já tinham entrada'} · ${data.length} etiqueta(s) para imprimir. A janela de impressão vai abrir (use Ctrl+Shift+P na Argox).` });
+    setMarc({});
+    await almoxImprimirEtiquetas(data, cfgEt);
+    const ids = data.map(v => v.id);
+    if (ids.length) await supabase.from('almox_volume').update({ impresso_em: new Date().toISOString() }).in('id', ids);
+    recarregar();
+  };
+
+  const criarPedido = async (l) => {
+    const tipo = l.vol ? 'para_setor' : 'para_estoque';
+    if (tipo === 'para_setor' && !pedSetor) { setAviso({ erro: true, t: 'Escolha para qual setor é o pedido.' }); return; }
+    const { error } = await supabase.from('solicitacoes_movimentacao_almoxarifado').insert({
+      tipo, br: l.m.br || opSel?.br || null, op: l.m.op, material: l.m.materia_prima_descricao, cod_materia_prima: l.m.cod_materia_prima,
+      quantidade_total_prevista: l.m.quantidade_mp, quantidade_solicitada: pedQtd ? Number(String(pedQtd).replace(',', '.')) : null,
+      setor_destino: tipo === 'para_setor' ? pedSetor : null, status: 'pendente', solicitado_por: currentUser?.nome || null,
+    });
+    if (error) { setAviso({ erro: true, t: error.message }); return; }
+    setAviso({ t: `Pedido registrado: ${l.m.materia_prima_descricao} ${tipo === 'para_setor' ? `→ ${pedSetor}` : '→ Ponto de Estoque'}.` });
+    setPedindo(null); setPedSetor(''); setPedQtd('');
+    recarregar();
+  };
+  const cancelarPedido = async (s) => {
+    if (!window.confirm(`Cancelar o pedido de ${s.material}?`)) return;
+    await supabase.from('solicitacoes_movimentacao_almoxarifado').update({ status: 'cancelado' }).eq('id', s.id);
+    recarregar();
+  };
+  const verFoto = async (caminho) => {
+    const { data } = await supabase.storage.from('almoxarifado-entregas').createSignedUrl(caminho, 600);
+    if (data?.signedUrl) window.open(data.signedUrl, '_blank', 'noopener');
+  };
+
+  const botao = (forte, cor) => ({ fontFamily: 'inherit', fontSize: 12.5, fontWeight: 700, padding: '7px 12px', borderRadius: 7, cursor: 'pointer', whiteSpace: 'nowrap',
+    border: `1px solid ${forte ? (cor || T.ink) : T.line}`, background: forte ? (cor || T.ink) : T.panel, color: forte ? '#fff' : T.inkDim });
+  const campo = { ...inputStyle(), padding: '6px 8px', fontSize: 12.5 };
+  const dataHora = (ts) => ts ? new Date(ts).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
+  const tOp = buscaOp.trim().toLowerCase();
+  const opsF = ops.filter(o => !tOp || String(o.op).includes(tOp) || String(o.br || '').toLowerCase().includes(tOp)).slice(0, 80);
+  const motivoFora = (o) => ['Finalizado', 'F'].includes(o.situacao_op) ? 'finalizada' : ['C', 'Cancelado'].includes(o.situacao_op) ? 'cancelada/concluída' : 'itens já entregues';
+  const selec = linhas.filter(l => marc[l.k]);
+  const selSemEntrada = selec.filter(l => !l.vol || l.vol.status === 'cancelado');
+  const selComEtiqueta = selec.filter(l => l.vol);
+  const pendPorOp = pendentes.reduce((a, s) => { a[s.op] = (a[s.op] || 0) + 1; return a; }, {});
+
+  const situacao = (l) => {
+    if (!l.vol) return { t: 'Ainda não deu entrada', bg: T.panelAlt, c: T.inkFaint };
+    if (l.vol.status === 'finalizado') return { t: `Finalizado · ${l.vol.setor_atual}`, bg: T.oliveSoft, c: T.oliveText };
+    if (l.vol.setor_atual === 'Ponto de Estoque') return { t: 'No Ponto de Estoque', bg: T.amberSoft, c: T.amberText };
+    return { t: `Em ${l.vol.setor_atual}`, bg: T.blueSoft, c: T.blueText };
+  };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      {movVol && (
+        <AlmoxEntregaModal volume={movVol.vol} destinoPadrao={movVol.destino} currentUser={currentUser}
+          onFechar={() => setMovVol(null)} onFeito={() => { setMovVol(null); setAviso({ t: 'Movimentação registrada.' }); recarregar(); }} />
+      )}
+
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+        <button onClick={() => setVerLeitor(v => !v)} style={botao(verLeitor)}>📷 {verLeitor ? 'Fechar leitor' : 'Ler QR (tablet)'}</button>
+        <button onClick={() => setVerCfg(v => !v)} style={botao(verCfg)}>⚙ Etiqueta</button>
+        <span style={{ fontSize: 12, color: T.inkFaint }}>Escolha a OP, marque os itens e use as ações da linha. Tudo passa primeiro pelo Ponto de Estoque.</span>
+      </div>
+
+      {verLeitor && (
+        <Panel title="Leitor de QR" subtitle="Aponte a câmera para a etiqueta; abre a movimentação do item.">
+          <AlmoxQR modo="leitor" currentUser={currentUser} codigoInicial={codigoInicial} />
+        </Panel>
+      )}
+
+      {verCfg && (
+        <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: 12, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 12.5, fontWeight: 700 }}>Etiqueta (Argox OS-214 plus)</span>
+          {Object.entries(ALMOX_ETIQUETAS).map(([k, t]) => (
+            <button key={k} onClick={() => { mudarCfg('w', t.w); mudarCfg('h', t.h); }} style={botao(Number(cfgEt.w) === t.w && Number(cfgEt.h) === t.h)}>{t.w} × {t.h} mm</button>
+          ))}
+          <label style={{ fontSize: 12, color: T.inkDim }}>largura <input value={cfgEt.w} onChange={e => mudarCfg('w', e.target.value)} inputMode="decimal" style={{ ...campo, width: 58 }} /> mm</label>
+          <label style={{ fontSize: 12, color: T.inkDim }}>altura <input value={cfgEt.h} onChange={e => mudarCfg('h', e.target.value)} inputMode="decimal" style={{ ...campo, width: 58 }} /> mm</label>
+          <label style={{ fontSize: 12, color: T.inkDim }} title="+ vai para a direita">ajuste ↔ <input value={cfgEt.dx} onChange={e => mudarCfg('dx', e.target.value)} inputMode="decimal" style={{ ...campo, width: 50 }} /> mm</label>
+          <label style={{ fontSize: 12, color: T.inkDim }} title="+ desce">ajuste ↕ <input value={cfgEt.dy} onChange={e => mudarCfg('dy', e.target.value)} inputMode="decimal" style={{ ...campo, width: 50 }} /> mm</label>
+          <button onClick={() => almoxImprimirEtiquetas([{ codigo: 'V000000', op: '0000', br: 'BR00000/26', material: 'ETIQUETA DE TESTE — CONFIRA SE O QR LÊ NO TABLET', quantidade: 1, criado_em: new Date().toISOString() }], cfgEt)}
+            style={botao(false)}>Imprimir etiqueta de teste</button>
+          <span style={{ fontSize: 11.5, color: T.inkFaint, flexBasis: '100%' }}>
+            Na Argox: imprima pela caixa de diálogo do Windows (Ctrl+Shift+P), papel USER 105,5 × 50, Retrato, margens nenhuma.
+          </span>
+        </div>
+      )}
+
+      {pendentes.length > 0 && (
+        <Panel title={`Pedidos pendentes (${pendentes.length})`} subtitle="Pedidos de material ainda não atendidos. Fecham sozinhos quando o item é movimentado. Clique para abrir a OP.">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 220, overflowY: 'auto' }}>
+            {pendentes.map(s => (
+              <div key={s.id} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '7px 10px', borderRadius: 7, background: T.amberSoft, fontSize: 12.5 }}>
+                <button onClick={() => abrirOp(ops.find(o => String(o.op) === String(s.op)) || { op: s.op, br: s.br, fora: true })}
+                  style={{ flex: 1, textAlign: 'left', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit', fontSize: 12.5, color: T.ink, padding: 0 }}>
+                  <strong>OP {s.op}</strong> · {s.material} → <strong>{s.tipo === 'para_estoque' ? 'Ponto de Estoque' : s.setor_destino}</strong>
+                  {s.quantidade_solicitada != null && ` · qtd ${String(s.quantidade_solicitada).replace('.', ',')}`}
+                  <span style={{ color: T.inkFaint }}> · {s.solicitado_por || '—'} · {dataHora(s.solicitado_em)}</span>
+                </button>
+                <button onClick={() => cancelarPedido(s)} title="cancelar o pedido" style={{ ...botao(false), padding: '3px 8px' }}>×</button>
+              </div>
+            ))}
+          </div>
+        </Panel>
+      )}
+
+      <div className="grid-2col" style={{ display: 'grid', gridTemplateColumns: '300px 1fr', gap: 14, alignItems: 'flex-start' }}>
+        <Panel title="OPs em andamento" subtitle="sem finalizadas, canceladas ou já entregues · a busca acha qualquer OP">
+          <input value={buscaOp} onChange={e => setBuscaOp(e.target.value)} placeholder="buscar OP ou BR" style={{ ...campo, width: '100%', boxSizing: 'border-box', marginBottom: 8 }} />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 520, overflowY: 'auto' }}>
+            {opsF.map(o => (
+              <button key={o.op} onClick={() => abrirOp(o)} style={{ textAlign: 'left', padding: '8px 10px', borderRadius: 7, cursor: 'pointer', fontSize: 12.5, fontFamily: 'inherit',
+                border: `1px solid ${opSel?.op === o.op ? T.terracotta : T.line}`, background: opSel?.op === o.op ? T.rustSoft : T.panelAlt, color: T.ink }}>
+                <strong>OP {o.op}</strong> · {o.br || 'sem BR'}
+                <div style={{ fontSize: 11, color: T.inkFaint, marginTop: 1 }}>
+                  {o.itens_entregues ? `${o.itens_entregues} de ${o.qtd_materiais} itens entregues` : `${o.qtd_materiais} itens`}
+                  {pendPorOp[o.op] ? <span style={{ color: T.amberText, fontWeight: 700 }}> · {pendPorOp[o.op]} pedido(s)</span> : null}
+                  {o.situacao_op === 'S' ? ' · Sankhya: S' : ''}
+                </div>
+              </button>
+            ))}
+            {opsFora.length > 0 && <div style={{ fontSize: 11, fontWeight: 700, color: T.inkFaint, margin: '8px 2px 2px' }}>Fora da lista — achadas pela busca</div>}
+            {opsFora.map(o => (
+              <button key={'f' + o.op} onClick={() => abrirOp(o)} style={{ textAlign: 'left', padding: '8px 10px', borderRadius: 7, cursor: 'pointer', fontSize: 12.5, fontFamily: 'inherit',
+                border: `1px dashed ${opSel?.op === o.op ? T.terracotta : T.line}`, background: opSel?.op === o.op ? T.rustSoft : T.panel, color: T.inkDim }}>
+                <strong>OP {o.op}</strong> · {o.br || 'sem BR'} <span style={{ fontSize: 10.5 }}>· {motivoFora(o)}</span>
+              </button>
+            ))}
+            {tOp && !opsF.length && !opsFora.length && (
+              <div style={{ fontSize: 12, color: T.inkFaint, padding: '6px 2px' }}>{buscaOp.trim().length < 3 ? 'Digite pelo menos 3 caracteres para buscar fora da lista.' : 'Nenhuma OP encontrada.'}</div>
+            )}
+          </div>
+        </Panel>
+
+        <Panel title={opSel ? `OP ${opSel.op} · ${opSel.br || 'sem BR'}` : 'Itens da OP'}
+          subtitle={opSel ? 'Onde cada item está, o QR e os pedidos. Marque vários para fazer de uma vez.' : 'Escolha uma OP à esquerda.'}>
+          {aviso && <div style={{ fontSize: 12.5, fontWeight: 600, padding: '8px 10px', borderRadius: 7, marginBottom: 10,
+            background: aviso.erro ? T.rustSoft : T.oliveSoft, color: aviso.erro ? T.rustText : T.oliveText }}>{aviso.t}</div>}
+          {!opSel ? null : carregandoOp ? (
+            <div style={{ padding: 20, textAlign: 'center', color: T.inkFaint }}>Carregando itens…</div>
+          ) : !linhas.length ? (
+            <div style={{ padding: 20, textAlign: 'center', color: T.inkFaint, fontSize: 13 }}>Esta OP não tem lista de materiais sincronizada.</div>
+          ) : (<>
+            {selec.length > 0 && (
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', padding: '8px 10px', borderRadius: 8, background: T.panelAlt, marginBottom: 10 }}>
+                <span style={{ fontSize: 12.5, fontWeight: 700 }}>{selec.length} marcado(s):</span>
+                {selSemEntrada.length > 0 && <button disabled={ocupado} onClick={() => darEntrada(selSemEntrada.map(l => l.m))} style={botao(true, T.olive)}>Dar entrada e imprimir {selSemEntrada.length} QR</button>}
+                {selComEtiqueta.length > 0 && <button onClick={() => almoxImprimirEtiquetas(selComEtiqueta.map(l => l.vol), cfgEt)} style={botao(false)}>Reimprimir {selComEtiqueta.length} QR</button>}
+                <button onClick={() => almoxBaixarCsvBarTender(selComEtiqueta.map(l => l.vol))} disabled={!selComEtiqueta.length} style={{ ...botao(false), opacity: selComEtiqueta.length ? 1 : 0.5 }}>Arquivo p/ BarTender</button>
+                <button onClick={() => setMarc({})} style={botao(false)}>Desmarcar</button>
+              </div>
+            )}
+            <div style={{ overflowX: 'auto', border: `1px solid ${T.line}`, borderRadius: 8 }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+                <thead><tr style={{ background: T.panelAlt }}>
+                  {['', 'Material', 'Qtd', 'Onde está', 'QR', 'Ações'].map((h, i) => (
+                    <th key={i} style={{ textAlign: 'left', padding: '8px 10px', fontSize: 11, color: T.inkFaint, fontWeight: 700, borderBottom: `1px solid ${T.line}` }}>
+                      {i === 0 ? <input type="checkbox" checked={linhas.length > 0 && linhas.every(l => marc[l.k])}
+                        onChange={e => setMarc(e.target.checked ? Object.fromEntries(linhas.map(l => [l.k, true])) : {})} /> : h}
+                    </th>
+                  ))}
+                </tr></thead>
+                <tbody>
+                  {linhas.map(l => {
+                    const sit = situacao(l);
+                    const ativo = l.vol && l.vol.status === 'ativo';
+                    const pedSetorDest = l.peds.find(p => p.tipo === 'para_setor')?.setor_destino;
+                    return (
+                      <React.Fragment key={l.k}>
+                        <tr style={{ background: marc[l.k] ? T.rustSoft : 'transparent' }}>
+                          <td style={{ padding: '8px 10px', borderBottom: `1px solid ${T.lineSoft}`, verticalAlign: 'top' }}>
+                            <input type="checkbox" checked={!!marc[l.k]} onChange={e => setMarc(x => ({ ...x, [l.k]: e.target.checked }))} />
+                          </td>
+                          <td style={{ padding: '8px 10px', borderBottom: `1px solid ${T.lineSoft}`, verticalAlign: 'top' }}>
+                            <div style={{ fontWeight: 600 }}>{l.m.cod_materia_prima ? `${l.m.cod_materia_prima} · ` : ''}{l.m.materia_prima_descricao}</div>
+                            {l.peds.map(p => (
+                              <div key={p.id} style={{ fontSize: 11, color: T.amberText, fontWeight: 700, marginTop: 2 }}>
+                                ⏳ pedido → {p.tipo === 'para_estoque' ? 'Ponto de Estoque' : p.setor_destino}{p.quantidade_solicitada != null ? ` · qtd ${String(p.quantidade_solicitada).replace('.', ',')}` : ''} · {p.solicitado_por || '—'}
+                              </div>
+                            ))}
+                            {l.h.length > 0 && (
+                              <button onClick={() => setAberto(a => a === l.k ? null : l.k)} style={{ background: 'none', border: 'none', padding: 0, marginTop: 3, cursor: 'pointer', fontSize: 11, color: T.inkFaint, textDecoration: 'underline', fontFamily: 'inherit' }}>
+                                {aberto === l.k ? 'fechar histórico' : `histórico (${l.h.length})`}
+                              </button>
+                            )}
+                          </td>
+                          <td style={{ padding: '8px 10px', borderBottom: `1px solid ${T.lineSoft}`, verticalAlign: 'top', whiteSpace: 'nowrap' }}>
+                            {!l.vol ? (
+                              <input value={qtd[l.k] ?? ''} onChange={e => setQtd(x => ({ ...x, [l.k]: e.target.value }))} placeholder={String(l.m.quantidade_mp ?? '')}
+                                inputMode="decimal" title="quantidade que vai na etiqueta (vazio = a da OP)" style={{ ...campo, width: 70 }} />
+                            ) : String(l.vol.quantidade ?? l.m.quantidade_mp ?? '—').replace('.', ',')}
+                          </td>
+                          <td style={{ padding: '8px 10px', borderBottom: `1px solid ${T.lineSoft}`, verticalAlign: 'top' }}>
+                            <span style={{ display: 'inline-block', fontSize: 11.5, fontWeight: 700, padding: '3px 8px', borderRadius: 6, background: sit.bg, color: sit.c, whiteSpace: 'nowrap' }}>{sit.t}</span>
+                          </td>
+                          <td style={{ padding: '8px 10px', borderBottom: `1px solid ${T.lineSoft}`, verticalAlign: 'top', whiteSpace: 'nowrap', fontWeight: 700 }}>{l.vol?.codigo || '—'}</td>
+                          <td style={{ padding: '8px 10px', borderBottom: `1px solid ${T.lineSoft}`, verticalAlign: 'top' }}>
+                            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                              {!l.vol && <button disabled={ocupado} onClick={() => darEntrada([l.m])} style={botao(true, T.olive)} title="registra a chegada no Ponto de Estoque e imprime o QR">Dar entrada + QR</button>}
+                              {ativo && <button onClick={() => setMovVol({ vol: l.vol, destino: pedSetorDest || l.vol.setor_destino })} style={botao(true)}>Movimentar</button>}
+                              {l.vol && <button onClick={() => almoxImprimirEtiquetas([l.vol], cfgEt)} style={botao(false)}>QR</button>}
+                              {(!l.vol || ativo) && <button onClick={() => { setPedindo(p => p === l.k ? null : l.k); setPedSetor(''); setPedQtd(''); }} style={botao(pedindo === l.k)}>Pedir</button>}
+                            </div>
+                            {pedindo === l.k && (
+                              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', marginTop: 6 }}>
+                                {l.vol ? (
+                                  <select value={pedSetor} onChange={e => setPedSetor(e.target.value)} style={{ ...campo, width: 170 }}>
+                                    <option value="">para qual setor?</option>
+                                    {ALMOX_SETORES.filter(s => s !== l.vol.setor_atual).map(s => <option key={s} value={s}>{s}</option>)}
+                                  </select>
+                                ) : <span style={{ fontSize: 12, color: T.inkDim }}>para o Ponto de Estoque</span>}
+                                <input value={pedQtd} onChange={e => setPedQtd(e.target.value)} placeholder="qtd (opcional)" inputMode="decimal" style={{ ...campo, width: 100 }} />
+                                <button onClick={() => criarPedido(l)} style={botao(true)}>Enviar pedido</button>
+                              </div>
+                            )}
+                          </td>
+                        </tr>
+                        {aberto === l.k && (
+                          <tr><td colSpan={6} style={{ padding: '8px 14px', background: T.panelAlt, borderBottom: `1px solid ${T.lineSoft}` }}>
+                            {l.h.map(e => (
+                              <div key={e.id} style={{ fontSize: 12, padding: '4px 0' }}>
+                                <strong>{dataHora(e.criado_em)}</strong> · {e.de_setor} → <strong>{e.para_setor}</strong> · {e.entregue_por || '—'} entregou, {e.recebido_por || '—'} recebeu
+                                {e.foto_material && <> · <button onClick={() => verFoto(e.foto_material)} style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: T.blueText, textDecoration: 'underline', fontSize: 12, fontFamily: 'inherit' }}>foto</button></>}
+                                {e.foto_documento && <> · <button onClick={() => verFoto(e.foto_documento)} style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: T.blueText, textDecoration: 'underline', fontSize: 12, fontFamily: 'inherit' }}>documento</button></>}
+                                {e.observacao && <span style={{ color: T.inkDim }}> · {e.observacao}</span>}
+                              </div>
+                            ))}
+                          </td></tr>
+                        )}
+                      </React.Fragment>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </>)}
+        </Panel>
+      </div>
+    </div>
+  );
+}
+
 function AlmoxarifadoFluxo({ currentUser, etiquetaInicial }) {
   // fmtData local (sombreia a global) -- a global só aceita data simples
   // ("2026-08-31"), quebra em "Invalid Date" com timestamp completo
@@ -9410,7 +9751,7 @@ function AlmoxarifadoFluxo({ currentUser, etiquetaInicial }) {
   const [busca, setBusca] = useState('');
   const [buscaDetalhado, setBuscaDetalhado] = useState('');
   const [mesFiltro, setMesFiltro] = useState('');
-  const [abaAtiva, setAbaAtiva] = useState(etiquetaInicial ? 'qr_leitor' : apenasFilaAtendimento ? 'fila_atendimento' : 'registrar');
+  const [abaAtiva, setAbaAtiva] = useState('movimentar');
   const [drillBr, setDrillBr] = useState(null);
   const [itensDrill, setItensDrill] = useState([]);
 
@@ -9799,10 +10140,11 @@ function AlmoxarifadoFluxo({ currentUser, etiquetaInicial }) {
     );
   };
 
+  // quem só atendia a fila agora usa a tela Movimentar (pedidos pendentes ficam no topo dela)
   if (apenasFilaAtendimento) {
     return (
       <div className="fade-up">
-        <FilaAtendimentoAlmoxarifado currentUser={currentUser} />
+        <AlmoxMovimentar currentUser={currentUser} codigoInicial={etiquetaInicial} />
       </div>
     );
   }
@@ -9823,7 +10165,7 @@ function AlmoxarifadoFluxo({ currentUser, etiquetaInicial }) {
       </div>
 
       <div style={{ display: 'flex', gap: 4, borderBottom: `1px solid ${T.line}`, flexWrap: 'wrap' }}>
-        {[{ id: 'visao_geral', label: 'Visão Geral' }, { id: 'registrar', label: 'Registrar / Situação atual' }, { id: 'fila_atendimento', label: 'Fila de Atendimento' }, { id: 'qr_leitor', label: '📷 Leitor (tablet)' }, { id: 'qr_etiquetas', label: 'Etiquetas QR' }, { id: 'qr_entregas', label: 'Entregas registradas' }, { id: 'reservas', label: `Reservas por Projeto${reservas.filter(r => r.ja_faturado).length ? ` (${reservas.filter(r => r.ja_faturado).length})` : ''}` }, { id: 'detalhado', label: `Detalhado (${detalhado.length})` }, { id: 'faturado_mes', label: 'Faturado por Mês' }, { id: 'produtividade_produto', label: 'Produtividade por Produto' }, { id: 'projetos', label: `Projetos (${projetos.length})` }, { id: 'perdas', label: `Perdas (${perdas.length})` }].map(aba => (
+        {[{ id: 'visao_geral', label: 'Visão Geral' }, { id: 'movimentar', label: 'Movimentar' }, { id: 'reservas', label: `Reservas por Projeto${reservas.filter(r => r.ja_faturado).length ? ` (${reservas.filter(r => r.ja_faturado).length})` : ''}` }, { id: 'detalhado', label: `Detalhado (${detalhado.length})` }, { id: 'faturado_mes', label: 'Faturado por Mês' }, { id: 'produtividade_produto', label: 'Produtividade por Produto' }, { id: 'projetos', label: `Projetos (${projetos.length})` }, { id: 'perdas', label: `Perdas (${perdas.length})` }].map(aba => (
           <button key={aba.id} onClick={() => setAbaAtiva(aba.id)}
             style={{
               background: 'none', border: 'none', cursor: 'pointer', padding: '10px 16px', fontSize: 13, fontWeight: 600,
@@ -10071,6 +10413,7 @@ function AlmoxarifadoFluxo({ currentUser, etiquetaInicial }) {
         </>
       )}
 
+      {abaAtiva === 'movimentar' && <AlmoxMovimentar currentUser={currentUser} codigoInicial={etiquetaInicial} />}
       {abaAtiva === 'qr_leitor' && <AlmoxQR modo="leitor" currentUser={currentUser} codigoInicial={etiquetaInicial} />}
       {abaAtiva === 'qr_etiquetas' && <AlmoxQR modo="etiquetas" currentUser={currentUser} />}
       {abaAtiva === 'qr_entregas' && <AlmoxQR modo="entregas" currentUser={currentUser} />}
