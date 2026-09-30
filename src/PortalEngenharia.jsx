@@ -347,7 +347,10 @@ function PortalConteudo({ currentUser, session }) {
   // aponta direto pra tela de validação, em vez de cair na Visão geral).
   const [view, setView] = useState(() => {
     try {
-      const alvo = (new URLSearchParams(window.location.search).get('tela') || '').trim();
+      const qs = new URLSearchParams(window.location.search);
+      // etiqueta QR do estoque: ?e=V000123 abre o Fluxo de Materiais já no registro
+      if ((qs.get('e') || '').trim()) return 'almoxarifado_fluxo';
+      const alvo = (qs.get('tela') || '').trim();
       // Valida contra o catálogo -- link com id errado cairia numa tela em
       // branco (nenhum renderTab casaria), então melhor voltar pra Visão geral.
       const existe = alvo && (alvo === 'dashboard' || TELAS_CATALOGO.some(t => t.id === alvo));
@@ -359,6 +362,14 @@ function PortalConteudo({ currentUser, session }) {
   // não é a ativa) — preserva filtros/estado local ao trocar de aba e voltar, sem precisar
   // levantar o estado de cada tela individualmente.
   const [visitedViews, setVisitedViews] = useState(() => new Set(['dashboard']));
+  // código da etiqueta vindo do link do QR (lido uma vez e tirado da barra de endereço)
+  const [etiquetaUrl] = useState(() => {
+    try {
+      const e = (new URLSearchParams(window.location.search).get('e') || '').trim().toUpperCase();
+      if (e) window.history.replaceState(null, '', window.location.pathname);
+      return e || null;
+    } catch { return null; }
+  });
   useEffect(() => {
     setVisitedViews(prev => prev.has(view) ? prev : new Set(prev).add(view));
   }, [view]);
@@ -624,7 +635,7 @@ function PortalConteudo({ currentUser, session }) {
           {renderTab('verificacao_projetos', <TabErrorBoundary tab="Verificação de Projetos"><VerificacaoProjetos currentUser={currentUser} /></TabErrorBoundary>)}
           {renderTab('analise_comercial', <TabErrorBoundary tab="Follow Up Comercial"><AnaliseComercial currentUser={currentUser} /></TabErrorBoundary>)}
           {renderTab('prospeccao_clientes', <TabErrorBoundary tab="Prospecção de Clientes"><ProspeccaoClientes /></TabErrorBoundary>)}
-          {renderTab('almoxarifado_fluxo', <TabErrorBoundary tab="Fluxo de Materiais"><AlmoxarifadoFluxo currentUser={currentUser} /></TabErrorBoundary>)}
+          {renderTab('almoxarifado_fluxo', <TabErrorBoundary tab="Fluxo de Materiais"><AlmoxarifadoFluxo currentUser={currentUser} etiquetaInicial={etiquetaUrl} /></TabErrorBoundary>)}
           {renderTab('pedidosvale', <PedidosVale />)}
           {renderTab('aberturacotacao', <TabErrorBoundary tab="Abertura de Cotação"><AberturaCotacao currentUser={currentUser} /></TabErrorBoundary>)}
           {renderTab('criar_br', <TabErrorBoundary tab="Criar BR"><CriarBR currentUser={currentUser} /></TabErrorBoundary>)}
@@ -8571,41 +8582,54 @@ async function almoxEnviarFoto(file, pasta) {
 }
 
 // janela de impressão com uma etiqueta por página, no tamanho da etiqueta.
-// QR em SVG (vetor): na impressora térmica, imagem reduzida sai borrada e o
-// leitor não pega. Margem de 2 módulos em volta do código (zona de silêncio).
+// O texto manda (OP, BR, item, quantidade, destino) e o QR fica pequeno ao lado.
+// O QR é um LINK do portal (…/?e=V000123): a câmera comum do tablet também lê
+// e abre direto o registro daquele material. QR em SVG (nítido na térmica),
+// margem de 2 módulos. O título da janela vira o nome do arquivo/trabalho de
+// impressão: diz de que OP e quantos itens são.
+const almoxLinkEtiqueta = (codigo) => `${window.location.origin}/?e=${codigo}`;
 async function almoxImprimirEtiquetas(volumes, cfgArg) {
   const cfg = typeof cfgArg === 'object' && cfgArg ? cfgArg
     : (ALMOX_ETIQUETAS[cfgArg] ? { ...almoxConfigEtiqueta(), ...ALMOX_ETIQUETAS[cfgArg] } : almoxConfigEtiqueta());
   const w = Number(cfg.w) || 60, h = Number(cfg.h) || 40, dx = Number(cfg.dx) || 0, dy = Number(cfg.dy) || 0;
-  const qrMm = Math.max(12, Math.min(h - 3, w * 0.48));
-  const svgs = await Promise.all(volumes.map(v => QRCode.toString(`KDB-V:${v.codigo}`, { type: 'svg', margin: 2, errorCorrectionLevel: 'M', color: { dark: '#000000', light: '#ffffff' } })));
+  const qrMm = Math.max(15, Math.min(22, h - 4, w * 0.36));
+  const svgs = await Promise.all(volumes.map(v => QRCode.toString(almoxLinkEtiqueta(v.codigo), { type: 'svg', margin: 2, errorCorrectionLevel: 'M', color: { dark: '#000000', light: '#ffffff' } })));
   const esc = (s) => String(s ?? '').replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
   const pequeno = w < 55 || h < 32;
-  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Etiquetas</title><style>
+  const porOp = volumes.reduce((m, v) => { m[v.op] = (m[v.op] || 0) + 1; return m; }, {});
+  const opsTxt = Object.entries(porOp).map(([op, n]) => `OP ${op} (${n} ${n === 1 ? 'item' : 'itens'})`).join(', ');
+  const brs = [...new Set(volumes.map(v => v.br).filter(Boolean))].join(' ');
+  const titulo = `Etiquetas ${opsTxt}${brs ? ' - ' + brs.replace(/\//g, '-') : ''} - ${new Date().toLocaleDateString('pt-BR').replace(/\//g, '-')}`;
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>${esc(titulo)}</title><style>
     @page { size: ${w}mm ${h}mm; margin: 0; }
     * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     html, body { margin: 0; padding: 0; font-family: Arial, Helvetica, sans-serif; color: #000; }
-    .et { width: ${w}mm; height: ${h}mm; padding: 1.2mm; display: flex; gap: 1.2mm; align-items: center; page-break-after: always; overflow: hidden;
+    .et { width: ${w}mm; height: ${h}mm; padding: 1.4mm; display: flex; gap: 1.4mm; align-items: stretch; page-break-after: always; overflow: hidden;
           transform: translate(${dx}mm, ${dy}mm); }
     .et:last-child { page-break-after: auto; }
-    .qr { width: ${qrMm}mm; height: ${qrMm}mm; flex-shrink: 0; }
+    .tx { flex: 1; min-width: 0; line-height: 1.12; display: flex; flex-direction: column; }
+    .op { font-size: ${pequeno ? 11 : 15}pt; font-weight: 700; }
+    .br { font-size: ${pequeno ? 7 : 9}pt; font-weight: 700; }
+    .it { font-size: ${pequeno ? 6.5 : 8}pt; font-weight: 700; margin-top: 0.6mm; flex: 1; overflow: hidden; }
+    .rod { font-size: ${pequeno ? 6 : 7.5}pt; font-weight: 700; display: flex; justify-content: space-between; gap: 1mm; }
+    .lado { width: ${qrMm}mm; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; flex-shrink: 0; }
+    .qr { width: ${qrMm}mm; height: ${qrMm}mm; }
     .qr svg { width: 100%; height: 100%; display: block; shape-rendering: crispEdges; }
-    .tx { flex: 1; min-width: 0; line-height: 1.12; }
-    .cod { font-size: ${pequeno ? 9 : 12}pt; font-weight: 700; }
-    .op { font-size: ${pequeno ? 7 : 9}pt; font-weight: 700; }
-    .mat { font-size: ${pequeno ? 6 : 7.5}pt; font-weight: 700; max-height: ${pequeno ? 3.4 : 4.5}em; overflow: hidden; }
-    .rod { font-size: ${pequeno ? 5.5 : 6.5}pt; font-weight: 700; margin-top: 0.5mm; }
+    .cod { font-size: ${pequeno ? 6 : 7}pt; font-weight: 700; margin-top: 0.3mm; }
   </style></head><body>
-  ${volumes.map((v, i) => `<div class="et"><div class="qr">${svgs[i]}</div><div class="tx">
-    <div class="cod">${esc(v.codigo)}</div>
-    <div class="op">OP ${esc(v.op)}${v.br ? ' · ' + esc(v.br) : ''}</div>
-    <div class="mat">${esc(v.material)}</div>
-    <div class="rod">${v.quantidade != null ? 'Qtd ' + esc(v.quantidade) + (v.unidade ? ' ' + esc(v.unidade) : '') + ' · ' : ''}${new Date(v.criado_em || Date.now()).toLocaleDateString('pt-BR')}</div>
-  </div></div>`).join('')}
+  ${volumes.map((v, i) => `<div class="et">
+    <div class="tx">
+      <div class="op">OP ${esc(v.op)}</div>
+      <div class="br">${esc(v.br || 'sem BR')}</div>
+      <div class="it">${v.cod_materia_prima ? esc(v.cod_materia_prima) + ' · ' : ''}${esc(v.material)}</div>
+      <div class="rod"><span>${v.quantidade != null ? 'QTD ' + esc(v.quantidade) + (v.unidade ? ' ' + esc(v.unidade) : '') : ''}</span><span>${v.setor_destino ? '→ ' + esc(v.setor_destino) : ''}</span></div>
+    </div>
+    <div class="lado"><div class="qr">${svgs[i]}</div><div class="cod">${esc(v.codigo)}</div></div>
+  </div>`).join('')}
   <script>window.onload = () => setTimeout(() => window.print(), 300);</script></body></html>`;
   const janela = window.open('', '_blank');
   if (!janela) { alert('O navegador bloqueou a janela de impressão. Libere pop-ups para o portal.'); return; }
-  janela.document.write(html); janela.document.close();
+  janela.document.write(html); janela.document.close(); janela.document.title = titulo;
   const reais = volumes.filter(v => v.id);
   if (reais.length) await supabase.from('almox_volume').update({ impresso_em: new Date().toISOString() }).in('id', reais.map(v => v.id));
 }
@@ -8664,7 +8688,7 @@ function AlmoxLeitorQR({ onLido, ativo = true }) {
 
 // entrega / movimentação com comprovação (foto do material obrigatória, documento opcional)
 function AlmoxEntregaModal({ volume, destinoPadrao, currentUser, onFechar, onFeito }) {
-  const [para, setPara] = useState(destinoPadrao || '');
+  const [para, setPara] = useState(destinoPadrao || volume.setor_destino || '');
   const [recebido, setRecebido] = useState('');
   const [obs, setObs] = useState('');
   const [fotoMat, setFotoMat] = useState(null);
@@ -8711,9 +8735,10 @@ function AlmoxEntregaModal({ volume, destinoPadrao, currentUser, onFechar, onFei
       <div onClick={e => e.stopPropagation()} style={{ background: T.panel, borderRadius: 14, width: '100%', maxWidth: 640, padding: 18, display: 'flex', flexDirection: 'column', gap: 12 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10 }}>
           <div>
-            <div style={{ fontSize: 12, color: T.inkFaint }}>Etiqueta {volume.codigo} · está em <strong>{volume.setor_atual}</strong></div>
-            <div style={{ fontSize: 19, fontWeight: 800 }}>OP {volume.op}{volume.br ? ` · ${volume.br}` : ''}</div>
-            <div style={{ fontSize: 14, color: T.inkDim }}>{volume.material}{volume.quantidade != null ? ` · qtd ${volume.quantidade}` : ''}</div>
+            <div style={{ fontSize: 12, fontWeight: 700, color: T.oliveText }}>✓ Etiqueta {volume.codigo} lida · o material está em <span style={{ color: T.ink }}>{volume.setor_atual}</span></div>
+            <div style={{ fontSize: 22, fontWeight: 800 }}>OP {volume.op}{volume.br ? <span style={{ fontSize: 16, color: T.inkDim }}> · {volume.br}</span> : ''}</div>
+            <div style={{ fontSize: 15, fontWeight: 600 }}>{volume.cod_materia_prima ? `${volume.cod_materia_prima} · ` : ''}{volume.material}</div>
+            <div style={{ fontSize: 13, color: T.inkDim }}>{volume.quantidade != null ? `Quantidade ${volume.quantidade}` : ''}{volume.setor_destino ? ` · destino previsto: ${volume.setor_destino}` : ''}</div>
           </div>
           <button onClick={onFechar} style={{ fontSize: 14, padding: '6px 12px', height: 36, borderRadius: 8, border: `1px solid ${T.line}`, background: T.panel }}>Fechar</button>
         </div>
@@ -8756,7 +8781,7 @@ function AlmoxEntregaModal({ volume, destinoPadrao, currentUser, onFechar, onFei
 }
 
 // as três abas novas do Fluxo de Materiais
-function AlmoxQR({ modo, currentUser }) {
+function AlmoxQR({ modo, currentUser, codigoInicial }) {
   const [ops, setOps] = useState([]);
   const [buscaOp, setBuscaOp] = useState('');
   const [opSel, setOpSel] = useState(null);
@@ -8764,6 +8789,7 @@ function AlmoxQR({ modo, currentUser }) {
   const [marcados, setMarcados] = useState({});
   const [volumes, setVolumes] = useState([]);
   const [cfgEt, setCfgEt] = useState(almoxConfigEtiqueta);
+  const [destinoLote, setDestinoLote] = useState('');
   const [verAjuda, setVerAjuda] = useState(false);
   const mudarCfg = (k, v) => setCfgEt(x => { const n = { ...x, [k]: v }; almoxSalvarConfigEtiqueta(n); return n; });
   const [selVol, setSelVol] = useState({});
@@ -8809,7 +8835,7 @@ function AlmoxQR({ modo, currentUser }) {
     if (!itens.length) return;
     const linhas = itens.map(m => ({ br: m.br || opSel.br || null, op: m.op, cod_materia_prima: m.cod_materia_prima, material: m.materia_prima_descricao,
       quantidade: marcados[m.id]?.qtd !== undefined && marcados[m.id]?.qtd !== '' ? Number(String(marcados[m.id].qtd).replace(',', '.')) : m.quantidade_mp,
-      criado_por: currentUser?.nome || null }));
+      setor_destino: destinoLote || null, criado_por: currentUser?.nome || null }));
     const { data, error } = await supabase.from('almox_volume').insert(linhas).select();
     if (error) { setAviso({ erro: true, t: error.message }); return; }
     setAviso({ t: `${data.length} etiqueta(s) gerada(s). A janela de impressão vai abrir.` });
@@ -8818,11 +8844,20 @@ function AlmoxQR({ modo, currentUser }) {
     carregarVolumes();
   };
   const lido = useCallback(async (texto) => {
-    const codigo = String(texto).trim().toUpperCase().replace(/^KDB-V:/, '');
+    // aceita o link do QR (…/?e=V000123), o formato antigo (KDB-V:V000123) ou o código digitado
+    const bruto = String(texto).trim();
+    const m = bruto.match(/[?&]e=([A-Za-z0-9]+)/);
+    const codigo = (m ? m[1] : bruto.replace(/^KDB-V:/i, '')).toUpperCase();
     const { data } = await supabase.from('almox_volume').select('*').eq('codigo', codigo).maybeSingle();
     if (!data) { setAviso({ erro: true, t: `Etiqueta "${codigo}" não encontrada.` }); setLendo(false); setTimeout(() => setLendo(true), 1500); return; }
     setAviso(null); setLendo(false); setVolumeAberto(data);
   }, []);
+
+  // veio pelo link do QR (câmera comum do tablet): abre o registro direto
+  const abriuInicial = useRef(false);
+  useEffect(() => {
+    if (modo === 'leitor' && codigoInicial && !abriuInicial.current) { abriuInicial.current = true; lido(codigoInicial); }
+  }, [modo, codigoInicial, lido]);
 
   if (modo === 'leitor') return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12, alignItems: 'center', padding: '6px 0' }}>
@@ -8944,6 +8979,21 @@ function AlmoxQR({ modo, currentUser }) {
                   ))}
                 </tbody>
               </table>
+              {nSel > 0 && (
+                <div style={{ marginTop: 10, background: T.panelAlt, borderRadius: 8, padding: '10px 12px', fontSize: 12.5 }}>
+                  <div style={{ fontWeight: 700, marginBottom: 4 }}>Vai imprimir {nSel} etiqueta(s) da OP {opSel.op}{opSel.br ? ` · ${opSel.br}` : ''} — uma por item:</div>
+                  {materiais.filter(m => marcados[m.id]?.on).map(m => (
+                    <div key={m.id} style={{ color: T.inkDim }}>• {m.cod_materia_prima} · {m.materia_prima_descricao} — qtd {marcados[m.id]?.qtd || m.quantidade_mp}</div>
+                  ))}
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8, flexWrap: 'wrap' }}>
+                    <span style={{ color: T.inkDim }}>Destino (sai impresso e já vem marcado na leitura):</span>
+                    <select value={destinoLote} onChange={e => setDestinoLote(e.target.value)} style={{ ...campo, padding: '5px 8px' }}>
+                      <option value="">— sem destino —</option>
+                      {ALMOX_SETORES.filter(s => s !== 'Ponto de Estoque').map(s => <option key={s} value={s}>{s}</option>)}
+                    </select>
+                  </div>
+                </div>
+              )}
               <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 10 }}>
                 <button disabled={!nSel} onClick={gerar} style={{ ...botao(true), opacity: nSel ? 1 : 0.5 }}>Gerar e imprimir {nSel || ''} etiqueta(s)</button>
               </div>
@@ -8982,7 +9032,7 @@ function AlmoxQR({ modo, currentUser }) {
   );
 }
 
-function AlmoxarifadoFluxo({ currentUser }) {
+function AlmoxarifadoFluxo({ currentUser, etiquetaInicial }) {
   // fmtData local (sombreia a global) -- a global só aceita data simples
   // ("2026-08-31"), quebra em "Invalid Date" com timestamp completo
   // (a coluna data_entrega_material vem com hora/timezone).
@@ -9004,7 +9054,7 @@ function AlmoxarifadoFluxo({ currentUser }) {
   const [busca, setBusca] = useState('');
   const [buscaDetalhado, setBuscaDetalhado] = useState('');
   const [mesFiltro, setMesFiltro] = useState('');
-  const [abaAtiva, setAbaAtiva] = useState(apenasFilaAtendimento ? 'fila_atendimento' : 'registrar');
+  const [abaAtiva, setAbaAtiva] = useState(etiquetaInicial ? 'qr_leitor' : apenasFilaAtendimento ? 'fila_atendimento' : 'registrar');
   const [drillBr, setDrillBr] = useState(null);
   const [itensDrill, setItensDrill] = useState([]);
 
@@ -9665,7 +9715,7 @@ function AlmoxarifadoFluxo({ currentUser }) {
         </>
       )}
 
-      {abaAtiva === 'qr_leitor' && <AlmoxQR modo="leitor" currentUser={currentUser} />}
+      {abaAtiva === 'qr_leitor' && <AlmoxQR modo="leitor" currentUser={currentUser} codigoInicial={etiquetaInicial} />}
       {abaAtiva === 'qr_etiquetas' && <AlmoxQR modo="etiquetas" currentUser={currentUser} />}
       {abaAtiva === 'qr_entregas' && <AlmoxQR modo="entregas" currentUser={currentUser} />}
 
@@ -15255,7 +15305,7 @@ function FilaAtendimentoAlmoxarifado({ currentUser }) {
     let { data: vol } = await supabase.from('almox_volume').select('*').eq('solicitacao_id', solic.id).eq('status', 'ativo').maybeSingle();
     if (!vol) {
       const r = await supabase.from('almox_volume').insert({ br: solic.br, op: solic.op, cod_materia_prima: solic.cod_materia_prima, material: solic.material,
-        quantidade: solic.quantidade_solicitada ?? solic.quantidade_total_prevista, solicitacao_id: solic.id, criado_por: currentUser?.nome || null }).select().single();
+        quantidade: solic.quantidade_solicitada ?? solic.quantidade_total_prevista, solicitacao_id: solic.id, setor_destino: solic.setor_destino || null, criado_por: currentUser?.nome || null }).select().single();
       vol = r.data;
     }
     if (vol) setEntregaVol({ vol, destino: solic.setor_destino });
@@ -15264,7 +15314,7 @@ function FilaAtendimentoAlmoxarifado({ currentUser }) {
     let { data: vol } = await supabase.from('almox_volume').select('*').eq('solicitacao_id', solic.id).eq('status', 'ativo').maybeSingle();
     if (!vol) {
       const r = await supabase.from('almox_volume').insert({ br: solic.br, op: solic.op, cod_materia_prima: solic.cod_materia_prima, material: solic.material,
-        quantidade: solic.quantidade_solicitada ?? solic.quantidade_total_prevista, solicitacao_id: solic.id, criado_por: currentUser?.nome || null }).select().single();
+        quantidade: solic.quantidade_solicitada ?? solic.quantidade_total_prevista, solicitacao_id: solic.id, setor_destino: solic.setor_destino || null, criado_por: currentUser?.nome || null }).select().single();
       vol = r.data;
     }
     if (vol) await almoxImprimirEtiquetas([vol], almoxConfigEtiqueta());
