@@ -22268,17 +22268,25 @@ function VendaCustoDetalhe({ l, H, alvo, moeda, num }) {
   );
 }
 
+const SETORES_H = ['VULCANIZAÇÃO', 'CALDEIRARIA', 'REVESTIMENTO', 'PINTURA', 'CORTE CERÂMICA', 'sem setor'];
+const CORES_SETOR = ['#3E7A4E', '#1F4E79', '#B5651D', '#7A4E9E', '#2E8B8B', '#9A9A9A', '#C9A227', '#8B3A3A'];
 const rotMesCurto = (s) => { const [a, m] = String(s || '').split('-'); return m ? `${['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'][Number(m) - 1]}/${a.slice(2)}` : (s || '—'); };
 // detalhe de um mês clicado no gráfico da Venda × custo
-function DetalheMesVenda({ x, k, cuDe, H, moeda, num, thx, tdx }) {
+function DetalheMesVenda({ x, k, cuDe, H, moeda, num, thx, tdx, setoresMes = [] }) {
   const [ops, setOps] = useState(null);
+  const [brutoMo, setBrutoMo] = useState([]);
+  const [pessoas, setPessoas] = useState([]);
+  const [setorSel, setSetorSel] = useState(null);
   useEffect(() => {
     if (k !== 'horas') return;
-    setOps(null);
-    supabase.from('v_custeio_mao_de_obra').select('idiproc,descr_prod,br,setor_nome,horas,pessoas,custo_mao_obra').eq('competencia', x.m).then(r => {
+    setOps(null); setSetorSel(null);
+    Promise.all([
+      supabase.from('v_custeio_mao_de_obra').select('idiproc,descr_prod,br,setor_nome,horas,pessoas,custo_mao_obra').eq('competencia', x.m),
+      supabase.from('v_custeio_horas_pessoa_mes').select('*').eq('competencia', x.m),
+    ]).then(([r, p]) => {
       const a = {};
       (r.data || []).forEach(l => { const c = l.idiproc; a[c] = a[c] || { op: c, prod: l.descr_prod, br: l.br, h: 0, c: 0, setores: new Set() }; a[c].h += Number(l.horas) || 0; a[c].c += Number(l.custo_mao_obra) || 0; if (l.setor_nome) a[c].setores.add(l.setor_nome); });
-      setOps(Object.values(a).sort((p, q) => q.h - p.h));
+      setOps(Object.values(a).sort((p2, q) => q.h - p2.h)); setBrutoMo(r.data || []); setPessoas(p.data || []);
     });
   }, [k, x.m]);
   const box = { marginTop: 12, paddingTop: 10, borderTop: `1px solid ${T.line}` };
@@ -22286,6 +22294,85 @@ function DetalheMesVenda({ x, k, cuDe, H, moeda, num, thx, tdx }) {
     return (
       <div style={box}>
         <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 6 }}>{rotMesCurto(x.m)}: {num(x.hp + x.ho, 0)} h apontadas · {num(x.hp, 0)} h em {x.opsH} OPs · {num(x.ho, 0)} h ociosas ({x.hp + x.ho ? num(x.ho / (x.hp + x.ho) * 100, 1) : 0}%) · {x.dias} dias com apontamento · {x.pessoas} pessoas · {x.pd} pessoa-dias · {x.pd ? num((x.hp + x.ho) / x.pd, 1) : '—'} h por pessoa-dia</div>
+        {(() => {
+          // por setor: horas em OP x ociosas, pessoas e custo; clique abre pessoas e OPs do setor
+          const sts = [...setoresMes].sort((a, b) => ((Number(b.horas_op) || 0) + (Number(b.horas_ociosas) || 0)) - ((Number(a.horas_op) || 0) + (Number(a.horas_ociosas) || 0)));
+          const tt = (f) => sts.reduce((a, r) => a + (Number(r[f]) || 0), 0);
+          return (
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4 }}>Por setor <span style={{ fontWeight: 400, color: T.inkFaint }}>· clique no setor para ver as pessoas e as OPs</span></div>
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead><tr>{['Setor', 'Horas em OP', 'Horas ociosas', 'Total', '% ociosa', 'Pessoas', 'Pessoa-dias', 'h por pessoa-dia', 'Custo em OP', 'Custo ocioso', 'Custo total'].map((h, j) => <th key={j} style={thx(j > 0)}>{h}</th>)}</tr></thead>
+                <tbody>
+                  {sts.map((r, i) => {
+                    const hop = Number(r.horas_op) || 0, hoc = Number(r.horas_ociosas) || 0, tot = hop + hoc;
+                    const ab = setorSel === r.setor_nome;
+                    return (
+                      <React.Fragment key={r.setor_nome}>
+                        <tr onClick={() => setSetorSel(v => v === r.setor_nome ? null : r.setor_nome)} style={{ cursor: 'pointer', background: ab ? T.rustSoft : 'transparent' }}>
+                          <td style={{ ...tdx(), fontWeight: 700 }}>
+                            <span style={{ display: 'inline-block', width: 9, height: 9, borderRadius: 2, marginRight: 6, background: CORES_SETOR[Math.max(0, SETORES_H.indexOf(r.setor_nome)) % CORES_SETOR.length] }} />
+                            {ab ? '▾' : '▸'} {r.setor_nome}
+                          </td>
+                          <td style={tdx(1)}>{num(hop, 0)} h</td><td style={tdx(1)}>{num(hoc, 0)} h</td><td style={{ ...tdx(1), fontWeight: 600 }}>{num(tot, 0)} h</td>
+                          <td style={tdx(1)}>{tot ? `${num(hoc / tot * 100, 1)}%` : '—'}</td><td style={tdx(1)}>{r.pessoas}</td><td style={tdx(1)}>{r.pessoa_dias}</td>
+                          <td style={tdx(1)}>{Number(r.pessoa_dias) ? num(tot / Number(r.pessoa_dias), 1) : '—'}</td>
+                          <td style={tdx(1)}>{moeda(Number(r.custo_op) || 0)}</td><td style={tdx(1)}>{moeda(Number(r.custo_ocioso) || 0)}</td>
+                          <td style={{ ...tdx(1), fontWeight: 700 }}>{moeda((Number(r.custo_op) || 0) + (Number(r.custo_ocioso) || 0))}</td>
+                        </tr>
+                        {ab && (
+                          <tr><td colSpan={11} style={{ padding: '6px 10px 10px', background: T.panelAlt }}>
+                            <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))' }}>
+                              <div>
+                                <div style={{ fontSize: 11.5, fontWeight: 700, marginBottom: 4 }}>Pessoas do setor no mês</div>
+                                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                                  <thead><tr>{['Pessoa', 'Dias', 'Em OP', 'Ociosas', '% ociosa', 'OPs', 'Custo'].map((h, j) => <th key={j} style={thx(j > 0)}>{h}</th>)}</tr></thead>
+                                  <tbody>{pessoas.filter(p2 => p2.setor_nome === r.setor_nome)
+                                    .sort((a, b) => ((Number(b.horas_op) || 0) + (Number(b.horas_ociosas) || 0)) - ((Number(a.horas_op) || 0) + (Number(a.horas_ociosas) || 0)))
+                                    .map(p2 => { const a1 = Number(p2.horas_op) || 0, a2 = Number(p2.horas_ociosas) || 0; return (
+                                      <tr key={p2.cod_usuario}>
+                                        <td style={tdx()}>{p2.nome_usuario || p2.cod_usuario}</td><td style={tdx(1)}>{p2.dias}</td>
+                                        <td style={tdx(1)}>{num(a1, 1)} h</td><td style={tdx(1)}>{num(a2, 1)} h</td>
+                                        <td style={{ ...tdx(1), color: a1 + a2 && a2 / (a1 + a2) >= 0.5 ? T.amberText : T.ink }}>{a1 + a2 ? `${num(a2 / (a1 + a2) * 100, 0)}%` : '—'}</td>
+                                        <td style={tdx(1)}>{p2.ops}</td><td style={tdx(1)}>{moeda((a1 + a2) * (Number(p2.custo_hora) || 0))}</td>
+                                      </tr>); })}
+                                  </tbody>
+                                </table>
+                              </div>
+                              <div>
+                                <div style={{ fontSize: 11.5, fontWeight: 700, marginBottom: 4 }}>OPs do setor no mês</div>
+                                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                                  <thead><tr>{['OP', 'Produto', 'Horas', 'Custo'].map((h, j) => <th key={j} style={thx(j > 1)}>{h}</th>)}</tr></thead>
+                                  <tbody>{Object.values(brutoMo.filter(b => (b.setor_nome || 'sem setor') === r.setor_nome).reduce((a, b) => {
+                                      const c = b.idiproc; a[c] = a[c] || { op: c, prod: b.descr_prod, br: b.br, h: 0, c: 0 }; a[c].h += Number(b.horas) || 0; a[c].c += Number(b.custo_mao_obra) || 0; return a; }, {}))
+                                    .sort((a, b) => b.h - a.h).map(o => (
+                                      <tr key={o.op} style={{ background: o.br === 'BR9595/22' ? T.panel : 'transparent' }}>
+                                        <td style={{ ...tdx(), fontWeight: 700 }}>{o.op}</td>
+                                        <td style={{ ...tdx(), maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={o.prod}>{o.br === 'BR9595/22' ? 'ociosa · ' : ''}{o.prod}</td>
+                                        <td style={tdx(1)}>{num(o.h, 1)} h</td><td style={tdx(1)}>{moeda(o.c)}</td>
+                                      </tr>))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            </div>
+                          </td></tr>
+                        )}
+                      </React.Fragment>
+                    );
+                  })}
+                  <tr style={{ fontWeight: 700 }}>
+                    <td style={tdx()}>Total</td><td style={tdx(1)}>{num(tt('horas_op'), 0)} h</td><td style={tdx(1)}>{num(tt('horas_ociosas'), 0)} h</td>
+                    <td style={tdx(1)}>{num(tt('horas_op') + tt('horas_ociosas'), 0)} h</td>
+                    <td style={tdx(1)}>{tt('horas_op') + tt('horas_ociosas') ? `${num(tt('horas_ociosas') / (tt('horas_op') + tt('horas_ociosas')) * 100, 1)}%` : '—'}</td>
+                    <td style={tdx(1)} /><td style={tdx(1)}>{tt('pessoa_dias')}</td><td style={tdx(1)} />
+                    <td style={tdx(1)}>{moeda(tt('custo_op'))}</td><td style={tdx(1)}>{moeda(tt('custo_ocioso'))}</td><td style={tdx(1)}>{moeda(tt('custo_op') + tt('custo_ocioso'))}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          );
+        })()}
+        <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4 }}>Por OP</div>
         {!ops ? <div style={{ fontSize: 11.5, color: T.inkFaint }}>Carregando as OPs do mês…</div> : (
           <div style={{ maxHeight: 320, overflowY: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
@@ -22349,6 +22436,11 @@ function CusteioVendaCusto({ H, moeda, num }) {
   const [grafico, setGrafico] = useState(null);
   const [expandido, setExpandido] = useState(false);
   const [mesSel, setMesSel] = useState(null);
+  const [horasSetor, setHorasSetor] = useState([]);
+  const [visaoHoras, setVisaoHoras] = useState('total');
+  useEffect(() => {
+    supabase.from('v_custeio_horas_setor_mes').select('*').then(r => setHorasSetor(r.data || []));
+  }, []);
   useEffect(() => {
     (async () => {
       const lerTodas = async (tab) => {
@@ -22476,7 +22568,12 @@ function CusteioVendaCusto({ H, moeda, num }) {
           custo: { tit: 'Custo do vendido × receita líquida', barras: [{ nome: 'Receita líquida', cor: T.blueText, valores: serie.map(x => x.liq) }, { nome: 'Custo do vendido', cor: T.terracotta, valores: serie.map(x => x.custo) }] },
           resultado: { tit: 'Resultado e margem', barras: [{ nome: 'Resultado', cor: (v) => v < 0 ? T.rust : T.olive, valores: serie.map(x => x.res) }], linha: { nome: 'Margem', cor: T.amberText, valores: serie.map(x => x.marg) }, fmtLinha: (v) => `${num(v, 0)}%` },
           abaixo: { tit: 'Produtos vendidos abaixo do preço ideal', barras: [{ nome: 'Vendidos no mês', cor: '#D8DEE6', valores: serie.map(x => x.vend) }, { nome: 'Abaixo do ideal', cor: T.amberText, valores: serie.map(x => x.abx.length) }], fmt: (v) => num(v, 0) },
-          horas: { tit: 'Horas apontadas e dias trabalhados', empilhar: true, barras: [{ nome: 'Horas em OP', cor: T.olive, valores: serie.map(x => x.hp) }, { nome: 'Horas ociosas (BR9595/22)', cor: '#C8C2B4', valores: serie.map(x => x.ho) }], linha: { nome: 'Pessoas no mês', cor: T.blueText, valores: serie.map(x => x.pessoas) }, fmt: (v) => `${num(v, 0)} h`, fmtLinha: (v) => num(v, 0) },
+          horas: visaoHoras === 'setor'
+            ? { tit: 'Horas por setor (em OP + ociosas)', empilhar: true,
+                barras: SETORES_H.map((st, i) => ({ nome: st, cor: CORES_SETOR[i % CORES_SETOR.length],
+                  valores: serie.map(x => horasSetor.filter(h => h.competencia === x.m && h.setor_nome === st).reduce((a, h) => a + (Number(h.horas_op) || 0) + (Number(h.horas_ociosas) || 0), 0)) })),
+                linha: { nome: 'Pessoas no mês', cor: T.ink, valores: serie.map(x => x.pessoas) }, fmt: (v) => `${num(v, 0)} h`, fmtLinha: (v) => num(v, 0) }
+            : { tit: 'Horas apontadas e dias trabalhados', empilhar: true, barras: [{ nome: 'Horas em OP', cor: T.olive, valores: serie.map(x => x.hp) }, { nome: 'Horas ociosas (BR9595/22)', cor: '#C8C2B4', valores: serie.map(x => x.ho) }], linha: { nome: 'Pessoas no mês', cor: T.blueText, valores: serie.map(x => x.pessoas) }, fmt: (v) => `${num(v, 0)} h`, fmtLinha: (v) => num(v, 0) },
         }[grafico];
         const sel = mesSel != null ? serie[mesSel] : null;
         const thx = (dir) => ({ padding: '5px 8px', fontSize: 10.5, color: T.inkFaint, fontWeight: 700, textAlign: dir ? 'right' : 'left', borderBottom: `1px solid ${T.line}`, whiteSpace: 'nowrap' });
@@ -22498,6 +22595,9 @@ function CusteioVendaCusto({ H, moeda, num }) {
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 6 }}>
                 <span style={{ fontSize: 13, fontWeight: 700, color: T.terracotta }}>{cfg.tit} · {rotMesCurto(deEf)} a {rotMesCurto(ateEf)}</span>
                 <span style={{ display: 'flex', gap: 6 }}>
+                  {grafico === 'horas' && [['total', 'Em OP × ociosas'], ['setor', 'Por setor']].map(([k2, r2]) => (
+                    <button key={k2} onClick={() => setVisaoHoras(k2)} style={{ ...ghostBtn(visaoHoras === k2 ? T.terracotta : T.inkDim), cursor: 'pointer', fontWeight: visaoHoras === k2 ? 700 : 500 }}>{r2}</button>
+                  ))}
                   <button onClick={() => setExpandido(x => !x)} style={{ ...ghostBtn(T.inkDim), cursor: 'pointer' }}>{expandido ? 'Recolher' : '⤢ Expandir'}</button>
                   <button onClick={() => { setGrafico(null); setMesSel(null); }} style={{ ...ghostBtn(T.inkDim), cursor: 'pointer' }}>×</button>
                 </span>
@@ -22524,7 +22624,8 @@ function CusteioVendaCusto({ H, moeda, num }) {
                   </table>
                 </div>
               )}
-              {sel && <DetalheMesVenda x={sel} k={grafico} cuDe={cuDe} H={H} moeda={moeda} num={num} thx={thx} tdx={tdx} />}
+              {sel && <DetalheMesVenda x={sel} k={grafico} cuDe={cuDe} H={H} moeda={moeda} num={num} thx={thx} tdx={tdx}
+                setoresMes={horasSetor.filter(h => h.competencia === sel.m)} />}
             </div>
           )}
         </>);
