@@ -8555,11 +8555,12 @@ function FunilVisualSVG({ segmentos, total, ativo, onClick }) {
 const ALMOX_SETORES = ['Ponto de Estoque', 'Corte', 'Vulcanização', 'Pintura', 'Caldeiraria', 'Revestimento', 'Expedição', 'Material 100% em produção', 'Projeto Faturado'];
 const ALMOX_ETIQUETAS = { '50x30': { w: 50, h: 30 }, '60x40': { w: 60, h: 40 }, '100x50': { w: 100, h: 50 } };
 // impressora do estoque: Argox OS-214 plus (térmica, 203 dpi, até 104 mm de largura)
+// etiqueta do estoque: 100 x 50 mm (padrão)
 const almoxConfigEtiqueta = () => {
-  try { return { w: 60, h: 40, dx: 0, dy: 0, ...(JSON.parse(localStorage.getItem('almox_etiqueta_cfg') || '{}')) }; }
-  catch { return { w: 60, h: 40, dx: 0, dy: 0 }; }
+  try { return { w: 100, h: 50, dx: 0, dy: 0, ...(JSON.parse(localStorage.getItem('almox_etiqueta_cfg_v2') || '{}')) }; }
+  catch { return { w: 100, h: 50, dx: 0, dy: 0 }; }
 };
-const almoxSalvarConfigEtiqueta = (cfg) => { try { localStorage.setItem('almox_etiqueta_cfg', JSON.stringify(cfg)); } catch {} };
+const almoxSalvarConfigEtiqueta = (cfg) => { try { localStorage.setItem('almox_etiqueta_cfg_v2', JSON.stringify(cfg)); } catch {} };
 
 // reduz a foto antes de enviar (lado maior 1600 px, JPEG 0,8)
 async function almoxComprimirFoto(file) {
@@ -8592,7 +8593,8 @@ async function almoxImprimirEtiquetas(volumes, cfgArg) {
   const cfg = typeof cfgArg === 'object' && cfgArg ? cfgArg
     : (ALMOX_ETIQUETAS[cfgArg] ? { ...almoxConfigEtiqueta(), ...ALMOX_ETIQUETAS[cfgArg] } : almoxConfigEtiqueta());
   const w = Number(cfg.w) || 60, h = Number(cfg.h) || 40, dx = Number(cfg.dx) || 0, dy = Number(cfg.dy) || 0;
-  const qrMm = Math.max(15, Math.min(22, h - 4, w * 0.36));
+  const qrMm = Math.max(15, Math.min(28, h - 8, w * 0.3));
+  const k = Math.max(0.75, Math.min(1.45, h / 40));   // escala das letras pela altura
   const svgs = await Promise.all(volumes.map(v => QRCode.toString(almoxLinkEtiqueta(v.codigo), { type: 'svg', margin: 2, errorCorrectionLevel: 'M', color: { dark: '#000000', light: '#ffffff' } })));
   const esc = (s) => String(s ?? '').replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
   const pequeno = w < 55 || h < 32;
@@ -8604,18 +8606,18 @@ async function almoxImprimirEtiquetas(volumes, cfgArg) {
     @page { size: ${w}mm ${h}mm; margin: 0; }
     * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     html, body { margin: 0; padding: 0; font-family: Arial, Helvetica, sans-serif; color: #000; }
-    .et { width: ${w}mm; height: ${h}mm; padding: 1.4mm; display: flex; gap: 1.4mm; align-items: stretch; page-break-after: always; overflow: hidden;
+    .et { width: ${w}mm; height: ${h}mm; padding: ${pequeno ? 1.4 : 2.5}mm; display: flex; gap: ${pequeno ? 1.4 : 3}mm; align-items: stretch; page-break-after: always; overflow: hidden;
           transform: translate(${dx}mm, ${dy}mm); }
     .et:last-child { page-break-after: auto; }
     .tx { flex: 1; min-width: 0; line-height: 1.12; display: flex; flex-direction: column; }
-    .op { font-size: ${pequeno ? 11 : 15}pt; font-weight: 700; }
-    .br { font-size: ${pequeno ? 7 : 9}pt; font-weight: 700; }
-    .it { font-size: ${pequeno ? 6.5 : 8}pt; font-weight: 700; margin-top: 0.6mm; flex: 1; overflow: hidden; }
-    .rod { font-size: ${pequeno ? 6 : 7.5}pt; font-weight: 700; display: flex; justify-content: space-between; gap: 1mm; }
+    .op { font-size: ${(pequeno ? 11 : 15 * k).toFixed(1)}pt; font-weight: 700; }
+    .br { font-size: ${(pequeno ? 7 : 9 * k).toFixed(1)}pt; font-weight: 700; }
+    .it { font-size: ${(pequeno ? 6.5 : 8 * k).toFixed(1)}pt; font-weight: 700; margin-top: 0.8mm; flex: 1; overflow: hidden; }
+    .rod { font-size: ${(pequeno ? 6.5 : 9.5 * k).toFixed(1)}pt; font-weight: 700; display: flex; justify-content: space-between; gap: 1mm; }
     .lado { width: ${qrMm}mm; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; flex-shrink: 0; }
     .qr { width: ${qrMm}mm; height: ${qrMm}mm; }
     .qr svg { width: 100%; height: 100%; display: block; shape-rendering: crispEdges; }
-    .cod { font-size: ${pequeno ? 6 : 7}pt; font-weight: 700; margin-top: 0.3mm; }
+    .cod { font-size: ${(pequeno ? 6 : 7 * k).toFixed(1)}pt; font-weight: 700; margin-top: 0.4mm; }
   </style></head><body>
   ${volumes.map((v, i) => `<div class="et">
     <div class="tx">
