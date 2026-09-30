@@ -9061,7 +9061,8 @@ function AlmoxQR({ modo, currentUser, codigoInicial }) {
   }, []);
   useEffect(() => {
     if (modo === 'etiquetas') {
-      supabase.from('v_almoxarifado_ops_andamento').select('*').then(r => setOps(r.data || []));
+      // sem OPs finalizadas/canceladas e sem as que já tiveram todos os itens entregues
+      supabase.from('v_almox_fluxo_ops').select('*').then(r => setOps(r.data || []));
       carregarVolumes();
     }
     if (modo === 'entregas') {
@@ -9220,7 +9221,8 @@ function AlmoxQR({ modo, currentUser, codigoInicial }) {
             {opsF.map(o => (
               <button key={o.op} onClick={() => abrirOp(o)} style={{ textAlign: 'left', padding: '8px 10px', borderRadius: 7, cursor: 'pointer', fontSize: 12.5,
                 border: `1px solid ${opSel?.op === o.op ? T.terracotta : T.line}`, background: opSel?.op === o.op ? T.rustSoft : T.panelAlt }}>
-                <strong>OP {o.op}</strong> · {o.br || 'sem BR'} <span style={{ color: T.inkFaint }}>· {o.qtd_materiais} itens</span>
+                <strong>OP {o.op}</strong> · {o.br || 'sem BR'} <span style={{ color: T.inkFaint }}>· {o.itens_entregues ? `${o.itens_entregues} de ${o.qtd_materiais} itens entregues` : `${o.qtd_materiais} itens`}</span>
+                {o.situacao_op === 'S' && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: T.amberText, background: T.amberSoft, padding: '1px 6px', borderRadius: 8 }}>Sankhya: S</span>}
               </button>
             ))}
           </div>
