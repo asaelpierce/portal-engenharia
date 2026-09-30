@@ -22075,8 +22075,8 @@ function CusteioHorasOciosas({ linhas, setLinhas, mesAberto, setMesAberto, moeda
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       <div style={{ fontSize: 12.5, color: T.inkDim, background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 8, padding: '10px 14px' }}>
-        Tudo o que é apontado no <strong>BR9595/22</strong> é hora ociosa: as OPs de lançamento (PROD-LANCA — geral, prensa, misturador, stud welding, CNC, corte) e qualquer hora de outra OP lançada nesse projeto.
-        Essas horas <strong>não entram em nenhuma OP</strong> nem nas bases de rateio do overhead e dos serviços.
+        O <strong>BR9595/22</strong> existe para lançar a hora ociosa — o tempo do dia que não é trabalho em OP (ninguém produz o tempo todo). Entram as OPs de lançamento (PROD-LANCA — geral, prensa, misturador, stud welding, CNC, corte) e qualquer hora lançada nesse projeto.
+        Essas horas ficam à parte: <strong>não entram em nenhuma OP</strong> nem nas bases de rateio do overhead e dos serviços.
       </div>
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
         {card('Horas ociosas no ano', `${num(H, 0)} h`, `${porMes.length} meses`)}
@@ -22092,7 +22092,7 @@ function CusteioHorasOciosas({ linhas, setLinhas, mesAberto, setMesAberto, moeda
                 <tr onClick={() => setMesAberto(a => a === x.m ? null : x.m)} style={{ cursor: 'pointer', background: mesAberto === x.m ? T.rustSoft : 'transparent' }}>
                   <td style={{ ...td(), fontWeight: 700 }}>{mesAberto === x.m ? '▾' : '▸'} {x.m}</td>
                   <td style={td(1)}>{num(x.h)} h</td><td style={td(1)}>{num(x.tot)} h</td>
-                  <td style={{ ...td(1), fontWeight: 700, color: x.pct >= 30 ? T.rustText : x.pct >= 20 ? T.amberText : T.ink }}>{x.pct != null ? `${num(x.pct, 1)}%` : '—'}</td>
+                  <td style={{ ...td(1), fontWeight: 700 }}>{x.pct != null ? `${num(x.pct, 1)}%` : '—'}</td>
                   <td style={td(1)}>{moeda(x.c)}</td>
                 </tr>
                 {mesAberto === x.m && x.d.sort((a, b) => (Number(b.horas) || 0) - (Number(a.horas) || 0)).map((l, j) => (
