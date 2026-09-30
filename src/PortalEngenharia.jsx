@@ -8592,70 +8592,6 @@ async function almoxEnviarFoto(file, pasta) {
 // margem de 2 módulos. O título da janela vira o nome do arquivo/trabalho de
 // impressão: diz de que OP e quantos itens são.
 const almoxLinkEtiqueta = (codigo) => `${window.location.origin}/?e=${codigo}`;
-// Desenha UMA etiqueta como imagem 1 bit na resolução da Argox (203 dpi):
-// o driver só recebe um bitmap, sem texto para trocar pela fonte interna dele
-// nem SVG para descartar (antes saía só o código V000000 na fonte da impressora).
-const ALMOX_DPI = 203;
-function almoxDesenharEtiqueta(v, { w, h, giro }) {
-  const pxmm = ALMOX_DPI / 25.4, pxpt = ALMOX_DPI / 72;
-  const W = Math.round(w * pxmm), H = Math.round(h * pxmm);
-  const c = document.createElement('canvas');
-  c.width = W; c.height = H;
-  const g = c.getContext('2d');
-  g.fillStyle = '#fff'; g.fillRect(0, 0, W, H);
-  g.fillStyle = '#000'; g.textBaseline = 'top';
-  const pequeno = w < 55 || h < 32;
-  const k = Math.max(0.75, Math.min(1.45, h / 40));
-  const pad = Math.round((pequeno ? 1.4 : 2.5) * pxmm), gap = Math.round((pequeno ? 1.4 : 3) * pxmm);
-  const qr = Math.round(Math.max(15, Math.min(28, h - 8, w * 0.3)) * pxmm);
-  const fonte = (pt) => { const px = Math.round(pt * pxpt); g.font = `bold ${px}px Arial, Helvetica, sans-serif`; return px; };
-
-  // QR: módulos desenhados um a um, alinhados a pontos inteiros (nítido na térmica)
-  const q = QRCode.create(almoxLinkEtiqueta(v.codigo), { errorCorrectionLevel: 'M' });
-  const n = q.modules.size, borda = 2, mod = Math.max(1, Math.floor(qr / (n + 2 * borda)));
-  const lado = mod * (n + 2 * borda), qx = W - pad - qr + Math.floor((qr - lado) / 2), qy = pad;
-  for (let r = 0; r < n; r++) for (let col = 0; col < n; col++)
-    if (q.modules.data[r * n + col]) g.fillRect(qx + (col + borda) * mod, qy + (r + borda) * mod, mod, mod);
-  const pxCod = fonte(pequeno ? 6 : 7 * k);
-  g.textAlign = 'center'; g.fillText(String(v.codigo || ''), W - pad - qr / 2, qy + lado + Math.round(0.4 * pxmm), qr);
-  g.textAlign = 'left';
-
-  // texto à esquerda: OP, BR, material (quebra em linhas), rodapé com QTD e destino
-  const x = pad, larg = W - pad - qr - gap - pad;
-  let y = pad;
-  const linha = (txt, pt) => { const px = fonte(pt); g.fillText(txt, x, y, larg); y += Math.round(px * 1.12); };
-  linha(`OP ${v.op ?? ''}`, pequeno ? 11 : 15 * k);
-  linha(String(v.br || 'sem BR'), pequeno ? 7 : 9 * k);
-  y += Math.round(0.8 * pxmm);
-  const ptRod = pequeno ? 6.5 : 9.5 * k, pxRod = Math.round(ptRod * pxpt);
-  const limite = H - pad - Math.round(pxRod * 1.12);           // o material não invade o rodapé
-  const pxIt = fonte(pequeno ? 6.5 : 8 * k), alt = Math.round(pxIt * 1.12);
-  const palavras = `${v.cod_materia_prima ? v.cod_materia_prima + ' · ' : ''}${v.material || ''}`.split(/\s+/).filter(Boolean);
-  let atual = '';
-  const soltar = (t) => { if (y + alt <= limite) { g.fillText(t, x, y, larg); y += alt; } };
-  for (const p of palavras) {
-    const teste = atual ? atual + ' ' + p : p;
-    if (g.measureText(teste).width > larg && atual) { soltar(atual); atual = p; } else atual = teste;
-  }
-  if (atual) soltar(atual);
-  fonte(ptRod);
-  const yRod = H - pad - pxRod;
-  if (v.quantidade != null) g.fillText(`QTD ${v.quantidade}${v.unidade ? ' ' + v.unidade : ''}`, x, yRod, larg / 2);
-  if (v.setor_destino) { g.textAlign = 'right'; g.fillText(`→ ${v.setor_destino}`, x + larg, yRod, larg / 2); g.textAlign = 'left'; }
-
-  // preto ou branco, sem cinza (a térmica não tem meio-tom; o cinza virava pontilhado)
-  const img = g.getImageData(0, 0, W, H), d = img.data;
-  for (let i = 0; i < d.length; i += 4) { const p = (d[i] * 0.3 + d[i + 1] * 0.59 + d[i + 2] * 0.11) < 150 ? 0 : 255; d[i] = d[i + 1] = d[i + 2] = p; d[i + 3] = 255; }
-  g.putImageData(img, 0, 0);
-  if (!giro) return c.toDataURL('image/png');
-  // giro 90/270: página em pé, etiqueta girada dentro dela
-  const r = document.createElement('canvas'); r.width = H; r.height = W;
-  const rg = r.getContext('2d');
-  if (giro === 90) { rg.translate(H, 0); rg.rotate(Math.PI / 2); } else { rg.translate(0, W); rg.rotate(-Math.PI / 2); }
-  rg.drawImage(c, 0, 0);
-  return r.toDataURL('image/png');
-}
-
 // Arquivo para o BarTender (programa da Argox no estoque): um CSV com uma linha
 // por etiqueta. O modelo .btw é montado UMA vez no BarTender ligado a este arquivo
 // (Banco de dados -> Arquivo de texto, delimitado por vírgula, 1ª linha = nomes);
@@ -8687,8 +8623,12 @@ async function almoxImprimirEtiquetas(volumes, cfgArg) {
   // como no BarTender. 'fixa' mantém o comportamento antigo.
   const pagFixa = cfg.pagina === 'fixa';
   const pgHcorte = pagFixa ? pgH : Math.max(1, pgH - 0.4);   // folga contra arredondamento virar 2ª página
-  const imagens = volumes.map(v => almoxDesenharEtiqueta(v, { w, h, giro }));
+  const girar = giro === 90 ? `translate(${h}mm, 0) rotate(90deg)` : giro === 270 ? `translate(0, ${w}mm) rotate(-90deg)` : '';
+  const qrMm = Math.max(15, Math.min(28, h - 8, w * 0.3));
+  const k = Math.max(0.75, Math.min(1.45, h / 40));   // escala das letras pela altura
+  const svgs = await Promise.all(volumes.map(v => QRCode.toString(almoxLinkEtiqueta(v.codigo), { type: 'svg', margin: 2, errorCorrectionLevel: 'M', color: { dark: '#000000', light: '#ffffff' } })));
   const esc = (s) => String(s ?? '').replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
+  const pequeno = w < 55 || h < 32;
   const porOp = volumes.reduce((m, v) => { m[v.op] = (m[v.op] || 0) + 1; return m; }, {});
   const opsTxt = Object.entries(porOp).map(([op, n]) => `OP ${op} (${n} ${n === 1 ? 'item' : 'itens'})`).join(', ');
   const brs = [...new Set(volumes.map(v => v.br).filter(Boolean))].join(' ');
@@ -8699,10 +8639,27 @@ async function almoxImprimirEtiquetas(volumes, cfgArg) {
     html, body { margin: 0; padding: 0; font-family: Arial, Helvetica, sans-serif; color: #000; }
     .pg { width: ${pgW}mm; height: ${pgHcorte}mm; position: relative; overflow: hidden; page-break-after: always; break-after: page; }
     .pg:last-child { page-break-after: auto; }
-    .pg img { position: absolute; top: 0; left: 0; width: ${pgW}mm; height: ${pgH}mm; display: block;
-              image-rendering: pixelated; transform: translate(${dx}mm, ${dy}mm); }
+    .et { width: ${w}mm; height: ${h}mm; padding: ${pequeno ? 1.4 : 2.5}mm; display: flex; gap: ${pequeno ? 1.4 : 3}mm; align-items: stretch; overflow: hidden;
+          position: absolute; top: 0; left: 0; transform-origin: 0 0; transform: translate(${dx}mm, ${dy}mm) ${girar}; }
+    .tx { flex: 1; min-width: 0; line-height: 1.12; display: flex; flex-direction: column; }
+    .op { font-size: ${(pequeno ? 11 : 15 * k).toFixed(1)}pt; font-weight: 700; }
+    .br { font-size: ${(pequeno ? 7 : 9 * k).toFixed(1)}pt; font-weight: 700; }
+    .it { font-size: ${(pequeno ? 6.5 : 8 * k).toFixed(1)}pt; font-weight: 700; margin-top: 0.8mm; flex: 1; overflow: hidden; }
+    .rod { font-size: ${(pequeno ? 6.5 : 9.5 * k).toFixed(1)}pt; font-weight: 700; display: flex; justify-content: space-between; gap: 1mm; }
+    .lado { width: ${qrMm}mm; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; flex-shrink: 0; }
+    .qr { width: ${qrMm}mm; height: ${qrMm}mm; }
+    .qr svg { width: 100%; height: 100%; display: block; shape-rendering: crispEdges; }
+    .cod { font-size: ${(pequeno ? 6 : 7 * k).toFixed(1)}pt; font-weight: 700; margin-top: 0.4mm; }
   </style></head><body>
-  ${imagens.map((src, i) => `<div class="pg"><img src="${src}" alt="${esc(volumes[i].codigo)}"></div>`).join('')}
+  ${volumes.map((v, i) => `<div class="pg"><div class="et">
+    <div class="tx">
+      <div class="op">OP ${esc(v.op)}</div>
+      <div class="br">${esc(v.br || 'sem BR')}</div>
+      <div class="it">${v.cod_materia_prima ? esc(v.cod_materia_prima) + ' · ' : ''}${esc(v.material)}</div>
+      <div class="rod"><span>${v.quantidade != null ? 'QTD ' + esc(v.quantidade) + (v.unidade ? ' ' + esc(v.unidade) : '') : ''}</span><span>${v.setor_destino ? '→ ' + esc(v.setor_destino) : ''}</span></div>
+    </div>
+    <div class="lado"><div class="qr">${svgs[i]}</div><div class="cod">${esc(v.codigo)}</div></div>
+  </div></div>`).join('')}
   <script>window.onload = () => setTimeout(() => window.print(), 300);</script></body></html>`;
   const janela = window.open('', '_blank');
   if (!janela) { alert('O navegador bloqueou a janela de impressão. Libere pop-ups para o portal.'); return; }
