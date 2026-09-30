@@ -22035,6 +22035,136 @@ function ApontarHoras({ setores, apontamentos, onSalvo }) {
 ============================================================================ */
 // Custeio por OP > Horas ociosas: tudo apontado no BR9595/22 (OPs PROD-LANCA e afins).
 // Essas horas não entram em OP nenhuma nem nas bases de rateio (v_custeio_op_mes).
+// Custeio por OP > Venda × custo: por produto, o que foi vendido em 2026, a receita líquida,
+// o custo do vendido (custo por peça do Custeio por OP × qtd vendida) e o preço ideal para
+// atingir a margem-alvo sobre a receita líquida. Fonte: v_custeio_op_produto_venda.
+function CusteioVendaCusto({ H, moeda, num }) {
+  const [linhas, setLinhas] = useState(null);
+  const [alvo, setAlvo] = useState(0.30);
+  const [alvoTxt, setAlvoTxt] = useState('');
+  const [busca, setBusca] = useState('');
+  const [soVendidos, setSoVendidos] = useState(true);
+  const [ordem, setOrdem] = useState('receita');
+  useEffect(() => {
+    (async () => {
+      const [v, p] = await Promise.all([
+        supabase.from('v_custeio_op_produto_venda').select('*'),
+        supabase.from('custeio_parametro').select('*').eq('chave', 'margem_alvo_pct').maybeSingle(),
+      ]);
+      setLinhas(v.data || []);
+      if (p.data?.valor != null) setAlvo(Number(p.data.valor));
+    })();
+  }, []);
+  const salvarAlvo = async () => {
+    const x = Number(String(alvoTxt).replace(',', '.')) / 100;
+    if (!(x > 0 && x < 0.95)) { alert('Informe a margem-alvo em %, entre 1 e 94.'); return; }
+    setAlvo(x); setAlvoTxt('');
+    await supabase.from('custeio_parametro').update({ valor: x, atualizado_em: new Date().toISOString() }).eq('chave', 'margem_alvo_pct');
+  };
+  const calc = useMemo(() => (linhas || []).map(l => {
+    const cu = Number(H ? l.custo_unit_horas : l.custo_unit) || 0;
+    const q = Number(l.qtd_vendida) || 0, liq = Number(l.receita_liquida) || 0, bruta = Number(l.receita_bruta) || 0;
+    const taxa = (Number(l.taxa_icms_ipi_iss) || 0) + (Number(l.taxa_pis_cofins) || 0);
+    const custoVend = cu * q, res = liq - custoVend;
+    const idealLiq = cu > 0 ? cu / (1 - alvo) : null, idealBruto = idealLiq != null && taxa < 1 ? idealLiq / (1 - taxa) : null;
+    const liqPeca = q ? liq / q : null, brutoPeca = q ? bruta / q : null;
+    return { ...l, cu, q, liq, bruta, taxa, custoVend, res, marg: liq > 0 ? res / liq * 100 : null,
+      idealLiq, idealBruto, liqPeca, brutoPeca, gap: liqPeca != null && idealLiq ? (liqPeca / idealLiq - 1) * 100 : null };
+  }), [linhas, H, alvo]);
+  const filtradas = useMemo(() => {
+    const b = busca.trim().toLowerCase();
+    const f = calc.filter(l => (!soVendidos || l.q > 0) && (!b || `${l.cod_produto} ${l.produto || ''}`.toLowerCase().includes(b)));
+    const ord = { receita: (a, c) => c.liq - a.liq, margem: (a, c) => (a.marg ?? 999) - (c.marg ?? 999), gap: (a, c) => (a.gap ?? 999) - (c.gap ?? 999), resultado: (a, c) => a.res - c.res };
+    return f.sort(ord[ordem]);
+  }, [calc, busca, soVendidos, ordem]);
+  if (!linhas) return <div style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Carregando vendas e custos…</div>;
+  const vend = calc.filter(l => l.q > 0);
+  const tot = (f) => vend.reduce((s, l) => s + (Number(f(l)) || 0), 0);
+  const TL = tot(l => l.liq), TC = tot(l => l.custoVend), TB = tot(l => l.bruta);
+  const abaixo = vend.filter(l => l.gap != null && l.gap < 0);
+  const prejuizo = vend.filter(l => l.res < 0);
+  const pctF = (v, d = 1) => v == null ? '—' : `${v > 0 ? '+' : ''}${num(v, d)}%`;
+  const th = (dir) => ({ padding: '6px 8px', fontSize: 10.5, color: T.inkFaint, fontWeight: 700, textAlign: dir ? 'right' : 'left', borderBottom: `1px solid ${T.line}`, whiteSpace: 'nowrap', position: 'sticky', top: 0, background: T.panel });
+  const td = (dir) => ({ padding: '6px 8px', fontSize: 12, textAlign: dir ? 'right' : 'left', borderBottom: `1px solid ${T.lineSoft}`, fontVariantNumeric: 'tabular-nums', verticalAlign: 'top' });
+  const sub = { fontSize: 10.5, color: T.inkFaint };
+  const card = (r, v, s2, cor) => (
+    <div style={{ flex: '1 1 160px', background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 10, padding: '10px 14px' }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: T.inkFaint }}>{r}</div>
+      <div style={{ fontSize: 19, fontWeight: 800, marginTop: 2, color: cor || T.ink }}>{v}</div>
+      {s2 && <div style={sub}>{s2}</div>}
+    </div>
+  );
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <div style={{ fontSize: 12.5, color: T.inkDim, background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 8, padding: '10px 14px', lineHeight: 1.6 }}>
+        Vendas de 2026 (notas com TOP de venda) contra o custo por peça do Custeio por OP ({H ? 'overhead pelas horas' : 'overhead pelo material + MO'}).
+        Receita líquida = bruta − ICMS − IPI − ISS (alíquota efetiva do produto) − PIS/COFINS ({num((Number(linhas[0]?.taxa_pis_cofins) || 0.0925) * 100, 2)}%).
+        <strong> Preço ideal</strong> = custo por peça ÷ (1 − margem-alvo) ÷ (1 − impostos do produto).
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8, flexWrap: 'wrap' }}>
+          <span>Margem-alvo sobre a receita líquida: <strong>{num(alvo * 100, 1)}%</strong></span>
+          <input value={alvoTxt} onChange={e => setAlvoTxt(e.target.value)} placeholder="nova %" inputMode="decimal"
+            onKeyDown={e => e.key === 'Enter' && salvarAlvo()} style={{ ...inputStyle(), width: 80, padding: '5px 8px' }} />
+          <button onClick={salvarAlvo} disabled={!alvoTxt} style={{ ...ghostBtn(T.inkDim), cursor: 'pointer', opacity: alvoTxt ? 1 : 0.5 }}>Salvar</button>
+        </div>
+      </div>
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+        {card('Receita líquida', moeda(TL), `bruta ${moeda(TB)} · ${vend.length} produtos vendidos`)}
+        {card('Custo do vendido', moeda(TC), 'custo por peça × quantidade vendida')}
+        {card('Resultado', moeda(TL - TC), TL ? `margem ${num((TL - TC) / TL * 100, 1)}%` : null, TL - TC < 0 ? T.rustText : T.oliveText)}
+        {card('Abaixo do preço ideal', abaixo.length, `de ${vend.length} vendidos · ${prejuizo.length} com prejuízo`, abaixo.length ? T.amberText : T.oliveText)}
+      </div>
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+        <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="buscar produto ou código" style={{ ...inputStyle(), width: 260, padding: '6px 8px' }} />
+        <label style={{ fontSize: 12.5, color: T.inkDim, display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+          <input type="checkbox" checked={soVendidos} onChange={e => setSoVendidos(e.target.checked)} /> só produtos vendidos em 2026
+        </label>
+        <span style={{ fontSize: 12, color: T.inkDim }}>ordenar por</span>
+        <select value={ordem} onChange={e => setOrdem(e.target.value)} style={{ ...inputStyle(), width: 200, padding: '6px 8px' }}>
+          <option value="receita">maior receita líquida</option>
+          <option value="gap">mais abaixo do preço ideal</option>
+          <option value="margem">menor margem</option>
+          <option value="resultado">maior prejuízo</option>
+        </select>
+      </div>
+      <div style={{ overflow: 'auto', maxHeight: 640, border: `1px solid ${T.line}`, borderRadius: 8 }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead><tr>
+            <th style={th()}>Produto</th><th style={th(1)}>Vendido</th><th style={th(1)}>Receita líquida</th><th style={th(1)}>Custo do vendido</th>
+            <th style={th(1)}>Resultado</th><th style={th(1)}>Margem</th><th style={th(1)}>Custo / peça</th><th style={th(1)}>Preço praticado / peça</th>
+            <th style={th(1)}>Preço ideal / peça</th><th style={th(1)}>Praticado × ideal</th>
+          </tr></thead>
+          <tbody>
+            {filtradas.map(l => {
+              const aviso = l.q > 0 && Number(l.qtd_produzida) > 0 && l.q > Number(l.qtd_produzida) * 1.1;
+              return (
+                <tr key={l.cod_produto} style={{ background: l.q > 0 && l.res < 0 ? T.rustSoft : 'transparent' }}>
+                  <td style={{ ...td(), maxWidth: 340 }}>
+                    <div style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={l.produto}>{l.cod_produto} · {l.produto}</div>
+                    <div style={sub}>{l.ops} OP(s) · {num(l.qtd_produzida, 2)} produzida(s){aviso ? ' · vendeu mais do que produziu em 2026 (parte veio de estoque)' : ''}{l.taxa_estimada ? ' · sem imposto registrado' : ''}</div>
+                  </td>
+                  <td style={td(1)}>{l.q ? num(l.q, 2) : '—'}{l.q > 0 && <div style={sub}>{l.notas} nota(s) · {l.clientes} cliente(s)</div>}</td>
+                  <td style={td(1)}>{l.q ? moeda(l.liq) : '—'}{l.q > 0 && <div style={sub}>bruta {moeda(l.bruta)}</div>}</td>
+                  <td style={td(1)}>{l.q ? moeda(l.custoVend) : '—'}</td>
+                  <td style={{ ...td(1), fontWeight: 700, color: !l.q ? T.inkFaint : l.res < 0 ? T.rustText : T.oliveText }}>{l.q ? moeda(l.res) : '—'}</td>
+                  <td style={{ ...td(1), fontWeight: 700, color: l.marg == null ? T.inkFaint : l.marg < 0 ? T.rustText : l.marg < alvo * 100 ? T.amberText : T.oliveText }}>{l.marg == null ? '—' : `${num(l.marg, 1)}%`}</td>
+                  <td style={td(1)}>{l.cu ? moeda(l.cu) : '—'}</td>
+                  <td style={td(1)}>{l.liqPeca != null ? <>{moeda(l.liqPeca)}<div style={sub}>líquido · bruto {moeda(l.brutoPeca)}</div></> : '—'}</td>
+                  <td style={td(1)}>{l.idealBruto != null ? <><strong>{moeda(l.idealBruto)}</strong><div style={sub}>bruto · líquido {moeda(l.idealLiq)}</div></> : '—'}</td>
+                  <td style={{ ...td(1), fontWeight: 700, color: l.gap == null ? T.inkFaint : l.gap < 0 ? T.rustText : T.oliveText }}>{pctF(l.gap)}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <div style={sub}>
+        Linha vermelha: vendeu abaixo do custo. Praticado × ideal compara o preço líquido por peça com o líquido ideal (negativo = vendeu abaixo do ideal).
+        O custo por peça é o das OPs de 2026; peça vendida de estoque antigo usa o custo de 2026 do mesmo produto.
+      </div>
+    </div>
+  );
+}
+
 function CusteioHorasOciosas({ linhas, setLinhas, mesAberto, setMesAberto, moeda, num }) {
   useEffect(() => {
     if (linhas) return;
@@ -22268,7 +22398,7 @@ function CusteioPorOP() {
       </div>
 
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-        {[['ops', 'OPs'], ['produto', 'Por produto'], ['desvios', 'Desvios de material'], ['rateio', 'Rateio e conferência'], ['ociosas', 'Horas ociosas']].map(([k, r]) => (
+        {[['ops', 'OPs'], ['produto', 'Por produto'], ['desvios', 'Desvios de material'], ['rateio', 'Rateio e conferência'], ['ociosas', 'Horas ociosas'], ['venda', 'Venda × custo']].map(([k, r]) => (
           <button key={k} onClick={() => setAba(k)} style={botao(aba === k)}>{r}</button>
         ))}
         <span style={{ width: 1, height: 20, background: T.line, margin: '0 4px' }} />
@@ -22769,6 +22899,7 @@ function CusteioPorOP() {
         );
       })()}
 
+      {aba === 'venda' && <CusteioVendaCusto H={H} moeda={moeda} num={num} />}
       {aba === 'ociosas' && <CusteioHorasOciosas linhas={ociosas} setLinhas={setOciosas} mesAberto={ociosaMes} setMesAberto={setOciosaMes} moeda={moeda} num={num} />}
       {aba === 'rateio' && (() => {
         if (!conf || !fornec) return <div style={{ padding: 20, color: T.inkFaint }}>Carregando a conferência…</div>;
