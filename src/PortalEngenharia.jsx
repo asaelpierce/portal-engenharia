@@ -22033,6 +22033,87 @@ function ApontarHoras({ setores, apontamentos, onSalvo }) {
    v_custeio_op_previsto_x_real, v_custeio_mao_de_obra,
    v_custeio_op_movimento_x_apontado.
 ============================================================================ */
+// Custeio por OP > Horas ociosas: tudo apontado no BR9595/22 (OPs PROD-LANCA e afins).
+// Essas horas não entram em OP nenhuma nem nas bases de rateio (v_custeio_op_mes).
+function CusteioHorasOciosas({ linhas, setLinhas, mesAberto, setMesAberto, moeda, num }) {
+  useEffect(() => {
+    if (linhas) return;
+    supabase.from('v_custeio_horas_ociosas').select('*').order('competencia').then(r => setLinhas(r.data || []));
+  }, [linhas, setLinhas]);
+  if (!linhas) return <div style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Carregando as horas ociosas…</div>;
+  const meses = [...new Set(linhas.map(l => l.competencia))].sort();
+  const porMes = meses.map(m => {
+    const d = linhas.filter(l => l.competencia === m);
+    const h = d.reduce((s, l) => s + (Number(l.horas) || 0), 0), c = d.reduce((s, l) => s + (Number(l.custo) || 0), 0);
+    const tot = Number(d[0]?.horas_mes_total) || 0;
+    return { m, d, h, c, tot, pct: tot ? h / tot * 100 : null };
+  });
+  const H = porMes.reduce((s, x) => s + x.h, 0), C = porMes.reduce((s, x) => s + x.c, 0), TOT = porMes.reduce((s, x) => s + x.tot, 0);
+  const agrupa = (campo) => Object.values(linhas.reduce((a, l) => {
+    const k = l[campo] || '—'; a[k] = a[k] || { k, h: 0, c: 0 }; a[k].h += Number(l.horas) || 0; a[k].c += Number(l.custo) || 0; return a;
+  }, {})).sort((x, y) => y.h - x.h);
+  const porLanc = agrupa('lancamento'), porSetor = agrupa('setor_nome');
+  const th = (dir) => ({ padding: '6px 8px', fontSize: 10.5, color: T.inkFaint, fontWeight: 700, textAlign: dir ? 'right' : 'left', borderBottom: `1px solid ${T.line}` });
+  const td = (dir) => ({ padding: '6px 8px', fontSize: 12, textAlign: dir ? 'right' : 'left', borderBottom: `1px solid ${T.lineSoft}`, fontVariantNumeric: 'tabular-nums' });
+  const card = (r, v, sub) => (
+    <div style={{ flex: '1 1 170px', background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 10, padding: '10px 14px' }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: T.inkFaint }}>{r}</div>
+      <div style={{ fontSize: 20, fontWeight: 800, marginTop: 2 }}>{v}</div>
+      {sub && <div style={{ fontSize: 11, color: T.inkFaint }}>{sub}</div>}
+    </div>
+  );
+  const lista = (titulo, dados) => (
+    <Panel title={titulo}>
+      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+        <thead><tr><th style={th()}>{titulo.includes('setor') ? 'Setor' : 'Lançamento (OP)'}</th><th style={th(1)}>Horas</th><th style={th(1)}>% das ociosas</th><th style={th(1)}>Custo</th></tr></thead>
+        <tbody>{dados.map(x => (
+          <tr key={x.k}><td style={td()}>{x.k}</td><td style={td(1)}>{num(x.h)} h</td><td style={td(1)}>{H ? `${num(x.h / H * 100, 1)}%` : '—'}</td><td style={td(1)}>{moeda(x.c)}</td></tr>
+        ))}</tbody>
+      </table>
+    </Panel>
+  );
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <div style={{ fontSize: 12.5, color: T.inkDim, background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 8, padding: '10px 14px' }}>
+        Tudo o que é apontado no <strong>BR9595/22</strong> é hora ociosa: as OPs de lançamento (PROD-LANCA — geral, prensa, misturador, stud welding, CNC, corte) e qualquer hora de outra OP lançada nesse projeto.
+        Essas horas <strong>não entram em nenhuma OP</strong> nem nas bases de rateio do overhead e dos serviços.
+      </div>
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+        {card('Horas ociosas no ano', `${num(H, 0)} h`, `${porMes.length} meses`)}
+        {card('Custo das horas ociosas', moeda(C), 'mão de obra dessas horas')}
+        {card('Ociosidade', TOT ? `${num(H / TOT * 100, 1)}%` : '—', `de ${num(TOT, 0)} h apontadas no ano`)}
+      </div>
+      <Panel title="Por mês" subtitle="clique no mês para ver os lançamentos">
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead><tr><th style={th()}>Mês</th><th style={th(1)}>Horas ociosas</th><th style={th(1)}>Horas apontadas no mês</th><th style={th(1)}>Ociosidade</th><th style={th(1)}>Custo</th></tr></thead>
+          <tbody>
+            {porMes.map(x => (
+              <React.Fragment key={x.m}>
+                <tr onClick={() => setMesAberto(a => a === x.m ? null : x.m)} style={{ cursor: 'pointer', background: mesAberto === x.m ? T.rustSoft : 'transparent' }}>
+                  <td style={{ ...td(), fontWeight: 700 }}>{mesAberto === x.m ? '▾' : '▸'} {x.m}</td>
+                  <td style={td(1)}>{num(x.h)} h</td><td style={td(1)}>{num(x.tot)} h</td>
+                  <td style={{ ...td(1), fontWeight: 700, color: x.pct >= 30 ? T.rustText : x.pct >= 20 ? T.amberText : T.ink }}>{x.pct != null ? `${num(x.pct, 1)}%` : '—'}</td>
+                  <td style={td(1)}>{moeda(x.c)}</td>
+                </tr>
+                {mesAberto === x.m && x.d.sort((a, b) => (Number(b.horas) || 0) - (Number(a.horas) || 0)).map((l, j) => (
+                  <tr key={j} style={{ background: T.panelAlt }}>
+                    <td style={{ ...td(), paddingLeft: 26, fontSize: 11.5 }}>OP {l.op} · {l.lancamento || '—'}<span style={{ color: T.inkFaint }}> · {l.setor_nome || 'sem setor'}</span></td>
+                    <td style={{ ...td(1), fontSize: 11.5 }}>{num(l.horas)} h</td><td style={td(1)} /><td style={td(1)} /><td style={{ ...td(1), fontSize: 11.5 }}>{moeda(Number(l.custo) || 0)}</td>
+                  </tr>
+                ))}
+              </React.Fragment>
+            ))}
+          </tbody>
+        </table>
+      </Panel>
+      <div style={{ display: 'grid', gap: 14, gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))' }}>
+        {lista('Por lançamento (OP)', porLanc)}
+        {lista('Por setor', porSetor)}
+      </div>
+    </div>
+  );
+}
+
 function CusteioPorOP() {
   const [aba, setAba] = useState('ops');
   const [ops, setOps] = useState([]);
@@ -22064,6 +22145,9 @@ function CusteioPorOP() {
     + (Number(l.rateio_autoclave) || 0) + (Number(l.rateio_outro_servico) || 0);
   const [conf, setConf] = useState(null);
   const [fornec, setFornec] = useState(null);
+  // horas ociosas = tudo apontado no BR9595/22 (fora das OPs e das bases de rateio)
+  const [ociosas, setOciosas] = useState(null);
+  const [ociosaMes, setOciosaMes] = useState(null);
   const [recarga, setRecarga] = useState(0);
 
   const lerTudo = async (tabela, aplicar) => {
@@ -22184,7 +22268,7 @@ function CusteioPorOP() {
       </div>
 
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-        {[['ops', 'OPs'], ['produto', 'Por produto'], ['desvios', 'Desvios de material'], ['rateio', 'Rateio e conferência']].map(([k, r]) => (
+        {[['ops', 'OPs'], ['produto', 'Por produto'], ['desvios', 'Desvios de material'], ['rateio', 'Rateio e conferência'], ['ociosas', 'Horas ociosas']].map(([k, r]) => (
           <button key={k} onClick={() => setAba(k)} style={botao(aba === k)}>{r}</button>
         ))}
         <span style={{ width: 1, height: 20, background: T.line, margin: '0 4px' }} />
@@ -22685,6 +22769,7 @@ function CusteioPorOP() {
         );
       })()}
 
+      {aba === 'ociosas' && <CusteioHorasOciosas linhas={ociosas} setLinhas={setOciosas} mesAberto={ociosaMes} setMesAberto={setOciosaMes} moeda={moeda} num={num} />}
       {aba === 'rateio' && (() => {
         if (!conf || !fornec) return <div style={{ padding: 20, color: T.inkFaint }}>Carregando a conferência…</div>;
         const TIPOS = [['industrializacao', 'Industrialização'], ['autoclave', 'Autoclave'], ['outro_producao', 'Outro de produção'], ['fora', 'Fora do rateio'], ['a classificar', 'A classificar']];
