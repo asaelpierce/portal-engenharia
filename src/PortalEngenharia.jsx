@@ -8600,6 +8600,13 @@ async function almoxImprimirEtiquetas(volumes, cfgArg) {
   // a página em pé (h × w) e gira a etiqueta dentro dela -- sai deitada no rolo
   const giro = [90, 270].includes(Number(cfg.giro)) ? Number(cfg.giro) : 0;
   const pgW = giro ? h : w, pgH = giro ? w : h;
+  // pagina 'driver' (padrão): NÃO declara o tamanho no @page. Com size mais largo
+  // que alto (105,5 x 50) o Chrome manda o trabalho em Paisagem e o driver da Argox
+  // gira tudo -- a etiqueta saía de lado, ocupando duas no rolo. Sem size, vale o
+  // papel e a orientação escolhidos na janela do Chrome (USER 105,5 x 50, Retrato),
+  // como no BarTender. 'fixa' mantém o comportamento antigo.
+  const pagFixa = cfg.pagina === 'fixa';
+  const pgHcorte = pagFixa ? pgH : Math.max(1, pgH - 0.4);   // folga contra arredondamento virar 2ª página
   const girar = giro === 90 ? `translate(${h}mm, 0) rotate(90deg)` : giro === 270 ? `translate(0, ${w}mm) rotate(-90deg)` : '';
   const qrMm = Math.max(15, Math.min(28, h - 8, w * 0.3));
   const k = Math.max(0.75, Math.min(1.45, h / 40));   // escala das letras pela altura
@@ -8611,10 +8618,10 @@ async function almoxImprimirEtiquetas(volumes, cfgArg) {
   const brs = [...new Set(volumes.map(v => v.br).filter(Boolean))].join(' ');
   const titulo = `Etiquetas ${opsTxt}${brs ? ' - ' + brs.replace(/\//g, '-') : ''} - ${new Date().toLocaleDateString('pt-BR').replace(/\//g, '-')}`;
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>${esc(titulo)}</title><style>
-    @page { size: ${pgW}mm ${pgH}mm; margin: 0; }
+    @page { ${pagFixa ? `size: ${pgW}mm ${pgH}mm; ` : ''}margin: 0; }
     * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     html, body { margin: 0; padding: 0; font-family: Arial, Helvetica, sans-serif; color: #000; }
-    .pg { width: ${pgW}mm; height: ${pgH}mm; position: relative; overflow: hidden; page-break-after: always; }
+    .pg { width: ${pgW}mm; height: ${pgHcorte}mm; position: relative; overflow: hidden; page-break-after: always; break-after: page; }
     .pg:last-child { page-break-after: auto; }
     .et { width: ${w}mm; height: ${h}mm; padding: ${pequeno ? 1.4 : 2.5}mm; display: flex; gap: ${pequeno ? 1.4 : 3}mm; align-items: stretch; overflow: hidden;
           position: absolute; top: 0; left: 0; transform-origin: 0 0; transform: translate(${dx}mm, ${dy}mm) ${girar}; }
@@ -8934,6 +8941,10 @@ function AlmoxQR({ modo, currentUser, codigoInicial }) {
           {[[0, 'nenhum'], [90, '90°'], [270, '270°']].map(([g, r]) => (
             <button key={g} onClick={() => mudarCfg('giro', g)} style={botao(Number(cfgEt.giro || 0) === g)}>{r}</button>
           ))}
+          <span style={{ fontSize: 12, color: T.inkDim, marginLeft: 6 }} title="pelo driver: vale o papel escolhido na janela do Chrome (recomendado na Argox); fixa: o portal manda o tamanho da página">página</span>
+          {[['driver', 'pelo driver'], ['fixa', 'fixa']].map(([v, r]) => (
+            <button key={v} onClick={() => mudarCfg('pagina', v)} style={botao((cfgEt.pagina || 'driver') === v)}>{r}</button>
+          ))}
           <span style={{ flex: 1 }} />
           <button onClick={() => almoxImprimirEtiquetas([{ codigo: 'V000000', op: '0000', br: 'BR00000/26', material: 'ETIQUETA DE TESTE — CONFIRA SE O QR LÊ NO TABLET', quantidade: 1, criado_em: new Date().toISOString() }], cfgEt)}
             style={botao(false)}>Imprimir etiqueta de teste</button>
@@ -8950,7 +8961,7 @@ function AlmoxQR({ modo, currentUser, codigoInicial }) {
             <strong style={{ color: T.ink }}>Na janela de impressão do Chrome:</strong>
             <ol style={{ margin: '4px 0 8px 18px', padding: 0 }}>
               <li>Impressora: <strong>Argox OS-214 plus</strong>; em <em>Mais configurações</em> → <em>Tamanho do papel</em>: <strong>USER (105,5 x 50,0 mm)</strong>.</li>
-              <li><em>Mais configurações</em> → margens <strong>Nenhuma</strong>, escala <strong>Padrão (100%)</strong>, desmarcar <strong>Cabeçalhos e rodapés</strong>.</li>
+              <li><em>Layout</em>: <strong>Retrato</strong>. <em>Mais configurações</em> → margens <strong>Nenhuma</strong>, escala <strong>Padrão (100%)</strong>, desmarcar <strong>Cabeçalhos e rodapés</strong>.</li>
               <li>O Chrome lembra essas escolhas para a próxima vez.</li>
             </ol>
             Imprima uma <strong>etiqueta de teste</strong> e leia no tablet. O rolo do estoque já vem deitado, então o giro fica em <strong>nenhum</strong>;
