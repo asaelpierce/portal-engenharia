@@ -4184,7 +4184,7 @@ const TXT = {
     explicaPrevNova: 'Full value of the proposals expected to close by December, picked by customer relationship score.',
     explicaVendidoKdb: 'Net value of orders booked in the KdB panel this year, manually checked. Counted by order date.',
     explicaPedidoKdb: 'Projects with a sales order and no invoice yet. Order net value from the KdB panel; without it, the proposal value.',
-    explicaPedidoPendente: 'Sales orders of the year flagged PENDING in Sankhya, one per order, by Sankhya's Net Offer Value (invoice value − all invoice taxes). Excludes gifts, rework and stock. Pending orders from previous years are left out of the value and appear in the full backlog (Excel). Refreshed from Sankhya hourly.',
+    explicaPedidoPendente: 'Sales orders of the year flagged PENDING in Sankhya, one per order, by the Sankhya Net Offer Value (invoice value − all invoice taxes). Excludes gifts, rework and stock. Pending orders from previous years are left out of the value and appear in the full backlog (Excel). Refreshed from Sankhya hourly.',
     pedidosPendentes: 'pending orders', deAnosAnteriores: 'from previous years',
     fatTitulo: 'Where 2026 revenue comes from', fatTotal: 'Total revenue for the year',
     fatCliqueFatia: 'click a slice to see the BRs', fatTodos: 'show all {n}', fatMenos: 'show less',
