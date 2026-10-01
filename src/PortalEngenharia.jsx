@@ -4406,7 +4406,8 @@ function Contador({ valor, formata }) {
 // Resumo da carteira igual à aba "Resumo" da planilha "Cabeçalho da Nota" do Asael:
 // data de corte (pedidos até), coluna de data = Dt. do Movimento, quadro Até/Após o corte/Total
 // (qtd de pedidos, Net Offer Value, Vlr. Nota) e a tabela mês a mês.
-const corteCarteiraPadrao = () => { const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - 3); const f = new Date(d.getFullYear(), d.getMonth() + 1, 0); return f.toISOString().slice(0, 10); };
+// corte padrão = fim do semestre anterior (em out/26: 30/06/2026, como na planilha)
+const corteCarteiraPadrao = () => { const d = new Date(); return d.getMonth() >= 6 ? `${d.getFullYear()}-06-30` : `${d.getFullYear() - 1}-12-31`; };
 const resumoCarteira = (linhas, corte) => {
   const dia = (l) => String(l.data_pedido || '').slice(0, 10);
   const grp = (arr) => ({ n: arr.length, net: arr.reduce((a, l) => a + (Number(l.valor) || 0), 0), nota: arr.reduce((a, l) => a + (Number(l.valor_nota) || 0), 0) });
