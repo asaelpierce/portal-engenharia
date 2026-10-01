@@ -3951,6 +3951,9 @@ const TXT = {
     explicaVendidoKdb: 'Net value dos pedidos lançados no Painel KdB no ano, conferido à mão. Conta pela data do pedido — inclui pedido de proposta de ano anterior.',
     explicaPedidoKdb: 'BRs com pedido de venda e ainda sem nota. Valor do pedido no Painel KdB (net value); sem lançamento no KdB, o da proposta. Brinde, retrabalho e estoque não contam.',
     fatTitulo: 'De onde vem o faturamento de 2026', fatTotal: 'Faturamento total do ano',
+    fatCliqueFatia: 'clique numa fatia para ver os BRs', fatTodos: 'ver todos os {n}', fatMenos: 'ver menos',
+    fatPorTipo: 'Por tipo de venda', fatSpot: 'Spot', fatContrato: 'Contrato', fatVale: 'Vale (automação)', fatSemTipo: 'Sem tipo no KdB (em geral, pedido de 2025)',
+    fatTopClientes: 'Maiores clientes no faturamento', fatPrazo: 'Da proposta à nota: em média {m} meses (BRs propostos no ano, {n} notas).',
     fatSub: 'o painel acima é do funil de 2026; este quadro fecha com a tela de Faturamento',
     fatExplica: 'O cartão “Faturado” conta só o que foi vendido em 2026. O restante veio de projetos fechados em anos anteriores e entregues agora — em obra longa isso é o normal, e é a diferença entre este painel e a tela de Faturamento.',
     simTitulo: 'Simulação de desconto — propostas paradas com margem alta',
@@ -4159,6 +4162,9 @@ const TXT = {
     explicaVendidoKdb: 'Net value of orders booked in the KdB panel this year, manually checked. Counted by order date.',
     explicaPedidoKdb: 'Projects with a sales order and no invoice yet. Order net value from the KdB panel; without it, the proposal value.',
     fatTitulo: 'Where 2026 revenue comes from', fatTotal: 'Total revenue for the year',
+    fatCliqueFatia: 'click a slice to see the BRs', fatTodos: 'show all {n}', fatMenos: 'show less',
+    fatPorTipo: 'By sale type', fatSpot: 'Spot', fatContrato: 'Contract', fatVale: 'Vale (automated)', fatSemTipo: 'No type in KdB (mostly 2025 orders)',
+    fatTopClientes: 'Top customers in revenue', fatPrazo: 'Proposal to invoice: {m} months on average (BRs proposed this year, {n} invoices).',
     fatSub: 'the cards above cover the 2026 funnel; this panel reconciles with the Invoicing screen',
     fatExplica: 'The “Invoiced” card counts only what was sold in 2026. The rest came from projects closed in earlier years and delivered now — normal for long-cycle work, and the reason this dashboard differs from the Invoicing screen.',
     simTitulo: 'Discount simulation — stalled proposals with high margin',
@@ -4831,6 +4837,15 @@ function PainelDiretoria() {
   useEffect(() => { supabase.from('v_comercial_ciclo_tipo').select('*').then(r => setCicloTipo(r.data || [])); }, []);
   const [fatOrigem, setFatOrigem] = useState([]);
   const [fatDet, setFatDet] = useState([]);
+  // card "De onde vem o faturamento": tipo de cada BR (KdB) e a fatia clicada
+  const [brTipo, setBrTipo] = useState({});
+  const [fatSel, setFatSel] = useState(null);
+  const [fatTodos, setFatTodos] = useState(false);
+  useEffect(() => {
+    supabase.from('v_comercial_br_tipo').select('*').then(r => {
+      const m = {}; (r.data || []).forEach(x => { m[x.br] = x; }); setBrTipo(m);
+    });
+  }, []);
   const [estagiosCfg, setEstagiosCfg] = useState([]);
   const [estagioIsolado, setEstagioIsolado] = useState(null);
   const [prev, setPrev] = useState([]);           // previsibilidade
@@ -5068,7 +5083,7 @@ function PainelDiretoria() {
   });
   const CORES_O = { funil: G.verde, anterior: G.ciano, sem_proposta: G.ambar, duplicata: G.cinza };
   const roscaOrigem = Object.entries(porOrigem)
-    .map(([k, x]) => ({ k: x.rot, v: x.v, par: CORES_O[k] || G.cinza, rot: val(x.v), n: x.n }))
+    .map(([k, x]) => ({ k: x.rot, o: k, v: x.v, par: CORES_O[k] || G.cinza, rot: val(x.v), n: x.n }))
     .sort((a, b) => b.v - a.v);
   const totalFat = roscaOrigem.reduce((s, x) => s + x.v, 0);
 
@@ -6301,15 +6316,75 @@ IMPORTANTE: Responda SOMENTE com base nos dados acima. Se a pergunta pede algo q
             </div>
           )}
         </>), t.explicaConv)}
-        {painel(t.fatTitulo, (
-          <>
-            <Rosca dados={roscaOrigem} tamanho={165} espessura={26} centro={val(totalFat)} />
-            <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 10, paddingTop: 9,
-              borderTop: `1px solid ${T.lineSoft}`, letterSpacing: '.04em', textTransform: 'uppercase' }}>
-              {t.fatTotal}: <strong style={{ color: T.ink, letterSpacing: 0 }}>{val(totalFat)}</strong>
-            </div>
-          </>
-        ), t.fatSub)}
+        {painel(t.fatTitulo, (() => {
+          // detalhe do faturamento do ano (mesma base da rosca): origem, tipo de venda e clientes
+          const ano = String(new Date().getFullYear());
+          const det = fatDet.filter(f => String(f.mes_faturamento || '').startsWith(ano)).map(f => ({
+            ...f, o: f.no_funil ? 'funil' : String(f.origem_proposta || '').startsWith(`ANO:${ano}`) ? 'sem_proposta' : 'anterior',
+            tp: brTipo[f.br]?.eh_vale ? 'vale' : brTipo[f.br]?.tipo === 'CONTRATO' ? 'contrato' : brTipo[f.br]?.tipo === 'SPOT' ? 'spot' : 'sem',
+          }));
+          const somaF = (arr) => arr.reduce((a, f) => a + (Number(f.valor) || 0), 0);
+          const totDet = somaF(det) || 1;
+          const tipos = [['spot', t.fatSpot, G.verde], ['contrato', t.fatContrato, G.azul], ['vale', t.fatVale, G.ambar], ['sem', t.fatSemTipo, G.cinza]]
+            .map(([k, r, par]) => { const l = det.filter(f => f.tp === k); return { k, r, par, v: somaF(l), n: new Set(l.map(f => f.br)).size }; }).filter(x => x.v > 0);
+          const porCli = {}; det.forEach(f => { const c = f.cliente || '—'; porCli[c] = (porCli[c] || 0) + (Number(f.valor) || 0); });
+          const topCli = Object.entries(porCli).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([k, v]) => ({ k, v, rot: val(v), par: G.azul }));
+          const comPrazo = det.filter(f => f.o === 'funil' && f.meses_da_proposta_ate_faturar != null);
+          const prazoMed = comPrazo.length ? comPrazo.reduce((a, f) => a + Number(f.meses_da_proposta_ate_faturar), 0) / comPrazo.length : null;
+          const lista = fatSel ? det.filter(f => f.o === fatSel).sort((a, b) => (Number(b.valor) || 0) - (Number(a.valor) || 0)) : [];
+          const sub = { fontSize: 10.5, fontWeight: 700, color: T.inkFaint, letterSpacing: '.04em', textTransform: 'uppercase', margin: '14px 0 6px' };
+          return (
+            <>
+              <Rosca dados={roscaOrigem} tamanho={165} espessura={26} centro={val(totalFat)}
+                aoClicar={(d) => { setFatSel(x => x === d.o ? null : d.o); setFatTodos(false); }} ativo={roscaOrigem.find(x => x.o === fatSel)?.k} />
+              <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 6 }}>{t.fatCliqueFatia}</div>
+              {fatSel && (
+                <div style={{ marginTop: 8, border: `1px solid ${T.line}`, borderRadius: 8, padding: '6px 8px', maxHeight: 230, overflowY: 'auto' }}>
+                  {(fatTodos ? lista : lista.slice(0, 12)).map((f, i) => (
+                    <div key={`${f.br}-${f.mes_faturamento}-${i}`} style={{ display: 'flex', gap: 8, fontSize: 11, padding: '3px 0', borderTop: i ? `1px solid ${T.lineSoft}` : 'none' }}>
+                      <strong style={{ minWidth: 86 }}>{f.br}</strong>
+                      <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: T.inkDim }} title={f.cliente}>{f.cliente}</span>
+                      <span style={{ color: T.inkFaint }}>{rotMes(f.mes_faturamento)}</span>
+                      <span style={{ fontWeight: 600, minWidth: 70, textAlign: 'right' }}>{val(Number(f.valor) || 0)}</span>
+                    </div>
+                  ))}
+                  {lista.length > 12 && (
+                    <button onClick={() => setFatTodos(x => !x)} style={{ background: 'none', border: 'none', padding: '4px 0 0', cursor: 'pointer', color: T.blueText, fontSize: 11, textDecoration: 'underline', fontFamily: 'inherit' }}>
+                      {fatTodos ? t.fatMenos : t.fatTodos.replace('{n}', lista.length)}
+                    </button>
+                  )}
+                </div>
+              )}
+
+              <div style={sub}>{t.fatPorTipo}</div>
+              <div style={{ display: 'flex', height: 12, borderRadius: 6, overflow: 'hidden', background: T.lineSoft }}>
+                {tipos.map(x => <div key={x.k} title={`${x.r}: ${val(x.v)}`} style={{ width: `${x.v / totDet * 100}%`, background: x.par[0] }} />)}
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr auto auto', gap: '3px 10px', fontSize: 11.5, marginTop: 6 }}>
+                {tipos.map(x => (
+                  <React.Fragment key={x.k}>
+                    <span><span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 2, background: x.par[0], marginRight: 6 }} />{x.r} <span style={{ color: T.inkFaint }}>· {x.n} BR</span></span>
+                    <strong style={{ textAlign: 'right' }}>{val(x.v)}</strong>
+                    <span style={{ color: T.inkFaint, textAlign: 'right' }}>{(x.v / totDet * 100).toFixed(0)}%</span>
+                  </React.Fragment>
+                ))}
+              </div>
+
+              <div style={sub}>{t.fatTopClientes}</div>
+              <BarrasH dados={topCli} altura={18} />
+
+              {prazoMed != null && (
+                <div style={{ fontSize: 11.5, color: T.inkDim, marginTop: 12 }}>
+                  {t.fatPrazo.replace('{m}', prazoMed.toFixed(1).replace('.', idioma === 'pt' ? ',' : '.')).replace('{n}', comPrazo.length)}
+                </div>
+              )}
+              <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 10, paddingTop: 9,
+                borderTop: `1px solid ${T.lineSoft}`, letterSpacing: '.04em', textTransform: 'uppercase' }}>
+                {t.fatTotal}: <strong style={{ color: T.ink, letterSpacing: 0 }}>{val(totalFat)}</strong>
+              </div>
+            </>
+          );
+        })(), t.fatSub)}
       </div>
 
 
