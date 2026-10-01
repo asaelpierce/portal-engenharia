@@ -364,6 +364,32 @@ function AlmoxQrPublico({ codigo, chave, nomeLogado }) {
   const [aviso, setAviso] = useState(null);
   const [feito, setFeito] = useState(null);
   const [verHist, setVerHist] = useState(false);
+  // sem login: só consulta. Com login do estoque (almoxarifado/gestor): movimenta, com o nome do login.
+  const [perm, setPerm] = useState({ checado: false, pode: false, nome: null, logado: false });
+  const [loginTxt, setLoginTxt] = useState('');
+  const [senhaTxt, setSenhaTxt] = useState('');
+  const [entrando, setEntrando] = useState(false);
+  const [erroLogin, setErroLogin] = useState(null);
+  const checarPerm = useCallback(async () => {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) { setPerm({ checado: true, pode: false, nome: null, logado: false }); return; }
+    const { data } = await supabase.rpc('fn_almox_pode_movimentar');
+    setPerm({ checado: true, pode: !!data?.pode, nome: data?.nome || null, logado: true });
+  }, []);
+  useEffect(() => {
+    checarPerm();
+    const { data: l } = supabase.auth.onAuthStateChange(() => checarPerm());
+    return () => l?.subscription?.unsubscribe();
+  }, [checarPerm]);
+  const entrar = async () => {
+    setErroLogin(null);
+    if (!loginTxt.trim() || !senhaTxt) { setErroLogin('Preencha o usuário e a senha.'); return; }
+    setEntrando(true);
+    const { error } = await supabase.auth.signInWithPassword({ email: almoxEmailDoLogin(loginTxt), password: senhaTxt });
+    setEntrando(false);
+    if (error) { setErroLogin('Usuário ou senha não conferem.'); return; }
+    setSenhaTxt(''); checarPerm(); carregar();
+  };
 
   const carregar = useCallback(async () => {
     setCarregando(true); setErro(null);
@@ -383,18 +409,17 @@ function AlmoxQrPublico({ codigo, chave, nomeLogado }) {
 
   const registrar = async () => {
     setAviso(null);
-    if (!nome.trim()) { setAviso('Escreva o seu nome.'); return; }
+    if (!perm.pode) { setAviso('Para movimentar, entre com o seu login do estoque.'); return; }
     if (!para) { setAviso('Escolha para onde o material vai.'); return; }
     if (!recebido.trim()) { setAviso('Escreva quem recebeu o material.'); return; }
     if (!fotoMat) { setAviso('Tire a foto do material.'); return; }
     setSalvando(true);
     try {
-      try { localStorage.setItem('almox_meu_nome', nome.trim()); } catch {}
       const pasta = `publico/${dados.volume.codigo}/${chave}`;
       const cMat = await almoxEnviarFoto(fotoMat, pasta);
       const cDoc = fotoDoc ? await almoxEnviarFoto(fotoDoc, pasta) : null;
       const { data, error } = await supabase.rpc('fn_almox_publico_registrar', {
-        p_codigo: codigo, p_chave: chave, p_nome: nome.trim(), p_para_setor: para, p_recebido_por: recebido.trim(),
+        p_codigo: codigo, p_chave: chave, p_nome: perm.nome, p_para_setor: para, p_recebido_por: recebido.trim(),
         p_foto_material: cMat, p_foto_documento: cDoc, p_observacao: obs.trim() || null });
       if (error || !data?.ok) throw new Error(error?.message || data?.erro || 'Não foi possível registrar.');
       setFeito({ para, recebido: recebido.trim(), hora: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) });
@@ -480,15 +505,32 @@ function AlmoxQrPublico({ codigo, chave, nomeLogado }) {
           </div>
         )}
 
-        {ativo && !feito && (<>
-          <div style={bloco}>
-            <div style={titulo}>1. Seu nome</div>
-            <input value={nome} onChange={e => setNome(e.target.value)} list="almox-nomes" autoComplete="name" placeholder="Nome e sobrenome" style={entrada} />
-            <div style={{ fontSize: 13, color: T.inkFaint, marginTop: 6 }}>Fica salvo neste aparelho para a próxima leitura.</div>
+        {ativo && !feito && perm.checado && !perm.pode && (
+          <div style={{ ...bloco, borderColor: T.blueText }}>
+            <div style={titulo}>Só consulta</div>
+            <div style={{ fontSize: 15, color: T.inkDim, marginBottom: 12 }}>
+              {perm.logado ? 'O seu login não tem permissão para movimentar material. Fale com a Daniela (estoque).' : 'Para movimentar este material, entre com o seu login do estoque. Fica salvo neste celular.'}
+            </div>
+            {!perm.logado && (<>
+              <input value={loginTxt} onChange={e => setLoginTxt(e.target.value)} placeholder="Usuário ou e-mail" autoCapitalize="none" autoCorrect="off" autoComplete="username" style={{ ...entrada, marginBottom: 8 }} />
+              <input value={senhaTxt} onChange={e => setSenhaTxt(e.target.value)} type="password" placeholder="Senha" autoComplete="current-password"
+                onKeyDown={e => e.key === 'Enter' && entrar()} style={{ ...entrada, marginBottom: 8 }} />
+              {erroLogin && <div style={{ color: T.rustText, fontWeight: 700, fontSize: 15, marginBottom: 8 }}>{erroLogin}</div>}
+              <button onClick={entrar} disabled={entrando} style={{ width: '100%', minHeight: 52, fontSize: 17, fontWeight: 800, borderRadius: 10, border: 'none', background: T.ink, color: T.panel }}>
+                {entrando ? 'Entrando…' : 'Entrar para movimentar'}
+              </button>
+            </>)}
+          </div>
+        )}
+
+        {ativo && !feito && perm.pode && (<>
+          <div style={{ ...bloco, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
+            <div><div style={{ fontSize: 13, color: T.inkFaint }}>Movimentando como</div><div style={{ fontSize: 18, fontWeight: 800 }}>{perm.nome}</div></div>
+            <button onClick={async () => { await supabase.auth.signOut(); checarPerm(); }} style={{ fontSize: 14, padding: '8px 12px', borderRadius: 8, border: `1px solid ${T.line}`, background: T.panel, color: T.inkDim }}>Sair</button>
           </div>
 
           <div style={bloco}>
-            <div style={titulo}>2. Para onde vai</div>
+            <div style={titulo}>1. Para onde vai</div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 8 }}>
               {setores.map(s => (
                 <button key={s} onClick={() => setPara(s)} style={{ minHeight: 56, fontSize: 16, fontWeight: 700, borderRadius: 10, cursor: 'pointer', padding: '8px 10px',
@@ -501,12 +543,12 @@ function AlmoxQrPublico({ codigo, chave, nomeLogado }) {
           </div>
 
           <div style={bloco}>
-            <div style={titulo}>3. Quem recebeu</div>
+            <div style={titulo}>2. Quem recebeu</div>
             <input value={recebido} onChange={e => setRecebido(e.target.value)} list="almox-nomes" placeholder="Nome de quem recebeu" style={entrada} />
           </div>
 
           <div style={bloco}>
-            <div style={titulo}>4. Fotos</div>
+            <div style={titulo}>3. Fotos</div>
             <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
               {fotoCampo('Foto do material', true, fotoMat, urlFoto.mat, setFotoMat)}
               {fotoCampo('Foto do documento', false, fotoDoc, urlFoto.doc, setFotoDoc)}
@@ -534,7 +576,7 @@ function AlmoxQrPublico({ codigo, chave, nomeLogado }) {
         )}
       </div>
 
-      {ativo && !feito && (
+      {ativo && !feito && perm.pode && (
         <div style={{ position: 'fixed', left: 0, right: 0, bottom: 0, background: T.panel, borderTop: `1px solid ${T.line}`,
           padding: '10px 14px', paddingBottom: 'calc(10px + env(safe-area-inset-bottom, 0px))', boxShadow: '0 -4px 16px rgba(0,0,0,0.08)' }}>
           <div style={{ maxWidth: 680, margin: '0 auto' }}>
@@ -31883,6 +31925,9 @@ function PermissoesManager() {
 function ModalCriarUsuario({ onFechar, onCriado }) {
   const [nome, setNome] = useState('');
   const [email, setEmail] = useState('');
+  const [semEmail, setSemEmail] = useState(false);
+  const [usuario, setUsuario] = useState('');
+  const [criado, setCriado] = useState(null);
   const [senha, setSenha] = useState('');
   const [papel, setPapel] = useState('engenheiro');
   const [bloquearTudo, setBloquearTudo] = useState(false);
@@ -31899,20 +31944,23 @@ function ModalCriarUsuario({ onFechar, onCriado }) {
   };
 
   const criar = async () => {
-    if (!nome.trim() || !email.trim() || !senha.trim()) { setErro('Preenche nome, e-mail e senha.'); return; }
+    if (!nome.trim() || !(semEmail ? usuario.trim() : email.trim()) || !senha.trim()) { setErro(`Preenche nome, ${semEmail ? 'usuário' : 'e-mail'} e senha.`); return; }
     setCriando(true);
     setErro(null);
     try {
+      // só gestor logado pode criar (a função confere o login)
+      const { data: { session } } = await supabase.auth.getSession();
       const res = await fetch(`${SUPABASE_URL}/functions/v1/admin-criar-colaborador`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token || ''}` },
         body: JSON.stringify({
-          nome: nome.trim(), email: email.trim(), senha, papel,
+          nome: nome.trim(), ...(semEmail ? { usuario: usuario.trim() } : { email: email.trim() }), senha, papel,
           ve_almoxarifado_completo: papel !== 'almoxarifado',
           ve_almoxarifado_apenas_fila: papel === 'almoxarifado',
           bloquear_tudo: bloquearTudo,
         }),
       }).then(r => r.json());
       if (!res.ok) { setErro(res.erro || 'Erro desconhecido.'); setCriando(false); return; }
+      if (semEmail) { setCriado(res.login); setCriando(false); return; }   // mostra o usuário para passar à pessoa
       await onCriado();
     } catch (e) {
       setErro(String(e));
@@ -31931,10 +31979,22 @@ function ModalCriarUsuario({ onFechar, onCriado }) {
             <label style={{ fontSize: 11.5, fontWeight: 700, color: T.inkFaint, display: 'block', marginBottom: 4 }}>Nome completo</label>
             <input value={nome} onChange={e => setNome(e.target.value)} placeholder="Ex: Daniela Oliveira" style={{ ...inputStyle(), width: '100%' }} />
           </div>
-          <div>
-            <label style={{ fontSize: 11.5, fontWeight: 700, color: T.inkFaint, display: 'block', marginBottom: 4 }}>E-mail</label>
-            <input value={email} onChange={e => setEmail(e.target.value)} placeholder="nome@kalenborn.com.br" style={{ ...inputStyle(), width: '100%' }} />
-          </div>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5 }}>
+            <input type="checkbox" checked={semEmail} onChange={e => { setSemEmail(e.target.checked); if (e.target.checked) setPapel('almoxarifado'); }} />
+            Não tem e-mail da empresa (entra com um usuário)
+          </label>
+          {semEmail ? (
+            <div>
+              <label style={{ fontSize: 11.5, fontWeight: 700, color: T.inkFaint, display: 'block', marginBottom: 4 }}>Usuário para entrar</label>
+              <input value={usuario} onChange={e => setUsuario(e.target.value.toLowerCase().replace(/\s+/g, '.'))} placeholder="ex: alisson.gabriel" autoCapitalize="none" style={{ ...inputStyle(), width: '100%' }} />
+              <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 3 }}>Sem espaço. A pessoa entra no portal com este usuário e a senha (não precisa de @).</div>
+            </div>
+          ) : (
+            <div>
+              <label style={{ fontSize: 11.5, fontWeight: 700, color: T.inkFaint, display: 'block', marginBottom: 4 }}>E-mail</label>
+              <input value={email} onChange={e => setEmail(e.target.value)} placeholder="nome@kalenborn.com.br" style={{ ...inputStyle(), width: '100%' }} />
+            </div>
+          )}
           <div>
             <label style={{ fontSize: 11.5, fontWeight: 700, color: T.inkFaint, display: 'block', marginBottom: 4 }}>Senha (mínimo 6 caracteres)</label>
             <div style={{ display: 'flex', gap: 6 }}>
@@ -31957,8 +32017,14 @@ function ModalCriarUsuario({ onFechar, onCriado }) {
           </label>
 
           {erro && <div style={{ fontSize: 12, color: T.rustText, background: T.rustSoft, padding: '8px 10px', borderRadius: 6 }}>{erro}</div>}
+          {criado && (
+            <div style={{ fontSize: 12.5, color: T.oliveText, background: T.oliveSoft, padding: '10px 12px', borderRadius: 6, lineHeight: 1.5 }}>
+              ✓ Usuário criado. A pessoa entra no portal com <strong>{criado}</strong> e a senha que você definiu.
+              <div style={{ marginTop: 6 }}><button onClick={onCriado} style={{ fontSize: 12, fontWeight: 700, padding: '6px 12px', borderRadius: 6, border: 'none', background: T.oliveText, color: '#fff', cursor: 'pointer' }}>Fechar</button></div>
+            </div>
+          )}
 
-          <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+          <div style={{ display: criado ? 'none' : 'flex', gap: 8, marginTop: 4 }}>
             <button onClick={criar} disabled={criando}
               style={{ fontSize: 12.5, fontWeight: 700, color: '#fff', background: T.oliveText, border: 'none', borderRadius: 8, padding: '10px 18px', cursor: 'pointer', opacity: criando ? 0.6 : 1 }}>
               {criando ? 'Criando…' : '✓ Criar usuário'}
@@ -32162,6 +32228,10 @@ function Admin({ currentUser }) {
 /* ============================================================================
    TELA DE LOGIN — Supabase Auth real, e-mail/senha
 ============================================================================ */
+// login por USUÁRIO (sem e-mail da empresa): vira o e-mail técnico criado em admin-criar-colaborador
+const ALMOX_DOMINIO_SEM_EMAIL = 'sem-email.kalenborn.com.br';
+const almoxEmailDoLogin = (t) => { const x = String(t || '').trim().toLowerCase(); return x.includes('@') ? x : `${x}@${ALMOX_DOMINIO_SEM_EMAIL}`; };
+
 function TelaLogin() {
   const [email, setEmail] = useState('');
   const [senha, setSenha] = useState('');
@@ -32179,9 +32249,9 @@ function TelaLogin() {
   const entrar = async (e) => {
     e.preventDefault();
     setErro(null);
-    if (!email.trim() || !senha) { setErro('Preencha e-mail e senha.'); return; }
+    if (!email.trim() || !senha) { setErro('Preencha e-mail (ou usuário) e senha.'); return; }
     setEntrando(true);
-    const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password: senha });
+    const { error } = await supabase.auth.signInWithPassword({ email: almoxEmailDoLogin(email), password: senha });
     setEntrando(false);
     if (error) {
       setErro(error.message.includes('Invalid') ? 'E-mail ou senha incorretos.' : error.message);
@@ -32209,8 +32279,8 @@ function TelaLogin() {
 
         <form onSubmit={entrar} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <div>
-            <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: T.inkDim, marginBottom: 6 }}>E-mail</label>
-            <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="seu.nome@kalenborn.com.br"
+            <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: T.inkDim, marginBottom: 6 }}>E-mail ou usuário</label>
+            <input type="text" autoCapitalize="none" autoCorrect="off" value={email} onChange={e => setEmail(e.target.value)} placeholder="seu.nome@kalenborn.com.br ou usuário"
               style={inputStyle()} autoFocus />
           </div>
           <div>
