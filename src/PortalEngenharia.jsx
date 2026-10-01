@@ -3927,7 +3927,7 @@ const TXT = {
     cicloTitulo: 'Propostas e fechamento, mês a mês',
     diasAtePedido: 'Da proposta ao pedido', diasAteFaturar: 'Do pedido ao faturamento',
     spotMedia: 'spot (média)', contratoAbrev: 'contrato', semVale: 'sem Vale',
-    explicaPrazoTipo: 'Média 2026 dos dias entre a proposta e o pedido, sem a Vale (pedidos da automação). SPOT: {sn} pedidos, média {sm} dias, mediana {sd}, {s1} em até 1 dia. CONTRATO: {cn} pedidos, média {cm} dias, {c1} em até 1 dia. Tipo vem do Painel KdB.',
+    explicaPrazoTipo: 'BRs de 2026, sem a Vale (automação) e sem projeto estoque. Dias da PRIMEIRA proposta (a mais antiga de todas as revisões) até o pedido de venda no Sankhya. SPOT: {sn} BRs, média {sm} dias, mediana {sd}, {s1} em até 1 dia; da criação do BR ao pedido: {sb} dias. CONTRATO: {cn} BRs, média {cm} dias, {c1} em até 1 dia; da criação do BR ao pedido: {cb} dias. Tipo vem do Painel KdB.',
     convMedia: 'Média mensal (valor)',
     convDecididos: 'Ganho × perdido (valor)',
     convMetaVendas: 'Conversão: vendas (KdB) ÷ meta de cotações {a}',
@@ -4138,7 +4138,7 @@ const TXT = {
     cicloTitulo: 'Proposals and closings, month by month',
     diasAtePedido: 'Proposal to order', diasAteFaturar: 'Order to invoice',
     spotMedia: 'spot (avg)', contratoAbrev: 'contract', semVale: 'excl. Vale',
-    explicaPrazoTipo: '2026 average of days from proposal to order, excluding Vale (automated orders). SPOT: {sn} orders, avg {sm} days, median {sd}, {s1} within 1 day. CONTRACT: {cn} orders, avg {cm} days, {c1} within 1 day. Type comes from the KdB panel.',
+    explicaPrazoTipo: '2026 BRs, excluding Vale (automated) and stock projects. Days from the FIRST proposal (oldest of all revisions) to the sales order in Sankhya. SPOT: {sn} BRs, avg {sm} days, median {sd}, {s1} within 1 day; BR creation to order: {sb} days. CONTRACT: {cn} BRs, avg {cm} days, {c1} within 1 day; BR creation to order: {cb} days. Type comes from the KdB panel.',
     convMedia: 'Monthly average (value)',
     convDecididos: 'Won × lost (value)',
     convMetaVendas: 'Conversion: sales (KdB) ÷ {a} quotation target',
@@ -4834,7 +4834,8 @@ function PainelDiretoria() {
   const [ciclo, setCiclo] = useState([]);
   // proposta -> pedido por tipo (SPOT / CONTRATO), sem a Vale (automação)
   const [cicloTipo, setCicloTipo] = useState([]);
-  useEffect(() => { supabase.from('v_comercial_ciclo_tipo').select('*').then(r => setCicloTipo(r.data || [])); }, []);
+  // por BR: 1ª proposta (a mais antiga das revisões) e criação do BR (v_comercial_ciclo_br)
+  useEffect(() => { supabase.from('v_comercial_ciclo_br').select('br,tipo,eh_vale,eh_estoque,ano_br,dias_proposta_ate_pedido,dias_br_ate_pedido').eq('ano_br', String(new Date().getFullYear())).then(r => setCicloTipo(r.data || [])); }, []);
   const [fatOrigem, setFatOrigem] = useState([]);
   const [fatDet, setFatDet] = useState([]);
   // card "De onde vem o faturamento": tipo de cada BR (KdB) e a fatia clicada
@@ -5134,10 +5135,13 @@ function PainelDiretoria() {
   // "Da proposta ao pedido" (Asael, 01/10/2026): spot e contrato separados, sem a Vale --
   // contrato e Vale (automação) fecham em ~0 dia e escondiam o prazo real do spot.
   const prazoTipo = (tp) => {
-    const d = cicloTipo.filter(c => c.tipo === tp && !c.eh_vale && Number(c.dias_proposta_ate_pedido) >= 0).map(c => Number(c.dias_proposta_ate_pedido)).sort((a, b) => a - b);
+    const doTipo = cicloTipo.filter(c => c.tipo === tp && !c.eh_vale && !c.eh_estoque && c.dias_proposta_ate_pedido != null && Number(c.dias_proposta_ate_pedido) >= 0);
+    const d = doTipo.map(c => Number(c.dias_proposta_ate_pedido)).sort((a, b) => a - b);
     if (!d.length) return null;
     const med = d.length % 2 ? d[(d.length - 1) / 2] : (d[d.length / 2 - 1] + d[d.length / 2]) / 2;
-    return { n: d.length, media: Math.round(d.reduce((a, b) => a + b, 0) / d.length), mediana: Math.round(med), ate1: d.filter(x => x <= 1).length };
+    const br = doTipo.filter(c => c.dias_br_ate_pedido != null && Number(c.dias_br_ate_pedido) >= 0).map(c => Number(c.dias_br_ate_pedido));
+    return { n: d.length, media: Math.round(d.reduce((a, b) => a + b, 0) / d.length), mediana: Math.round(med), ate1: d.filter(x => x <= 1).length,
+      brMedia: br.length ? Math.round(br.reduce((a, b) => a + b, 0) / br.length) : null };
   };
   const pzSpot = prazoTipo('SPOT'), pzContr = prazoTipo('CONTRATO');
   const diasFat = ciclo.length ? Math.round(ciclo.reduce((s, c) => s + (Number(c.dias_ate_faturar) || 0), 0) / ciclo.length) : null;
@@ -6017,7 +6021,8 @@ IMPORTANTE: Responda SOMENTE com base nos dados acima. Se a pergunta pede algo q
           { t: t.diasAtePedido, txt: pzSpot ? `${pzSpot.media} ${t.dias}` : (diasPedido == null ? '—' : `${diasPedido} ${t.dias}`),
             n: pzSpot ? `${t.spotMedia} · ${t.contratoAbrev} ${pzContr ? `${pzContr.media} ${t.dias}` : '—'} · ${t.semVale}` : t.medio, p: G.ciano,
             ajuda: pzSpot ? t.explicaPrazoTipo.replace('{sn}', pzSpot.n).replace('{sm}', pzSpot.media).replace('{sd}', pzSpot.mediana).replace('{s1}', pzSpot.ate1)
-              .replace('{cn}', pzContr?.n ?? 0).replace('{cm}', pzContr?.media ?? '—').replace('{c1}', pzContr?.ate1 ?? 0) : undefined },
+              .replace('{cn}', pzContr?.n ?? 0).replace('{cm}', pzContr?.media ?? '—').replace('{c1}', pzContr?.ate1 ?? 0)
+              .replace('{sb}', pzSpot.brMedia ?? '—').replace('{cb}', pzContr?.brMedia ?? '—') : undefined },
           { t: t.diasAteFaturar, txt: diasFat == null ? '—' : `${diasFat} ${t.dias}`, n: t.medio, p: G.rosa },
         ].map((k, i) => (
           <div key={k.t} title={k.ajuda || ''} className={`g-card g-linha${k.lista ? ' g-clicavel' : ''}`}
@@ -31054,7 +31059,7 @@ function ConferenciaConhecimentoPedido({ currentUser }) {
                         )}
                       </td>
                       <td style={td}>{l.cliente || '—'}<div style={sub}>{l.vendedor || '—'}</div></td>
-                      <td style={{ ...td, whiteSpace: 'nowrap' }}>{l.data_proposta ? <>{dataCurta(l.data_proposta)}<div style={sub}>{fmtMoeda(l.valor_proposta)}{l.fonte_proposta === 'portal' ? ' · portal' : ''}</div></> : <span style={{ ...sub, color: T.amberText, fontWeight: 700 }}>sem proposta</span>}</td>
+                      <td style={{ ...td, whiteSpace: 'nowrap' }}>{l.data_proposta ? <>{dataCurta(l.data_proposta)}<div style={sub}>1ª proposta{Number(l.revisoes) > 1 ? ` · ${l.revisoes} revisões` : ''} · {fmtMoeda(l.valor_proposta)}</div>{l.data_criacao_br && <div style={sub}>BR criado {dataCurta(l.data_criacao_br)}</div>}</> : <span style={{ ...sub, color: T.amberText, fontWeight: 700 }}>sem proposta</span>}</td>
                       <td style={{ ...td, whiteSpace: 'nowrap' }}>
                         {semPedido ? (
                           <span style={{ display: 'inline-block', background: T.rust, color: '#fff', fontWeight: 700, fontSize: 11.5, borderRadius: 6, padding: '3px 8px' }}>
@@ -31067,6 +31072,7 @@ function ConferenciaConhecimentoPedido({ currentUser }) {
                       <td style={{ ...td, whiteSpace: 'nowrap' }}>
                         <div title="da proposta até o pedido de abertura">proposta → pedido de abertura: <strong>{dias(l.dias_proposta_ate_solicitacao)}</strong></div>
                         <div title="do pedido de abertura até o pedido de venda no Sankhya" style={{ marginTop: 2 }}>abertura → pedido de venda: <strong>{semPedido ? '—' : dias(l.dias_solicitacao_ate_pedido_venda)}</strong></div>
+                        {l.data_criacao_br && <div title="da criação do BR no Sankhya até o pedido de venda" style={{ marginTop: 2 }}>BR criado → pedido de venda: <strong>{semPedido ? '—' : dias(l.dias_br_ate_pedido_venda)}</strong></div>}
                       </td>
                       <td style={{ ...td, whiteSpace: 'nowrap', color: d == null ? T.inkFaint : d < 0 ? T.rustText : d > 0 ? T.oliveText : T.ink, fontWeight: 600 }}>
                         {d == null ? '—' : <>{fmtMoeda(d)}<div style={{ fontSize: 11 }}>{l.diferenca_pct != null ? `${String(l.diferenca_pct).replace('.', ',')}%` : ''}</div></>}
@@ -31087,7 +31093,7 @@ function ConferenciaConhecimentoPedido({ currentUser }) {
         </div>
       )}
       <div style={{ ...sub, marginTop: 8 }}>
-        Proposta: valor líquido do orçamento no Sankhya (o que virou o pedido; senão o último do BR). Pedido de venda: valor da nota menos os impostos, no Sankhya.
+        Proposta: data da PRIMEIRA proposta do BR (a mais antiga de todas as revisões); valor líquido do orçamento que virou o pedido. BR criado = início do projeto no Sankhya. Pedido de venda: valor da nota menos os impostos, no Sankhya.
         Diferença = pedido líquido menos proposta líquida. Linha vermelha: pedido de venda ainda não lançado (ou sem BR).
       </div>
     </Panel>
