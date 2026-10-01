@@ -3971,7 +3971,7 @@ const TXT = {
     explicaPrevNova: 'Valor cheio das propostas que devem fechar com expectativa até dezembro. Em cada estágio fecham propostas × chance, escolhidas pela nota de relacionamento do cliente.',
     explicaVendidoKdb: 'Net value dos pedidos lançados no Painel KdB no ano, conferido à mão. Conta pela data do pedido — inclui pedido de proposta de ano anterior.',
     explicaPedidoKdb: 'BRs com pedido de venda e ainda sem nota. Valor do pedido no Painel KdB (net value); sem lançamento no KdB, o da proposta. Brinde, retrabalho e estoque não contam.',
-    explicaPedidoPendente: 'Pedidos de venda do ano que o Sankhya marca como PENDENTE, um por pedido, pelo Net Offer Value = (itens − ICMS) × (1 − 9,25% de PIS/COFINS). Fora brinde, retrabalho e estoque. Pedidos pendentes de anos anteriores ficam de fora do valor e aparecem na Carteira completa (Excel). Atualizado do Sankhya de hora em hora.',
+    explicaPedidoPendente: 'Pedidos de venda do ano que o Sankhya marca como PENDENTE, um por pedido, pelo Net Offer Value do Sankhya (valor da nota − todos os impostos da nota). Fora brinde, retrabalho e estoque. Pedidos pendentes de anos anteriores ficam de fora do valor e aparecem na Carteira completa (Excel). Atualizado do Sankhya de hora em hora.',
     pedidosPendentes: 'pedidos pendentes', deAnosAnteriores: 'de anos anteriores',
     fatTitulo: 'De onde vem o faturamento de 2026', fatTotal: 'Faturamento total do ano',
     fatCliqueFatia: 'clique numa fatia para ver os BRs', fatTodos: 'ver todos os {n}', fatMenos: 'ver menos',
@@ -4184,7 +4184,7 @@ const TXT = {
     explicaPrevNova: 'Full value of the proposals expected to close by December, picked by customer relationship score.',
     explicaVendidoKdb: 'Net value of orders booked in the KdB panel this year, manually checked. Counted by order date.',
     explicaPedidoKdb: 'Projects with a sales order and no invoice yet. Order net value from the KdB panel; without it, the proposal value.',
-    explicaPedidoPendente: 'Sales orders of the year flagged PENDING in Sankhya, one per order, by Net Offer Value = (items − ICMS) × (1 − 9.25% PIS/COFINS). Excludes gifts, rework and stock. Pending orders from previous years are left out of the value and appear in the full backlog (Excel). Refreshed from Sankhya hourly.',
+    explicaPedidoPendente: 'Sales orders of the year flagged PENDING in Sankhya, one per order, by Sankhya's Net Offer Value (invoice value − all invoice taxes). Excludes gifts, rework and stock. Pending orders from previous years are left out of the value and appear in the full backlog (Excel). Refreshed from Sankhya hourly.',
     pedidosPendentes: 'pending orders', deAnosAnteriores: 'from previous years',
     fatTitulo: 'Where 2026 revenue comes from', fatTotal: 'Total revenue for the year',
     fatCliqueFatia: 'click a slice to see the BRs', fatTodos: 'show all {n}', fatMenos: 'show less',
@@ -5747,7 +5747,7 @@ IMPORTANTE: Responda SOMENTE com base nos dados acima. Se a pergunta pede algo q
     estiloCab(res); ['C', 'D'].forEach(c => { res.getColumn(c).numFmt = '#,##0.00'; });
     const como = wb.addWorksheet('Como ler');
     [['Pedidos de venda (TIPMOV P) com PENDENTE = Sim no Sankhya, um por pedido. Fora brinde (3105/3108), retrabalho (3104) e estoque (3109).'],
-     ['Net Offer Value = (soma dos itens − descontos − ICMS do pedido) × (1 − 9,25% de PIS/COFINS, sem ICMS na base).'],
+     ['Net Offer Value = campo do Sankhya (TGFCAB.AD_NETOFFERVALUE): valor da nota − soma de todos os impostos da nota. Pedido sem imposto nenhum entra pelo valor da nota (no Sankhya o campo fica em branco).'],
      ['O card da Diretoria soma só os pedidos do ano; os de anos anteriores que continuam pendentes no Sankhya estão aqui para conferir (em geral, pedido que precisa ser encerrado).'],
      ['Retrato do Sankhya atualizado de hora em hora.']].forEach(l => como.addRow(l));
     como.getColumn(1).width = 140;
