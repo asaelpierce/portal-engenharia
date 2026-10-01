@@ -312,6 +312,8 @@ export default function PortalEngenharia() {
             ve_produtividade_completa: data.ve_produtividade_completa,
             ve_almoxarifado_completo: data.ve_almoxarifado_completo,
             ve_almoxarifado_apenas_fila: data.ve_almoxarifado_apenas_fila,
+            // pode dar entrada, movimentar e gerar QR no Fluxo de Materiais (gestor sempre pode)
+            movimentaEstoque: data.movimenta_estoque === true || data.papel === 'gestor',
             // Vinculo com o vendedor do Sankhya: quando preenchido e a pessoa
             // nao tem permissao de ver todos, as telas comerciais mostram so
             // as vendas dela.
@@ -9441,6 +9443,7 @@ function AlmoxQR({ modo, currentUser, codigoInicial }) {
 const almoxChaveItem = (op, cod, desc) => `${op}|${cod || desc || ''}`;
 
 function AlmoxMovimentar({ currentUser, codigoInicial }) {
+  const pode = currentUser?.movimentaEstoque === true;   // sem permissão: só consulta
   const [ops, setOps] = useState([]);
   const [buscaOp, setBuscaOp] = useState('');
   const [opsFora, setOpsFora] = useState([]);
@@ -9591,6 +9594,7 @@ function AlmoxMovimentar({ currentUser, codigoInicial }) {
         <button onClick={() => setVerLeitor(v => !v)} style={botao(verLeitor)}>📷 {verLeitor ? 'Fechar leitor' : 'Ler QR (tablet)'}</button>
         <button onClick={() => setVerCfg(v => !v)} style={botao(verCfg)}>⚙ Etiqueta</button>
         <span style={{ fontSize: 12, color: T.inkFaint }}>Escolha a OP, marque os itens e use as ações da linha. Tudo passa primeiro pelo Ponto de Estoque.</span>
+        {!pode && <span style={{ fontSize: 12, fontWeight: 700, color: T.amberText, background: T.amberSoft, borderRadius: 6, padding: '4px 10px' }}>Seu usuário só consulta — para movimentar, peça a permissão ao gestor.</span>}
       </div>
 
       {verLeitor && (
@@ -9675,7 +9679,7 @@ function AlmoxMovimentar({ currentUser, codigoInicial }) {
             {selec.length > 0 && (
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', padding: '8px 10px', borderRadius: 8, background: T.panelAlt, marginBottom: 10 }}>
                 <span style={{ fontSize: 12.5, fontWeight: 700 }}>{selec.length} marcado(s):</span>
-                {selSemEntrada.length > 0 && <button disabled={ocupado} onClick={() => darEntrada(selSemEntrada.map(l => l.m))} style={botao(true, T.olive)}>Dar entrada e imprimir {selSemEntrada.length} QR</button>}
+                {pode && selSemEntrada.length > 0 && <button disabled={ocupado} onClick={() => darEntrada(selSemEntrada.map(l => l.m))} style={botao(true, T.olive)}>Dar entrada e imprimir {selSemEntrada.length} QR</button>}
                 {selComEtiqueta.length > 0 && <button onClick={() => almoxImprimirEtiquetas(selComEtiqueta.map(l => l.vol), cfgEt)} style={botao(false)}>Reimprimir {selComEtiqueta.length} QR</button>}
                 <button onClick={() => almoxBaixarCsvBarTender(selComEtiqueta.map(l => l.vol))} disabled={!selComEtiqueta.length} style={{ ...botao(false), opacity: selComEtiqueta.length ? 1 : 0.5 }}>Arquivo p/ BarTender</button>
                 <button onClick={() => setMarc({})} style={botao(false)}>Desmarcar</button>
@@ -9727,8 +9731,8 @@ function AlmoxMovimentar({ currentUser, codigoInicial }) {
                           <td style={{ padding: '8px 10px', borderBottom: `1px solid ${T.lineSoft}`, verticalAlign: 'top', whiteSpace: 'nowrap', fontWeight: 700 }}>{l.vol?.codigo || '—'}</td>
                           <td style={{ padding: '8px 10px', borderBottom: `1px solid ${T.lineSoft}`, verticalAlign: 'top' }}>
                             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                              {!l.vol && <button disabled={ocupado} onClick={() => darEntrada([l.m])} style={botao(true, T.olive)} title="registra a chegada no Ponto de Estoque e imprime o QR">Dar entrada + QR</button>}
-                              {ativo && <button onClick={() => setMovVol({ vol: l.vol, destino: pedSetorDest || l.vol.setor_destino })} style={botao(true)}>Movimentar</button>}
+                              {pode && !l.vol && <button disabled={ocupado} onClick={() => darEntrada([l.m])} style={botao(true, T.olive)} title="registra a chegada no Ponto de Estoque e imprime o QR">Dar entrada + QR</button>}
+                              {pode && ativo && <button onClick={() => setMovVol({ vol: l.vol, destino: pedSetorDest || l.vol.setor_destino })} style={botao(true)}>Movimentar</button>}
                               {l.vol && <button onClick={() => almoxImprimirEtiquetas([l.vol], cfgEt)} style={botao(false)}>QR</button>}
                               {(!l.vol || ativo) && <button onClick={() => { setPedindo(p => p === l.k ? null : l.k); setPedSetor(''); setPedQtd(''); }} style={botao(pedindo === l.k)}>Pedir</button>}
                             </div>
@@ -31877,7 +31881,13 @@ function PermissoesManager() {
 
               <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5 }}>
                 <input type="checkbox" checked={!!usuario.ve_almoxarifado_apenas_fila} disabled={salvando} onChange={toggleApenasFilaAtendimento} />
-                Em Fluxo de Materiais, vê só a Fila de Atendimento (nada mais) — pros colaboradores que atendem os pedidos
+                Em Fluxo de Materiais, vê só a tela Movimentar (nada mais) — pros colaboradores do setor de materiais
+              </label>
+
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5 }}>
+                <input type="checkbox" checked={usuario.papel === 'gestor' || !!usuario.movimenta_estoque} disabled={salvando || usuario.papel === 'gestor'}
+                  onChange={async () => { setSalvando(true); await supabase.from('colaboradores').update({ movimenta_estoque: !usuario.movimenta_estoque }).eq('id', usuario.id); await carregar(); setSalvando(false); }} />
+                Pode movimentar materiais (dar entrada, gerar QR e movimentar pelo QR){usuario.papel === 'gestor' ? ' — gestor sempre pode' : ''}. Sem isso, o QR é só consulta.
               </label>
 
               {/* Vinculo com o vendedor do Sankhya. Sem isso, as telas
