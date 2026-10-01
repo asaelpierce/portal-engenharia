@@ -31470,6 +31470,9 @@ function ConferenciaConhecimentoPedido({ currentUser }) {
   );
 }
 
+// Vendedores que aparecem na tela Criar BR: Aline (28), Dener (33), Givaldo (2), Givanildo (23),
+// Hygor (20), Kalbras (4), Kalbras Norte (29), Ricardo Souza (6), William Schreck (8)
+const VENDEDORES_CRIAR_BR = [28, 33, 2, 23, 20, 4, 29, 6, 8];
 function CriarBRForm({ currentUser }) {
   const [sugestao, setSugestao] = useState(null);   // { codproj, identificacao }
   const [carregandoSug, setCarregandoSug] = useState(true);
@@ -31543,7 +31546,8 @@ function CriarBRForm({ currentUser }) {
   useEffect(() => {
     carregarSugestao();
     carregarHistorico();
-    chamar({ acao: 'listar_vendedores' }).then(r => { if (r.ok) setVendedores(r.itens || []); });
+    // só os vendedores do comercial (Asael, 01/10/2026), pelo código do Sankhya (TGFVEN.CODVEND)
+    chamar({ acao: 'listar_vendedores' }).then(r => { if (r.ok) setVendedores((r.itens || []).filter(v => VENDEDORES_CRIAR_BR.includes(Number(v.cod)))); });
   }, [carregarSugestao, carregarHistorico]);
 
   // Sugere já a partir de 1 caractere -- o padrão da casa é digitar o código
