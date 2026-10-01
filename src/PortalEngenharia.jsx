@@ -3971,6 +3971,8 @@ const TXT = {
     explicaPrevNova: 'Valor cheio das propostas que devem fechar com expectativa até dezembro. Em cada estágio fecham propostas × chance, escolhidas pela nota de relacionamento do cliente.',
     explicaVendidoKdb: 'Net value dos pedidos lançados no Painel KdB no ano, conferido à mão. Conta pela data do pedido — inclui pedido de proposta de ano anterior.',
     explicaPedidoKdb: 'BRs com pedido de venda e ainda sem nota. Valor do pedido no Painel KdB (net value); sem lançamento no KdB, o da proposta. Brinde, retrabalho e estoque não contam.',
+    explicaPedidoPendente: 'Pedidos de venda do ano que o Sankhya marca como PENDENTE, um por pedido, pelo Net Offer Value = (itens − ICMS) × (1 − 9,25% de PIS/COFINS). Fora brinde, retrabalho e estoque. Pedidos pendentes de anos anteriores ficam de fora do valor e aparecem na Carteira completa (Excel). Atualizado do Sankhya de hora em hora.',
+    pedidosPendentes: 'pedidos pendentes', deAnosAnteriores: 'de anos anteriores',
     fatTitulo: 'De onde vem o faturamento de 2026', fatTotal: 'Faturamento total do ano',
     fatCliqueFatia: 'clique numa fatia para ver os BRs', fatTodos: 'ver todos os {n}', fatMenos: 'ver menos',
     fatPorTipo: 'Por tipo de venda', fatSpot: 'Spot', fatContrato: 'Contrato', fatVale: 'Vale Contrato', fatSemTipo: 'Sem tipo no KdB (em geral, pedido de 2025)',
@@ -4182,6 +4184,8 @@ const TXT = {
     explicaPrevNova: 'Full value of the proposals expected to close by December, picked by customer relationship score.',
     explicaVendidoKdb: 'Net value of orders booked in the KdB panel this year, manually checked. Counted by order date.',
     explicaPedidoKdb: 'Projects with a sales order and no invoice yet. Order net value from the KdB panel; without it, the proposal value.',
+    explicaPedidoPendente: 'Sales orders of the year flagged PENDING in Sankhya, one per order, by Net Offer Value = (items − ICMS) × (1 − 9.25% PIS/COFINS). Excludes gifts, rework and stock. Pending orders from previous years are left out of the value and appear in the full backlog (Excel). Refreshed from Sankhya hourly.',
+    pedidosPendentes: 'pending orders', deAnosAnteriores: 'from previous years',
     fatTitulo: 'Where 2026 revenue comes from', fatTotal: 'Total revenue for the year',
     fatCliqueFatia: 'click a slice to see the BRs', fatTodos: 'show all {n}', fatMenos: 'show less',
     fatPorTipo: 'By sale type', fatSpot: 'Spot', fatContrato: 'Contract', fatVale: 'Vale Contract', fatSemTipo: 'No type in KdB (mostly 2025 orders)',
@@ -4862,6 +4866,10 @@ function PainelDiretoria() {
   // card "De onde vem o faturamento": tipo de cada BR (KdB) e a fatia clicada
   const [brTipo, setBrTipo] = useState({});
   const [fatSel, setFatSel] = useState(null);
+  // Pedido em carteira (regra do Asael, 01/10/2026): pedidos de venda PENDENTES no Sankhya,
+  // um por pedido, pelo Net Offer Value = (itens − ICMS) × (1 − 9,25%) -- comercial_pedido_pendente
+  const [pendentes, setPendentes] = useState([]);
+  useEffect(() => { supabase.from('comercial_pedido_pendente').select('*').order('dtmov', { ascending: false }).then(r => setPendentes(r.data || [])); }, []);
   const [fatTodos, setFatTodos] = useState(false);
   useEffect(() => {
     supabase.from('v_comercial_br_tipo').select('*').then(r => {
@@ -5708,42 +5716,42 @@ IMPORTANTE: Responda SOMENTE com base nos dados acima. Se a pergunta pede algo q
     await salvarXlsx(wb, `${String(det.titulo || 'lista').replace(/[^\wÀ-ú -]/g, '').trim().replace(/\s+/g, '_')}_${new Date().toISOString().slice(0, 10)}.xlsx`);
   };
   const baixarCarteiraCompleta = async () => {
-    let rows = [];
-    for (let i = 0; ; i += 1000) {
-      const { data, error } = await supabase.from('v_comercial_carteira').select('*').neq('situacao_carteira', 'faturado').order('data_pedido').range(i, i + 999);
-      if (error) { alert('Não deu para gerar: ' + error.message); return; }
-      rows = rows.concat(data || []); if (!data || data.length < 1000) break;
-    }
+    const { data, error } = await supabase.from('comercial_pedido_pendente').select('*').order('dtmov', { ascending: false });
+    if (error) { alert('Não deu para gerar: ' + error.message); return; }
+    const rows = data || [];
     const { default: ExcelJS } = await import('exceljs');
     const wb = new ExcelJS.Workbook();
-    const ws = wb.addWorksheet('Carteira', { views: [{ state: 'frozen', xSplit: 2, ySplit: 1 }] });
+    const ws = wb.addWorksheet('Pedidos pendentes', { views: [{ state: 'frozen', xSplit: 3, ySplit: 1 }] });
     ws.columns = [
-      ['BR', 'br', 12], ['Cliente', 'cliente', 32], ['Vendedor', 'vendedor', 18], ['Ano do BR', 'ano_br', 8], ['Situação', 'situacao_carteira', 16],
-      ['No card da Diretoria', 'no_card', 10], ['Data do pedido', 'data_pedido', 12], ['Dias em carteira', 'dias_em_carteira', 10], ['Nº pedido(s)', 'nunotas', 14],
-      ['Itens', 'itens', 7], ['Itens pendentes', 'itens_pendentes', 9], ['Próxima entrega prevista', 'proxima_entrega_prevista', 12],
-      ['Pedido bruto', 'pedido_bruto', 14], ['Pedido líquido', 'pedido_liquido', 14], ['Faturado (notas)', 'faturado', 14], ['Notas', 'notas', 7], ['Última nota', 'ultima_nota', 12],
-      ['Saldo pelo faturado', 'saldo_faturado_bruto', 14], ['Saldo pela entrega', 'saldo_entrega_bruto', 14], ['KdB net value', 'kdb_net_value', 14],
-      ['Tipo (KdB)', 'tipo', 10], ['Vale', 'vale', 7], ['Projeto estoque', 'estoque', 9],
+      ['BR', 'br', 12], ['Nº nota', 'numnota', 9], ['Cliente', 'cliente', 32], ['Vendedor', 'vendedor', 16], ['Usuário inclusão', 'usuario_inclusao', 14],
+      ['TOP', 'codtipoper', 7], ['Tipo de operação', 'descr_top', 30], ['Status', 'status', 12], ['Ano', 'ano', 7],
+      ['Dt. do movimento', 'dtmov', 12], ['Dt. negociação', 'dtneg', 12], ['Faturamento previsto', 'dt_faturamento_prevista', 12], ['Entrega prevista', 'dt_entrega_prevista', 12],
+      ['Dias pendente', 'dias', 9], ['Vlr. nota', 'vlr_nota', 13], ['Vlr. itens', 'vlr_itens', 13], ['ICMS', 'vlr_icms', 11], ['IPI', 'vlr_ipi', 11],
+      ['Net Offer Value', 'net_offer_value', 14], ['Nº único (NUNOTA)', 'nunota', 11],
     ].map(([header, key, width]) => ({ header, key, width }));
     const dt = (x) => x ? new Date(`${String(x).slice(0, 10)}T12:00:00`) : null;
-    const nb = (x) => x != null ? Number(x) : null;
-    rows.forEach(r => ws.addRow({ ...r, no_card: r.no_card_diretoria ? 'Sim' : 'Não', vale: r.eh_vale ? 'Sim' : 'Não', estoque: r.eh_estoque ? 'Sim' : 'Não',
-      data_pedido: dt(r.data_pedido), proxima_entrega_prevista: dt(r.proxima_entrega_prevista), ultima_nota: dt(r.ultima_nota),
-      pedido_bruto: nb(r.pedido_bruto), pedido_liquido: nb(r.pedido_liquido), faturado: nb(r.faturado), saldo_faturado_bruto: nb(r.saldo_faturado_bruto),
-      saldo_entrega_bruto: nb(r.saldo_entrega_bruto), kdb_net_value: nb(r.kdb_net_value) }));
+    const hoje = new Date();
+    rows.forEach(r => ws.addRow({ ...r, status: r.statusnota === 'L' ? 'Liberada' : r.statusnota === 'P' ? 'Pendente (sem confirmação)' : r.statusnota,
+      ano: Number(String(r.dtmov || '').slice(0, 4)) || null, dtmov: dt(r.dtmov), dtneg: dt(r.dtneg), dt_faturamento_prevista: dt(r.dt_faturamento_prevista),
+      dt_entrega_prevista: dt(r.dt_entrega_prevista), dias: r.dtmov ? Math.round((hoje - new Date(`${String(r.dtmov).slice(0, 10)}T12:00:00`)) / 86400000) : null,
+      vlr_nota: Number(r.vlr_nota) || 0, vlr_itens: Number(r.vlr_itens) || 0, vlr_icms: Number(r.vlr_icms) || 0, vlr_ipi: Number(r.vlr_ipi) || 0, net_offer_value: Number(r.net_offer_value) || 0 }));
     estiloCab(ws);
-    ['G', 'L', 'Q'].forEach(c => { ws.getColumn(c).numFmt = 'dd/mm/yyyy'; });
-    ['M', 'N', 'O', 'R', 'S', 'T'].forEach(c => { ws.getColumn(c).numFmt = '#,##0'; });
-    ws.autoFilter = { from: 'A1', to: `W${rows.length + 1}` };
+    ['J', 'K', 'L', 'M'].forEach(c => { ws.getColumn(c).numFmt = 'dd/mm/yyyy'; });
+    ['O', 'P', 'Q', 'R', 'S'].forEach(c => { ws.getColumn(c).numFmt = '#,##0.00'; });
+    ws.autoFilter = { from: 'A1', to: `T${rows.length + 1}` };
+    const res = wb.addWorksheet('Resumo por ano');
+    res.columns = [{ header: 'Ano do pedido', key: 'a', width: 14 }, { header: 'Pedidos', key: 'n', width: 10 }, { header: 'Net Offer Value', key: 'v', width: 18 }, { header: 'Vlr. nota', key: 'b', width: 18 }];
+    const porAno = {};
+    rows.forEach(r => { const a = String(r.dtmov || '').slice(0, 4) || '—'; porAno[a] = porAno[a] || { a, n: 0, v: 0, b: 0 }; porAno[a].n += 1; porAno[a].v += Number(r.net_offer_value) || 0; porAno[a].b += Number(r.vlr_nota) || 0; });
+    Object.values(porAno).sort((x, y) => String(y.a).localeCompare(String(x.a))).forEach(x => res.addRow(x));
+    estiloCab(res); ['C', 'D'].forEach(c => { res.getColumn(c).numFmt = '#,##0.00'; });
     const como = wb.addWorksheet('Como ler');
-    [['Carteira completa: todo BR com pedido de venda (TOPs de venda; fora brinde, retrabalho e estoque) que ainda tem saldo a faturar, de qualquer ano.'],
-     ['Situação: "sem nota" = nenhuma nota de venda no BR; "faturado em parte" = notas somam menos de 95% do pedido.'],
-     ['Saldo pelo faturado = pedido bruto − notas de venda do BR. Saldo pela entrega = itens × (qtd − qtd entregue no Sankhya) ÷ qtd.'],
-     ['No card da Diretoria = o BR aparece no card "Pedido em carteira" (que só olha propostas do ano e sai na primeira nota).'],
-     ['Pedidos antigos sem nota ou com saldo há mais de 1 ano costumam ser pedido cancelado não encerrado no Sankhya, ou nota lançada em outro BR.']]
-      .forEach(l => como.addRow(l));
+    [['Pedidos de venda (TIPMOV P) com PENDENTE = Sim no Sankhya, um por pedido. Fora brinde (3105/3108), retrabalho (3104) e estoque (3109).'],
+     ['Net Offer Value = (soma dos itens − descontos − ICMS do pedido) × (1 − 9,25% de PIS/COFINS, sem ICMS na base).'],
+     ['O card da Diretoria soma só os pedidos do ano; os de anos anteriores que continuam pendentes no Sankhya estão aqui para conferir (em geral, pedido que precisa ser encerrado).'],
+     ['Retrato do Sankhya atualizado de hora em hora.']].forEach(l => como.addRow(l));
     como.getColumn(1).width = 140;
-    await salvarXlsx(wb, `carteira_completa_${new Date().toISOString().slice(0, 10)}.xlsx`);
+    await salvarXlsx(wb, `pedidos_pendentes_${new Date().toISOString().slice(0, 10)}.xlsx`);
   };
   const gavetaConteudo = detalhe && (
     <div className="g-drawer" style={{ background: T.panel, border: `1px solid ${T.terracotta}`,
@@ -5762,8 +5770,8 @@ IMPORTANTE: Responda SOMENTE com base nos dados acima. Se a pergunta pede algo q
               style={{ fontFamily: 'inherit', fontSize: 11.5, fontWeight: 600, padding: '4px 10px', borderRadius: 5, cursor: 'pointer', border: `1px solid ${T.line}`, background: 'transparent', color: T.inkDim }}>⬇ Excel</button>
           )}
           {detalhe.chave === 'card:ped' && (
-            <button onClick={baixarCarteiraCompleta} title="todos os BRs com pedido de venda e saldo a faturar, de qualquer ano, inclusive os faturados em parte"
-              style={{ fontFamily: 'inherit', fontSize: 11.5, fontWeight: 700, padding: '4px 10px', borderRadius: 5, cursor: 'pointer', border: `1px solid ${T.terracotta}`, background: 'transparent', color: T.terracotta }}>⬇ Carteira completa (Excel)</button>
+            <button onClick={baixarCarteiraCompleta} title="todos os pedidos pendentes no Sankhya, de qualquer ano, com o Net Offer Value"
+              style={{ fontFamily: 'inherit', fontSize: 11.5, fontWeight: 700, padding: '4px 10px', borderRadius: 5, cursor: 'pointer', border: `1px solid ${T.terracotta}`, background: 'transparent', color: T.terracotta }}>⬇ Pendentes de todos os anos (Excel)</button>
           )}
           <button onClick={() => setDetalhe(null)}
             style={{ fontFamily: 'inherit', fontSize: 15, lineHeight: 1, padding: '3px 8px', borderRadius: 5,
@@ -6110,8 +6118,20 @@ IMPORTANTE: Responda SOMENTE com base nos dados acima. Se a pergunta pede algo q
             const vk = vendaKdb.find(x => Number(x.ano) === new Date().getFullYear());
             return vk ? [{ t: t.vendidoKdb, bruto: Number(vk.vendido) || 0, n: `${vk.entradas} ${t.entradasKdb}`, p: G.roxo, ajuda: t.explicaVendidoKdb }] : [];
           })(),
-          { t: t.pedido, bruto: soma(pedidos), n: `${pedidos.length} ${t.brs}`, p: G.azul, ajuda: t.explicaPedidoKdb,
-            lista: ['card:ped', t.explicaPedidoKdb, pedidos] },
+          (() => {
+            const anoAt = new Date().getFullYear();
+            const comoLinha = (x) => ({ br: x.br, cliente: x.cliente, vendedor: x.vendedor, valor: Number(x.net_offer_value) || 0,
+              situacao: 'pedido pendente', estagio: x.statusnota === 'P' ? 'Pedido sem confirmação' : 'Pedido em carteira',
+              competencia: String(x.dtmov || '').slice(0, 7), pedido_nunota: x.nunota, nota: x.numnota, top: `${x.codtipoper} ${x.descr_top || ''}`.trim(),
+              data_pedido: x.dtmov, faturamento_previsto: x.dt_faturamento_prevista, entrega_prevista: x.dt_entrega_prevista,
+              valor_nota: Number(x.vlr_nota) || 0, icms: Number(x.vlr_icms) || 0, ipi: Number(x.vlr_ipi) || 0 });
+            const doAno = pendentes.filter(x => Number(String(x.dtmov || '').slice(0, 4)) >= anoAt).map(comoLinha);
+            const antigos = pendentes.filter(x => Number(String(x.dtmov || '').slice(0, 4)) < anoAt);
+            const totAnt = antigos.reduce((a, x) => a + (Number(x.net_offer_value) || 0), 0);
+            return { t: t.pedido, bruto: pendentes.length ? soma(doAno) : soma(pedidos),
+              n: pendentes.length ? `${doAno.length} ${t.pedidosPendentes}${antigos.length ? ` · +${antigos.length} ${t.deAnosAnteriores} (${val(totAnt)})` : ''}` : `${pedidos.length} ${t.brs}`,
+              p: G.azul, ajuda: t.explicaPedidoPendente, lista: ['card:ped', t.explicaPedidoPendente, pendentes.length ? doAno : pedidos] };
+          })(),
           { t: t.faturado, bruto: receitaFat, n: `${faturados.length} ${t.brs}`, p: G.verde, ajuda: t.explicaFaturado },
           { t: t.diasAtePedido, txt: pzSpot ? `${pzSpot.media} ${t.dias}` : (diasPedido == null ? '—' : `${diasPedido} ${t.dias}`),
             n: pzSpot ? `${t.spotMedia} · ${t.contratoAbrev} ${pzContr ? `${pzContr.media} ${t.dias}` : '—'} · ${t.semVale}` : t.medio, p: G.ciano,
