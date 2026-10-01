@@ -30935,6 +30935,43 @@ function ConferenciaConhecimentoPedido({ currentUser }) {
   }, []);
   useEffect(() => { carregar(); }, [carregar]);
 
+  // relatório Excel do ciclo por BR (v_comercial_ciclo_br): criação do BR, 1ª proposta (a mais
+  // antiga das revisões), conhecimento de pedido, pedido de venda e os prazos entre eles
+  const baixarCicloBr = async () => {
+    let rows = [];
+    for (let i = 0; ; i += 1000) {
+      const { data, error } = await supabase.from('v_comercial_ciclo_br').select('*').order('br').range(i, i + 999);
+      if (error) { alert('Não deu para gerar: ' + error.message); return; }
+      rows = rows.concat(data || []); if (!data || data.length < 1000) break;
+    }
+    const { default: ExcelJS } = await import('exceljs');
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('Ciclo por BR', { views: [{ state: 'frozen', xSplit: 2, ySplit: 1 }] });
+    ws.columns = [
+      ['BR', 'br', 12], ['Cliente', 'cliente', 30], ['Vendedor', 'vendedor', 18], ['Tipo (KdB)', 'tipo', 11], ['Vale', 'vale', 7], ['Projeto estoque', 'estoque', 9],
+      ['BR criado', 'data_criacao_br', 12], ['Fonte da criação', 'fonte_criacao', 22], ['1ª proposta', 'data_primeira_proposta', 12], ['Revisões', 'revisoes', 9],
+      ['Conhecimento de pedido', 'data_conhecimento_pedido', 13], ['Fonte do CP', 'fonte_cp', 18], ['Pedido de venda', 'data_pedido_venda', 12],
+      ['Valor 1ª proposta', 'valor_primeira_proposta', 14], ['Valor última proposta', 'valor_ultima_proposta', 14], ['Pedido líquido', 'valor_pedido_liquido', 14],
+      ['BR → 1ª proposta (dias)', 'dias_br_ate_proposta', 12], ['1ª proposta → CP (dias)', 'dias_proposta_ate_cp', 12],
+      ['1ª proposta → pedido (dias)', 'dias_proposta_ate_pedido', 12], ['BR → pedido (dias)', 'dias_br_ate_pedido', 12],
+    ].map(([header, key, width]) => ({ header, key, width }));
+    const dt = (x) => x ? new Date(`${String(x).slice(0, 10)}T12:00:00`) : null;
+    rows.forEach(r => ws.addRow({ ...r, vale: r.eh_vale ? 'Sim' : 'Não', estoque: r.eh_estoque ? 'Sim' : 'Não',
+      data_criacao_br: dt(r.data_criacao_br), data_primeira_proposta: dt(r.data_primeira_proposta), data_conhecimento_pedido: dt(r.data_conhecimento_pedido), data_pedido_venda: dt(r.data_pedido_venda),
+      valor_primeira_proposta: r.valor_primeira_proposta != null ? Number(r.valor_primeira_proposta) : null, valor_ultima_proposta: r.valor_ultima_proposta != null ? Number(r.valor_ultima_proposta) : null,
+      valor_pedido_liquido: r.valor_pedido_liquido != null ? Number(r.valor_pedido_liquido) : null }));
+    ws.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    ws.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F4E79' } };
+    ws.getRow(1).alignment = { wrapText: true, vertical: 'middle' };
+    ['G', 'I', 'K', 'M'].forEach(c => { ws.getColumn(c).numFmt = 'dd/mm/yyyy'; });
+    ['N', 'O', 'P'].forEach(c => { ws.getColumn(c).numFmt = '#,##0'; });
+    ws.autoFilter = { from: 'A1', to: `T${rows.length + 1}` };
+    const buf = await wb.xlsx.writeBuffer();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+    a.download = `ciclo_por_br_${new Date().toISOString().slice(0, 10)}.xlsx`; document.body.appendChild(a); a.click(); a.remove();
+  };
+
   const salvarBR = async (id) => {
     const br = (editando[id] || '').trim().toUpperCase();
     if (br && !/^BR\d{4,6}\/\d{2}$/.test(br)) { alert('Use o formato BR00000/00.'); return; }
@@ -30988,6 +31025,7 @@ function ConferenciaConhecimentoPedido({ currentUser }) {
     <Panel title="Conferência do conhecimento de pedido"
       subtitle="Quando pediram a abertura do conhecimento, quando foi feita a proposta e quando entrou o pedido de venda no Sankhya. Valores líquidos, os dois do sistema."
       right={<div style={{ display: 'flex', gap: 8 }}>
+        <button onClick={baixarCicloBr} style={{ ...ghostBtn(T.inkDim), cursor: 'pointer' }} title="todos os BRs desde 2025: criação, 1ª proposta, conhecimento de pedido, pedido de venda e prazos">Ciclo por BR (Excel)</button>
         <button onClick={() => setVerComo(v => !v)} style={{ ...ghostBtn(T.inkDim), cursor: 'pointer' }}>{verComo ? 'Fechar' : 'Como o fluxo envia'}</button>
         <button onClick={carregar} style={{ ...ghostBtn(T.inkDim), cursor: 'pointer' }}>Atualizar</button>
       </div>}>
