@@ -4403,6 +4403,58 @@ function Contador({ valor, formata }) {
 }
 
 // Rosca: fatias com furo no meio e o total no centro.
+// Resumo da carteira igual à aba "Resumo" da planilha "Cabeçalho da Nota" do Asael:
+// data de corte (pedidos até), coluna de data = Dt. do Movimento, quadro Até/Após o corte/Total
+// (qtd de pedidos, Net Offer Value, Vlr. Nota) e a tabela mês a mês.
+const corteCarteiraPadrao = () => { const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - 3); const f = new Date(d.getFullYear(), d.getMonth() + 1, 0); return f.toISOString().slice(0, 10); };
+const resumoCarteira = (linhas, corte) => {
+  const dia = (l) => String(l.data_pedido || '').slice(0, 10);
+  const grp = (arr) => ({ n: arr.length, net: arr.reduce((a, l) => a + (Number(l.valor) || 0), 0), nota: arr.reduce((a, l) => a + (Number(l.valor_nota) || 0), 0) });
+  const ate = linhas.filter(l => dia(l) && dia(l) <= corte), apos = linhas.filter(l => dia(l) > corte);
+  const meses = [...new Set(linhas.map(l => dia(l).slice(0, 7)).filter(Boolean))].sort();
+  return { ate: grp(ate), apos: grp(apos), tot: grp(linhas), meses: meses.map(m => ({ m, ...grp(linhas.filter(l => dia(l).startsWith(m))) })) };
+};
+function ResumoCarteira({ linhas, val, corte, setCorte }) {
+  const r = resumoCarteira(linhas, corte);
+  const th = (dir) => ({ padding: '5px 9px', fontSize: 10.5, fontWeight: 700, color: '#fff', background: '#1F4E79', textAlign: dir ? 'right' : 'left', whiteSpace: 'nowrap' });
+  const td = (dir, forte) => ({ padding: '5px 9px', fontSize: 12, textAlign: dir ? 'right' : 'left', borderBottom: `1px solid ${T.lineSoft}`, fontWeight: forte ? 700 : 400, fontVariantNumeric: 'tabular-nums' });
+  const rotM = (m) => { const [a, mm] = m.split('-'); return `${['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'][Number(mm) - 1]}/${a}`; };
+  const linha = (rot, k, fmt) => (
+    <tr><td style={td(false, true)}>{rot}</td><td style={td(true)}>{fmt(r.ate[k])}</td><td style={td(true)}>{fmt(r.apos[k])}</td><td style={td(true, true)}>{fmt(r.tot[k])}</td></tr>
+  );
+  return (
+    <div style={{ marginBottom: 12, border: `1px solid ${T.line}`, borderRadius: 8, padding: 12, background: T.panel }}>
+      <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 8 }}>Resumo dos pedidos – até a data de corte</div>
+      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'center', fontSize: 12, marginBottom: 10 }}>
+        <label>Data de corte (pedidos até) <input type="date" value={corte} onChange={e => e.target.value && setCorte(e.target.value)} style={{ ...inputStyle(), width: 150, padding: '4px 8px', marginLeft: 6 }} /></label>
+        <span style={{ color: T.inkDim }}>Coluna de data usada: <strong>Dt. do Movimento</strong></span>
+      </div>
+      <div style={{ display: 'grid', gap: 14, gridTemplateColumns: 'repeat(auto-fit, minmax(330px, 1fr))', alignItems: 'start' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead><tr><th style={th()}>Indicador</th><th style={th(1)}>Até o corte</th><th style={th(1)}>Após o corte</th><th style={th(1)}>Total</th></tr></thead>
+          <tbody>
+            {linha('Qtd. de pedidos', 'n', (v) => v)}
+            {linha('Net Offer Value', 'net', val)}
+            {linha('Vlr. Nota', 'nota', val)}
+          </tbody>
+        </table>
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead><tr><th style={th()}>Mês (Dt. do Movimento)</th><th style={th(1)}>Qtd. pedidos</th><th style={th(1)}>Net Offer Value</th><th style={th(1)}>Vlr. Nota</th></tr></thead>
+          <tbody>
+            {r.meses.map(x => (
+              <tr key={x.m} style={{ background: x.m <= corte.slice(0, 7) ? T.amberSoft : 'transparent' }}>
+                <td style={td()}>{rotM(x.m)}</td><td style={td(true)}>{x.n}</td><td style={td(true)}>{val(x.net)}</td><td style={td(true)}>{val(x.nota)}</td>
+              </tr>
+            ))}
+            <tr><td style={td(false, true)}>Total</td><td style={td(true, true)}>{r.tot.n}</td><td style={td(true, true)}>{val(r.tot.net)}</td><td style={td(true, true)}>{val(r.tot.nota)}</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 6 }}>Em amarelo, os meses até a data de corte (pedidos mais antigos ainda pendentes).</div>
+    </div>
+  );
+}
+
 function Rosca({ dados, tamanho = 200, espessura = 32, centro, subcentro, aoClicar, ativo }) {
   const total = dados.reduce((s, d) => s + d.v, 0) || 1;
   const r = (tamanho - espessura - 10) / 2;
@@ -4869,6 +4921,7 @@ function PainelDiretoria() {
   // Pedido em carteira (regra do Asael, 01/10/2026): pedidos de venda PENDENTES no Sankhya,
   // um por pedido, pelo Net Offer Value = (itens − ICMS) × (1 − 9,25%) -- comercial_pedido_pendente
   const [pendentes, setPendentes] = useState([]);
+  const [corteCart, setCorteCart] = useState(corteCarteiraPadrao);
   useEffect(() => { supabase.from('comercial_pedido_pendente').select('*').order('dtmov', { ascending: false }).then(r => setPendentes(r.data || [])); }, []);
   const [fatTodos, setFatTodos] = useState(false);
   useEffect(() => {
@@ -5711,6 +5764,28 @@ IMPORTANTE: Responda SOMENTE com base nos dados acima. Se a pergunta pede algo q
     ws.columns = ord.map(k => ({ header: k, key: k, width: k === 'cliente' ? 32 : 14 }));
     det.linhas.forEach(l => ws.addRow(Object.fromEntries(ord.map(k => [k, l[k] != null && !isNaN(l[k]) && typeof l[k] !== 'boolean' && k !== 'br' ? Number(l[k]) : l[k]]))));
     estiloCab(ws); ws.autoFilter = { from: 'A1', to: { row: 1, column: ord.length } };
+    if (det.chave === 'card:ped' && det.linhas.some(l => l.data_pedido)) {
+      // aba Resumo igual à da planilha "Cabeçalho da Nota"
+      const r = resumoCarteira(det.linhas, corteCart);
+      const rs = wb.addWorksheet('Resumo');
+      rs.addRow(['Resumo dos pedidos – até a data de corte']).font = { bold: true, size: 13 };
+      rs.addRow([]);
+      rs.addRow(['Data de corte (pedidos até)', new Date(`${corteCart}T12:00:00`)]); rs.getCell('B3').numFmt = 'dd/mm/yyyy';
+      rs.addRow(['Coluna de data usada', 'Dt. do Movimento']);
+      rs.addRow([]);
+      const h1 = rs.addRow(['Indicador', 'Até o corte', 'Após o corte', 'Total']);
+      rs.addRow(['Qtd. de pedidos', r.ate.n, r.apos.n, r.tot.n]);
+      rs.addRow(['Net Offer Value', r.ate.net, r.apos.net, r.tot.net]);
+      rs.addRow(['Vlr. Nota', r.ate.nota, r.apos.nota, r.tot.nota]);
+      rs.addRow([]);
+      const h2 = rs.addRow(['Mês (Dt. do Movimento)', 'Qtd. pedidos', 'Net Offer Value', 'Vlr. Nota']);
+      r.meses.forEach(x => { const lr = rs.addRow([new Date(`${x.m}-01T12:00:00`), x.n, x.net, x.nota]); lr.getCell(1).numFmt = 'mmm/yyyy'; });
+      rs.addRow(['Total', r.tot.n, r.tot.net, r.tot.nota]).font = { bold: true };
+      [h1, h2].forEach(h => { h.font = { bold: true, color: { argb: 'FFFFFFFF' } }; h.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F4E79' } }; });
+      [8, 9].forEach(i => { ['B', 'C', 'D'].forEach(c => { rs.getCell(`${c}${i}`).numFmt = '#,##0.00'; }); });
+      for (let i = 12; i <= 12 + r.meses.length; i++) ['C', 'D'].forEach(c => { rs.getCell(`${c}${i}`).numFmt = '#,##0.00'; });
+      rs.getColumn(1).width = 30; ['B', 'C', 'D'].forEach(c => { rs.getColumn(c).width = 18; });
+    }
     const info = wb.addWorksheet('Regra');
     info.addRow([det.titulo]); info.addRow([det.regra]); info.addRow([`Linhas: ${det.linhas.length}`]); info.getColumn(1).width = 120;
     await salvarXlsx(wb, `${String(det.titulo || 'lista').replace(/[^\wÀ-ú -]/g, '').trim().replace(/\s+/g, '_')}_${new Date().toISOString().slice(0, 10)}.xlsx`);
@@ -5792,6 +5867,9 @@ IMPORTANTE: Responda SOMENTE com base nos dados acima. Se a pergunta pede algo q
           </strong>
         </span>
       </div>
+      {!detalhe.carregando && detalhe.chave === 'card:ped' && detalhe.linhas.some(l => l.data_pedido) && (
+        <ResumoCarteira linhas={detalhe.linhas} val={val} corte={corteCart} setCorte={setCorteCart} />
+      )}
       {/* ── RESUMO POR ESTÁGIO ── */}
       {!detalhe.carregando && (() => {
         const CORES_EST = { 'Avançado': G.verde, 'Alto': G.azul, 'Médio': G.ambar,
