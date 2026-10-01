@@ -359,6 +359,7 @@ function AlmoxQrPublico({ codigo, chave, nomeLogado }) {
   const [nome, setNome] = useState(() => { try { return localStorage.getItem('almox_meu_nome') || ''; } catch { return ''; } });
   const [para, setPara] = useState('');
   const [recebido, setRecebido] = useState('');
+  const [qtdEnt, setQtdEnt] = useState('');
   const [obs, setObs] = useState('');
   const [fotoMat, setFotoMat] = useState(null);
   const [fotoDoc, setFotoDoc] = useState(null);
@@ -400,7 +401,10 @@ function AlmoxQrPublico({ codigo, chave, nomeLogado }) {
     else {
       setDados(data);
       const v = data.volume;
-      setPara(v.setor_destino && v.setor_destino !== v.setor_atual ? v.setor_destino : '');
+      // ordem aberta para esta etiqueta: o destino e a quantidade da ordem já vêm marcados
+      const ord = (data.ordens || [])[0];
+      setPara(ord?.setor_destino && ord.setor_destino !== v.setor_atual ? ord.setor_destino : (v.setor_destino && v.setor_destino !== v.setor_atual ? v.setor_destino : ''));
+      setQtdEnt(String(ord?.quantidade_solicitada ?? v.quantidade ?? '').replace('.', ','));
     }
     setCarregando(false);
   }, [codigo, chave]);
@@ -422,7 +426,8 @@ function AlmoxQrPublico({ codigo, chave, nomeLogado }) {
       const cDoc = fotoDoc ? await almoxEnviarFoto(fotoDoc, pasta) : null;
       const { data, error } = await supabase.rpc('fn_almox_publico_registrar', {
         p_codigo: codigo, p_chave: chave, p_nome: perm.nome, p_para_setor: para, p_recebido_por: recebido.trim(),
-        p_foto_material: cMat, p_foto_documento: cDoc, p_observacao: obs.trim() || null });
+        p_foto_material: cMat, p_foto_documento: cDoc, p_observacao: obs.trim() || null,
+        p_quantidade: qtdEnt.trim() ? Number(qtdEnt.replace(',', '.')) : null });
       if (error || !data?.ok) throw new Error(error?.message || data?.erro || 'Não foi possível registrar.');
       setFeito({ para, recebido: recebido.trim(), hora: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) });
       setFotoMat(null); setFotoDoc(null); setObs(''); setRecebido('');
@@ -531,6 +536,17 @@ function AlmoxQrPublico({ codigo, chave, nomeLogado }) {
             <button onClick={async () => { await supabase.auth.signOut(); checarPerm(); }} style={{ fontSize: 14, padding: '8px 12px', borderRadius: 8, border: `1px solid ${T.line}`, background: T.panel, color: T.inkDim }}>Sair</button>
           </div>
 
+          {(dados.ordens || []).length > 0 && (
+            <div style={{ ...bloco, borderColor: T.terracotta, background: T.rustSoft }}>
+              <div style={titulo}>📋 Ordem para esta etiqueta</div>
+              {dados.ordens.map(o => (
+                <div key={o.id} style={{ fontSize: 16, marginTop: 4 }}>
+                  Levar para <strong>{o.setor_destino}</strong>{o.quantidade_solicitada != null ? <> · <strong>{String(o.quantidade_solicitada).replace('.', ',')}</strong>{v.unidade ? ` ${v.unidade}` : ''}</> : ''}
+                  <div style={{ fontSize: 13, color: T.inkDim }}>Pedido por {o.solicitado_por || '—'} · para {o.atribuido_a || 'a equipe'}{o.observacao ? ` · ${o.observacao}` : ''}</div>
+                </div>
+              ))}
+            </div>
+          )}
           <div style={bloco}>
             <div style={titulo}>1. Para onde vai</div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 8 }}>
@@ -542,6 +558,11 @@ function AlmoxQrPublico({ codigo, chave, nomeLogado }) {
               ))}
             </div>
             {v.setor_destino && <div style={{ fontSize: 13, color: T.inkFaint, marginTop: 6 }}>★ destino previsto na etiqueta</div>}
+          </div>
+
+          <div style={bloco}>
+            <div style={titulo}>Quantidade entregue{v.unidade ? ` (${v.unidade})` : ''}</div>
+            <input value={qtdEnt} onChange={e => setQtdEnt(e.target.value)} inputMode="decimal" placeholder={String(v.quantidade ?? '')} style={{ ...entrada, maxWidth: 220 }} />
           </div>
 
           <div style={bloco}>
