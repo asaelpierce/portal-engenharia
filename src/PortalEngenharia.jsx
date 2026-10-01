@@ -5681,6 +5681,70 @@ IMPORTANTE: Responda SOMENTE com base nos dados acima. Se a pergunta pede algo q
       abertos.filter(d => (d.cliente || '—') === topCli[0]), topCli[1]),
   });
 
+  // Excel da lista aberta (qualquer card/fatia) e da carteira completa (v_comercial_carteira)
+  const salvarXlsx = async (wb, nome) => {
+    const buf = await wb.xlsx.writeBuffer();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+    a.download = nome; document.body.appendChild(a); a.click(); a.remove();
+  };
+  const estiloCab = (ws) => {
+    ws.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    ws.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F4E79' } };
+    ws.getRow(1).alignment = { wrapText: true, vertical: 'middle' };
+  };
+  const baixarListaExcel = async (det) => {
+    const { default: ExcelJS } = await import('exceljs');
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('Lista', { views: [{ state: 'frozen', ySplit: 1 }] });
+    const chaves = [...new Set(det.linhas.flatMap(l => Object.keys(l)))].filter(k => !['payload'].includes(k) && det.linhas.some(l => l[k] != null && typeof l[k] !== 'object'));
+    const prefer = ['br', 'cliente', 'vendedor', 'situacao', 'estagio', 'estagio_rotulo', 'valor', 'competencia'];
+    const ord = [...prefer.filter(k => chaves.includes(k)), ...chaves.filter(k => !prefer.includes(k))];
+    ws.columns = ord.map(k => ({ header: k, key: k, width: k === 'cliente' ? 32 : 14 }));
+    det.linhas.forEach(l => ws.addRow(Object.fromEntries(ord.map(k => [k, l[k] != null && !isNaN(l[k]) && typeof l[k] !== 'boolean' && k !== 'br' ? Number(l[k]) : l[k]]))));
+    estiloCab(ws); ws.autoFilter = { from: 'A1', to: { row: 1, column: ord.length } };
+    const info = wb.addWorksheet('Regra');
+    info.addRow([det.titulo]); info.addRow([det.regra]); info.addRow([`Linhas: ${det.linhas.length}`]); info.getColumn(1).width = 120;
+    await salvarXlsx(wb, `${String(det.titulo || 'lista').replace(/[^\wÀ-ú -]/g, '').trim().replace(/\s+/g, '_')}_${new Date().toISOString().slice(0, 10)}.xlsx`);
+  };
+  const baixarCarteiraCompleta = async () => {
+    let rows = [];
+    for (let i = 0; ; i += 1000) {
+      const { data, error } = await supabase.from('v_comercial_carteira').select('*').neq('situacao_carteira', 'faturado').order('data_pedido').range(i, i + 999);
+      if (error) { alert('Não deu para gerar: ' + error.message); return; }
+      rows = rows.concat(data || []); if (!data || data.length < 1000) break;
+    }
+    const { default: ExcelJS } = await import('exceljs');
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('Carteira', { views: [{ state: 'frozen', xSplit: 2, ySplit: 1 }] });
+    ws.columns = [
+      ['BR', 'br', 12], ['Cliente', 'cliente', 32], ['Vendedor', 'vendedor', 18], ['Ano do BR', 'ano_br', 8], ['Situação', 'situacao_carteira', 16],
+      ['No card da Diretoria', 'no_card', 10], ['Data do pedido', 'data_pedido', 12], ['Dias em carteira', 'dias_em_carteira', 10], ['Nº pedido(s)', 'nunotas', 14],
+      ['Itens', 'itens', 7], ['Itens pendentes', 'itens_pendentes', 9], ['Próxima entrega prevista', 'proxima_entrega_prevista', 12],
+      ['Pedido bruto', 'pedido_bruto', 14], ['Pedido líquido', 'pedido_liquido', 14], ['Faturado (notas)', 'faturado', 14], ['Notas', 'notas', 7], ['Última nota', 'ultima_nota', 12],
+      ['Saldo pelo faturado', 'saldo_faturado_bruto', 14], ['Saldo pela entrega', 'saldo_entrega_bruto', 14], ['KdB net value', 'kdb_net_value', 14],
+      ['Tipo (KdB)', 'tipo', 10], ['Vale', 'vale', 7], ['Projeto estoque', 'estoque', 9],
+    ].map(([header, key, width]) => ({ header, key, width }));
+    const dt = (x) => x ? new Date(`${String(x).slice(0, 10)}T12:00:00`) : null;
+    const nb = (x) => x != null ? Number(x) : null;
+    rows.forEach(r => ws.addRow({ ...r, no_card: r.no_card_diretoria ? 'Sim' : 'Não', vale: r.eh_vale ? 'Sim' : 'Não', estoque: r.eh_estoque ? 'Sim' : 'Não',
+      data_pedido: dt(r.data_pedido), proxima_entrega_prevista: dt(r.proxima_entrega_prevista), ultima_nota: dt(r.ultima_nota),
+      pedido_bruto: nb(r.pedido_bruto), pedido_liquido: nb(r.pedido_liquido), faturado: nb(r.faturado), saldo_faturado_bruto: nb(r.saldo_faturado_bruto),
+      saldo_entrega_bruto: nb(r.saldo_entrega_bruto), kdb_net_value: nb(r.kdb_net_value) }));
+    estiloCab(ws);
+    ['G', 'L', 'Q'].forEach(c => { ws.getColumn(c).numFmt = 'dd/mm/yyyy'; });
+    ['M', 'N', 'O', 'R', 'S', 'T'].forEach(c => { ws.getColumn(c).numFmt = '#,##0'; });
+    ws.autoFilter = { from: 'A1', to: `W${rows.length + 1}` };
+    const como = wb.addWorksheet('Como ler');
+    [['Carteira completa: todo BR com pedido de venda (TOPs de venda; fora brinde, retrabalho e estoque) que ainda tem saldo a faturar, de qualquer ano.'],
+     ['Situação: "sem nota" = nenhuma nota de venda no BR; "faturado em parte" = notas somam menos de 95% do pedido.'],
+     ['Saldo pelo faturado = pedido bruto − notas de venda do BR. Saldo pela entrega = itens × (qtd − qtd entregue no Sankhya) ÷ qtd.'],
+     ['No card da Diretoria = o BR aparece no card "Pedido em carteira" (que só olha propostas do ano e sai na primeira nota).'],
+     ['Pedidos antigos sem nota ou com saldo há mais de 1 ano costumam ser pedido cancelado não encerrado no Sankhya, ou nota lançada em outro BR.']]
+      .forEach(l => como.addRow(l));
+    como.getColumn(1).width = 140;
+    await salvarXlsx(wb, `carteira_completa_${new Date().toISOString().slice(0, 10)}.xlsx`);
+  };
   const gavetaConteudo = detalhe && (
     <div className="g-drawer" style={{ background: T.panel, border: `1px solid ${T.terracotta}`,
       borderRadius: 10, padding: 15, boxShadow: `0 4px 20px ${T.ink}12` }}>
@@ -5692,9 +5756,19 @@ IMPORTANTE: Responda SOMENTE com base nos dados acima. Se a pergunta pede algo q
           </div>
           <div style={{ fontSize: 10, color: T.inkFaint, marginTop: 5 }}>↗ {t.cliqueItens}</div>
         </div>
-        <button onClick={() => setDetalhe(null)}
-          style={{ fontFamily: 'inherit', fontSize: 15, lineHeight: 1, padding: '3px 8px', borderRadius: 5,
-            cursor: 'pointer', border: `1px solid ${T.line}`, background: 'transparent', color: T.inkFaint }}>×</button>
+        <span style={{ display: 'flex', gap: 6, alignItems: 'flex-start', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+          {!detalhe.carregando && detalhe.linhas.length > 0 && (
+            <button onClick={() => baixarListaExcel(detalhe)} title="baixa esta lista em Excel"
+              style={{ fontFamily: 'inherit', fontSize: 11.5, fontWeight: 600, padding: '4px 10px', borderRadius: 5, cursor: 'pointer', border: `1px solid ${T.line}`, background: 'transparent', color: T.inkDim }}>⬇ Excel</button>
+          )}
+          {detalhe.chave === 'card:ped' && (
+            <button onClick={baixarCarteiraCompleta} title="todos os BRs com pedido de venda e saldo a faturar, de qualquer ano, inclusive os faturados em parte"
+              style={{ fontFamily: 'inherit', fontSize: 11.5, fontWeight: 700, padding: '4px 10px', borderRadius: 5, cursor: 'pointer', border: `1px solid ${T.terracotta}`, background: 'transparent', color: T.terracotta }}>⬇ Carteira completa (Excel)</button>
+          )}
+          <button onClick={() => setDetalhe(null)}
+            style={{ fontFamily: 'inherit', fontSize: 15, lineHeight: 1, padding: '3px 8px', borderRadius: 5,
+              cursor: 'pointer', border: `1px solid ${T.line}`, background: 'transparent', color: T.inkFaint }}>×</button>
+        </span>
       </div>
       <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', padding: '10px 13px',
         background: `linear-gradient(90deg, ${T.terracotta}0C, transparent)`,
