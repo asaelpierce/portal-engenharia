@@ -3926,6 +3926,8 @@ const TXT = {
     porVendedor: 'Desempenho por vendedor',
     cicloTitulo: 'Propostas e fechamento, mês a mês',
     diasAtePedido: 'Da proposta ao pedido', diasAteFaturar: 'Do pedido ao faturamento',
+    spotMedia: 'spot (média)', contratoAbrev: 'contrato', semVale: 'sem Vale',
+    explicaPrazoTipo: 'Média 2026 dos dias entre a proposta e o pedido, sem a Vale (pedidos da automação). SPOT: {sn} pedidos, média {sm} dias, mediana {sd}, {s1} em até 1 dia. CONTRATO: {cn} pedidos, média {cm} dias, {c1} em até 1 dia. Tipo vem do Painel KdB.',
     convMedia: 'Média mensal (valor)',
     convDecididos: 'Ganho × perdido (valor)',
     convMetaVendas: 'Conversão: vendas (KdB) ÷ meta de cotações {a}',
@@ -4132,6 +4134,8 @@ const TXT = {
     porVendedor: 'Performance by salesperson',
     cicloTitulo: 'Proposals and closings, month by month',
     diasAtePedido: 'Proposal to order', diasAteFaturar: 'Order to invoice',
+    spotMedia: 'spot (avg)', contratoAbrev: 'contract', semVale: 'excl. Vale',
+    explicaPrazoTipo: '2026 average of days from proposal to order, excluding Vale (automated orders). SPOT: {sn} orders, avg {sm} days, median {sd}, {s1} within 1 day. CONTRACT: {cn} orders, avg {cm} days, {c1} within 1 day. Type comes from the KdB panel.',
     convMedia: 'Monthly average (value)',
     convDecididos: 'Won × lost (value)',
     convMetaVendas: 'Conversion: sales (KdB) ÷ {a} quotation target',
@@ -4822,6 +4826,9 @@ function PainelDiretoria() {
   const [cambio, setCambio] = useState([]);
   const [previsao, setPrevisao] = useState([]);
   const [ciclo, setCiclo] = useState([]);
+  // proposta -> pedido por tipo (SPOT / CONTRATO), sem a Vale (automação)
+  const [cicloTipo, setCicloTipo] = useState([]);
+  useEffect(() => { supabase.from('v_comercial_ciclo_tipo').select('*').then(r => setCicloTipo(r.data || [])); }, []);
   const [fatOrigem, setFatOrigem] = useState([]);
   const [fatDet, setFatDet] = useState([]);
   const [estagiosCfg, setEstagiosCfg] = useState([]);
@@ -5109,6 +5116,15 @@ function PainelDiretoria() {
   });
 
   const diasPedido = ciclo.length ? Math.round(ciclo.reduce((s, c) => s + (Number(c.dias_ate_pedido) || 0), 0) / ciclo.length) : null;
+  // "Da proposta ao pedido" (Asael, 01/10/2026): spot e contrato separados, sem a Vale --
+  // contrato e Vale (automação) fecham em ~0 dia e escondiam o prazo real do spot.
+  const prazoTipo = (tp) => {
+    const d = cicloTipo.filter(c => c.tipo === tp && !c.eh_vale && Number(c.dias_proposta_ate_pedido) >= 0).map(c => Number(c.dias_proposta_ate_pedido)).sort((a, b) => a - b);
+    if (!d.length) return null;
+    const med = d.length % 2 ? d[(d.length - 1) / 2] : (d[d.length / 2 - 1] + d[d.length / 2]) / 2;
+    return { n: d.length, media: Math.round(d.reduce((a, b) => a + b, 0) / d.length), mediana: Math.round(med), ate1: d.filter(x => x <= 1).length };
+  };
+  const pzSpot = prazoTipo('SPOT'), pzContr = prazoTipo('CONTRATO');
   const diasFat = ciclo.length ? Math.round(ciclo.reduce((s, c) => s + (Number(c.dias_ate_faturar) || 0), 0) / ciclo.length) : null;
 
   // ---- LEITURAS DE DIRETORIA ----
@@ -5983,7 +5999,10 @@ IMPORTANTE: Responda SOMENTE com base nos dados acima. Se a pergunta pede algo q
           { t: t.pedido, bruto: soma(pedidos), n: `${pedidos.length} ${t.brs}`, p: G.azul, ajuda: t.explicaPedidoKdb,
             lista: ['card:ped', t.explicaPedidoKdb, pedidos] },
           { t: t.faturado, bruto: receitaFat, n: `${faturados.length} ${t.brs}`, p: G.verde, ajuda: t.explicaFaturado },
-          { t: t.diasAtePedido, txt: diasPedido == null ? '—' : `${diasPedido} ${t.dias}`, n: t.medio, p: G.ciano },
+          { t: t.diasAtePedido, txt: pzSpot ? `${pzSpot.media} ${t.dias}` : (diasPedido == null ? '—' : `${diasPedido} ${t.dias}`),
+            n: pzSpot ? `${t.spotMedia} · ${t.contratoAbrev} ${pzContr ? `${pzContr.media} ${t.dias}` : '—'} · ${t.semVale}` : t.medio, p: G.ciano,
+            ajuda: pzSpot ? t.explicaPrazoTipo.replace('{sn}', pzSpot.n).replace('{sm}', pzSpot.media).replace('{sd}', pzSpot.mediana).replace('{s1}', pzSpot.ate1)
+              .replace('{cn}', pzContr?.n ?? 0).replace('{cm}', pzContr?.media ?? '—').replace('{c1}', pzContr?.ate1 ?? 0) : undefined },
           { t: t.diasAteFaturar, txt: diasFat == null ? '—' : `${diasFat} ${t.dias}`, n: t.medio, p: G.rosa },
         ].map((k, i) => (
           <div key={k.t} title={k.ajuda || ''} className={`g-card g-linha${k.lista ? ' g-clicavel' : ''}`}
