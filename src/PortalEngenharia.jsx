@@ -4906,7 +4906,20 @@ function Medidor({ pct, largura = 150, par, rotulo }) {
 }
 
 function PainelDiretoria() {
-  const [dados, setDados] = useState([]);
+  // Período (Asael, 01/10/2026): igual ao da tela Faturado x Previsto. Filtra as propostas pela
+  // competência, a carteira pela data do pedido e o faturamento pelo mês da nota.
+  const [dadosTodos, setDados] = useState([]);
+  const anoPer = new Date().getFullYear();
+  const [perDe, setPerDe] = useState(`${anoPer}-01`);
+  const [perAte, setPerAte] = useState(() => new Date().toISOString().slice(0, 7));
+  const noPer = (m) => { const x = String(m || '').slice(0, 7); return !x || (x >= perDe && x <= perAte); };
+  const dados = useMemo(() => dadosTodos.filter(d => noPer(d.competencia)), [dadosTodos, perDe, perAte]);  // eslint-disable-line
+  const margemPorBr = useMemo(() => { const m = {}; dadosTodos.forEach(d => { if (d.br && d.margem != null) m[d.br] = { margem: Number(d.margem), valor: Number(d.valor) || 0 }; }); return m; }, [dadosTodos]);
+  const mesesPer = useMemo(() => {
+    const ms = new Set(dadosTodos.map(d => String(d.competencia || '').slice(0, 7)).filter(Boolean));
+    ms.add(new Date().toISOString().slice(0, 7));
+    return [...ms].sort().map(v => { const [a, mm] = v.split('-'); return { val: v, label: `${['Jan.','Fev.','Mar.','Abr.','Mai.','Jun.','Jul.','Ago.','Set.','Out.','Nov.','Dez.'][Number(mm) - 1]} de ${a}` }; });
+  }, [dadosTodos]);
   const [cambio, setCambio] = useState([]);
   const [previsao, setPrevisao] = useState([]);
   const [ciclo, setCiclo] = useState([]);
@@ -4914,8 +4927,10 @@ function PainelDiretoria() {
   const [cicloTipo, setCicloTipo] = useState([]);
   // por BR: 1ª proposta (a mais antiga das revisões) e criação do BR (v_comercial_ciclo_br)
   useEffect(() => { supabase.from('v_comercial_ciclo_br').select('br,tipo,eh_vale,eh_estoque,ano_br,dias_proposta_ate_pedido,dias_br_ate_pedido').eq('ano_br', String(new Date().getFullYear())).then(r => setCicloTipo(r.data || [])); }, []);
-  const [fatOrigem, setFatOrigem] = useState([]);
-  const [fatDet, setFatDet] = useState([]);
+  const [fatOrigemTodos, setFatOrigem] = useState([]);
+  const [fatDetTodos, setFatDet] = useState([]);
+  const fatOrigem = useMemo(() => fatOrigemTodos.filter(f => noPer(f.competencia)), [fatOrigemTodos, perDe, perAte]);  // eslint-disable-line
+  const fatDet = useMemo(() => fatDetTodos.filter(f => noPer(f.mes_faturamento)), [fatDetTodos, perDe, perAte]);  // eslint-disable-line
   // card "De onde vem o faturamento": tipo de cada BR (KdB) e a fatia clicada
   const [brTipo, setBrTipo] = useState({});
   const [fatSel, setFatSel] = useState(null);
@@ -5994,6 +6009,21 @@ IMPORTANTE: Responda SOMENTE com base nos dados acima. Se a pergunta pede algo q
                     <tr>
                       <td colSpan={5} style={{ padding: 0, background: T.panelAlt }}>
                         <div style={{ padding: '10px 14px 12px 24px', borderLeft: `3px solid ${T.terracotta}` }}>
+                          {(() => {
+                            // margem do projeto = margem prevista no orçamento do Sankhya (nunca "lucro")
+                            const mg = l.margem != null ? Number(l.margem) : margemPorBr[l.br]?.margem;
+                            if (mg == null || isNaN(mg)) return <div style={{ fontSize: 11, color: T.inkFaint, marginBottom: 8 }}>{idioma === 'en' ? 'Project margin: not available for this BR.' : 'Margem do projeto: sem margem no orçamento deste BR.'}</div>;
+                            const base = Number(l.valor) || margemPorBr[l.br]?.valor || 0;
+                            const cor = mg < 0 ? T.rustText : mg < 25 ? T.amberText : T.oliveText;
+                            return (
+                              <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', alignItems: 'baseline', marginBottom: 10, padding: '7px 10px', borderRadius: 6, background: T.panel, border: `1px solid ${T.lineSoft}` }}>
+                                <span style={{ fontSize: 10.5, color: T.inkFaint, textTransform: 'uppercase', letterSpacing: '.04em' }}>{idioma === 'en' ? 'Project margin' : 'Margem do projeto'}</span>
+                                <strong style={{ fontSize: 15, color: cor }}>{mg.toFixed(1).replace('.', idioma === 'en' ? '.' : ',')}%</strong>
+                                {base > 0 && <span style={{ fontSize: 11.5, color: T.inkDim }}>≈ {val(base * mg / 100)} {idioma === 'en' ? 'on' : 'sobre'} {val(base)}</span>}
+                                <span style={{ fontSize: 10.5, color: T.inkFaint }}>{idioma === 'en' ? 'planned in the Sankhya quote' : 'prevista no orçamento do Sankhya'}</span>
+                              </div>
+                            );
+                          })()}
                           {it?.loading ? (
                             <div className="g-brilho" style={{ fontSize: 10.5, color: T.inkFaint,
                               padding: '8px 0', letterSpacing: '.05em', textTransform: 'uppercase' }}>
@@ -6171,6 +6201,32 @@ IMPORTANTE: Responda SOMENTE com base nos dados acima. Se a pergunta pede algo q
         </span>
       </div>
 
+      <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '12px 18px' }}>
+        <span style={{ fontSize: 12, fontWeight: 600, color: T.inkDim }}>{idioma === 'en' ? 'Period:' : 'Período:'}</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ fontSize: 12, color: T.inkFaint }}>{idioma === 'en' ? 'From' : 'De'}</span>
+          <div style={{ position: 'relative' }}>
+            <select value={perDe} onChange={e => { setPerDe(e.target.value); if (e.target.value > perAte) setPerAte(e.target.value); setDetalhe(null); }} style={selectStyleFat(150)}>
+              {mesesPer.map(m => <option key={m.val} value={m.val}>{m.label}</option>)}
+            </select>
+            <ChevronDown size={13} style={chevronStyleFat} />
+          </div>
+          <span style={{ fontSize: 12, color: T.inkFaint }}>{idioma === 'en' ? 'to' : 'até'}</span>
+          <div style={{ position: 'relative' }}>
+            <select value={perAte} onChange={e => { setPerAte(e.target.value); setDetalhe(null); }} style={selectStyleFat(150)}>
+              {mesesPer.filter(m => m.val >= perDe).map(m => <option key={m.val} value={m.val}>{m.label}</option>)}
+            </select>
+            <ChevronDown size={13} style={chevronStyleFat} />
+          </div>
+        </div>
+        <span style={{ fontSize: 12, color: T.inkFaint }}>{loading ? 'Carregando…' : `${dados.length} ${idioma === 'en' ? 'proposals' : 'propostas'}`}</span>
+        <button onClick={() => { setPerDe(`${anoPer}-01`); setPerAte(new Date().toISOString().slice(0, 7)); setDetalhe(null); }}
+          style={{ display: 'flex', alignItems: 'center', gap: 5, background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 6, padding: '6px 12px', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', color: T.inkDim }}>
+          <RefreshCw size={12} /> {idioma === 'en' ? 'Whole year' : 'Ano todo'}
+        </button>
+        <span style={{ fontSize: 10.5, color: T.inkFaint }}>{idioma === 'en' ? 'proposals by month, backlog by order date, revenue by invoice month' : 'propostas pelo mês, carteira pela data do pedido, faturamento pelo mês da nota'}</span>
+      </div>
+
       {syncSankhyaMsg && (
         <div style={{ fontSize: 11.5, padding: '8px 12px', borderRadius: 6, marginTop: -4,
           background: syncSankhyaMsg.ok ? T.oliveSoft : T.rustSoft,
@@ -6201,11 +6257,12 @@ IMPORTANTE: Responda SOMENTE com base nos dados acima. Se a pergunta pede algo q
             const anoAt = new Date().getFullYear();
             const comoLinha = (x) => ({ br: x.br, cliente: x.cliente, vendedor: x.vendedor, valor: Number(x.net_offer_value) || 0,
               situacao: 'pedido pendente', estagio: x.statusnota === 'P' ? 'Pedido sem confirmação' : 'Pedido em carteira',
-              competencia: String(x.dtmov || '').slice(0, 7), pedido_nunota: x.nunota, nota: x.numnota, top: `${x.codtipoper} ${x.descr_top || ''}`.trim(),
+              competencia: String(x.dtmov || '').slice(0, 7), margem: margemPorBr[x.br]?.margem ?? null, pedido_nunota: x.nunota, nota: x.numnota, top: `${x.codtipoper} ${x.descr_top || ''}`.trim(),
               data_pedido: x.dtmov, faturamento_previsto: x.dt_faturamento_prevista, entrega_prevista: x.dt_entrega_prevista,
               valor_nota: Number(x.vlr_nota) || 0, icms: Number(x.vlr_icms) || 0, ipi: Number(x.vlr_ipi) || 0 });
-            const doAno = pendentes.filter(x => Number(String(x.dtmov || '').slice(0, 4)) >= anoAt).map(comoLinha);
-            const antigos = pendentes.filter(x => Number(String(x.dtmov || '').slice(0, 4)) < anoAt);
+            const mesP = (x) => String(x.dtmov || '').slice(0, 7);
+            const doAno = pendentes.filter(x => mesP(x) >= perDe && mesP(x) <= perAte).map(comoLinha);
+            const antigos = pendentes.filter(x => mesP(x) < perDe);
             const totAnt = antigos.reduce((a, x) => a + (Number(x.net_offer_value) || 0), 0);
             return { t: t.pedido, bruto: pendentes.length ? soma(doAno) : soma(pedidos),
               n: pendentes.length ? `${doAno.length} ${t.pedidosPendentes}${antigos.length ? ` · +${antigos.length} ${t.deAnosAnteriores} (${val(totAnt)})` : ''}` : `${pedidos.length} ${t.brs}`,
