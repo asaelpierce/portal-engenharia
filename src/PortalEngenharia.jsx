@@ -427,7 +427,7 @@ function AlmoxQrPublico({ codigo, chave, nomeLogado }) {
       const { data, error } = await supabase.rpc('fn_almox_publico_registrar', {
         p_codigo: codigo, p_chave: chave, p_nome: perm.nome, p_para_setor: para, p_recebido_por: recebido.trim(),
         p_foto_material: cMat, p_foto_documento: cDoc, p_observacao: obs.trim() || null,
-        p_quantidade: qtdEnt.trim() ? Number(qtdEnt.replace(',', '.')) : null });
+        p_quantidade: dados.tipo === 'grupo' ? null : (qtdEnt.trim() ? Number(qtdEnt.replace(',', '.')) : null) });
       if (error || !data?.ok) throw new Error(error?.message || data?.erro || 'Não foi possível registrar.');
       setFeito({ para, recebido: recebido.trim(), hora: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) });
       setFotoMat(null); setFotoDoc(null); setObs(''); setRecebido('');
@@ -536,6 +536,20 @@ function AlmoxQrPublico({ codigo, chave, nomeLogado }) {
             <button onClick={async () => { await supabase.auth.signOut(); checarPerm(); }} style={{ fontSize: 14, padding: '8px 12px', borderRadius: 8, border: `1px solid ${T.line}`, background: T.panel, color: T.inkDim }}>Sair</button>
           </div>
 
+          {dados.tipo === 'grupo' && (
+            <div style={{ ...bloco, borderColor: T.blueText, background: T.blueSoft }}>
+              <div style={titulo}>📦 QR agrupado · {(dados.itens || []).length} itens — movimenta todos de uma vez</div>
+              {(dados.itens || []).map(it => (
+                <div key={it.codigo} style={{ fontSize: 14, padding: '5px 0', borderTop: `1px solid ${T.lineSoft}` }}>
+                  <strong>{it.codigo}</strong> · {it.cod_materia_prima ? `${it.cod_materia_prima} · ` : ''}{it.material}
+                  <div style={{ fontSize: 12.5, color: T.inkDim }}>{String(it.quantidade ?? '').replace('.', ',')}{it.unidade ? ` ${it.unidade}` : ''} · {it.status === 'ativo' ? it.setor_atual : `finalizado (${it.setor_atual})`}</div>
+                </div>
+              ))}
+            </div>
+          )}
+          {dados.tipo !== 'grupo' && dados.grupo?.codigo && (
+            <div style={{ ...bloco, fontSize: 14, color: T.blueText }}>Este item também está no QR agrupado <strong>{dados.grupo.codigo}</strong>. Pode movimentar só este item aqui, ou ler o QR do grupo para levar todos.</div>
+          )}
           {(dados.ordens || []).length > 0 && (
             <div style={{ ...bloco, borderColor: T.terracotta, background: T.rustSoft }}>
               <div style={titulo}>📋 Ordem para esta etiqueta</div>
@@ -560,10 +574,12 @@ function AlmoxQrPublico({ codigo, chave, nomeLogado }) {
             {v.setor_destino && <div style={{ fontSize: 13, color: T.inkFaint, marginTop: 6 }}>★ destino previsto na etiqueta</div>}
           </div>
 
+          {dados.tipo !== 'grupo' && (
           <div style={bloco}>
             <div style={titulo}>Quantidade entregue{v.unidade ? ` (${v.unidade})` : ''}</div>
             <input value={qtdEnt} onChange={e => setQtdEnt(e.target.value)} inputMode="decimal" placeholder={String(v.quantidade ?? '')} style={{ ...entrada, maxWidth: 220 }} />
           </div>
+          )}
 
           <div style={bloco}>
             <div style={titulo}>2. Quem recebeu</div>
@@ -9379,7 +9395,7 @@ function AlmoxLeitorQR({ onLido, ativo = true }) {
 }
 
 // entrega / movimentação com comprovação (foto do material obrigatória, documento opcional)
-function AlmoxEntregaModal({ volume, destinoPadrao, quantidadePadrao, currentUser, onFechar, onFeito }) {
+function AlmoxEntregaModal({ volume, destinoPadrao, quantidadePadrao, currentUser, onFechar, onFeito, grupo }) {
   const [para, setPara] = useState(destinoPadrao || volume.setor_destino || '');
   const [qtdEnt, setQtdEnt] = useState(String(quantidadePadrao ?? volume.quantidade ?? '').replace('.', ','));
   const [recebido, setRecebido] = useState('');
@@ -9392,7 +9408,7 @@ function AlmoxEntregaModal({ volume, destinoPadrao, quantidadePadrao, currentUse
   const [hist, setHist] = useState([]);
   useEffect(() => {
     supabase.from('colaboradores').select('nome').order('nome').then(r => setNomes((r.data || []).map(x => x.nome).filter(Boolean)));
-    supabase.from('almox_entrega').select('*').eq('volume_id', volume.id).order('criado_em', { ascending: false }).then(r => setHist(r.data || []));
+    if (volume.id) supabase.from('almox_entrega').select('*').eq('volume_id', volume.id).order('criado_em', { ascending: false }).then(r => setHist(r.data || []));
   }, [volume.id]);
   const prev = (f) => f ? URL.createObjectURL(f) : null;
   const confirmar = async () => {
@@ -9405,7 +9421,10 @@ function AlmoxEntregaModal({ volume, destinoPadrao, quantidadePadrao, currentUse
       const pasta = `op-${volume.op}/${volume.codigo}`;
       const cMat = await almoxEnviarFoto(fotoMat, pasta);
       const cDoc = fotoDoc ? await almoxEnviarFoto(fotoDoc, pasta) : null;
-      const { data, error } = await supabase.rpc('fn_almox_registrar_entrega', {
+      // QR agrupado: registra a entrega de todos os itens do grupo de uma vez
+      const { data, error } = grupo ? await supabase.rpc('fn_almox_registrar_entrega_grupo', {
+        p_grupo_id: grupo.id, p_para_setor: para, p_recebido_por: recebido.trim(), p_entregue_por: currentUser?.nome || null,
+        p_foto_material: cMat, p_foto_documento: cDoc, p_observacao: obs }) : await supabase.rpc('fn_almox_registrar_entrega', {
         p_volume_id: volume.id, p_para_setor: para, p_recebido_por: recebido.trim(), p_entregue_por: currentUser?.nome || null,
         p_foto_material: cMat, p_foto_documento: cDoc, p_observacao: obs, p_tipo: volume.setor_atual === 'Ponto de Estoque' ? 'entrega' : 'movimentacao',
         p_quantidade: qtdEnt.trim() ? Number(qtdEnt.replace(',', '.')) : null });
@@ -9446,11 +9465,18 @@ function AlmoxEntregaModal({ volume, destinoPadrao, quantidadePadrao, currentUse
             ))}
           </div>
         </div>
+        {grupo ? (
+          <div style={{ fontSize: 12.5, background: T.blueSoft, color: T.blueText, borderRadius: 8, padding: '8px 10px' }}>
+            📦 Grupo {grupo.codigo}: vai movimentar <strong>{(grupo.itens || []).filter(i => i.status === 'ativo').length} itens</strong> de uma vez
+            ({(grupo.itens || []).filter(i => i.status === 'ativo').map(i => i.codigo).join(', ')}), cada um com a quantidade da etiqueta.
+          </div>
+        ) : (
         <div>
           <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6 }}>Quantidade entregue{volume.unidade ? ` (${volume.unidade})` : ''}</div>
           <input value={qtdEnt} onChange={e => setQtdEnt(e.target.value)} inputMode="decimal" placeholder={String(volume.quantidade ?? '')}
             style={{ width: 160, boxSizing: 'border-box', fontSize: 16, padding: '11px 12px', borderRadius: 8, border: `1px solid ${T.line}` }} />
         </div>
+        )}
         <div>
           <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6 }}>Quem recebeu</div>
           <input list="almox-nomes" value={recebido} onChange={e => setRecebido(e.target.value)} placeholder="nome de quem pegou o material"
@@ -9576,6 +9602,10 @@ function AlmoxQR({ modo, currentUser, codigoInicial }) {
     const bruto = String(texto).trim();
     const m = bruto.match(/[?&]e=([A-Za-z0-9]+)/);
     const codigo = (m ? m[1] : bruto.replace(/^KDB-V:/i, '')).toUpperCase();
+    if (codigo.startsWith('G')) {   // QR agrupado: a página do grupo movimenta todos os itens
+      const { data: g } = await supabase.from('almox_grupo').select('codigo,chave').eq('codigo', codigo).maybeSingle();
+      if (g) { window.location.href = almoxLinkEtiqueta(g.codigo, g.chave); return; }
+    }
     const { data } = await supabase.from('almox_volume').select('*').eq('codigo', codigo).maybeSingle();
     if (!data) { setAviso({ erro: true, t: `Etiqueta "${codigo}" não encontrada.` }); setLendo(false); setTimeout(() => setLendo(true), 1500); return; }
     setAviso(null); setLendo(false); setVolumeAberto(data);
@@ -9888,6 +9918,146 @@ function AlmoxRotina({ currentUser }) {
   );
 }
 
+// ============================================================================
+// ESTOQUE > ETIQUETAS (QR): todas as etiquetas já geradas, sem precisar abrir a
+// OP -- itens (V000001) e grupos (G000001). Reimprimir, agrupar, movimentar grupo.
+// ============================================================================
+const almoxRotuloGrupo = (g, itens) => ({ codigo: g.codigo, chave: g.chave, op: g.op || 'várias', br: g.br,
+  material: `${g.descricao ? g.descricao + ' · ' : ''}GRUPO ${itens.length} ITENS: ${itens.map(i => i.cod_materia_prima || i.codigo).join(', ')}`,
+  quantidade: itens.length, unidade: 'itens' });
+function AlmoxEtiquetasLista({ currentUser }) {
+  const pode = currentUser?.movimentaEstoque === true;
+  const [vols, setVols] = useState(null);
+  const [grupos, setGrupos] = useState([]);
+  const [busca, setBusca] = useState('');
+  const [setor, setSetor] = useState('Todos');
+  const [situ, setSitu] = useState('ativo');
+  const [marc, setMarc] = useState({});
+  const [movG, setMovG] = useState(null);
+  const [aviso, setAviso] = useState(null);
+  const cfgEt = almoxConfigEtiqueta();
+  const carregar = useCallback(async () => {
+    let out = [];
+    for (let i = 0; ; i += 1000) {
+      const { data } = await supabase.from('almox_volume').select('*').neq('status', 'cancelado').order('id', { ascending: false }).range(i, i + 999);
+      out = out.concat(data || []); if (!data || data.length < 1000) break;
+    }
+    const { data: g } = await supabase.from('almox_grupo').select('*').neq('status', 'cancelado').order('id', { ascending: false });
+    setVols(out); setGrupos(g || []);
+  }, []);
+  useEffect(() => { carregar(); }, [carregar]);
+  if (!vols) return <div style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Carregando as etiquetas…</div>;
+  const b = busca.trim().toLowerCase();
+  const gPorId = Object.fromEntries(grupos.map(g => [g.id, g]));
+  const filtradas = vols.filter(v => (situ === 'todas' || v.status === situ) && (setor === 'Todos' || v.setor_atual === setor)
+    && (!b || [v.codigo, v.op, v.br, v.material, v.cod_materia_prima, gPorId[v.grupo_id]?.codigo].some(x => String(x || '').toLowerCase().includes(b))));
+  const gruposF = grupos.filter(g => (situ === 'todas' || g.status === situ) && (!b || [g.codigo, g.op, g.br, g.descricao].some(x => String(x || '').toLowerCase().includes(b))
+    || vols.some(v => v.grupo_id === g.id && [v.codigo, v.material].some(x => String(x || '').toLowerCase().includes(b)))));
+  const sel = filtradas.filter(v => marc[v.id]);
+  const agrupar = async () => {
+    const ativos = sel.filter(v => v.status === 'ativo');
+    if (ativos.length < 2) { setAviso({ erro: true, t: 'Marque pelo menos 2 etiquetas ativas para agrupar.' }); return; }
+    const ops = [...new Set(ativos.map(v => v.op))];
+    const desc = window.prompt('Nome do grupo (aparece na etiqueta):', ops.length === 1 ? `OP ${ops[0]} · ${ativos.length} itens` : `${ativos.length} itens`);
+    if (desc === null) return;
+    const { data, error } = await supabase.rpc('fn_almox_grupo_criar', { p_volume_ids: ativos.map(v => v.id), p_descricao: desc, p_usuario: currentUser?.nome || null });
+    if (error || !data?.ok) { setAviso({ erro: true, t: error?.message || data?.erro }); return; }
+    setAviso({ t: `Grupo ${data.grupo.codigo} criado com ${data.itens} itens. A etiqueta do grupo vai abrir para imprimir.` });
+    setMarc({});
+    await almoxImprimirEtiquetas([almoxRotuloGrupo(data.grupo, ativos)], cfgEt);
+    carregar();
+  };
+  const desfazer = async (g) => {
+    if (!window.confirm(`Desfazer o grupo ${g.codigo}? Os itens continuam com o QR individual.`)) return;
+    const { data, error } = await supabase.rpc('fn_almox_grupo_desfazer', { p_grupo_id: g.id });
+    if (error || !data?.ok) { setAviso({ erro: true, t: error?.message || data?.erro }); return; }
+    carregar();
+  };
+  const dataBR = (t) => t ? new Date(t).toLocaleDateString('pt-BR') : '—';
+  const btn = (forte, cor) => ({ fontFamily: 'inherit', fontSize: 12, fontWeight: 700, padding: '6px 11px', borderRadius: 7, cursor: 'pointer', whiteSpace: 'nowrap',
+    border: `1px solid ${forte ? (cor || T.ink) : T.line}`, background: forte ? (cor || T.ink) : T.panel, color: forte ? '#fff' : T.inkDim });
+  const th = { textAlign: 'left', padding: '7px 9px', fontSize: 11, color: T.inkFaint, fontWeight: 700, borderBottom: `1px solid ${T.line}`, background: T.panelAlt, position: 'sticky', top: 0 };
+  const td = { padding: '7px 9px', fontSize: 12.5, borderBottom: `1px solid ${T.lineSoft}`, verticalAlign: 'top' };
+  const badge = (txt, bg, c) => <span style={{ display: 'inline-block', fontSize: 11, fontWeight: 700, padding: '2px 7px', borderRadius: 6, background: bg, color: c, whiteSpace: 'nowrap' }}>{txt}</span>;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      {movG && (
+        <AlmoxEntregaModal volume={movG.pseudo} grupo={movG.g} currentUser={currentUser}
+          onFechar={() => setMovG(null)} onFeito={() => { setMovG(null); setAviso({ t: 'Grupo movimentado: todos os itens registrados.' }); carregar(); }} />
+      )}
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+        <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="buscar código, OP, BR ou material" style={{ ...inputStyle(), width: 280, padding: '6px 9px' }} />
+        <select value={setor} onChange={e => setSetor(e.target.value)} style={{ ...inputStyle(), width: 190, padding: '6px 9px' }}>
+          {['Todos', ...ALMOX_SETORES].map(s2 => <option key={s2} value={s2}>{s2 === 'Todos' ? 'Todos os setores' : s2}</option>)}
+        </select>
+        {[['ativo', 'Ativas'], ['finalizado', 'Finalizadas'], ['todas', 'Todas']].map(([k, r]) => (
+          <button key={k} onClick={() => setSitu(k)} style={btn(situ === k)}>{r}</button>
+        ))}
+        <span style={{ fontSize: 12, color: T.inkFaint }}>{filtradas.length} etiquetas · {gruposF.length} grupos</span>
+        <button onClick={carregar} style={btn(false)}>Atualizar</button>
+      </div>
+      {aviso && <div style={{ fontSize: 12.5, fontWeight: 600, padding: '8px 10px', borderRadius: 7, background: aviso.erro ? T.rustSoft : T.oliveSoft, color: aviso.erro ? T.rustText : T.oliveText }}>{aviso.t}</div>}
+
+      {gruposF.length > 0 && (
+        <Panel title={`QR agrupados (${gruposF.length})`} subtitle="Um QR para vários itens: lê uma vez e movimenta todos. O QR de cada item continua valendo.">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {gruposF.map(g => {
+              const itens = vols.filter(v => v.grupo_id === g.id);
+              const setores = [...new Set(itens.filter(v => v.status === 'ativo').map(v => v.setor_atual))];
+              return (
+                <div key={g.id} style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', padding: '9px 11px', borderRadius: 8, border: `1px solid ${T.line}`, background: T.panelAlt }}>
+                  <strong style={{ fontSize: 14 }}>📦 {g.codigo}</strong>
+                  <span style={{ fontSize: 12.5 }}>{g.descricao || `${itens.length} itens`}{g.op ? ` · OP ${g.op}` : ''}{g.br ? ` · ${g.br}` : ''}</span>
+                  {badge(setores.length === 1 ? setores[0] : setores.length ? 'vários setores' : 'tudo entregue', T.blueSoft, T.blueText)}
+                  <span style={{ fontSize: 11.5, color: T.inkFaint, flex: 1, minWidth: 200 }}>{itens.map(v => v.codigo).join(', ')}</span>
+                  <button onClick={() => almoxImprimirEtiquetas([almoxRotuloGrupo(g, itens)], cfgEt)} style={btn(false)}>QR do grupo</button>
+                  {pode && g.status === 'ativo' && <button onClick={() => setMovG({ g: { ...g, itens }, pseudo: { id: null, codigo: g.codigo, op: g.op, br: g.br, material: g.descricao || `${itens.length} itens`, quantidade: itens.length, setor_atual: setores.length === 1 ? setores[0] : 'vários setores' } })} style={btn(true)}>Movimentar grupo</button>}
+                  {pode && g.status === 'ativo' && <button onClick={() => desfazer(g)} style={btn(false)}>Desfazer</button>}
+                </div>
+              );
+            })}
+          </div>
+        </Panel>
+      )}
+
+      <Panel title="Etiquetas por item" subtitle="Marque várias para reimprimir ou juntar num QR agrupado.">
+        {sel.length > 0 && (
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', padding: '8px 10px', borderRadius: 8, background: T.panelAlt, marginBottom: 10 }}>
+            <strong style={{ fontSize: 12.5 }}>{sel.length} marcada(s):</strong>
+            <button onClick={() => almoxImprimirEtiquetas(sel, cfgEt)} style={btn(false)}>Reimprimir</button>
+            {pode && <button onClick={agrupar} style={btn(true, T.blueText)}>📦 Agrupar num QR só</button>}
+            <button onClick={() => almoxBaixarCsvBarTender(sel)} style={btn(false)}>Arquivo p/ BarTender</button>
+            <button onClick={() => setMarc({})} style={btn(false)}>Desmarcar</button>
+          </div>
+        )}
+        <div style={{ overflow: 'auto', maxHeight: 620, border: `1px solid ${T.line}`, borderRadius: 8 }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead><tr>
+              <th style={th}><input type="checkbox" checked={filtradas.length > 0 && filtradas.every(v => marc[v.id])} onChange={e => setMarc(e.target.checked ? Object.fromEntries(filtradas.map(v => [v.id, true])) : {})} /></th>
+              {['Etiqueta', 'OP', 'BR', 'Material', 'Qtd', 'Onde está', 'Grupo', 'Gerada', 'Impressa'].map(h => <th key={h} style={th}>{h}</th>)}
+            </tr></thead>
+            <tbody>
+              {filtradas.slice(0, 1500).map(v => (
+                <tr key={v.id} style={{ background: marc[v.id] ? T.rustSoft : 'transparent' }}>
+                  <td style={td}><input type="checkbox" checked={!!marc[v.id]} onChange={e => setMarc(x => ({ ...x, [v.id]: e.target.checked }))} /></td>
+                  <td style={{ ...td, fontWeight: 700, whiteSpace: 'nowrap' }}>{v.codigo}</td>
+                  <td style={td}>{v.op}</td><td style={{ ...td, whiteSpace: 'nowrap' }}>{v.br || '—'}</td>
+                  <td style={{ ...td, maxWidth: 380 }}>{v.cod_materia_prima ? `${v.cod_materia_prima} · ` : ''}{v.material}</td>
+                  <td style={td}>{String(v.quantidade ?? '—').replace('.', ',')}</td>
+                  <td style={td}>{v.status === 'finalizado' ? badge(`Finalizado · ${v.setor_atual}`, T.oliveSoft, T.oliveText) : badge(v.setor_atual, v.setor_atual === 'Ponto de Estoque' ? T.amberSoft : T.blueSoft, v.setor_atual === 'Ponto de Estoque' ? T.amberText : T.blueText)}</td>
+                  <td style={td}>{v.grupo_id && gPorId[v.grupo_id] ? <strong>📦 {gPorId[v.grupo_id].codigo}</strong> : '—'}</td>
+                  <td style={{ ...td, whiteSpace: 'nowrap', color: T.inkFaint }}>{dataBR(v.criado_em)}</td>
+                  <td style={{ ...td, whiteSpace: 'nowrap', color: T.inkFaint }}>{v.impresso_em ? dataBR(v.impresso_em) : 'não'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Panel>
+    </div>
+  );
+}
+
 function AlmoxMovimentar({ currentUser, codigoInicial }) {
   const pode = currentUser?.movimentaEstoque === true;   // sem permissão: só consulta
   const [ops, setOps] = useState([]);
@@ -9915,6 +10085,8 @@ function AlmoxMovimentar({ currentUser, codigoInicial }) {
   // ordem de movimentação (líder -> equipe): setor, quem leva, quantidade, observação
   const [equipe, setEquipe] = useState([]);
   const [ordemDe, setOrdemDe] = useState(null);
+  const [gruposOp, setGruposOp] = useState([]);
+  const [movGrupo, setMovGrupo] = useState(null);
   const [ordem, setOrdem] = useState({ setor: '', quem: ALMOX_QUALQUER, qtd: '', obs: '' });
   useEffect(() => {
     supabase.from('colaboradores').select('nome, papel, movimenta_estoque, ativo').eq('ativo', true).eq('movimenta_estoque', true).order('nome')
@@ -9941,6 +10113,8 @@ function AlmoxMovimentar({ currentUser, codigoInicial }) {
       supabase.from('almox_entrega').select('*').eq('op', o.op).order('criado_em', { ascending: false }).limit(300),
     ]);
     setItens(m.data || []); setVols(v.data || []); setSolicOp(s.data || []); setHist(h.data || []);
+    const gids = [...new Set((v.data || []).map(x => x.grupo_id).filter(Boolean))];
+    if (gids.length) { const { data: g } = await supabase.from('almox_grupo').select('*').in('id', gids).neq('status', 'cancelado'); setGruposOp(g || []); } else setGruposOp([]);
     setCarregandoOp(false);
   }, []);
   const abrirOp = (o) => { setOpSel(o); setMarc({}); setQtd({}); setPedindo(null); setAberto(null); setAviso(null); carregarOp(o); };
@@ -10148,8 +10322,42 @@ function AlmoxMovimentar({ currentUser, codigoInicial }) {
                 <span style={{ fontSize: 12.5, fontWeight: 700 }}>{selec.length} marcado(s):</span>
                 {pode && selSemEntrada.length > 0 && <button disabled={ocupado} onClick={() => darEntrada(selSemEntrada.map(l => l.m))} style={botao(true, T.olive)}>Dar entrada e imprimir {selSemEntrada.length} QR</button>}
                 {selComEtiqueta.length > 0 && <button onClick={() => almoxImprimirEtiquetas(selComEtiqueta.map(l => l.vol), cfgEt)} style={botao(false)}>Reimprimir {selComEtiqueta.length} QR</button>}
+                {pode && selComEtiqueta.filter(l => l.vol.status === 'ativo').length >= 2 && (
+                  <button onClick={async () => {
+                    const ativos = selComEtiqueta.filter(l => l.vol.status === 'ativo').map(l => l.vol);
+                    const desc = window.prompt('Nome do grupo (aparece na etiqueta):', `OP ${opSel?.op} · ${ativos.length} itens`);
+                    if (desc === null) return;
+                    const { data, error } = await supabase.rpc('fn_almox_grupo_criar', { p_volume_ids: ativos.map(v => v.id), p_descricao: desc, p_usuario: currentUser?.nome || null });
+                    if (error || !data?.ok) { setAviso({ erro: true, t: error?.message || data?.erro }); return; }
+                    setAviso({ t: `Grupo ${data.grupo.codigo} criado com ${data.itens} itens. A etiqueta do grupo vai abrir para imprimir.` });
+                    setMarc({});
+                    await almoxImprimirEtiquetas([almoxRotuloGrupo(data.grupo, ativos)], cfgEt);
+                    recarregar();
+                  }} style={botao(true, T.blueText)}>📦 Agrupar num QR só</button>
+                )}
                 <button onClick={() => almoxBaixarCsvBarTender(selComEtiqueta.map(l => l.vol))} disabled={!selComEtiqueta.length} style={{ ...botao(false), opacity: selComEtiqueta.length ? 1 : 0.5 }}>Arquivo p/ BarTender</button>
                 <button onClick={() => setMarc({})} style={botao(false)}>Desmarcar</button>
+              </div>
+            )}
+            {movGrupo && (
+              <AlmoxEntregaModal volume={movGrupo.pseudo} grupo={movGrupo.g} currentUser={currentUser}
+                onFechar={() => setMovGrupo(null)} onFeito={() => { setMovGrupo(null); setAviso({ t: 'Grupo movimentado: todos os itens registrados.' }); recarregar(); }} />
+            )}
+            {gruposOp.length > 0 && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 10 }}>
+                {gruposOp.map(g => {
+                  const its = vols.filter(v => v.grupo_id === g.id);
+                  const sets = [...new Set(its.filter(v => v.status === 'ativo').map(v => v.setor_atual))];
+                  return (
+                    <div key={g.id} style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', padding: '8px 10px', borderRadius: 8, background: T.blueSoft }}>
+                      <strong>📦 {g.codigo}</strong>
+                      <span style={{ fontSize: 12.5 }}>{g.descricao || `${its.length} itens`} · {sets.length === 1 ? sets[0] : sets.length ? 'vários setores' : 'tudo entregue'}</span>
+                      <span style={{ fontSize: 11.5, color: T.inkDim, flex: 1 }}>{its.map(v => v.codigo).join(', ')}</span>
+                      <button onClick={() => almoxImprimirEtiquetas([almoxRotuloGrupo(g, its)], cfgEt)} style={botao(false)}>QR do grupo</button>
+                      {pode && g.status === 'ativo' && <button onClick={() => setMovGrupo({ g: { ...g, itens: its }, pseudo: { id: null, codigo: g.codigo, op: g.op, br: g.br, material: g.descricao || `${its.length} itens`, quantidade: its.length, setor_atual: sets.length === 1 ? sets[0] : 'vários setores' } })} style={botao(true)}>Movimentar grupo</button>}
+                    </div>
+                  );
+                })}
               </div>
             )}
             <div style={{ overflowX: 'auto', border: `1px solid ${T.line}`, borderRadius: 8 }}>
@@ -10196,7 +10404,10 @@ function AlmoxMovimentar({ currentUser, codigoInicial }) {
                           <td style={{ padding: '8px 10px', borderBottom: `1px solid ${T.lineSoft}`, verticalAlign: 'top' }}>
                             <span style={{ display: 'inline-block', fontSize: 11.5, fontWeight: 700, padding: '3px 8px', borderRadius: 6, background: sit.bg, color: sit.c, whiteSpace: 'nowrap' }}>{sit.t}</span>
                           </td>
-                          <td style={{ padding: '8px 10px', borderBottom: `1px solid ${T.lineSoft}`, verticalAlign: 'top', whiteSpace: 'nowrap', fontWeight: 700 }}>{l.vol?.codigo || '—'}</td>
+                          <td style={{ padding: '8px 10px', borderBottom: `1px solid ${T.lineSoft}`, verticalAlign: 'top', whiteSpace: 'nowrap', fontWeight: 700 }}>
+                            {l.vol?.codigo || '—'}
+                            {l.vol?.grupo_id && gruposOp.find(g => g.id === l.vol.grupo_id) && <div style={{ fontSize: 10.5, color: T.blueText }}>📦 {gruposOp.find(g => g.id === l.vol.grupo_id).codigo}</div>}
+                          </td>
                           <td style={{ padding: '8px 10px', borderBottom: `1px solid ${T.lineSoft}`, verticalAlign: 'top' }}>
                             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                               {pode && !l.vol && <button disabled={ocupado} onClick={() => darEntrada([l.m])} style={botao(true, T.olive)} title="registra a chegada no Ponto de Estoque e imprime o QR">Dar entrada + QR</button>}
@@ -10698,7 +10909,7 @@ function AlmoxarifadoFluxo({ currentUser, etiquetaInicial }) {
       </div>
 
       <div style={{ display: 'flex', gap: 4, borderBottom: `1px solid ${T.line}`, flexWrap: 'wrap' }}>
-        {[{ id: 'visao_geral', label: 'Visão Geral' }, { id: 'movimentar', label: 'Movimentar' }, { id: 'rotina', label: 'Minha rotina' }, { id: 'reservas', label: `Reservas por Projeto${reservas.filter(r => r.ja_faturado).length ? ` (${reservas.filter(r => r.ja_faturado).length})` : ''}` }, { id: 'detalhado', label: `Detalhado (${detalhado.length})` }, { id: 'faturado_mes', label: 'Faturado por Mês' }, { id: 'produtividade_produto', label: 'Produtividade por Produto' }, { id: 'projetos', label: `Projetos (${projetos.length})` }, { id: 'perdas', label: `Perdas (${perdas.length})` }].map(aba => (
+        {[{ id: 'visao_geral', label: 'Visão Geral' }, { id: 'movimentar', label: 'Movimentar' }, { id: 'rotina', label: 'Minha rotina' }, { id: 'etiquetas', label: 'Etiquetas (QR)' }, { id: 'reservas', label: `Reservas por Projeto${reservas.filter(r => r.ja_faturado).length ? ` (${reservas.filter(r => r.ja_faturado).length})` : ''}` }, { id: 'detalhado', label: `Detalhado (${detalhado.length})` }, { id: 'faturado_mes', label: 'Faturado por Mês' }, { id: 'produtividade_produto', label: 'Produtividade por Produto' }, { id: 'projetos', label: `Projetos (${projetos.length})` }, { id: 'perdas', label: `Perdas (${perdas.length})` }].map(aba => (
           <button key={aba.id} onClick={() => setAbaAtiva(aba.id)}
             style={{
               background: 'none', border: 'none', cursor: 'pointer', padding: '10px 16px', fontSize: 13, fontWeight: 600,
@@ -10948,6 +11159,7 @@ function AlmoxarifadoFluxo({ currentUser, etiquetaInicial }) {
 
       {abaAtiva === 'movimentar' && <AlmoxMovimentar currentUser={currentUser} codigoInicial={etiquetaInicial} />}
       {abaAtiva === 'rotina' && <AlmoxRotina currentUser={currentUser} />}
+      {abaAtiva === 'etiquetas' && <AlmoxEtiquetasLista currentUser={currentUser} />}
       {abaAtiva === 'qr_leitor' && <AlmoxQR modo="leitor" currentUser={currentUser} codigoInicial={etiquetaInicial} />}
       {abaAtiva === 'qr_etiquetas' && <AlmoxQR modo="etiquetas" currentUser={currentUser} />}
       {abaAtiva === 'qr_entregas' && <AlmoxQR modo="entregas" currentUser={currentUser} />}
