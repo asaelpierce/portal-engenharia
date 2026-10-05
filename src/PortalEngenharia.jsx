@@ -10389,6 +10389,17 @@ function AlmoxRegistro() {
   const [busca, setBusca] = useState('');
   const [setor, setSetor] = useState('Todos');
   const [dias, setDias] = useState(30);
+  const [fotos, setFotos] = useState(null);   // { titulo, itens: [{ rot, url }] }
+  // fotos ficam no bucket privado almoxarifado-entregas: abre com link temporário (1 h)
+  const verFotos = async (l) => {
+    const caminhos = [['Foto do material', l.foto_material], ['Foto do documento', l.foto_documento]].filter(([, c]) => c);
+    setFotos({ titulo: `${l.codigo || ''} · ${l.de_setor || '—'} → ${l.para_setor} · ${new Date(l.criado_em).toLocaleString('pt-BR')}`, itens: null });
+    const itens = await Promise.all(caminhos.map(async ([rot, c]) => {
+      const { data } = await supabase.storage.from('almoxarifado-entregas').createSignedUrl(c, 3600);
+      return { rot, url: data?.signedUrl || null };
+    }));
+    setFotos(f => f && { ...f, itens });
+  };
   const carregar = useCallback(async () => {
     const desde = new Date(Date.now() - dias * 86400000).toISOString();
     const [r, o, s] = await Promise.all([
@@ -10414,6 +10425,30 @@ function AlmoxRegistro() {
   const td = { padding: '7px 9px', fontSize: 12.5, borderBottom: `1px solid ${T.lineSoft}`, verticalAlign: 'top' };
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      {fotos && (
+        <div onClick={() => setFotos(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.6)', zIndex: 90, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: T.panel, borderRadius: 12, padding: 16, maxWidth: 'min(1100px, 100%)', maxHeight: '92vh', overflow: 'auto' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', marginBottom: 10 }}>
+              <strong style={{ fontSize: 14 }}>{fotos.titulo}</strong>
+              <button onClick={() => setFotos(null)} style={{ ...ghostBtn(T.inkDim), cursor: 'pointer' }}>Fechar</button>
+            </div>
+            {!fotos.itens ? <div style={{ padding: 30, color: T.inkFaint }}>Carregando as fotos…</div> : (
+              <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap' }}>
+                {fotos.itens.map(f => (
+                  <div key={f.rot} style={{ flex: '1 1 320px' }}>
+                    <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 6 }}>{f.rot}</div>
+                    {f.url ? (
+                      <a href={f.url} target="_blank" rel="noopener noreferrer" title="abrir em tamanho real">
+                        <img src={f.url} alt={f.rot} style={{ width: '100%', maxHeight: '70vh', objectFit: 'contain', borderRadius: 8, border: `1px solid ${T.line}`, background: T.panelAlt }} />
+                      </a>
+                    ) : <div style={{ color: T.rustText, fontSize: 12.5 }}>Não deu para abrir esta foto.</div>}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
         <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="buscar OP, BR, material, etiqueta ou pessoa" style={{ ...inputStyle(), width: 300, padding: '6px 9px' }} />
         <select value={setor} onChange={e => setSetor(e.target.value)} style={{ ...inputStyle(), width: 190, padding: '6px 9px' }}>
@@ -10450,9 +10485,9 @@ function AlmoxRegistro() {
       <Panel title={`Movimentações (${filtradas.length})`} subtitle="Cada entrega registrada, com a quantidade, quem levou e quem recebeu. 'Onde está agora' mostra o saldo de cada setor da etiqueta.">
         <div style={{ overflow: 'auto', maxHeight: 620, border: `1px solid ${T.line}`, borderRadius: 8 }}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead><tr>{['Quando', 'OP', 'Etiqueta', 'Material', 'Qtd', 'De → Para', 'Entregue por', 'Recebido por', 'Onde está agora'].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
+            <thead><tr>{['Quando', 'OP', 'Etiqueta', 'Material', 'Qtd', 'De → Para', 'Entregue por', 'Recebido por', 'Fotos', 'Onde está agora'].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
             <tbody>
-              {!filtradas.length && <tr><td colSpan={9} style={{ ...td, textAlign: 'center', color: T.inkFaint, padding: 20 }}>Nenhuma movimentação no período.</td></tr>}
+              {!filtradas.length && <tr><td colSpan={10} style={{ ...td, textAlign: 'center', color: T.inkFaint, padding: 20 }}>Nenhuma movimentação no período.</td></tr>}
               {filtradas.map(l => (
                 <tr key={l.id}>
                   <td style={{ ...td, whiteSpace: 'nowrap' }}>{dh(l.criado_em)}</td>
@@ -10463,6 +10498,11 @@ function AlmoxRegistro() {
                   <td style={{ ...td, whiteSpace: 'nowrap' }}>{l.de_setor || '—'} → <strong>{l.para_setor}</strong></td>
                   <td style={td}>{l.entregue_por || '—'}</td>
                   <td style={td}>{l.recebido_por || '—'}</td>
+                  <td style={{ ...td, whiteSpace: 'nowrap' }}>
+                    {l.foto_material || l.foto_documento
+                      ? <button onClick={() => verFotos(l)} style={{ ...ghostBtn(T.blueText), cursor: 'pointer', padding: '4px 9px' }}>📷 ver{l.foto_documento ? ' (2)' : ''}</button>
+                      : <span style={{ color: T.inkFaint }}>—</span>}
+                  </td>
                   <td style={{ ...td, color: T.blueText, fontWeight: 600 }}>{l.onde_esta || (l.status_etiqueta === 'finalizado' ? 'finalizado' : '—')}</td>
                 </tr>
               ))}
