@@ -4921,6 +4921,282 @@ function Medidor({ pct, largura = 150, par, rotulo }) {
   );
 }
 
+// ============================================================================
+// PAINEL COMERCIAL > APROVAÇÕES COMERCIAIS (documento de migração, 05/10/2026):
+// a aprovação final do Comercial sai do Power Automate (que expira em 30 dias) e
+// fica aqui sem prazo. Entrada: edge function aprovacao-comercial-receber. Decisão:
+// fn_aprov_decidir (individual ou em massa). Retorno ao Power Automate:
+// edge function aprovacao-comercial-retorno (array "decisoes", até 3 tentativas).
+// ============================================================================
+const APROV_CAMPOS = {
+  comercial: [['cliente', 'Cliente'], ['cnpj', 'CNPJ'], ['ie', 'IE'], ['contato', 'Contato'], ['condicaoPagamento', 'Cond. pagamento'], ['dataEmissao', 'Data de emissão'],
+    ['cfop', 'CFOP'], ['multa', 'Multa'], ['remessaEquipamento', 'Remessa de equip.'], ['necessitaBM', 'Necessita BM'], ['observacao', 'Observação']],
+  fiscal: [['destinoMercadoria', 'Destino da mercadoria'], ['ncmCliente', 'NCM do cliente'], ['codigoOrigem', 'Cód. origem'], ['icms', 'ICMS'], ['ipi', 'IPI'], ['iss', 'ISS'],
+    ['beneficioFiscal', 'Benefício fiscal'], ['observacao', 'Observação']],
+  engenharia: [['itemKbConcordante', 'Item (KB concordante)'], ['valorProjeto', 'Valor do projeto'], ['prazoEntrega', 'Prazo de entrega'], ['incoterms', 'Incoterms (frete)'],
+    ['impostoConcordanciaIcmsIpi', 'Imposto conc. (ICMS/IPI)'], ['anexarBM', 'Anexar BM'], ['observacao', 'Observação']],
+};
+function AprovacoesComerciais({ currentUser }) {
+  const [linhas, setLinhas] = useState(null);
+  const [quem, setQuem] = useState(null);
+  const [urlOk, setUrlOk] = useState(null);
+  const [modo, setModo] = useState('pendentes');
+  const [busca, setBusca] = useState('');
+  const [vend, setVend] = useState('Todos');
+  const [tipo, setTipo] = useState('Todos');
+  const [div, setDiv] = useState('todos');
+  const [de, setDe] = useState('');
+  const [ate, setAte] = useState('');
+  const [marc, setMarc] = useState({});
+  const [aberto, setAberto] = useState(null);
+  const [acao, setAcao] = useState(null);       // { decisao, ids }
+  const [coment, setComent] = useState('');
+  const [forcar, setForcar] = useState(false);
+  const [ocupado, setOcupado] = useState(false);
+  const [aviso, setAviso] = useState(null);
+  const [urlNova, setUrlNova] = useState('');
+  const carregar = useCallback(async () => {
+    const [p, q, u] = await Promise.all([
+      supabase.from('aprov_comercial_pedido').select('*').order('data_solicitacao', { ascending: false }).limit(3000),
+      supabase.rpc('fn_aprov_pode_decidir'),
+      supabase.rpc('fn_aprov_url_retorno_status'),
+    ]);
+    setLinhas(p.data || []); setQuem(q.data || { pode: false }); setUrlOk(u.data || null);
+  }, []);
+  useEffect(() => { carregar(); }, [carregar]);
+  if (!linhas) return <div style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Carregando as aprovações…</div>;
+  const pode = !!quem?.pode;
+  const ehGestor = currentUser?.papel === 'gestor';
+  const b = busca.trim().toLowerCase();
+  const dia = (t) => String(t || '').slice(0, 10);
+  const base = linhas.filter(l => modo === 'pendentes' ? l.status === 'PENDENTE' : l.status !== 'PENDENTE');
+  const filtradas = base.filter(l => (vend === 'Todos' || l.vendedor === vend) && (tipo === 'Todos' || (l.tipo_pedido || '—') === tipo)
+    && (div === 'todos' || (div === 'sem' ? !l.divergente : l.divergente))
+    && (!de || dia(l.data_solicitacao) >= de) && (!ate || dia(l.data_solicitacao) <= ate)
+    && (!b || [l.br, l.br_informado_original, l.comercial?.cliente, l.vendedor, l.task_id_planner].some(x => String(x || '').toLowerCase().includes(b))));
+  const vendedores = ['Todos', ...[...new Set(linhas.map(l => l.vendedor).filter(Boolean))].sort()];
+  const tipos = ['Todos', ...[...new Set(linhas.map(l => l.tipo_pedido || '—'))].sort()];
+  const semDiv = filtradas.filter(l => l.status === 'PENDENTE' && !l.divergente);
+  const sel = filtradas.filter(l => marc[l.id]);
+  const diasPend = (l) => Math.max(0, Math.floor((Date.now() - new Date(l.data_solicitacao || l.recebido_em)) / 86400000));
+  const dataHora = (t) => t ? new Date(t).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
+  const btn = (forte, cor) => ({ fontFamily: 'inherit', fontSize: 12.5, fontWeight: 700, padding: '7px 12px', borderRadius: 7, cursor: 'pointer', whiteSpace: 'nowrap',
+    border: `1px solid ${forte ? (cor || T.ink) : T.line}`, background: forte ? (cor || T.ink) : T.panel, color: forte ? '#fff' : T.inkDim });
+  const badgeDiv = (l) => !l.divergente
+    ? <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 6, background: T.oliveSoft, color: T.oliveText }}>sem divergência</span>
+    : <span title={(l.motivos || []).join('\n')} style={{ fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 6, background: l.nivel_divergencia === 'vermelho' ? T.rustSoft : T.amberSoft, color: l.nivel_divergencia === 'vermelho' ? T.rustText : T.amberText }}>
+        {(l.motivos || []).length} ponto(s) · {String((l.motivos || [])[0] || '').slice(0, 60)}{String((l.motivos || [])[0] || '').length > 60 ? '…' : ''}</span>;
+  const badgeSync = (l) => ({ ok: [T.oliveSoft, T.oliveText, 'Planner atualizado'], erro: [T.rustSoft, T.rustText, 'Erro de sincronização'],
+    enviando: [T.blueSoft, T.blueText, 'enviando…'], nao_enviado: [T.amberSoft, T.amberText, 'não enviado'] }[l.sync_status] || [T.panelAlt, T.inkFaint, l.sync_status]);
+  const enviar = async (ids) => {
+    const { data, error } = await supabase.functions.invoke('aprovacao-comercial-retorno', { body: { ids } });
+    let msg = data?.erro || error?.message;
+    if (error && error.context && typeof error.context.json === 'function') { try { const j = await error.context.json(); msg = j?.erro || msg; } catch { /* sem corpo */ } }
+    return data?.ok ? { ok: true, t: `${data.enviados} decisão(ões) enviada(s) ao Power Automate — Planner atualizado.` } : { ok: false, t: `Decisão gravada, mas o Power Automate não confirmou: ${msg || 'sem resposta'}. Use "Reenviar".` };
+  };
+  const confirmar = async () => {
+    if (acao.decisao === 'REPROVADO' && !coment.trim()) { setAviso({ erro: true, t: 'Para reprovar, escreva o comentário.' }); return; }
+    setOcupado(true); setAviso(null);
+    const { data, error } = await supabase.rpc('fn_aprov_decidir', { p_ids: acao.ids, p_decisao: acao.decisao, p_comentario: coment.trim() || null, p_forcar_divergentes: forcar });
+    if (error || !data?.ok) { setOcupado(false); setAviso({ erro: true, t: error?.message || data?.erro }); return; }
+    const r = await enviar(acao.ids);
+    setOcupado(false); setAcao(null); setComent(''); setForcar(false); setMarc({}); setAberto(null);
+    setAviso({ erro: !r.ok, t: `${data.decididos} pedido(s) ${acao.decisao === 'APROVADO' ? 'aprovado(s)' : 'reprovado(s)'}. ${r.t}` });
+    carregar();
+  };
+  const reenviar = async (ids) => {
+    setOcupado(true);
+    const r = await enviar(ids);
+    setOcupado(false); setAviso({ erro: !r.ok, t: r.t }); carregar();
+  };
+  const salvarUrl = async () => {
+    const { data, error } = await supabase.rpc('fn_aprov_definir_url_retorno', { p_url: urlNova });
+    if (error || !data?.ok) { setAviso({ erro: true, t: error?.message || data?.erro }); return; }
+    setUrlNova(''); setAviso({ t: 'URL do fluxo de retorno cadastrada.' }); carregar();
+  };
+  const abrirAcao = (decisao, ids) => { setAcao({ decisao, ids }); setComent(''); setForcar(false); setAviso(null); };
+  const th = { textAlign: 'left', padding: '8px 10px', fontSize: 11, color: T.inkFaint, fontWeight: 700, borderBottom: `1px solid ${T.line}`, background: T.panelAlt, whiteSpace: 'nowrap', position: 'sticky', top: 0 };
+  const td = { padding: '8px 10px', fontSize: 12.5, borderBottom: `1px solid ${T.lineSoft}`, verticalAlign: 'top' };
+  const secao = (titulo, o, campos, comentSetor) => (
+    <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 8, padding: 10 }}>
+      <div style={{ fontSize: 12.5, fontWeight: 800, marginBottom: 6 }}>{titulo}</div>
+      {campos.map(([k, r]) => (
+        <div key={k} style={{ display: 'flex', gap: 8, fontSize: 12, padding: '2px 0' }}>
+          <span style={{ color: T.inkFaint, minWidth: 150 }}>{r}</span>
+          <span style={{ color: /^\s*(|n[ãa]o informado)\s*$/i.test(String(o?.[k] ?? '')) ? T.rustText : T.ink, fontWeight: 600 }}>{String(o?.[k] ?? '').trim() || '— vazio —'}</span>
+        </div>
+      ))}
+      <div style={{ fontSize: 11.5, color: T.inkDim, marginTop: 6, paddingTop: 6, borderTop: `1px solid ${T.lineSoft}` }}>Comentário do setor: <strong>{String(comentSetor || '').trim() || '—'}</strong></div>
+    </div>
+  );
+  const nSel = sel.length, nDivSel = sel.filter(l => l.divergente).length;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      {acao && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.35)', zIndex: 80, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }} onClick={() => !ocupado && setAcao(null)}>
+          <div onClick={e => e.stopPropagation()} style={{ background: T.panel, borderRadius: 12, padding: 18, width: 'min(520px, 100%)', display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div style={{ fontSize: 16, fontWeight: 800 }}>{acao.decisao === 'APROVADO' ? 'Aprovar' : 'Reprovar'} {acao.ids.length} pedido(s)</div>
+            <div style={{ fontSize: 13, color: T.inkDim }}>
+              {linhas.filter(l => acao.ids.includes(l.id)).map(l => l.br || l.task_id_planner).join(', ')}
+            </div>
+            {acao.decisao === 'APROVADO' && linhas.filter(l => acao.ids.includes(l.id) && l.divergente).length > 0 && (
+              <label style={{ fontSize: 13, background: T.amberSoft, color: T.amberText, borderRadius: 8, padding: '8px 10px', display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                <input type="checkbox" checked={forcar} onChange={e => setForcar(e.target.checked)} />
+                <span><strong>{linhas.filter(l => acao.ids.includes(l.id) && l.divergente).length} com divergência.</strong> Confirmo que conferi e quero aprovar mesmo assim.</span>
+              </label>
+            )}
+            <textarea value={coment} onChange={e => setComent(e.target.value)} rows={3} placeholder={acao.decisao === 'REPROVADO' ? 'Motivo da reprovação (obrigatório)' : 'Comentário (opcional) — vai para "Comentários Final" no Planner'}
+              style={{ ...inputStyle(), width: '100%', boxSizing: 'border-box', resize: 'vertical' }} />
+            {aviso?.erro && <div style={{ color: T.rustText, fontSize: 12.5, fontWeight: 700 }}>{aviso.t}</div>}
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button onClick={() => setAcao(null)} disabled={ocupado} style={btn(false)}>Cancelar</button>
+              <button onClick={confirmar} disabled={ocupado} style={btn(true, acao.decisao === 'APROVADO' ? T.olive : T.rust)}>
+                {ocupado ? 'Enviando…' : `Confirmar ${acao.decisao === 'APROVADO' ? 'aprovação' : 'reprovação'} de ${acao.ids.length}`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <div>
+          <div style={{ fontSize: 18, fontWeight: 800 }}>Aprovações Comerciais</div>
+          <div style={{ fontSize: 12, color: T.inkFaint }}>Aprovação final do Comercial (antes no Power Automate). Sem prazo de expiração; ao decidir, o portal avisa o fluxo para atualizar o Planner.</div>
+        </div>
+        <span style={{ display: 'flex', gap: 6 }}>
+          {[['pendentes', `Pendentes (${linhas.filter(l => l.status === 'PENDENTE').length})`], ['historico', 'Histórico']].map(([k, r]) => (
+            <button key={k} onClick={() => { setModo(k); setMarc({}); setAberto(null); }} style={btn(modo === k)}>{r}</button>
+          ))}
+          <button onClick={carregar} style={btn(false)}>Atualizar</button>
+        </span>
+      </div>
+
+      {!pode && <div style={{ fontSize: 12.5, background: T.panelAlt, borderRadius: 8, padding: '8px 12px', color: T.inkDim }}>Você pode consultar. Aprovar e reprovar ficam com Priscila Monara, Youri Alves e os gestores.</div>}
+      {urlOk && !urlOk.configurada && (
+        <div style={{ fontSize: 12.5, background: T.amberSoft, color: T.amberText, borderRadius: 8, padding: '8px 12px', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <strong>URL do fluxo "Retorno de Aprovação Comercial" ainda não cadastrada</strong> — as decisões ficam gravadas, mas o Planner só é atualizado depois de cadastrar.
+          {ehGestor && <>
+            <input value={urlNova} onChange={e => setUrlNova(e.target.value)} placeholder="cole a URL HTTP POST do fluxo de retorno" style={{ ...inputStyle(), width: 360, padding: '5px 8px' }} />
+            <button onClick={salvarUrl} disabled={!urlNova} style={btn(true)}>Salvar</button>
+          </>}
+        </div>
+      )}
+      {aviso && !acao && <div style={{ fontSize: 12.5, fontWeight: 600, padding: '8px 12px', borderRadius: 8, background: aviso.erro ? T.rustSoft : T.oliveSoft, color: aviso.erro ? T.rustText : T.oliveText }}>{aviso.t}</div>}
+
+      {modo === 'pendentes' && pode && semDiv.length > 0 && (
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', background: T.oliveSoft, border: `1px solid ${T.olive}`, borderRadius: 10, padding: '10px 14px' }}>
+          <strong style={{ color: T.oliveText }}>{semDiv.length} pedido(s) sem divergência podem ser aprovados juntos.</strong>
+          <button onClick={() => setMarc(Object.fromEntries(semDiv.map(l => [l.id, true])))} style={btn(true, T.olive)}>Selecionar todos sem divergência</button>
+        </div>
+      )}
+
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+        <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="buscar BR ou cliente" style={{ ...inputStyle(), width: 220, padding: '6px 9px' }} />
+        <select value={vend} onChange={e => setVend(e.target.value)} style={{ ...inputStyle(), width: 180, padding: '6px 9px' }}>{vendedores.map(x => <option key={x} value={x}>{x === 'Todos' ? 'Todos os vendedores' : x}</option>)}</select>
+        <select value={tipo} onChange={e => setTipo(e.target.value)} style={{ ...inputStyle(), width: 150, padding: '6px 9px' }}>{tipos.map(x => <option key={x} value={x}>{x === 'Todos' ? 'Todos os tipos' : x}</option>)}</select>
+        <select value={div} onChange={e => setDiv(e.target.value)} style={{ ...inputStyle(), width: 170, padding: '6px 9px' }}>
+          <option value="todos">Com e sem divergência</option><option value="sem">Sem divergência</option><option value="com">Com divergência</option>
+        </select>
+        <label style={{ fontSize: 12, color: T.inkDim }}>de <input type="date" value={de} onChange={e => setDe(e.target.value)} style={{ ...inputStyle(), width: 140, padding: '5px 8px' }} /></label>
+        <label style={{ fontSize: 12, color: T.inkDim }}>até <input type="date" value={ate} onChange={e => setAte(e.target.value)} style={{ ...inputStyle(), width: 140, padding: '5px 8px' }} /></label>
+        <span style={{ fontSize: 12, color: T.inkFaint }}>{filtradas.length} pedido(s)</span>
+      </div>
+
+      {modo === 'pendentes' && pode && nSel > 0 && (
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', background: T.panelAlt, borderRadius: 8, padding: '8px 12px' }}>
+          <strong style={{ fontSize: 13 }}>{nSel} selecionado(s){nDivSel ? ` · ${nDivSel} com divergência` : ''}</strong>
+          <button onClick={() => abrirAcao('APROVADO', sel.map(l => l.id))} style={btn(true, T.olive)}>Aprovar selecionados</button>
+          <button onClick={() => abrirAcao('REPROVADO', sel.map(l => l.id))} style={btn(true, T.rust)}>Reprovar selecionados</button>
+          <button onClick={() => setMarc({})} style={btn(false)}>Desmarcar</button>
+        </div>
+      )}
+      {modo === 'historico' && filtradas.some(l => l.sync_status !== 'ok') && pode && (
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', background: T.rustSoft, borderRadius: 8, padding: '8px 12px' }}>
+          <strong style={{ fontSize: 13, color: T.rustText }}>{filtradas.filter(l => l.sync_status !== 'ok').length} decisão(ões) ainda não confirmada(s) pelo Power Automate.</strong>
+          <button disabled={ocupado} onClick={() => reenviar(filtradas.filter(l => l.sync_status !== 'ok').map(l => l.id))} style={btn(true, T.rust)}>{ocupado ? 'Enviando…' : 'Reenviar todas'}</button>
+        </div>
+      )}
+
+      <div style={{ overflow: 'auto', maxHeight: 680, border: `1px solid ${T.line}`, borderRadius: 8 }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead><tr>
+            {modo === 'pendentes' && pode && <th style={th}><input type="checkbox" checked={filtradas.length > 0 && filtradas.every(l => marc[l.id])} onChange={e => setMarc(e.target.checked ? Object.fromEntries(filtradas.map(l => [l.id, true])) : {})} /></th>}
+            {['BR', 'Cliente', 'Vendedor', 'Tipo', 'Solicitado em', modo === 'pendentes' ? 'Dias pendente' : 'Decisão', 'Divergência', modo === 'pendentes' ? 'Ações' : 'Planner'].map(h => <th key={h} style={th}>{h}</th>)}
+          </tr></thead>
+          <tbody>
+            {!filtradas.length && <tr><td colSpan={9} style={{ ...td, textAlign: 'center', color: T.inkFaint, padding: 24 }}>{modo === 'pendentes' ? 'Nenhum pedido aguardando aprovação.' : 'Nenhuma decisão ainda.'}</td></tr>}
+            {filtradas.map(l => {
+              const ab = aberto === l.id;
+              const [sbg, sc, st] = badgeSync(l);
+              return (
+                <React.Fragment key={l.id}>
+                  <tr style={{ background: ab ? T.blueSoft : marc[l.id] ? T.rustSoft : 'transparent' }}>
+                    {modo === 'pendentes' && pode && <td style={td}><input type="checkbox" checked={!!marc[l.id]} onChange={e => setMarc(x => ({ ...x, [l.id]: e.target.checked }))} /></td>}
+                    <td style={{ ...td, fontWeight: 700, whiteSpace: 'nowrap', cursor: 'pointer' }} onClick={() => setAberto(x => x === l.id ? null : l.id)}>{ab ? '▾' : '▸'} {l.br || '—'}</td>
+                    <td style={{ ...td, maxWidth: 260 }}>{l.comercial?.cliente || '—'}</td>
+                    <td style={td}>{l.vendedor || '—'}</td>
+                    <td style={td}>{l.tipo_pedido || '—'}</td>
+                    <td style={{ ...td, whiteSpace: 'nowrap' }}>{dataHora(l.data_solicitacao)}</td>
+                    <td style={{ ...td, whiteSpace: 'nowrap' }}>
+                      {modo === 'pendentes'
+                        ? <strong style={{ color: diasPend(l) > 20 ? T.rustText : diasPend(l) > 7 ? T.amberText : T.ink }}>{diasPend(l)}</strong>
+                        : <><strong style={{ color: l.status === 'APROVADO' ? T.oliveText : T.rustText }}>{l.status === 'APROVADO' ? 'Aprovado' : 'Reprovado'}</strong><div style={{ fontSize: 11, color: T.inkFaint }}>{l.decidido_por} · {dataHora(l.decidido_em)}</div></>}
+                    </td>
+                    <td style={{ ...td, maxWidth: 320 }}>{badgeDiv(l)}</td>
+                    <td style={{ ...td, whiteSpace: 'nowrap' }}>
+                      {modo === 'pendentes' ? (
+                        <span style={{ display: 'flex', gap: 6 }}>
+                          <button onClick={() => setAberto(x => x === l.id ? null : l.id)} style={btn(false)}>{ab ? 'Fechar' : 'Abrir'}</button>
+                          {pode && <button onClick={() => abrirAcao('APROVADO', [l.id])} style={btn(true, T.olive)}>Aprovar</button>}
+                          {pode && <button onClick={() => abrirAcao('REPROVADO', [l.id])} style={btn(true, T.rust)}>Reprovar</button>}
+                        </span>
+                      ) : (
+                        <span style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                          <span title={l.sync_ultimo_erro || ''} style={{ fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 6, background: sbg, color: sc }}>{st}</span>
+                          {pode && l.sync_status !== 'ok' && <button disabled={ocupado} onClick={() => reenviar([l.id])} style={btn(false)}>Reenviar</button>}
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                  {ab && (
+                    <tr><td colSpan={9} style={{ padding: 12, background: T.panelAlt, borderBottom: `2px solid ${T.blueText}` }}>
+                      {l.divergente && (
+                        <div style={{ background: l.nivel_divergencia === 'vermelho' ? T.rustSoft : T.amberSoft, borderRadius: 8, padding: '8px 12px', marginBottom: 10 }}>
+                          <div style={{ fontSize: 12.5, fontWeight: 800, color: l.nivel_divergencia === 'vermelho' ? T.rustText : T.amberText, marginBottom: 4 }}>Pontos de atenção — decisão individual</div>
+                          {(l.motivos || []).map((m, i) => <div key={i} style={{ fontSize: 12.5 }}>• {m}</div>)}
+                        </div>
+                      )}
+                      <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', fontSize: 12, color: T.inkDim, marginBottom: 10 }}>
+                        <span>Planner: <strong>{l.task_id_planner}</strong></span>
+                        <span>Origem: <strong>{l.origem || '—'}</strong></span>
+                        <span>BR informado: <strong>{l.br_informado_original || l.br || '—'}</strong></span>
+                        <span>Solicitante: <strong>{l.email_solicitante || '—'}</strong></span>
+                        {l.arquivo_link && <a href={l.arquivo_link} target="_blank" rel="noopener noreferrer" style={{ color: T.blueText, fontWeight: 700 }}>📄 {l.arquivo_nome || 'PDF do pedido'}</a>}
+                      </div>
+                      <div style={{ display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))' }}>
+                        {secao('Comercial', l.comercial, APROV_CAMPOS.comercial, l.comercial?.comentarioSetor)}
+                        {secao('Fiscal', l.fiscal, APROV_CAMPOS.fiscal, l.fiscal?.comentarioSetor)}
+                        {secao('Engenharia', l.engenharia, APROV_CAMPOS.engenharia, l.engenharia?.comentarioSetor)}
+                      </div>
+                      <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 8, padding: 10, marginTop: 10 }}>
+                        <div style={{ fontSize: 12.5, fontWeight: 800, marginBottom: 4 }}>Revisão da IA</div>
+                        <div style={{ fontSize: 12.5, whiteSpace: 'pre-wrap', color: T.ink }}>{String(l.engenharia?.revisaoIA || '').replace(/<br\s*\/?>/gi, '\n') || '—'}</div>
+                      </div>
+                      {l.status !== 'PENDENTE' && (
+                        <div style={{ fontSize: 12.5, marginTop: 10 }}>Decisão: <strong>{l.status === 'APROVADO' ? 'Aprovado' : 'Reprovado'}</strong> por {l.decidido_por} ({l.decidido_email}) em {dataHora(l.decidido_em)}{l.comentario_decisao ? ` · "${l.comentario_decisao}"` : ''}{l.sync_ultimo_erro ? ` · último erro: ${l.sync_ultimo_erro}` : ''}</div>
+                      )}
+                    </td></tr>
+                  )}
+                </React.Fragment>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 function PainelDiretoria() {
   // Período (Asael, 01/10/2026): igual ao da tela Faturado x Previsto. Filtra as propostas pela
   // competência, a carteira pela data do pedido e o faturamento pelo mês da nota.
@@ -8857,6 +9133,7 @@ function PainelComercial({ currentUser }) {
           { id: 'followup', label: 'Follow Up' },
           { id: 'crm', label: 'CRM' },
           { id: 'diretoria', label: 'Diretoria' },
+          { id: 'aprovacoes', label: 'Aprovações Comerciais' },
           { id: 'modelo', label: 'Modelo Preditivo' }].map(ab => (
           <button key={ab.id} onClick={() => setSubAba(ab.id)} style={{
             background: 'none', border: 'none', cursor: 'pointer', padding: '9px 16px',
@@ -8869,7 +9146,7 @@ function PainelComercial({ currentUser }) {
         ))}
       </div>
 
-      {subAba === 'modelo' ? <ModeloPreditivo /> : subAba === 'followup' ? <FollowUpComercial currentUser={currentUser} /> : subAba === 'crm' ? <CRM currentUser={currentUser} /> : subAba === 'diretoria' ? <PainelDiretoria /> : <>
+      {subAba === 'aprovacoes' ? <AprovacoesComerciais currentUser={currentUser} /> : subAba === 'modelo' ? <ModeloPreditivo /> : subAba === 'followup' ? <FollowUpComercial currentUser={currentUser} /> : subAba === 'crm' ? <CRM currentUser={currentUser} /> : subAba === 'diretoria' ? <PainelDiretoria /> : <>
 
       {/* Filtro de período — de/até */}
       <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '14px 18px' }}>
@@ -31489,7 +31766,7 @@ function CriarBR({ currentUser }) {
   return (
     <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       <div style={{ display: 'flex', gap: 2, borderBottom: `1px solid ${T.line}` }}>
-        {[{ id: 'criar', label: 'Criar BR' }, { id: 'conferencia', label: 'Conferência' }].map(ab => (
+        {[{ id: 'criar', label: 'Criar BR' }, { id: 'conferencia', label: 'Conferência' }, { id: 'aprovacoes', label: 'Aprovações Comerciais' }].map(ab => (
           <button key={ab.id} onClick={() => setAba(ab.id)} style={{
             background: 'none', border: 'none', cursor: 'pointer', padding: '9px 16px',
             fontSize: 13, fontFamily: 'inherit',
@@ -31500,7 +31777,7 @@ function CriarBR({ currentUser }) {
           }}>{ab.label}</button>
         ))}
       </div>
-      {aba === 'criar' ? <CriarBRForm currentUser={currentUser} /> : <ConferenciaConhecimentoPedido currentUser={currentUser} />}
+      {aba === 'criar' ? <CriarBRForm currentUser={currentUser} /> : aba === 'aprovacoes' ? <AprovacoesComerciais currentUser={currentUser} /> : <ConferenciaConhecimentoPedido currentUser={currentUser} />}
     </div>
   );
 }
