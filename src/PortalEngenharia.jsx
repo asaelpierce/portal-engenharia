@@ -4985,7 +4985,8 @@ function AprovacoesComerciais({ currentUser }) {
   const btn = (forte, cor) => ({ fontFamily: 'inherit', fontSize: 12.5, fontWeight: 700, padding: '7px 12px', borderRadius: 7, cursor: 'pointer', whiteSpace: 'nowrap',
     border: `1px solid ${forte ? (cor || T.ink) : T.line}`, background: forte ? (cor || T.ink) : T.panel, color: forte ? '#fff' : T.inkDim });
   const badgeDiv = (l) => !l.divergente
-    ? <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 6, background: T.oliveSoft, color: T.oliveText }}>sem divergência</span>
+    ? <span title={(l.observacoes || []).join('\n')} style={{ fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 6, background: T.oliveSoft, color: T.oliveText }}>
+        sem divergência{(l.observacoes || []).length ? ` · ${(l.observacoes || []).length} obs.` : ''}</span>
     : <span title={(l.motivos || []).join('\n')} style={{ fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 6, background: l.nivel_divergencia === 'vermelho' ? T.rustSoft : T.amberSoft, color: l.nivel_divergencia === 'vermelho' ? T.rustText : T.amberText }}>
         {(l.motivos || []).length} ponto(s) · {String((l.motivos || [])[0] || '').slice(0, 60)}{String((l.motivos || [])[0] || '').length > 60 ? '…' : ''}</span>;
   const badgeSync = (l) => ({ ok: [T.oliveSoft, T.oliveText, 'Planner atualizado'], erro: [T.rustSoft, T.rustText, 'Erro de sincronização'],
@@ -5063,7 +5064,8 @@ function AprovacoesComerciais({ currentUser }) {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
         <div>
           <div style={{ fontSize: 18, fontWeight: 800 }}>Aprovações Comerciais</div>
-          <div style={{ fontSize: 12, color: T.inkFaint }}>Aprovação final do Comercial (antes no Power Automate). Sem prazo de expiração; ao decidir, o portal avisa o fluxo para atualizar o Planner.</div>
+          <div style={{ fontSize: 12, color: T.inkFaint }}>Aprovação final do Comercial (antes no Power Automate). Sem prazo de expiração; ao decidir, o portal avisa o fluxo para atualizar o Planner.
+            Divergência = comentário negativo do <strong>fiscal</strong> ou da <strong>engenharia</strong>; comentário do comercial, campo vazio e comentário neutro aparecem como observação.</div>
         </div>
         <span style={{ display: 'flex', gap: 6 }}>
           {[['pendentes', `Pendentes (${linhas.filter(l => l.status === 'PENDENTE').length})`], ['historico', 'Histórico']].map(([k, r]) => (
@@ -5167,8 +5169,14 @@ function AprovacoesComerciais({ currentUser }) {
                     <tr><td colSpan={9} style={{ padding: 12, background: T.panelAlt, borderBottom: `2px solid ${T.blueText}` }}>
                       {l.divergente && (
                         <div style={{ background: l.nivel_divergencia === 'vermelho' ? T.rustSoft : T.amberSoft, borderRadius: 8, padding: '8px 12px', marginBottom: 10 }}>
-                          <div style={{ fontSize: 12.5, fontWeight: 800, color: l.nivel_divergencia === 'vermelho' ? T.rustText : T.amberText, marginBottom: 4 }}>Pontos de atenção — decisão individual</div>
+                          <div style={{ fontSize: 12.5, fontWeight: 800, color: l.nivel_divergencia === 'vermelho' ? T.rustText : T.amberText, marginBottom: 4 }}>Divergência relatada pelo fiscal / engenharia — decisão individual</div>
                           {(l.motivos || []).map((m, i) => <div key={i} style={{ fontSize: 12.5 }}>• {m}</div>)}
+                        </div>
+                      )}
+                      {(l.observacoes || []).length > 0 && (
+                        <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 8, padding: '8px 12px', marginBottom: 10 }}>
+                          <div style={{ fontSize: 12, fontWeight: 800, color: T.inkDim, marginBottom: 4 }}>Observações (não bloqueiam a aprovação)</div>
+                          {(l.observacoes || []).map((m, i) => <div key={i} style={{ fontSize: 12.5, color: T.inkDim }}>• {m}</div>)}
                         </div>
                       )}
                       <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', fontSize: 12, color: T.inkDim, marginBottom: 10 }}>
