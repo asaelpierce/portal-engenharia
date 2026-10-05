@@ -404,7 +404,7 @@ function AlmoxQrPublico({ codigo, chave, nomeLogado }) {
       // ordem aberta para esta etiqueta: o destino e a quantidade da ordem já vêm marcados
       const ord = (data.ordens || [])[0];
       setPara(ord?.setor_destino && ord.setor_destino !== v.setor_atual ? ord.setor_destino : (v.setor_destino && v.setor_destino !== v.setor_atual ? v.setor_destino : ''));
-      setQtdEnt(String(ord?.quantidade_solicitada ?? v.quantidade ?? '').replace('.', ','));
+      setQtdEnt(almoxFmtQtd(ord?.quantidade_solicitada ?? v.saldo_setor_atual ?? v.quantidade));
     }
     setCarregando(false);
   }, [codigo, chave]);
@@ -427,7 +427,7 @@ function AlmoxQrPublico({ codigo, chave, nomeLogado }) {
       const { data, error } = await supabase.rpc('fn_almox_publico_registrar', {
         p_codigo: codigo, p_chave: chave, p_nome: perm.nome, p_para_setor: para, p_recebido_por: recebido.trim(),
         p_foto_material: cMat, p_foto_documento: cDoc, p_observacao: obs.trim() || null,
-        p_quantidade: dados.tipo === 'grupo' ? null : (qtdEnt.trim() ? Number(qtdEnt.replace(',', '.')) : null) });
+        p_quantidade: dados.tipo === 'grupo' ? null : almoxNum(qtdEnt) });
       if (error || !data?.ok) throw new Error(error?.message || data?.erro || 'Não foi possível registrar.');
       setFeito({ para, recebido: recebido.trim(), hora: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) });
       setFotoMat(null); setFotoDoc(null); setObs(''); setRecebido('');
@@ -488,10 +488,16 @@ function AlmoxQrPublico({ codigo, chave, nomeLogado }) {
           <div style={{ fontSize: 30, fontWeight: 900, lineHeight: 1.1, marginTop: 2 }}>OP {v.op}</div>
           {v.br && <div style={{ fontSize: 18, fontWeight: 700, color: T.inkDim }}>{v.br}</div>}
           <div style={{ fontSize: 17, fontWeight: 600, marginTop: 6 }}>{v.cod_materia_prima ? `${v.cod_materia_prima} · ` : ''}{v.material}</div>
-          {v.quantidade != null && <div style={{ fontSize: 16, color: T.inkDim, marginTop: 2 }}>Quantidade: <strong style={{ color: T.ink }}>{String(v.quantidade).replace('.', ',')}{v.unidade ? ` ${v.unidade}` : ''}</strong></div>}
+          {v.quantidade != null && <div style={{ fontSize: 16, color: T.inkDim, marginTop: 2 }}>Quantidade: <strong style={{ color: T.ink }}>{almoxFmtQtd(v.quantidade)}{v.unidade ? ` ${v.unidade}` : ''}</strong></div>}
           <div style={{ display: 'inline-block', marginTop: 10, background: T.blueSoft, color: T.blueText, fontWeight: 800, fontSize: 15, borderRadius: 8, padding: '6px 10px' }}>
             Está em: {v.setor_atual}
           </div>
+          {v.onde_esta && v.onde_esta.includes('·') && (
+            <div style={{ fontSize: 14, color: T.blueText, marginTop: 8, lineHeight: 1.6 }}>
+              <strong>Dividido entre setores:</strong>
+              {v.onde_esta.split(' · ').map(x => <div key={x}>• {x}</div>)}
+            </div>
+          )}
         </div>
 
         {feito && (
@@ -577,7 +583,11 @@ function AlmoxQrPublico({ codigo, chave, nomeLogado }) {
           {dados.tipo !== 'grupo' && (
           <div style={bloco}>
             <div style={titulo}>Quantidade entregue{v.unidade ? ` (${v.unidade})` : ''}</div>
-            <input value={qtdEnt} onChange={e => setQtdEnt(e.target.value)} inputMode="decimal" placeholder={String(v.quantidade ?? '')} style={{ ...entrada, maxWidth: 220 }} />
+            <input value={qtdEnt} onChange={e => setQtdEnt(e.target.value)} inputMode="decimal" placeholder={almoxFmtQtd(v.saldo_setor_atual ?? v.quantidade)} style={{ ...entrada, maxWidth: 220 }} />
+            <div style={{ fontSize: 14, color: T.inkDim, marginTop: 6 }}>
+              {almoxNum(qtdEnt) != null ? <>vai registrar <strong>{almoxFmtQtd(almoxNum(qtdEnt))}</strong>{v.unidade ? ` ${v.unidade}` : ''}</> : 'vazio = tudo o que há no setor'}
+              {v.saldo_setor_atual != null && <> · em {v.setor_atual}: {almoxFmtQtd(v.saldo_setor_atual)}</>}
+            </div>
           </div>
           )}
 
@@ -9687,7 +9697,13 @@ function AlmoxLeitorQR({ onLido, ativo = true }) {
 // entrega / movimentação com comprovação (foto do material obrigatória, documento opcional)
 function AlmoxEntregaModal({ volume, destinoPadrao, quantidadePadrao, currentUser, onFechar, onFeito, grupo }) {
   const [para, setPara] = useState(destinoPadrao || volume.setor_destino || '');
-  const [qtdEnt, setQtdEnt] = useState(String(quantidadePadrao ?? volume.quantidade ?? '').replace('.', ','));
+  const [qtdEnt, setQtdEnt] = useState(quantidadePadrao != null ? almoxFmtQtd(quantidadePadrao) : almoxFmtQtd(volume.quantidade));
+  const [saldoOrigem, setSaldoOrigem] = useState(null);
+  useEffect(() => {
+    if (!volume.id) return;
+    supabase.from('v_almox_saldo_setor').select('saldo').eq('volume_id', volume.id).eq('setor', volume.setor_atual).maybeSingle()
+      .then(r => { if (r.data?.saldo != null) { setSaldoOrigem(Number(r.data.saldo)); if (quantidadePadrao == null) setQtdEnt(almoxFmtQtd(r.data.saldo)); } });
+  }, [volume.id, volume.setor_atual]);  // eslint-disable-line
   const [recebido, setRecebido] = useState('');
   const [obs, setObs] = useState('');
   const [fotoMat, setFotoMat] = useState(null);
@@ -9717,7 +9733,7 @@ function AlmoxEntregaModal({ volume, destinoPadrao, quantidadePadrao, currentUse
         p_foto_material: cMat, p_foto_documento: cDoc, p_observacao: obs }) : await supabase.rpc('fn_almox_registrar_entrega', {
         p_volume_id: volume.id, p_para_setor: para, p_recebido_por: recebido.trim(), p_entregue_por: currentUser?.nome || null,
         p_foto_material: cMat, p_foto_documento: cDoc, p_observacao: obs, p_tipo: volume.setor_atual === 'Ponto de Estoque' ? 'entrega' : 'movimentacao',
-        p_quantidade: qtdEnt.trim() ? Number(qtdEnt.replace(',', '.')) : null });
+        p_quantidade: almoxNum(qtdEnt) });
       if (error || !data?.ok) throw new Error(error?.message || data?.erro || 'Não foi possível registrar');
       onFeito && onFeito();
     } catch (e) { setErro(e.message || String(e)); }
@@ -9765,6 +9781,10 @@ function AlmoxEntregaModal({ volume, destinoPadrao, quantidadePadrao, currentUse
           <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6 }}>Quantidade entregue{volume.unidade ? ` (${volume.unidade})` : ''}</div>
           <input value={qtdEnt} onChange={e => setQtdEnt(e.target.value)} inputMode="decimal" placeholder={String(volume.quantidade ?? '')}
             style={{ width: 160, boxSizing: 'border-box', fontSize: 16, padding: '11px 12px', borderRadius: 8, border: `1px solid ${T.line}` }} />
+          <div style={{ fontSize: 12, color: T.inkDim, marginTop: 4 }}>
+            {almoxNum(qtdEnt) != null ? <>vai registrar <strong>{almoxFmtQtd(almoxNum(qtdEnt))}</strong>{volume.unidade ? ` ${volume.unidade}` : ''}</> : 'vazio = tudo o que há no setor'}
+            {saldoOrigem != null && <> · em {volume.setor_atual}: {almoxFmtQtd(saldoOrigem)}</>}
+          </div>
         </div>
         )}
         <div>
@@ -9872,7 +9892,7 @@ function AlmoxQR({ modo, currentUser, codigoInicial }) {
     const itens = materiais.filter(m => marcados[m.id]?.on);
     if (!itens.length) return;
     const linhas = itens.map(m => ({ br: m.br || opSel.br || null, op: m.op, cod_materia_prima: m.cod_materia_prima, material: m.materia_prima_descricao,
-      quantidade: marcados[m.id]?.qtd !== undefined && marcados[m.id]?.qtd !== '' ? Number(String(marcados[m.id].qtd).replace(',', '.')) : m.quantidade_mp,
+      quantidade: marcados[m.id]?.qtd !== undefined && marcados[m.id]?.qtd !== '' ? almoxNum(marcados[m.id].qtd) : m.quantidade_mp,
       setor_destino: destinoLote || null }));
     const { data, error } = await supabase.rpc('fn_almox_volumes_obter', { p_itens: linhas, p_usuario: currentUser?.nome || null });
     if (error) { setAviso({ erro: true, t: error.message }); return; }
@@ -10124,6 +10144,16 @@ const almoxChaveItem = (op, cod, desc) => `${op}|${cod || desc || ''}`;
 // (origem = 'ordem'). A pessoa vê o que é dela (ou "qualquer um da equipe"),
 // registra a entrega com quantidade e foto, e a ordem fecha sozinha.
 // ============================================================================
+// quantidade digitada no formato brasileiro: "1.250" = mil duzentos e cinquenta, "1.250,5", "1,25"
+const almoxNum = (x) => {
+  let t = String(x ?? '').trim().replace(/\s/g, '');
+  if (!t) return null;
+  if (t.includes(',')) t = t.replace(/\./g, '').replace(',', '.');
+  else if (/^\d{1,3}(\.\d{3})+$/.test(t)) t = t.replace(/\./g, '');
+  const n = Number(t);
+  return Number.isFinite(n) ? n : null;
+};
+const almoxFmtQtd = (n) => n == null || n === '' ? '—' : Number(n).toLocaleString('pt-BR', { maximumFractionDigits: 3 });
 const ALMOX_QUALQUER = 'Qualquer um da equipe';
 function AlmoxRotina({ currentUser }) {
   const [ordens, setOrdens] = useState(null);
@@ -10348,6 +10378,102 @@ function AlmoxEtiquetasLista({ currentUser }) {
   );
 }
 
+// ============================================================================
+// ESTOQUE > REGISTRO: cada movimentação (de onde, para onde, quanto, quem) e onde
+// está cada parte do material agora (saldo por setor: v_almox_saldo_setor).
+// ============================================================================
+function AlmoxRegistro() {
+  const [linhas, setLinhas] = useState(null);
+  const [ordens, setOrdens] = useState([]);
+  const [saldos, setSaldos] = useState([]);
+  const [busca, setBusca] = useState('');
+  const [setor, setSetor] = useState('Todos');
+  const [dias, setDias] = useState(30);
+  const carregar = useCallback(async () => {
+    const desde = new Date(Date.now() - dias * 86400000).toISOString();
+    const [r, o, s] = await Promise.all([
+      supabase.from('v_almox_registro').select('*').gte('criado_em', desde).order('criado_em', { ascending: false }).limit(2000),
+      supabase.from('solicitacoes_movimentacao_almoxarifado').select('*').eq('status', 'pendente').order('solicitado_em', { ascending: false }),
+      supabase.from('v_almox_saldo_setor').select('*'),
+    ]);
+    setLinhas(r.data || []); setOrdens(o.data || []); setSaldos(s.data || []);
+  }, [dias]);
+  useEffect(() => { carregar(); }, [carregar]);
+  if (!linhas) return <div style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Carregando o registro…</div>;
+  const b = busca.trim().toLowerCase();
+  const casa = (...xs) => !b || xs.some(x => String(x || '').toLowerCase().includes(b));
+  const filtradas = linhas.filter(l => (setor === 'Todos' || l.para_setor === setor || l.de_setor === setor) && casa(l.op, l.br, l.codigo, l.material, l.cod_materia_prima, l.entregue_por, l.recebido_por));
+  const porVol = {}; saldos.forEach(s => { (porVol[s.volume_id] = porVol[s.volume_id] || []).push(s); });
+  const ondeOrdem = (o) => {
+    const ss = o.volume_id ? (porVol[o.volume_id] || []) : saldos.filter(s => s.op === o.op && (s.cod_materia_prima || s.material) === (o.cod_materia_prima || o.material));
+    return ss.length ? ss.map(s => `${s.setor}: ${almoxFmtQtd(s.saldo)}`).join(' · ') : 'sem etiqueta';
+  };
+  const ordensF = ordens.filter(o => casa(o.op, o.br, o.material, o.cod_materia_prima, o.atribuido_a, o.solicitado_por) && (setor === 'Todos' || o.setor_destino === setor));
+  const dh = (t) => t ? new Date(t).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
+  const th = { textAlign: 'left', padding: '7px 9px', fontSize: 11, color: T.inkFaint, fontWeight: 700, borderBottom: `1px solid ${T.line}`, background: T.panelAlt, whiteSpace: 'nowrap', position: 'sticky', top: 0 };
+  const td = { padding: '7px 9px', fontSize: 12.5, borderBottom: `1px solid ${T.lineSoft}`, verticalAlign: 'top' };
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+        <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="buscar OP, BR, material, etiqueta ou pessoa" style={{ ...inputStyle(), width: 300, padding: '6px 9px' }} />
+        <select value={setor} onChange={e => setSetor(e.target.value)} style={{ ...inputStyle(), width: 190, padding: '6px 9px' }}>
+          {['Todos', ...ALMOX_SETORES].map(s2 => <option key={s2} value={s2}>{s2 === 'Todos' ? 'Todos os setores' : s2}</option>)}
+        </select>
+        <select value={dias} onChange={e => setDias(Number(e.target.value))} style={{ ...inputStyle(), width: 150, padding: '6px 9px' }}>
+          {[[7, 'Últimos 7 dias'], [30, 'Últimos 30 dias'], [90, 'Últimos 90 dias'], [365, 'Último ano']].map(([k, r]) => <option key={k} value={k}>{r}</option>)}
+        </select>
+        <button onClick={carregar} style={{ ...ghostBtn(T.inkDim), cursor: 'pointer' }}>Atualizar</button>
+      </div>
+
+      <Panel title={`Ordens e pedidos em aberto (${ordensF.length})`} subtitle="O que foi pedido, para quem, e onde o material está agora.">
+        {!ordensF.length ? <div style={{ fontSize: 12.5, color: T.inkFaint }}>Nada em aberto.</div> : (
+          <div style={{ overflow: 'auto', maxHeight: 340, border: `1px solid ${T.line}`, borderRadius: 8 }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead><tr>{['Pedido em', 'OP', 'Material', 'Levar para', 'Qtd', 'Quem leva', 'Pedido por', 'Onde está agora'].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
+              <tbody>{ordensF.map(o => (
+                <tr key={o.id}>
+                  <td style={{ ...td, whiteSpace: 'nowrap' }}>{dh(o.solicitado_em)}</td>
+                  <td style={{ ...td, whiteSpace: 'nowrap' }}><strong>{o.op}</strong>{o.br ? <div style={{ fontSize: 11, color: T.inkFaint }}>{o.br}</div> : null}</td>
+                  <td style={{ ...td, maxWidth: 320 }}>{o.cod_materia_prima ? `${o.cod_materia_prima} · ` : ''}{o.material}</td>
+                  <td style={{ ...td, fontWeight: 700, color: T.terracotta }}>{o.tipo === 'para_estoque' ? 'Ponto de Estoque' : o.setor_destino}</td>
+                  <td style={td}>{o.quantidade_solicitada != null ? almoxFmtQtd(o.quantidade_solicitada) : 'tudo'}</td>
+                  <td style={td}>{o.origem === 'ordem' ? (o.atribuido_a || 'equipe') : '—'}</td>
+                  <td style={td}>{o.solicitado_por || '—'}</td>
+                  <td style={{ ...td, color: T.blueText, fontWeight: 600 }}>{ondeOrdem(o)}</td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
+        )}
+      </Panel>
+
+      <Panel title={`Movimentações (${filtradas.length})`} subtitle="Cada entrega registrada, com a quantidade, quem levou e quem recebeu. 'Onde está agora' mostra o saldo de cada setor da etiqueta.">
+        <div style={{ overflow: 'auto', maxHeight: 620, border: `1px solid ${T.line}`, borderRadius: 8 }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead><tr>{['Quando', 'OP', 'Etiqueta', 'Material', 'Qtd', 'De → Para', 'Entregue por', 'Recebido por', 'Onde está agora'].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
+            <tbody>
+              {!filtradas.length && <tr><td colSpan={9} style={{ ...td, textAlign: 'center', color: T.inkFaint, padding: 20 }}>Nenhuma movimentação no período.</td></tr>}
+              {filtradas.map(l => (
+                <tr key={l.id}>
+                  <td style={{ ...td, whiteSpace: 'nowrap' }}>{dh(l.criado_em)}</td>
+                  <td style={{ ...td, whiteSpace: 'nowrap' }}><strong>{l.op}</strong>{l.br ? <div style={{ fontSize: 11, color: T.inkFaint }}>{l.br}</div> : null}</td>
+                  <td style={{ ...td, fontWeight: 700 }}>{l.codigo || '—'}</td>
+                  <td style={{ ...td, maxWidth: 300 }}>{l.cod_materia_prima ? `${l.cod_materia_prima} · ` : ''}{l.material}</td>
+                  <td style={{ ...td, whiteSpace: 'nowrap' }}>{almoxFmtQtd(l.quantidade)}{l.unidade ? ` ${l.unidade}` : ''}{l.quantidade_etiqueta != null && Number(l.quantidade) < Number(l.quantidade_etiqueta) ? <div style={{ fontSize: 10.5, color: T.inkFaint }}>de {almoxFmtQtd(l.quantidade_etiqueta)} (parcial)</div> : null}</td>
+                  <td style={{ ...td, whiteSpace: 'nowrap' }}>{l.de_setor || '—'} → <strong>{l.para_setor}</strong></td>
+                  <td style={td}>{l.entregue_por || '—'}</td>
+                  <td style={td}>{l.recebido_por || '—'}</td>
+                  <td style={{ ...td, color: T.blueText, fontWeight: 600 }}>{l.onde_esta || (l.status_etiqueta === 'finalizado' ? 'finalizado' : '—')}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Panel>
+    </div>
+  );
+}
+
 function AlmoxMovimentar({ currentUser, codigoInicial }) {
   const pode = currentUser?.movimentaEstoque === true;   // sem permissão: só consulta
   const [ops, setOps] = useState([]);
@@ -10376,6 +10502,7 @@ function AlmoxMovimentar({ currentUser, codigoInicial }) {
   const [equipe, setEquipe] = useState([]);
   const [ordemDe, setOrdemDe] = useState(null);
   const [gruposOp, setGruposOp] = useState([]);
+  const [saldosOp, setSaldosOp] = useState([]);
   const [movGrupo, setMovGrupo] = useState(null);
   const [ordem, setOrdem] = useState({ setor: '', quem: ALMOX_QUALQUER, qtd: '', obs: '' });
   useEffect(() => {
@@ -10403,7 +10530,9 @@ function AlmoxMovimentar({ currentUser, codigoInicial }) {
       supabase.from('almox_entrega').select('*').eq('op', o.op).order('criado_em', { ascending: false }).limit(300),
     ]);
     setItens(m.data || []); setVols(v.data || []); setSolicOp(s.data || []); setHist(h.data || []);
-    const gids = [...new Set((v.data || []).map(x => x.grupo_id).filter(Boolean))];
+    const vids = (v.data || []).map(x => x.id);
+    if (vids.length) { const { data: ss } = await supabase.from('v_almox_saldo_setor').select('volume_id,setor,saldo').in('volume_id', vids); setSaldosOp(ss || []); } else setSaldosOp([]);
+        const gids = [...new Set((v.data || []).map(x => x.grupo_id).filter(Boolean))];
     if (gids.length) { const { data: g } = await supabase.from('almox_grupo').select('*').in('id', gids).neq('status', 'cancelado'); setGruposOp(g || []); } else setGruposOp([]);
     setCarregandoOp(false);
   }, []);
@@ -10442,7 +10571,7 @@ function AlmoxMovimentar({ currentUser, codigoInicial }) {
 
   const itemParaEtiqueta = (m) => ({ br: m.br || opSel?.br || null, op: m.op, cod_materia_prima: m.cod_materia_prima, material: m.materia_prima_descricao,
     quantidade: qtd[almoxChaveItem(m.op, m.cod_materia_prima, m.materia_prima_descricao)] !== undefined && qtd[almoxChaveItem(m.op, m.cod_materia_prima, m.materia_prima_descricao)] !== ''
-      ? Number(String(qtd[almoxChaveItem(m.op, m.cod_materia_prima, m.materia_prima_descricao)]).replace(',', '.')) : m.quantidade_mp });
+      ? almoxNum(qtd[almoxChaveItem(m.op, m.cod_materia_prima, m.materia_prima_descricao)]) : m.quantidade_mp });
 
   const darEntrada = async (lista) => {
     if (!lista.length) return;
@@ -10464,7 +10593,7 @@ function AlmoxMovimentar({ currentUser, codigoInicial }) {
     if (tipo === 'para_setor' && !pedSetor) { setAviso({ erro: true, t: 'Escolha para qual setor é o pedido.' }); return; }
     const { error } = await supabase.from('solicitacoes_movimentacao_almoxarifado').insert({
       tipo, br: l.m.br || opSel?.br || null, op: l.m.op, material: l.m.materia_prima_descricao, cod_materia_prima: l.m.cod_materia_prima,
-      quantidade_total_prevista: l.m.quantidade_mp, quantidade_solicitada: pedQtd ? Number(String(pedQtd).replace(',', '.')) : null,
+      quantidade_total_prevista: l.m.quantidade_mp, quantidade_solicitada: pedQtd ? almoxNum(pedQtd) : null,
       setor_destino: tipo === 'para_setor' ? pedSetor : null, status: 'pendente', solicitado_por: currentUser?.nome || null,
     });
     if (error) { setAviso({ erro: true, t: error.message }); return; }
@@ -10477,7 +10606,7 @@ function AlmoxMovimentar({ currentUser, codigoInicial }) {
     const { error } = await supabase.from('solicitacoes_movimentacao_almoxarifado').insert({
       tipo: 'para_setor', origem: 'ordem', br: l.m.br || opSel?.br || null, op: l.m.op, material: l.m.materia_prima_descricao,
       cod_materia_prima: l.m.cod_materia_prima, quantidade_total_prevista: l.m.quantidade_mp, volume_id: l.vol?.id || null,
-      quantidade_solicitada: ordem.qtd ? Number(String(ordem.qtd).replace(',', '.')) : null, setor_destino: ordem.setor,
+      quantidade_solicitada: ordem.qtd ? almoxNum(ordem.qtd) : null, setor_destino: ordem.setor,
       atribuido_a: ordem.quem, observacao: ordem.obs.trim() || null, status: 'pendente', solicitado_por: currentUser?.nome || null,
     });
     if (error) { setAviso({ erro: true, t: error.message }); return; }
@@ -10689,10 +10818,15 @@ function AlmoxMovimentar({ currentUser, codigoInicial }) {
                             {!l.vol ? (
                               <input value={qtd[l.k] ?? ''} onChange={e => setQtd(x => ({ ...x, [l.k]: e.target.value }))} placeholder={String(l.m.quantidade_mp ?? '')}
                                 inputMode="decimal" title="quantidade que vai na etiqueta (vazio = a da OP)" style={{ ...campo, width: 70 }} />
-                            ) : String(l.vol.quantidade ?? l.m.quantidade_mp ?? '—').replace('.', ',')}
+                            ) : almoxFmtQtd(l.vol.quantidade ?? l.m.quantidade_mp)}
                           </td>
                           <td style={{ padding: '8px 10px', borderBottom: `1px solid ${T.lineSoft}`, verticalAlign: 'top' }}>
                             <span style={{ display: 'inline-block', fontSize: 11.5, fontWeight: 700, padding: '3px 8px', borderRadius: 6, background: sit.bg, color: sit.c, whiteSpace: 'nowrap' }}>{sit.t}</span>
+                            {l.vol && saldosOp.filter(x => x.volume_id === l.vol.id).length > 1 && (
+                              <div style={{ fontSize: 11, color: T.blueText, marginTop: 4, lineHeight: 1.5 }}>
+                                {saldosOp.filter(x => x.volume_id === l.vol.id).map(x => <div key={x.setor}>{x.setor}: <strong>{almoxFmtQtd(x.saldo)}</strong></div>)}
+                              </div>
+                            )}
                           </td>
                           <td style={{ padding: '8px 10px', borderBottom: `1px solid ${T.lineSoft}`, verticalAlign: 'top', whiteSpace: 'nowrap', fontWeight: 700 }}>
                             {l.vol?.codigo || '—'}
@@ -10717,7 +10851,8 @@ function AlmoxMovimentar({ currentUser, codigoInicial }) {
                                   <option value={ALMOX_QUALQUER}>{ALMOX_QUALQUER}</option>
                                   {equipe.map(n => <option key={n} value={n}>{n}</option>)}
                                 </select>
-                                <input value={ordem.qtd} onChange={e => setOrdem(o => ({ ...o, qtd: e.target.value }))} placeholder={`qtd (tudo: ${String(l.vol.quantidade ?? '').replace('.', ',')})`} inputMode="decimal" style={{ ...campo, width: 120 }} />
+                                <input value={ordem.qtd} onChange={e => setOrdem(o => ({ ...o, qtd: e.target.value }))} placeholder={`qtd (tudo: ${almoxFmtQtd(l.vol.quantidade)})`} inputMode="decimal" style={{ ...campo, width: 120 }} />
+                                {ordem.qtd && <span style={{ fontSize: 11.5, color: T.blueText }}>= {almoxFmtQtd(almoxNum(ordem.qtd))}</span>}
                                 <input value={ordem.obs} onChange={e => setOrdem(o => ({ ...o, obs: e.target.value }))} placeholder="observação" style={{ ...campo, width: 180 }} />
                                 <button onClick={() => criarOrdem(l)} style={botao(true, T.blueText)}>Enviar ordem</button>
                               </div>
@@ -11199,7 +11334,7 @@ function AlmoxarifadoFluxo({ currentUser, etiquetaInicial }) {
       </div>
 
       <div style={{ display: 'flex', gap: 4, borderBottom: `1px solid ${T.line}`, flexWrap: 'wrap' }}>
-        {[{ id: 'visao_geral', label: 'Visão Geral' }, { id: 'movimentar', label: 'Movimentar' }, { id: 'rotina', label: 'Minha rotina' }, { id: 'etiquetas', label: 'Etiquetas (QR)' }, { id: 'reservas', label: `Reservas por Projeto${reservas.filter(r => r.ja_faturado).length ? ` (${reservas.filter(r => r.ja_faturado).length})` : ''}` }, { id: 'detalhado', label: `Detalhado (${detalhado.length})` }, { id: 'faturado_mes', label: 'Faturado por Mês' }, { id: 'produtividade_produto', label: 'Produtividade por Produto' }, { id: 'projetos', label: `Projetos (${projetos.length})` }, { id: 'perdas', label: `Perdas (${perdas.length})` }].map(aba => (
+        {[{ id: 'visao_geral', label: 'Visão Geral' }, { id: 'movimentar', label: 'Movimentar' }, { id: 'rotina', label: 'Minha rotina' }, { id: 'registro', label: 'Registro' }, { id: 'etiquetas', label: 'Etiquetas (QR)' }, { id: 'reservas', label: `Reservas por Projeto${reservas.filter(r => r.ja_faturado).length ? ` (${reservas.filter(r => r.ja_faturado).length})` : ''}` }, { id: 'detalhado', label: `Detalhado (${detalhado.length})` }, { id: 'faturado_mes', label: 'Faturado por Mês' }, { id: 'produtividade_produto', label: 'Produtividade por Produto' }, { id: 'projetos', label: `Projetos (${projetos.length})` }, { id: 'perdas', label: `Perdas (${perdas.length})` }].map(aba => (
           <button key={aba.id} onClick={() => setAbaAtiva(aba.id)}
             style={{
               background: 'none', border: 'none', cursor: 'pointer', padding: '10px 16px', fontSize: 13, fontWeight: 600,
@@ -11450,6 +11585,7 @@ function AlmoxarifadoFluxo({ currentUser, etiquetaInicial }) {
       {abaAtiva === 'movimentar' && <AlmoxMovimentar currentUser={currentUser} codigoInicial={etiquetaInicial} />}
       {abaAtiva === 'rotina' && <AlmoxRotina currentUser={currentUser} />}
       {abaAtiva === 'etiquetas' && <AlmoxEtiquetasLista currentUser={currentUser} />}
+      {abaAtiva === 'registro' && <AlmoxRegistro />}
       {abaAtiva === 'qr_leitor' && <AlmoxQR modo="leitor" currentUser={currentUser} codigoInicial={etiquetaInicial} />}
       {abaAtiva === 'qr_etiquetas' && <AlmoxQR modo="etiquetas" currentUser={currentUser} />}
       {abaAtiva === 'qr_entregas' && <AlmoxQR modo="entregas" currentUser={currentUser} />}
