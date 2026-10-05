@@ -4929,7 +4929,7 @@ function Medidor({ pct, largura = 150, par, rotulo }) {
 // edge function aprovacao-comercial-retorno (array "decisoes", até 3 tentativas).
 // ============================================================================
 const APROV_CAMPOS = {
-  comercial: [['cliente', 'Cliente'], ['cnpj', 'CNPJ'], ['ie', 'IE'], ['contato', 'Contato'], ['condicaoPagamento', 'Cond. pagamento'], ['dataEmissao', 'Data de emissão'],
+  comercial: [['numeroPedido', 'Nº do pedido (OC)'], ['cliente', 'Cliente'], ['cnpj', 'CNPJ'], ['ie', 'IE'], ['contato', 'Contato'], ['condicaoPagamento', 'Cond. pagamento'], ['dataEmissao', 'Data de emissão'],
     ['cfop', 'CFOP'], ['multa', 'Multa'], ['remessaEquipamento', 'Remessa de equip.'], ['necessitaBM', 'Necessita BM'], ['observacao', 'Observação']],
   fiscal: [['destinoMercadoria', 'Destino da mercadoria'], ['ncmCliente', 'NCM do cliente'], ['codigoOrigem', 'Cód. origem'], ['icms', 'ICMS'], ['ipi', 'IPI'], ['iss', 'ISS'],
     ['beneficioFiscal', 'Benefício fiscal'], ['observacao', 'Observação']],
@@ -4945,6 +4945,7 @@ function AprovacoesComerciais({ currentUser }) {
   const [vend, setVend] = useState('Todos');
   const [tipo, setTipo] = useState('Todos');
   const [div, setDiv] = useState('todos');
+  const [orig, setOrig] = useState('Todas');
   const [de, setDe] = useState('');
   const [ate, setAte] = useState('');
   const [marc, setMarc] = useState({});
@@ -4971,6 +4972,7 @@ function AprovacoesComerciais({ currentUser }) {
   const dia = (t) => String(t || '').slice(0, 10);
   const base = linhas.filter(l => modo === 'pendentes' ? l.status === 'PENDENTE' : l.status !== 'PENDENTE');
   const filtradas = base.filter(l => (vend === 'Todos' || l.vendedor === vend) && (tipo === 'Todos' || (l.tipo_pedido || '—') === tipo)
+    && (orig === 'Todas' || (l.origem || '—') === orig)
     && (div === 'todos' || (div === 'sem' ? !l.divergente : l.divergente))
     && (!de || dia(l.data_solicitacao) >= de) && (!ate || dia(l.data_solicitacao) <= ate)
     && (!b || [l.br, l.br_informado_original, l.comercial?.cliente, l.vendedor, l.task_id_planner].some(x => String(x || '').toLowerCase().includes(b))));
@@ -5094,6 +5096,9 @@ function AprovacoesComerciais({ currentUser }) {
         <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="buscar BR ou cliente" style={{ ...inputStyle(), width: 220, padding: '6px 9px' }} />
         <select value={vend} onChange={e => setVend(e.target.value)} style={{ ...inputStyle(), width: 180, padding: '6px 9px' }}>{vendedores.map(x => <option key={x} value={x}>{x === 'Todos' ? 'Todos os vendedores' : x}</option>)}</select>
         <select value={tipo} onChange={e => setTipo(e.target.value)} style={{ ...inputStyle(), width: 150, padding: '6px 9px' }}>{tipos.map(x => <option key={x} value={x}>{x === 'Todos' ? 'Todos os tipos' : x}</option>)}</select>
+        <select value={orig} onChange={e => setOrig(e.target.value)} style={{ ...inputStyle(), width: 160, padding: '6px 9px' }}>
+          {['Todas', ...[...new Set(linhas.map(l => l.origem || '—'))].sort()].map(x => <option key={x} value={x}>{x === 'Todas' ? 'Todas as origens' : x === 'retroativo' ? 'Retroativos (Planner)' : x}</option>)}
+        </select>
         <select value={div} onChange={e => setDiv(e.target.value)} style={{ ...inputStyle(), width: 170, padding: '6px 9px' }}>
           <option value="todos">Com e sem divergência</option><option value="sem">Sem divergência</option><option value="com">Com divergência</option>
         </select>
@@ -5133,7 +5138,7 @@ function AprovacoesComerciais({ currentUser }) {
                   <tr style={{ background: ab ? T.blueSoft : marc[l.id] ? T.rustSoft : 'transparent' }}>
                     {modo === 'pendentes' && pode && <td style={td}><input type="checkbox" checked={!!marc[l.id]} onChange={e => setMarc(x => ({ ...x, [l.id]: e.target.checked }))} /></td>}
                     <td style={{ ...td, fontWeight: 700, whiteSpace: 'nowrap', cursor: 'pointer' }} onClick={() => setAberto(x => x === l.id ? null : l.id)}>{ab ? '▾' : '▸'} {l.br || '—'}</td>
-                    <td style={{ ...td, maxWidth: 260 }}>{l.comercial?.cliente || '—'}</td>
+                    <td style={{ ...td, maxWidth: 260 }}>{l.comercial?.cliente || '—'}{l.origem === 'retroativo' && <div style={{ fontSize: 10.5, color: T.inkFaint }}>retroativo · Planner</div>}</td>
                     <td style={td}>{l.vendedor || '—'}</td>
                     <td style={td}>{l.tipo_pedido || '—'}</td>
                     <td style={{ ...td, whiteSpace: 'nowrap' }}>{dataHora(l.data_solicitacao)}</td>
