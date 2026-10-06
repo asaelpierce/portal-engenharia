@@ -487,6 +487,7 @@ function AlmoxQrPublico({ codigo, chave, nomeLogado }) {
           <div style={{ fontSize: 13, fontWeight: 700, color: T.inkFaint }}>Etiqueta {v.codigo}</div>
           <div style={{ fontSize: 30, fontWeight: 900, lineHeight: 1.1, marginTop: 2 }}>OP {v.op}</div>
           {v.br && <div style={{ fontSize: 18, fontWeight: 700, color: T.inkDim }}>{v.br}</div>}
+          {v.origem_item === 'nova_necessidade' && <div style={{ display: 'inline-block', marginTop: 6, fontSize: 13, fontWeight: 800, color: '#fff', background: T.terracotta, borderRadius: 6, padding: '3px 8px' }}>🆕 NOVA NECESSIDADE</div>}
           <div style={{ fontSize: 17, fontWeight: 600, marginTop: 6 }}>{v.cod_materia_prima ? `${v.cod_materia_prima} · ` : ''}{v.material}</div>
           {v.quantidade != null && <div style={{ fontSize: 16, color: T.inkDim, marginTop: 2 }}>Quantidade: <strong style={{ color: T.ink }}>{almoxFmtQtd(v.quantidade)}{v.unidade ? ` ${v.unidade}` : ''}</strong></div>}
           <div style={{ display: 'inline-block', marginTop: 10, background: T.blueSoft, color: T.blueText, fontWeight: 800, fontSize: 15, borderRadius: 8, padding: '6px 10px' }}>
@@ -9629,7 +9630,7 @@ async function almoxImprimirEtiquetas(volumes, cfgArg) {
     <div class="tx">
       <div class="op">OP ${esc(v.op)}</div>
       <div class="br">${esc(v.br || 'sem BR')}</div>
-      <div class="it">${v.cod_materia_prima ? esc(v.cod_materia_prima) + ' · ' : ''}${esc(v.material)}</div>
+      <div class="it">${v.origem_item === 'nova_necessidade' ? '<b>NOVA NECESSIDADE</b> · ' : ''}${v.cod_materia_prima ? esc(v.cod_materia_prima) + ' · ' : ''}${esc(v.material)}</div>
       <div class="rod"><span>${v.quantidade != null ? 'QTD ' + esc(v.quantidade) + (v.unidade ? ' ' + esc(v.unidade) : '') : ''}</span><span>${v.setor_destino ? '→ ' + esc(v.setor_destino) : ''}</span></div>
     </div>
     <div class="lado"><div class="qr">${svgs[i]}</div><div class="cod">${esc(v.codigo)}</div></div>
@@ -10543,6 +10544,9 @@ function AlmoxMovimentar({ currentUser, codigoInicial }) {
   const [ordemDe, setOrdemDe] = useState(null);
   const [gruposOp, setGruposOp] = useState([]);
   const [saldosOp, setSaldosOp] = useState([]);
+  // nova necessidade: requisição do Sankhya com material fora da lista ou acima do previsto
+  const [novaPorOp, setNovaPorOp] = useState({});
+  const [novas, setNovas] = useState([]);
   const [movGrupo, setMovGrupo] = useState(null);
   const [ordem, setOrdem] = useState({ setor: '', quem: ALMOX_QUALQUER, qtd: '', obs: '' });
   useEffect(() => {
@@ -10557,6 +10561,8 @@ function AlmoxMovimentar({ currentUser, codigoInicial }) {
       supabase.from('solicitacoes_movimentacao_almoxarifado').select('*').eq('status', 'pendente').order('solicitado_em'),
     ]);
     setOps(o.data || []); setPendentes(p.data || []);
+    const { data: nn } = await supabase.from('v_almox_nova_necessidade_op').select('*');
+    setNovaPorOp(Object.fromEntries((nn || []).map(x => [String(x.op), x])));
   }, []);
   useEffect(() => { carregarListas(); }, [carregarListas]);
 
@@ -10570,6 +10576,8 @@ function AlmoxMovimentar({ currentUser, codigoInicial }) {
       supabase.from('almox_entrega').select('*').eq('op', o.op).order('criado_em', { ascending: false }).limit(300),
     ]);
     setItens(m.data || []); setVols(v.data || []); setSolicOp(s.data || []); setHist(h.data || []);
+    const { data: nv } = await supabase.from('v_almox_nova_necessidade').select('*').eq('op', o.op).order('descricao');
+    setNovas(nv || []);
     const vids = (v.data || []).map(x => x.id);
     if (vids.length) { const { data: ss } = await supabase.from('v_almox_saldo_setor').select('volume_id,setor,saldo').in('volume_id', vids); setSaldosOp(ss || []); } else setSaldosOp([]);
         const gids = [...new Set((v.data || []).map(x => x.grupo_id).filter(Boolean))];
@@ -10600,18 +10608,27 @@ function AlmoxMovimentar({ currentUser, codigoInicial }) {
   }, [buscaOp, ops]);
 
   // itens da OP com etiqueta, pedidos e histórico
-  const linhas = useMemo(() => itens.map(m => {
-    const k = almoxChaveItem(m.op, m.cod_materia_prima, m.materia_prima_descricao);
-    const doItem = vols.filter(v => almoxChaveItem(v.op, v.cod_materia_prima, v.material) === k);
+  const linhas = useMemo(() => [
+    ...itens,
+    ...novas.map(n => ({ op: n.op, br: n.br, cod_materia_prima: n.cod_materia_prima, materia_prima_descricao: n.descricao, quantidade_mp: Number(n.qtd_nova),
+      unidade: n.unidade, nova: true, motivo: n.motivo, requisicoes: n.requisicoes, qtd_prevista: n.qtd_prevista, qtd_requisitada: n.qtd_requisitada })),
+  ].map(m => {
+    const kBase = almoxChaveItem(m.op, m.cod_materia_prima, m.materia_prima_descricao);
+    const orig = m.nova ? 'nova_necessidade' : 'lista';
+    const k = (m.nova ? 'N|' : '') + kBase;
+    const doItem = vols.filter(v => almoxChaveItem(v.op, v.cod_materia_prima, v.material) === kBase && (v.origem_item || 'lista') === orig);
     const vol = doItem.find(v => v.status === 'ativo') || doItem[doItem.length - 1] || null;
-    const peds = solicOp.filter(s => almoxChaveItem(s.op, s.cod_materia_prima, s.material) === k);
-    const h = hist.filter(e => doItem.some(v => v.id === e.volume_id) || almoxChaveItem(e.op, null, e.material) === almoxChaveItem(m.op, null, m.materia_prima_descricao));
+    const peds = solicOp.filter(s => almoxChaveItem(s.op, s.cod_materia_prima, s.material) === kBase && (!s.volume_id || doItem.some(v => v.id === s.volume_id) || !m.nova));
+    const h = hist.filter(e => doItem.some(v => v.id === e.volume_id) || (!m.nova && almoxChaveItem(e.op, null, e.material) === almoxChaveItem(m.op, null, m.materia_prima_descricao)));
     return { m, k, vol, peds, h };
-  }), [itens, vols, solicOp, hist]);
+  }), [itens, novas, vols, solicOp, hist]);
 
-  const itemParaEtiqueta = (m) => ({ br: m.br || opSel?.br || null, op: m.op, cod_materia_prima: m.cod_materia_prima, material: m.materia_prima_descricao,
-    quantidade: qtd[almoxChaveItem(m.op, m.cod_materia_prima, m.materia_prima_descricao)] !== undefined && qtd[almoxChaveItem(m.op, m.cod_materia_prima, m.materia_prima_descricao)] !== ''
-      ? almoxNum(qtd[almoxChaveItem(m.op, m.cod_materia_prima, m.materia_prima_descricao)]) : m.quantidade_mp });
+  const itemParaEtiqueta = (m) => {
+    const k = (m.nova ? 'N|' : '') + almoxChaveItem(m.op, m.cod_materia_prima, m.materia_prima_descricao);
+    return { br: m.br || opSel?.br || null, op: m.op, cod_materia_prima: m.cod_materia_prima, material: m.materia_prima_descricao,
+      unidade: m.unidade || null, origem_item: m.nova ? 'nova_necessidade' : 'lista',
+      quantidade: qtd[k] !== undefined && qtd[k] !== '' ? almoxNum(qtd[k]) : m.quantidade_mp };
+  };
 
   const darEntrada = async (lista) => {
     if (!lista.length) return;
@@ -10752,6 +10769,7 @@ function AlmoxMovimentar({ currentUser, codigoInicial }) {
                   {pendPorOp[o.op] ? <span style={{ color: T.amberText, fontWeight: 700 }}> · {pendPorOp[o.op]} pedido(s)</span> : null}
                   {o.situacao_op === 'S' ? ' · Sankhya: S' : ''}
                 </div>
+                {novaPorOp[String(o.op)] && <div style={{ fontSize: 11, fontWeight: 800, color: T.terracotta, marginTop: 2 }}>🆕 nova necessidade · {novaPorOp[String(o.op)].itens} item(ns)</div>}
               </button>
             ))}
             {opsFora.length > 0 && <div style={{ fontSize: 11, fontWeight: 700, color: T.inkFaint, margin: '8px 2px 2px' }}>Fora da lista — achadas pela busca</div>}
@@ -10769,6 +10787,12 @@ function AlmoxMovimentar({ currentUser, codigoInicial }) {
 
         <Panel title={opSel ? `OP ${opSel.op} · ${opSel.br || 'sem BR'}` : 'Itens da OP'}
           subtitle={opSel ? 'Onde cada item está, o QR e os pedidos. Marque vários para fazer de uma vez.' : 'Escolha uma OP à esquerda.'}>
+          {opSel && novas.length > 0 && (
+            <div style={{ fontSize: 12.5, padding: '9px 12px', borderRadius: 8, marginBottom: 10, background: T.rustSoft, border: `1px solid ${T.terracotta}`, color: T.ink }}>
+              <strong style={{ color: T.terracotta }}>🆕 Esta OP tem nova necessidade: {novas.length} item(ns) além da lista de materiais.</strong>
+              <div style={{ color: T.inkDim, marginTop: 2 }}>Pedido(s) de requisição no Sankhya: {[...new Set(novas.map(n => n.requisicoes))].join(' · ')}. Os itens aparecem no fim da lista, marcados — dê entrada e gere o QR próprio de cada um.</div>
+            </div>
+          )}
           {aviso && <div style={{ fontSize: 12.5, fontWeight: 600, padding: '8px 10px', borderRadius: 7, marginBottom: 10,
             background: aviso.erro ? T.rustSoft : T.oliveSoft, color: aviso.erro ? T.rustText : T.oliveText }}>{aviso.t}</div>}
           {!opSel ? null : carregandoOp ? (
@@ -10842,6 +10866,12 @@ function AlmoxMovimentar({ currentUser, codigoInicial }) {
                           </td>
                           <td style={{ padding: '8px 10px', borderBottom: `1px solid ${T.lineSoft}`, verticalAlign: 'top' }}>
                             <div style={{ fontWeight: 600 }}>{l.m.cod_materia_prima ? `${l.m.cod_materia_prima} · ` : ''}{l.m.materia_prima_descricao}</div>
+                            {l.m.nova && (
+                              <div style={{ fontSize: 11, fontWeight: 700, color: T.terracotta, marginTop: 2 }}>
+                                🆕 NOVA NECESSIDADE · {l.m.motivo === 'fora da lista' ? 'fora da lista da OP' : `acima do previsto (previsto ${almoxFmtQtd(l.m.qtd_prevista)}, requisitado ${almoxFmtQtd(l.m.qtd_requisitada)})`}
+                                <div style={{ fontWeight: 500, color: T.inkDim }}>requisição {l.m.requisicoes}</div>
+                              </div>
+                            )}
                             {l.peds.map(p => (
                               <div key={p.id} style={{ fontSize: 11, color: p.origem === 'ordem' ? T.blueText : T.amberText, fontWeight: 700, marginTop: 2 }}>
                                 {p.origem === 'ordem' ? '📋 ordem' : '⏳ pedido'} → {p.tipo === 'para_estoque' ? 'Ponto de Estoque' : p.setor_destino}{p.quantidade_solicitada != null ? ` · qtd ${String(p.quantidade_solicitada).replace('.', ',')}` : ''}
