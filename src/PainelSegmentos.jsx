@@ -12,21 +12,28 @@ const SEGS = ['PG1', 'PG2 Pipes', 'PG2 Kalimpact', 'PG2 Outros', 'PG3', 'Serviç
 const COR = { 'PG1': '#8E99A6', 'PG2 Pipes': '#2E75B6', 'PG2 Kalimpact': '#D2621A', 'PG2 Outros': '#E8B007', 'PG3': '#4E9A3A', 'Serviço': '#7A3FA0' };
 const NAVY = '#14324F', AZUL = '#1F4E79', CINZA = '#7A8592', LINHA = '#E3E7EC';
 const SIMB = { BRL: 'R$', EUR: '€', USD: 'US$' };
+// segmento de mercado do cliente (Sankhya TGFPAR.AD_SEGMENTO)
+const MERC = {
+  A: ['Cimenteira', 'Cement Plant'], B: ['Termelétrica a carvão', 'Coal Fired Power Plants'], C: ['Construção', 'Construction'],
+  D: ['Alimentos', 'Food processing'], E: ['Indústria', 'Industry'], F: ['Metalurgia', 'Metal Plant'], G: ['Mineração', 'Mining'],
+  H: ['Outros', 'Other'], I: ['Pelotização', 'Pelletizing'], J: ['Porto', 'Port'], K: ['Refratário', 'Refractory'],
+  L: ['Siderurgia', 'Steel Plant'], M: ['Transporte', 'Transport'], N: ['Fertilizantes', 'Fertilizer'],
+};
 
 const TXT = {
   pt: {
-    titulo: 'Faturado por segmento', empresa: 'KALENBORN DO BRASIL', base: 'Net Offer Value (valor da nota − todos os impostos)',
+    titulo: 'Faturado por produto', empresa: 'KALENBORN DO BRASIL', base: 'Net Offer Value (valor da nota − todos os impostos)',
     atual: 'Atualizado em', ate: 'até', idioma: 'Idioma', moeda: 'Moeda', cambio: 'Câmbio', mediaAno: 'Média do ano', cotAtual: 'Cotação atual',
-    mi: 'mi', mio: 'milhões', ytd: 'YTD', todos: 'Todos', ano: 'Ano', segmento: 'Segmento', pg2todos: 'PG2 (todo)',
-    filtros: 'Filtros', limpar: 'Limpar filtros', cliente: 'Cliente', produto: 'Produto', projeto: 'Projeto (BR)', mes: 'Mês',
+    mi: 'mi', mio: 'milhões', ytd: 'YTD', todos: 'Todos', ano: 'Ano', segmento: 'Produto', pg2todos: 'PG2 (todo)', merc: 'Segmento de mercado', semMerc: 'Sem segmento', gMerc: 'Faturado por segmento de mercado', gMercTab: 'Segmento de mercado × ano',
+    filtros: 'Filtros', limpar: 'Limpar filtros', cliente: 'Cliente', produto: 'Item', projeto: 'Projeto (BR)', mes: 'Mês',
     dica: 'Clique em qualquer barra, fatia, linha ou cliente para filtrar. A tela inteira se recalcula.',
     kTotal: 'Faturado', kNotas: 'Notas fiscais', kClientes: 'Clientes', kProjetos: 'Projetos (BR)', kTicket: 'Ticket médio por nota',
     vsAnt: 'vs. mesmo período do ano anterior', semComp: 'sem comparação',
-    gAnos: 'Evolução por ano', gMes: 'Mês a mês', gMix: 'Mix por segmento', gTab: 'Segmento × ano',
-    rCli: 'Ranking de clientes', rProd: 'Ranking de produtos', rBr: 'Ranking de projetos (BR)', agrupar: 'Agrupar por grupo econômico',
-    kal: 'Kalimpact em todos os segmentos', kPG2: 'em PG2', kPG1: 'em PG1', kPG3: 'em projetos PG3', kTot: 'Kalimpact total', kPct: '% do faturado',
+    gAnos: 'Evolução por ano', gMes: 'Mês a mês', gMix: 'Mix por produto', gTab: 'Produto × ano',
+    rCli: 'Ranking de clientes', rProd: 'Ranking de itens', rBr: 'Ranking de projetos (BR)', agrupar: 'Agrupar por grupo econômico',
+    kal: 'Kalimpact em todas as linhas (PG1, PG2, PG3)', kPG2: 'em PG2', kPG1: 'em PG1', kPG3: 'em projetos PG3', kTot: 'Kalimpact total', kPct: '% do faturado',
     notas: 'Notas fiscais', buscar: 'buscar NF, BR, cliente ou produto', exportar: 'Exportar CSV', nf: 'NF', data: 'Mês', valor: 'Valor',
-    segs: 'Segmentos', itens: 'Principais itens', verMais: 'ver mais', verMenos: 'ver menos', semDados: 'Sem dados para esta seleção.',
+    segs: 'Produtos', itens: 'Itens da nota', verMais: 'ver mais', verMenos: 'ver menos', semDados: 'Sem dados para esta seleção.',
     empilhado: 'Empilhado', lado: 'Lado a lado', participacao: 'Participação', total: 'Total',
     comoTit: 'Como os números são calculados', taxa: 'Taxa usada', carregando: 'Carregando…', invalido: 'Link inválido ou expirado.',
     como: [
@@ -34,24 +41,25 @@ const TXT = {
       'Valor: Net Offer Value = valor da nota menos todos os impostos (ICMS, IPI, PIS, COFINS…), rateado entre os itens da nota.',
       'PG1 / PG2: classificação do cadastro do produto no Sankhya. PG2 Kalimpact = família Kalimpact; PG2 Pipes = tubulações, curvas e conexões; PG2 Outros = demais itens PG2.',
       'PG3: projetos específicos marcados como PG3 nos relatórios Incoming Orders. Serviço: serviços prestados e aplicados.',
+      'Segmento de mercado: classificação do cliente no cadastro do Sankhya (Mineração, Siderurgia, Indústria, Porto, Cimenteira…).',
       'Câmbio: PTAX de venda do Banco Central do Brasil (fechamento) — média do respectivo ano, ou a última cotação para todos os anos.',
     ],
     meses: ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'],
     seg: { 'PG1': 'PG1', 'PG2 Pipes': 'PG2 Pipes', 'PG2 Kalimpact': 'PG2 Kalimpact', 'PG2 Outros': 'PG2 Outros', 'PG3': 'PG3', 'Serviço': 'Serviço' },
   },
   en: {
-    titulo: 'Invoiced sales by segment', empresa: 'KALENBORN DO BRASIL', base: 'Net Offer Value (invoice value − all taxes)',
+    titulo: 'Invoiced sales by product', empresa: 'KALENBORN DO BRASIL', base: 'Net Offer Value (invoice value − all taxes)',
     atual: 'Updated', ate: 'until', idioma: 'Language', moeda: 'Currency', cambio: 'FX rate', mediaAno: 'Yearly average', cotAtual: 'Current rate',
-    mi: 'm', mio: 'million', ytd: 'YTD', todos: 'All', ano: 'Year', segmento: 'Segment', pg2todos: 'PG2 (all)',
-    filtros: 'Filters', limpar: 'Clear filters', cliente: 'Customer', produto: 'Product', projeto: 'Project (BR)', mes: 'Month',
+    mi: 'm', mio: 'million', ytd: 'YTD', todos: 'All', ano: 'Year', segmento: 'Product', pg2todos: 'PG2 (all)', merc: 'Market segment', semMerc: 'Not classified', gMerc: 'Invoiced sales by market segment', gMercTab: 'Market segment × year',
+    filtros: 'Filters', limpar: 'Clear filters', cliente: 'Customer', produto: 'Item', projeto: 'Project (BR)', mes: 'Month',
     dica: 'Click any bar, slice, row or customer to filter. The whole page recalculates.',
     kTotal: 'Invoiced', kNotas: 'Invoices', kClientes: 'Customers', kProjetos: 'Projects (BR)', kTicket: 'Average per invoice',
     vsAnt: 'vs. same period last year', semComp: 'no comparison',
-    gAnos: 'Evolution by year', gMes: 'Month by month', gMix: 'Segment mix', gTab: 'Segment × year',
-    rCli: 'Customer ranking', rProd: 'Product ranking', rBr: 'Project ranking (BR)', agrupar: 'Group by corporate group',
-    kal: 'Kalimpact across all segments', kPG2: 'in PG2', kPG1: 'in PG1', kPG3: 'in PG3 projects', kTot: 'Kalimpact total', kPct: '% of invoiced sales',
+    gAnos: 'Evolution by year', gMes: 'Month by month', gMix: 'Product mix', gTab: 'Product × year',
+    rCli: 'Customer ranking', rProd: 'Item ranking', rBr: 'Project ranking (BR)', agrupar: 'Group by corporate group',
+    kal: 'Kalimpact across all lines (PG1, PG2, PG3)', kPG2: 'in PG2', kPG1: 'in PG1', kPG3: 'in PG3 projects', kTot: 'Kalimpact total', kPct: '% of invoiced sales',
     notas: 'Invoices', buscar: 'search invoice, BR, customer or product', exportar: 'Export CSV', nf: 'Invoice', data: 'Month', valor: 'Value',
-    segs: 'Segments', itens: 'Main items', verMais: 'show more', verMenos: 'show less', semDados: 'No data for this selection.',
+    segs: 'Products', itens: 'Invoice items', verMais: 'show more', verMenos: 'show less', semDados: 'No data for this selection.',
     empilhado: 'Stacked', lado: 'Side by side', participacao: 'Share', total: 'Total',
     comoTit: 'How the figures are calculated', taxa: 'Rate used', carregando: 'Loading…', invalido: 'Invalid or expired link.',
     como: [
@@ -59,6 +67,7 @@ const TXT = {
       'Value: Net Offer Value = invoice value minus all taxes (ICMS, IPI, PIS, COFINS…), allocated across the invoice items.',
       'PG1 / PG2: product master classification in Sankhya. PG2 Kalimpact = Kalimpact family; PG2 Pipes = pipes, bends and connections; PG2 Others = remaining PG2 items.',
       'PG3: specific projects flagged as PG3 in the Incoming Orders reports. Services: services rendered and applied.',
+      'Market segment: customer classification in the Sankhya master data (Mining, Steel Plant, Industry, Port, Cement Plant…).',
       'FX: Central Bank of Brazil PTAX selling rate (closing) — average of each year, or the latest rate for all years.',
     ],
     meses: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
@@ -244,7 +253,7 @@ export default function PainelSegmentos({ supabase, chave }) {
   const [lg, setLg] = useState(() => ler('painelSeg.lg', 'pt'));
   const [moeda, setMoeda] = useState(() => ler('painelSeg.moeda', 'BRL'));
   const [modo, setModo] = useState('media');
-  const [f, setF] = useState({ ano: null, mes: null, seg: null, cli: null, prod: null, br: null });
+  const [f, setF] = useState({ ano: null, mes: null, seg: null, cli: null, prod: null, br: null, merc: null });
   const [agrupar, setAgrupar] = useState(false);
   const [empilhado, setEmpilhado] = useState(true);
   const [busca, setBusca] = useState('');
@@ -286,7 +295,9 @@ export default function PainelSegmentos({ supabase, chave }) {
     };
   }, [lg, moeda, t.mi, t.mio]);
 
-  const nomeCli = useCallback(i => (dados ? dados.clientes[i] : ''), [dados]);
+  const nomeCli = useCallback(i => (dados ? (Array.isArray(dados.clientes[i]) ? dados.clientes[i][0] : dados.clientes[i]) : ''), [dados]);
+  const mercCli = useCallback(i => (dados && Array.isArray(dados.clientes[i]) ? dados.clientes[i][1] || '?' : '?'), [dados]);
+  const rotMerc = useCallback(c => (c && MERC[c] ? MERC[c][lg === 'pt' ? 0 : 1] : TXT[lg].semMerc), [lg]);
   const chaveCli = useCallback(l => (agrupar ? grupoDe(nomeCli(l.c)) : String(l.c)), [agrupar, nomeCli]);
   const passa = useCallback((l, ignora = []) => {
     if (!ignora.includes('ano') && f.ano != null && l.a !== f.ano) return false;
@@ -295,8 +306,9 @@ export default function PainelSegmentos({ supabase, chave }) {
     if (!ignora.includes('cli') && f.cli != null && chaveCli(l) !== f.cli) return false;
     if (!ignora.includes('prod') && f.prod != null && l.p !== f.prod) return false;
     if (!ignora.includes('br') && f.br != null && l.br !== f.br) return false;
+    if (!ignora.includes('merc') && f.merc != null && mercCli(l.c) !== f.merc) return false;
     return true;
-  }, [f, chaveCli]);
+  }, [f, chaveCli, mercCli]);
 
   const V = useMemo(() => {
     if (!base) return null;
@@ -335,6 +347,8 @@ export default function PainelSegmentos({ supabase, chave }) {
     const rCli = rank(['cli'], chaveCli, l => (agrupar ? grupoDe(nomeCli(l.c)) : nomeCli(l.c)));
     const rProd = rank(['prod'], l => l.p, l => { const p = dados.produtos[l.p]; return `${p[0]} · ${p[1]}`; });
     const rBr = rank(['br'], l => l.br, l => `${l.br || '—'} · ${nomeCli(l.c)}`).filter(i => i.k);
+    const rMerc = rank(['merc'], l => mercCli(l.c), l => rotMerc(mercCli(l.c)));
+    const mercAno = {}; linhas.filter(l => passa(l, ['merc', 'ano', 'mes'])).forEach(l => { const k = mercCli(l.c); mercAno[k] = mercAno[k] || {}; mercAno[k][l.a] = (mercAno[k][l.a] || 0) + l.v; });
     // Kalimpact em todos os segmentos (ignora segmento)
     const kal = Object.fromEntries(anos.map(a => [a, { 'PG2 Kalimpact': 0, 'PG1': 0, 'PG3': 0, outros: 0, tot: 0 }]));
     linhas.filter(l => passa(l, ['ano', 'seg', 'mes'])).forEach(l => {
@@ -347,8 +361,8 @@ export default function PainelSegmentos({ supabase, chave }) {
       const k = `${l.a}-${l.nf}`; const it = mNF.get(k) || { k, nf: l.nf, a: l.a, m: l.m, chM: l.chM, cli: nomeCli(l.c), brs: new Set(), segs: {}, itens: [], v: 0 };
       it.v += l.v; if (l.br) it.brs.add(l.br); it.segs[l.s] = (it.segs[l.s] || 0) + l.v; it.itens.push(l); mNF.set(k, it);
     });
-    return { total, nNF: nfs.size, nCli: clis.size, nBr: brs.size, comp, anoSeg, mesesK, mesSeg, mix, rCli, rProd, rBr, kal, nfs: [...mNF.values()] };
-  }, [base, passa, f, chaveCli, agrupar, nomeCli, dados]);
+    return { total, nNF: nfs.size, nCli: clis.size, nBr: brs.size, comp, anoSeg, mesesK, mesSeg, mix, rCli, rProd, rBr, rMerc, mercAno, kal, nfs: [...mNF.values()] };
+  }, [base, passa, f, chaveCli, agrupar, nomeCli, mercCli, rotMerc, dados]);
 
   const pagina = { minHeight: '100vh', background: '#EEF1F5', fontFamily: '"Segoe UI", Inter, Arial, sans-serif', color: '#1E2A36' };
   if (erro) return <div style={{ ...pagina, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18 }}>{t.invalido}</div>;
@@ -385,6 +399,7 @@ export default function PainelSegmentos({ supabase, chave }) {
     f.cli != null && [t.cliente, agrupar ? f.cli : nomeCli(Number(f.cli)), 'cli'],
     f.prod != null && [t.produto, `${dados.produtos[f.prod][0]} · ${String(dados.produtos[f.prod][1]).slice(0, 48)}`, 'prod'],
     f.br != null && [t.projeto, f.br, 'br'],
+    f.merc != null && [t.merc, rotMerc(f.merc), 'merc'],
   ].filter(Boolean);
   const series = SEGS.map(s => ({ chave: s, nome: t.seg[s], cor: COR[s], valores: anos.map(a => V.anoSeg[a][s]) }));
   const anoIdx = f.ano != null ? anos.indexOf(f.ano) : null;
@@ -404,8 +419,8 @@ export default function PainelSegmentos({ supabase, chave }) {
   });
   const exportar = () => {
     const sep = ';'; const dec = v => String(Math.round(v * 100) / 100).replace('.', lg === 'pt' ? ',' : '.');
-    const lin = [[t.data, t.nf, t.projeto, t.cliente, t.segmento, t.produto, `${t.valor} (${moeda})`].join(sep)];
-    nfsO.forEach(n => n.itens.forEach(i => lin.push([n.chM, n.nf, i.br, `"${n.cli}"`, t.seg[i.s], `"${dados.produtos[i.p][0]} ${String(dados.produtos[i.p][1]).replace(/"/g, "'")}"`, dec(i.v)].join(sep))));
+    const lin = [[t.data, t.nf, t.projeto, t.cliente, t.merc, t.segmento, t.produto, `${t.valor} (${moeda})`].join(sep)];
+    nfsO.forEach(n => n.itens.forEach(i => lin.push([n.chM, n.nf, i.br, `"${n.cli}"`, rotMerc(mercCli(i.c)), t.seg[i.s], `"${dados.produtos[i.p][0]} ${String(dados.produtos[i.p][1]).replace(/"/g, "'")}"`, dec(i.v)].join(sep))));
     const blob = new Blob(['\ufeff' + lin.join('\n')], { type: 'text/csv;charset=utf-8' });
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `kalenborn_faturado_${moeda}.csv`; a.click(); URL.revokeObjectURL(a.href);
   };
@@ -444,6 +459,12 @@ export default function PainelSegmentos({ supabase, chave }) {
           {chips(f.ano, [[null, t.todos], ...anos.map(a => [a, rotAno(a)])], v => setF(x => ({ ...x, ano: v, mes: null })))}
           <span style={{ fontSize: 12, fontWeight: 800, color: CINZA, marginLeft: 6 }}>{t.segmento}</span>
           {chips(f.seg, [[null, t.todos], ...SEGS.slice(0, 1).map(s => [s, t.seg[s], COR[s]]), ['PG2*', t.pg2todos, '#264B6E'], ...SEGS.slice(1).map(s => [s, t.seg[s], COR[s]])], v => setF(x => ({ ...x, seg: v })))}
+          <span style={{ fontSize: 12, fontWeight: 800, color: CINZA, marginLeft: 6 }}>{t.merc}</span>
+          <select value={f.merc ?? ''} onChange={e => setF(x => ({ ...x, merc: e.target.value === '' ? null : e.target.value }))}
+            style={{ border: `1px solid ${LINHA}`, borderRadius: 9, padding: '7px 10px', fontSize: 13, fontWeight: 700, fontFamily: 'inherit', color: NAVY, background: '#fff' }}>
+            <option value="">{t.todos}</option>
+            {V.rMerc.map(m => <option key={m.k} value={m.k}>{m.rot}</option>)}
+          </select>
         </div>
         {ativos.length > 0 && (
           <div style={{ maxWidth: 1680, margin: '0 auto', padding: '0 22px 10px', display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -454,7 +475,7 @@ export default function PainelSegmentos({ supabase, chave }) {
                 <button onClick={() => setF(x => ({ ...x, [c]: null }))} style={{ border: 'none', background: 'rgba(255,255,255,.18)', color: '#fff', borderRadius: 20, width: 20, height: 20, cursor: 'pointer', fontSize: 12 }}>✕</button>
               </span>
             ))}
-            <button onClick={() => setF({ ano: null, mes: null, seg: null, cli: null, prod: null, br: null })} style={{ border: `1px solid ${NAVY}`, background: '#fff', color: NAVY, borderRadius: 20, padding: '5px 12px', fontSize: 12.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>{t.limpar}</button>
+            <button onClick={() => setF({ ano: null, mes: null, seg: null, cli: null, prod: null, br: null, merc: null })} style={{ border: `1px solid ${NAVY}`, background: '#fff', color: NAVY, borderRadius: 20, padding: '5px 12px', fontSize: 12.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>{t.limpar}</button>
           </div>
         )}
       </div>
@@ -550,7 +571,7 @@ export default function PainelSegmentos({ supabase, chave }) {
             {titulo(t.rCli, <label style={{ fontSize: 12.5, display: 'flex', gap: 6, alignItems: 'center', cursor: 'pointer' }}>
               <input type="checkbox" checked={agrupar} onChange={e => { setAgrupar(e.target.checked); setF(x => ({ ...x, cli: null })); }} /> {t.agrupar}</label>)}
             <Ranking itens={V.rCli} fmt={fmt} t={t} sel={f.cli} onClick={k => alt('cli', k)} inicial={15}
-              extra={it => `${it.nfs.size} ${t.kNotas.toLowerCase()} · ${[...it.anos].sort().join(', ')}`} />
+              extra={it => `${agrupar ? '' : rotMerc(mercCli(Number(it.k))) + ' · '}${it.nfs.size} ${t.kNotas.toLowerCase()} · ${[...it.anos].sort().join(', ')}`} />
           </div>
           <div style={cartao}>
             {titulo(t.rProd)}
@@ -561,6 +582,40 @@ export default function PainelSegmentos({ supabase, chave }) {
             {titulo(t.rBr)}
             <Ranking itens={V.rBr} fmt={fmt} t={t} sel={f.br} onClick={k => alt('br', k)} inicial={15}
               extra={it => `${Object.keys(it.partes).map(s => t.seg[s]).join(' · ')} · ${it.nfs.size} ${t.kNotas.toLowerCase()}`} />
+          </div>
+        </div>
+
+        {/* ---------------- segmento de mercado ---------------- */}
+        <div style={{ display: 'grid', gap: 18, gridTemplateColumns: 'repeat(auto-fit, minmax(620px, 1fr))' }}>
+          <div style={cartao}>
+            {titulo(t.gMerc)}
+            <Ranking itens={V.rMerc} fmt={fmt} t={t} sel={f.merc} onClick={k => alt('merc', k)} inicial={14}
+              extra={it => `${Object.keys(it.partes).sort((a, c) => it.partes[c] - it.partes[a]).slice(0, 3).map(s => `${t.seg[s]} ${fmt.pct(it.partes[s] / it.v)}`).join(' · ')}`} />
+            <Legenda t={t} onClick={s => alt('seg', s)} sel={segSel} />
+          </div>
+          <div style={cartao}>
+            {titulo(t.gMercTab)}
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead><tr>{th('', null)}{anos.map(a => <React.Fragment key={a}>{th(rotAno(a), null, 'right')}</React.Fragment>)}</tr></thead>
+                <tbody>
+                  {V.rMerc.map(m => (
+                    <tr key={m.k} style={{ opacity: f.merc != null && f.merc !== m.k ? 0.45 : 1 }}>
+                      <td onClick={() => alt('merc', m.k)} style={{ ...td, fontWeight: 800, cursor: 'pointer', whiteSpace: 'nowrap' }}>{m.rot}</td>
+                      {anos.map(a => {
+                        const v = V.mercAno[m.k]?.[a] || 0; const totA = Object.values(V.mercAno).reduce((x, o) => x + (o[a] || 0), 0); const on = f.ano === a && f.merc === m.k;
+                        return (
+                          <td key={a} onClick={() => setF(x => ({ ...x, ano: on ? null : a, merc: on ? null : m.k, mes: null }))}
+                            style={{ ...td, textAlign: 'right', cursor: 'pointer', background: on ? '#E3ECF5' : 'transparent', fontWeight: on ? 800 : 500 }}>
+                            {v ? fmt.curto(v) : '—'}<div style={{ fontSize: 11, color: CINZA }}>{v ? fmt.pct(totA ? v / totA : 0) : ''}</div>
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
 
