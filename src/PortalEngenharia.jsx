@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom';
 import { createClient } from '@supabase/supabase-js';
 import QRCode from 'qrcode';
 import jsQR from 'jsqr';
+import PainelSegmentos from './PainelSegmentos.jsx';
 import {
   LayoutGrid, FileStack, ClipboardCheck, Gauge, SlidersHorizontal, Workflow,
   Plus, Search, UploadCloud, AlertTriangle, Clock3, Check, X, LogOut,
@@ -285,6 +286,13 @@ export default function PortalEngenharia() {
   }, []);
 
   const [session, setSession] = useState(undefined); // undefined = carregando, null = sem sessão
+  // painel público de faturamento por segmento (…/?painel=segmentos&k=…): sem login
+  const [painelPublico] = useState(() => {
+    try {
+      const q = new URLSearchParams(window.location.search);
+      return q.get('painel') === 'segmentos' && q.get('k') ? { chave: q.get('k').trim() } : null;
+    } catch { return null; }
+  });
   const [qrPublico] = useState(() => {
     try {
       const q = new URLSearchParams(window.location.search);
@@ -329,6 +337,9 @@ export default function PortalEngenharia() {
       });
   }, [session]);
 
+  if (painelPublico) {
+    return <PainelSegmentos supabase={supabase} chave={painelPublico.chave} />;
+  }
   // QR de etiqueta com chave (…/?e=V000123&k=…): página própria, sem login
   if (qrPublico) {
     return <AlmoxQrPublico codigo={qrPublico.codigo} chave={qrPublico.chave} nomeLogado={currentUser?.nome || null} />;
@@ -6539,6 +6550,17 @@ IMPORTANTE: Responda SOMENTE com base nos dados acima. Se a pergunta pede algo q
         <button onClick={() => { setPerDe(`${anoPer}-01`); setPerAte(new Date().toISOString().slice(0, 7)); setDetalhe(null); }}
           style={{ display: 'flex', alignItems: 'center', gap: 5, background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 6, padding: '6px 12px', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', color: T.inkDim }}>
           <RefreshCw size={12} /> {idioma === 'en' ? 'Whole year' : 'Ano todo'}
+        </button>
+        <button onClick={async () => {
+            const { data: k } = await supabase.rpc('fn_link_painel_segmentos');
+            if (!k) { window.alert(idioma === 'en' ? 'Only managers can get this link.' : 'Só gestor pode pegar esse link.'); return; }
+            const url = `${window.location.origin}/?painel=segmentos&k=${k}`;
+            try { await navigator.clipboard.writeText(url); } catch { /* sem área de transferência */ }
+            window.open(url, '_blank', 'noopener');
+          }}
+          title={idioma === 'en' ? 'Public dashboard (no login): opens and copies the link' : 'Painel público (sem login): abre e copia o link'}
+          style={{ display: 'flex', alignItems: 'center', gap: 5, background: '#14324F', color: '#fff', border: 'none', borderRadius: 6, padding: '6px 12px', fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>
+          <Link2 size={12} /> {idioma === 'en' ? 'Segment dashboard (link)' : 'Painel por segmento (link)'}
         </button>
         <span style={{ fontSize: 10.5, color: T.inkFaint }}>{idioma === 'en' ? 'proposals by month, backlog by order date, revenue by invoice month' : 'propostas pelo mês, carteira pela data do pedido, faturamento pelo mês da nota'}</span>
       </div>
