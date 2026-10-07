@@ -10383,7 +10383,8 @@ function AlmoxEtiquetasLista({ currentUser }) {
 // ESTOQUE > REGISTRO: cada movimentação (de onde, para onde, quanto, quem) e onde
 // está cada parte do material agora (saldo por setor: v_almox_saldo_setor).
 // ============================================================================
-function AlmoxRegistro() {
+function AlmoxRegistro({ currentUser }) {
+  const pode = currentUser?.movimentaEstoque === true;
   const [linhas, setLinhas] = useState(null);
   const [ordens, setOrdens] = useState([]);
   const [saldos, setSaldos] = useState([]);
@@ -10391,6 +10392,22 @@ function AlmoxRegistro() {
   const [setor, setSetor] = useState('Todos');
   const [dias, setDias] = useState(30);
   const [fotos, setFotos] = useState(null);   // { titulo, itens: [{ rot, url }] }
+  // gerenciar ordens: marcar, remanejar, mudar setor, editar (qtd/explicação), cancelar
+  const [equipe, setEquipe] = useState([]);
+  const [selO, setSelO] = useState({});
+  const [loteO, setLoteO] = useState({ quem: '', setor: '' });
+  const [editO, setEditO] = useState(null);   // { id, quem, setor, qtd, obs }
+  const [msgO, setMsgO] = useState(null);
+  useEffect(() => {
+    supabase.from('colaboradores').select('nome, papel, movimenta_estoque, ativo').eq('ativo', true).eq('movimenta_estoque', true).order('nome')
+      .then(r => setEquipe((r.data || []).filter(c => c.papel === 'almoxarifado' && !/^Colaborador Almoxarifado/i.test(c.nome)).map(c => c.nome)));
+  }, []);
+  const atualizarOrdens = async (ids, campos, texto) => {
+    if (!ids.length) return;
+    const { error } = await supabase.from('solicitacoes_movimentacao_almoxarifado').update(campos).in('id', ids);
+    setMsgO(error ? { erro: true, t: error.message } : { t: texto });
+    setSelO({}); setEditO(null); carregar();
+  };
   // fotos ficam no bucket privado almoxarifado-entregas: abre com link temporário (1 h)
   const verFotos = async (l) => {
     const caminhos = [['Foto do material', l.foto_material], ['Foto do documento', l.foto_documento]].filter(([, c]) => c);
@@ -10461,13 +10478,64 @@ function AlmoxRegistro() {
         <button onClick={carregar} style={{ ...ghostBtn(T.inkDim), cursor: 'pointer' }}>Atualizar</button>
       </div>
 
-      <Panel title={`Ordens e pedidos em aberto (${ordensF.length})`} subtitle="O que foi pedido, para quem, e onde o material está agora.">
+      <Panel title={`Ordens e pedidos em aberto (${ordensF.length})`} subtitle="O que foi pedido, para quem, e onde o material está agora. Marque para remanejar ou cancelar várias de uma vez; 'Editar' muda setor, pessoa, quantidade e a explicação.">
+        {msgO && <div style={{ fontSize: 12.5, fontWeight: 600, padding: '7px 10px', borderRadius: 7, marginBottom: 8, background: msgO.erro ? T.rustSoft : T.oliveSoft, color: msgO.erro ? T.rustText : T.oliveText }}>{msgO.t}</div>}
+        {pode && Object.values(selO).some(Boolean) && (() => {
+          const ids = Object.keys(selO).filter(k => selO[k]).map(Number);
+          return (
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', background: T.panelAlt, borderRadius: 8, padding: '8px 10px', marginBottom: 8 }}>
+              <strong style={{ fontSize: 12.5 }}>{ids.length} marcada(s):</strong>
+              <select value={loteO.quem} onChange={e => setLoteO(x => ({ ...x, quem: e.target.value }))} style={{ ...inputStyle(), width: 180, padding: '5px 8px' }}>
+                <option value="">passar para…</option>
+                <option value={ALMOX_QUALQUER}>{ALMOX_QUALQUER}</option>
+                {equipe.map(n => <option key={n} value={n}>{n}</option>)}
+              </select>
+              <button disabled={!loteO.quem} onClick={() => atualizarOrdens(ids, { atribuido_a: loteO.quem }, `${ids.length} ordem(ns) remanejada(s) para ${loteO.quem}. Aviso no Teams a caminho.`)}
+                style={{ ...ghostBtn(T.blueText), cursor: loteO.quem ? 'pointer' : 'default', fontWeight: 700 }}>Remanejar</button>
+              <select value={loteO.setor} onChange={e => setLoteO(x => ({ ...x, setor: e.target.value }))} style={{ ...inputStyle(), width: 170, padding: '5px 8px' }}>
+                <option value="">mudar setor para…</option>
+                {ALMOX_SETORES.map(s2 => <option key={s2} value={s2}>{s2}</option>)}
+              </select>
+              <button disabled={!loteO.setor} onClick={() => atualizarOrdens(ids, { setor_destino: loteO.setor }, `${ids.length} ordem(ns) agora vão para ${loteO.setor}.`)}
+                style={{ ...ghostBtn(T.blueText), cursor: loteO.setor ? 'pointer' : 'default', fontWeight: 700 }}>Mudar setor</button>
+              <button onClick={() => window.confirm(`Cancelar ${ids.length} ordem(ns)?`) && atualizarOrdens(ids, { status: 'cancelado' }, `${ids.length} ordem(ns) cancelada(s).`)}
+                style={{ ...ghostBtn(T.rustText), cursor: 'pointer' }}>Cancelar</button>
+              <button onClick={() => setSelO({})} style={{ ...ghostBtn(T.inkDim), cursor: 'pointer' }}>Desmarcar</button>
+            </div>
+          );
+        })()}
         {!ordensF.length ? <div style={{ fontSize: 12.5, color: T.inkFaint }}>Nada em aberto.</div> : (
           <div style={{ overflow: 'auto', maxHeight: 340, border: `1px solid ${T.line}`, borderRadius: 8 }}>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-              <thead><tr>{['Pedido em', 'OP', 'Material', 'Levar para', 'Qtd', 'Quem leva', 'Pedido por', 'Onde está agora'].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
-              <tbody>{ordensF.map(o => (
-                <tr key={o.id}>
+              <thead><tr>
+                {pode && <th style={th}><input type="checkbox" checked={ordensF.length > 0 && ordensF.every(o => selO[o.id])} onChange={e => setSelO(e.target.checked ? Object.fromEntries(ordensF.map(o => [o.id, true])) : {})} /></th>}
+                {['Pedido em', 'OP', 'Material', 'Levar para', 'Qtd', 'Quem leva', 'Pedido por', 'Onde está agora', ''].map((h, k) => <th key={k} style={th}>{h}</th>)}
+              </tr></thead>
+              <tbody>{ordensF.map(o => editO?.id === o.id ? (
+                <tr key={o.id} style={{ background: T.blueSoft }}>
+                  {pode && <td style={td} />}
+                  <td colSpan={9} style={td}>
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                      <strong style={{ fontSize: 12.5 }}>OP {o.op} · {o.material}</strong>
+                      <select value={editO.setor} onChange={e => setEditO(x => ({ ...x, setor: e.target.value }))} style={{ ...inputStyle(), width: 170, padding: '5px 8px' }}>
+                        {ALMOX_SETORES.map(s2 => <option key={s2} value={s2}>{s2}</option>)}
+                      </select>
+                      <select value={editO.quem} onChange={e => setEditO(x => ({ ...x, quem: e.target.value }))} style={{ ...inputStyle(), width: 170, padding: '5px 8px' }}>
+                        <option value={ALMOX_QUALQUER}>{ALMOX_QUALQUER}</option>
+                        {equipe.map(n => <option key={n} value={n}>{n}</option>)}
+                      </select>
+                      <input value={editO.qtd} onChange={e => setEditO(x => ({ ...x, qtd: e.target.value }))} placeholder="qtd (vazio = tudo)" inputMode="decimal" style={{ ...inputStyle(), width: 130, padding: '5px 8px' }} />
+                      {editO.qtd && <span style={{ fontSize: 11.5, color: T.blueText }}>= {almoxFmtQtd(almoxNum(editO.qtd))}</span>}
+                      <input value={editO.obs} onChange={e => setEditO(x => ({ ...x, obs: e.target.value }))} placeholder="explicação para quem vai levar" style={{ ...inputStyle(), flex: '1 1 240px', padding: '5px 8px' }} />
+                      <button onClick={() => atualizarOrdens([o.id], { setor_destino: editO.setor, atribuido_a: editO.quem, quantidade_solicitada: editO.qtd ? almoxNum(editO.qtd) : null, observacao: editO.obs.trim() || null }, 'Ordem alterada. Aviso no Teams a caminho.')}
+                        style={{ ...ghostBtn(T.blueText), cursor: 'pointer', fontWeight: 700 }}>Salvar</button>
+                      <button onClick={() => setEditO(null)} style={{ ...ghostBtn(T.inkDim), cursor: 'pointer' }}>Cancelar edição</button>
+                    </div>
+                  </td>
+                </tr>
+              ) : (
+                <tr key={o.id} style={{ background: selO[o.id] ? T.rustSoft : 'transparent' }}>
+                  {pode && <td style={td}><input type="checkbox" checked={!!selO[o.id]} onChange={e => setSelO(x => ({ ...x, [o.id]: e.target.checked }))} /></td>}
                   <td style={{ ...td, whiteSpace: 'nowrap' }}>{dh(o.solicitado_em)}</td>
                   <td style={{ ...td, whiteSpace: 'nowrap' }}><strong>{o.op}</strong>{o.br ? <div style={{ fontSize: 11, color: T.inkFaint }}>{o.br}</div> : null}</td>
                   <td style={{ ...td, maxWidth: 320 }}>{o.cod_materia_prima ? `${o.cod_materia_prima} · ` : ''}{o.material}</td>
@@ -10475,7 +10543,11 @@ function AlmoxRegistro() {
                   <td style={td}>{o.quantidade_solicitada != null ? almoxFmtQtd(o.quantidade_solicitada) : 'tudo'}</td>
                   <td style={td}>{o.origem === 'ordem' ? (o.atribuido_a || 'equipe') : '—'}</td>
                   <td style={td}>{o.solicitado_por || '—'}</td>
-                  <td style={{ ...td, color: T.blueText, fontWeight: 600 }}>{ondeOrdem(o)}</td>
+                  <td style={{ ...td, color: T.blueText, fontWeight: 600 }}>{ondeOrdem(o)}{o.observacao ? <div style={{ fontSize: 11, color: T.inkDim, fontWeight: 400 }}>obs.: {o.observacao}</div> : null}</td>
+                  <td style={{ ...td, whiteSpace: 'nowrap' }}>
+                    {pode && <button onClick={() => setEditO({ id: o.id, quem: o.atribuido_a || ALMOX_QUALQUER, setor: o.setor_destino || ALMOX_SETORES[0], qtd: o.quantidade_solicitada != null ? almoxFmtQtd(o.quantidade_solicitada) : '', obs: o.observacao || '' })}
+                      style={{ ...ghostBtn(T.blueText), cursor: 'pointer', padding: '3px 8px' }}>Editar</button>}
+                  </td>
                 </tr>
               ))}</tbody>
             </table>
@@ -10671,6 +10743,22 @@ function AlmoxMovimentar({ currentUser, codigoInicial }) {
     setOrdemDe(null); setOrdem({ setor: '', quem: ALMOX_QUALQUER, qtd: '', obs: '' });
     recarregar();
   };
+  // várias de uma vez: os itens marcados (com etiqueta ativa) vão para o mesmo setor e a mesma pessoa
+  const [lote, setLote] = useState(null);   // { setor, quem, obs }
+  const criarOrdensLote = async (ls) => {
+    if (!lote?.setor) { setAviso({ erro: true, t: 'Escolha para qual setor o material vai.' }); return; }
+    const alvo = ls.filter(l => l.vol && l.vol.status === 'ativo' && l.vol.setor_atual !== lote.setor);
+    if (!alvo.length) { setAviso({ erro: true, t: 'Nenhum item marcado pode ir para esse setor (sem etiqueta ativa ou já está lá).' }); return; }
+    const { error } = await supabase.from('solicitacoes_movimentacao_almoxarifado').insert(alvo.map(l => ({
+      tipo: 'para_setor', origem: 'ordem', br: l.m.br || opSel?.br || null, op: l.m.op, material: l.m.materia_prima_descricao,
+      cod_materia_prima: l.m.cod_materia_prima, quantidade_total_prevista: l.m.quantidade_mp, volume_id: l.vol.id,
+      quantidade_solicitada: null, setor_destino: lote.setor, atribuido_a: lote.quem || ALMOX_QUALQUER,
+      observacao: (lote.obs || '').trim() || null, status: 'pendente', solicitado_por: currentUser?.nome || null,
+    })));
+    if (error) { setAviso({ erro: true, t: error.message }); return; }
+    setAviso({ t: `${alvo.length} ordem(ns) enviada(s) para ${lote.quem || ALMOX_QUALQUER} → ${lote.setor}. Aviso no Teams a caminho.` });
+    setLote(null); setMarc({}); recarregar();
+  };
   const cancelarPedido = async (s) => {
     if (!window.confirm(`Cancelar o pedido de ${s.material}?`)) return;
     await supabase.from('solicitacoes_movimentacao_almoxarifado').update({ status: 'cancelado' }).eq('id', s.id);
@@ -10805,6 +10893,26 @@ function AlmoxMovimentar({ currentUser, codigoInicial }) {
                 <span style={{ fontSize: 12.5, fontWeight: 700 }}>{selec.length} marcado(s):</span>
                 {pode && selSemEntrada.length > 0 && <button disabled={ocupado} onClick={() => darEntrada(selSemEntrada.map(l => l.m))} style={botao(true, T.olive)}>Dar entrada e imprimir {selSemEntrada.length} QR</button>}
                 {selComEtiqueta.length > 0 && <button onClick={() => almoxImprimirEtiquetas(selComEtiqueta.map(l => l.vol), cfgEt)} style={botao(false)}>Reimprimir {selComEtiqueta.length} QR</button>}
+                {pode && selComEtiqueta.some(l => l.vol.status === 'ativo') && (
+                  <button onClick={() => setLote(x => x ? null : { setor: '', quem: ALMOX_QUALQUER, obs: '' })} style={botao(!!lote, T.blueText)}>
+                    Mandar para… ({selComEtiqueta.filter(l => l.vol.status === 'ativo').length})
+                  </button>
+                )}
+                {lote && (
+                  <span style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', padding: '6px 8px', borderRadius: 8, background: T.blueSoft, width: '100%' }}>
+                    <select value={lote.setor} onChange={e => setLote(o => ({ ...o, setor: e.target.value }))} style={{ ...campo, width: 170 }}>
+                      <option value="">para qual setor?</option>
+                      {ALMOX_SETORES.map(s2 => <option key={s2} value={s2}>{s2}</option>)}
+                    </select>
+                    <select value={lote.quem} onChange={e => setLote(o => ({ ...o, quem: e.target.value }))} style={{ ...campo, width: 170 }}>
+                      <option value={ALMOX_QUALQUER}>{ALMOX_QUALQUER}</option>
+                      {equipe.map(n => <option key={n} value={n}>{n}</option>)}
+                    </select>
+                    <input value={lote.obs} onChange={e => setLote(o => ({ ...o, obs: e.target.value }))} placeholder="explicação para quem vai levar" style={{ ...campo, width: 240 }} />
+                    <button onClick={() => criarOrdensLote(selComEtiqueta)} style={botao(true, T.blueText)}>Enviar {selComEtiqueta.filter(l => l.vol.status === 'ativo').length} ordem(ns)</button>
+                    <span style={{ fontSize: 11, color: T.inkDim }}>cada item vai inteiro (o que tiver no setor); para quantidade parcial use o "Mandar para…" da linha</span>
+                  </span>
+                )}
                 {pode && selComEtiqueta.filter(l => l.vol.status === 'ativo').length >= 2 && (
                   <button onClick={async () => {
                     const ativos = selComEtiqueta.filter(l => l.vol.status === 'ativo').map(l => l.vol);
@@ -11655,7 +11763,7 @@ function AlmoxarifadoFluxo({ currentUser, etiquetaInicial }) {
       {abaAtiva === 'movimentar' && <AlmoxMovimentar currentUser={currentUser} codigoInicial={etiquetaInicial} />}
       {abaAtiva === 'rotina' && <AlmoxRotina currentUser={currentUser} />}
       {abaAtiva === 'etiquetas' && <AlmoxEtiquetasLista currentUser={currentUser} />}
-      {abaAtiva === 'registro' && <AlmoxRegistro />}
+      {abaAtiva === 'registro' && <AlmoxRegistro currentUser={currentUser} />}
       {abaAtiva === 'qr_leitor' && <AlmoxQR modo="leitor" currentUser={currentUser} codigoInicial={etiquetaInicial} />}
       {abaAtiva === 'qr_etiquetas' && <AlmoxQR modo="etiquetas" currentUser={currentUser} />}
       {abaAtiva === 'qr_entregas' && <AlmoxQR modo="entregas" currentUser={currentUser} />}
