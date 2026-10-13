@@ -4107,7 +4107,7 @@ const TXT = {
     pvRegraVend: 'Todas as propostas em aberto de {v}. Classificado é ter estágio; com data é ter o mês de fechamento preenchido — só as com data entram na previsão por mês.',
     pvAlerta: 'A previsão do cenário {c} soma {v} nos próximos meses, contra uma média de {m} por mês faturados de verdade. Com apenas {p}% do funil com data, o número ainda diz mais sobre o preenchimento do que sobre a demanda.',
     dscTitulo: 'Onde cabe desconto', dscSub: 'proposta com margem gorda parada num estágio fraco é candidata a fechar com desconto — o custo não muda, o desconto sai inteiro da margem',
-    dscMargemMin: 'Margem acima de', dscEstagios: 'Estágio', dscDesconto: 'Desconto no preço',
+    dscMargemMin: 'Margem acima de', dscEstagios: 'Estágio', dscDesconto: 'Desconto padrão (atalho)',
     dscProjetos: 'Projetos no filtro', dscValorHoje: 'Preço de hoje', dscValorNovo: 'Novo preço',
     dscAbreMao: 'Abre mão de', dscLucroDepois: 'Margem R$ depois', dscMargemDepois: 'Margem depois',
     dscMargemHoje: 'Margem hoje', dscNegativo: '{n} propostas ficariam com margem NEGATIVA neste desconto — o preço cairia abaixo do custo orçado.',
@@ -5228,6 +5228,307 @@ function AprovacoesComerciais({ currentUser }) {
           </tbody>
         </table>
       </div>
+    </div>
+  );
+}
+
+// ============================================================================
+// REUNIÃO DE DESCONTO (Diretoria > Onde cabe desconto): cada BR recebe o seu desconto,
+// decidido em reunião. Fechar a reunião grava o histórico e enfileira os e-mails
+// (solicitacoes_email): relatório completo para a diretoria e um por vendedor, este só com
+// preço anterior e novo preço (sem margem).
+// ============================================================================
+const RD_COR = { 'PG1': '#8E99A6', 'PG2 Pipes': '#2E75B6', 'PG2 Kalimpact': '#D2621A', 'PG2 Outros': '#C9A000', 'PG3': '#4E9A3A', 'Serviço': '#7A3FA0', 'Sem PG': '#9AA5B1' };
+function rdLinhaItem(desc, pgBr) {
+  const d = String(desc || '').toUpperCase().trim();
+  if (/^SERVI(Ç|C)O/.test(d)) return 'Serviço';
+  if (/KALIMPACT|^WPKLT|^WPHSKRX|^KB-WPKLT|^WPHSKLC|^CJ-CHAPA/.test(d)) return 'PG2 Kalimpact';
+  if (/^(PP-|KB-PP|LK-PP|SP-|CJ-TUBO|EP-PP)/.test(d)) return 'PG2 Pipes';
+  if (pgBr === 'PG3') return 'PG3';
+  if (pgBr === 'PG1') return 'PG1';
+  if (pgBr === 'PG2') return 'PG2 Outros';
+  return pgBr || 'Sem PG';
+}
+const rdEsc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const rdBRL = v => Number(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+const rdData = d => (d ? new Date(String(d).slice(0, 10) + 'T12:00:00').toLocaleDateString('pt-BR') : '—');
+
+function ReuniaoDesconto({ candidatos, atalho, val }) {
+  const [quem, setQuem] = useState(null);
+  const [cfg, setCfg] = useState(null);
+  const [reuniao, setReuniao] = useState(null);       // reunião aberta
+  const [desc, setDesc] = useState({});               // br -> desconto %
+  const [obs, setObs] = useState({});                 // br -> observação
+  const [itens, setItens] = useState({});             // br -> [itens]
+  const [aberto, setAberto] = useState(null);
+  const [hist, setHist] = useState([]);
+  const [aviso, setAviso] = useState(null);
+  const [ocupado, setOcupado] = useState(false);
+  const [editEmails, setEditEmails] = useState(null);
+  const [verTodos, setVerTodos] = useState(false);
+  const carregar = useCallback(async () => {
+    const [q, c, r, h] = await Promise.all([
+      supabase.rpc('fn_reuniao_quem'), supabase.rpc('fn_reuniao_config'),
+      supabase.from('comercial_reuniao_desconto').select('*').eq('status', 'aberta').order('id', { ascending: false }).limit(1),
+      supabase.from('comercial_reuniao_desconto').select('id, data_reuniao, participantes, fechado_por, fechado_em, status').eq('status', 'fechada').order('fechado_em', { ascending: false }).limit(30),
+    ]);
+    setQuem(q.data || { pode: false }); setCfg(c.data || {}); setHist(h.data || []);
+    const ab = r.data?.[0] || null; setReuniao(ab);
+    if (ab) {
+      const { data: its } = await supabase.from('comercial_reuniao_desconto_item').select('br, desconto_pct, observacao').eq('reuniao_id', ab.id);
+      setDesc(Object.fromEntries((its || []).map(i => [i.br, Number(i.desconto_pct)])));
+      setObs(Object.fromEntries((its || []).filter(i => i.observacao).map(i => [i.br, i.observacao])));
+    }
+    const brs = candidatos.map(p => p.br);
+    if (brs.length) {
+      const { data: ii } = await supabase.from('v_comercial_itens_br').select('br, cod_produto, descricao, unidade, quantidade').in('br', brs);
+      const m = {}; (ii || []).forEach(x => { (m[x.br] = m[x.br] || []).push(x); }); setItens(m);
+    }
+  }, [candidatos.map(p => p.br).join(',')]);  // eslint-disable-line
+  useEffect(() => { carregar(); }, [carregar]);
+
+  const pode = !!quem?.pode;
+  const linhas = candidatos.map(p => {
+    const v = Number(p.valor) || 0, m = Number(p.margem_pct) || 0, d = Number(desc[p.br]) || 0;
+    const custo = v * (1 - m / 100), novo = v * (1 - d / 100), lucro = novo - custo;
+    const its = (itens[p.br] || []).map(i => ({ ...i, linha: rdLinhaItem(i.descricao, p.pg) }));
+    const linhasBR = [...new Set(its.map(i => i.linha))];
+    return { p, v, m, d, custo, novo, lucro, margemNova: novo > 0 ? lucro / novo * 100 : 0, its, linhasBR: linhasBR.length ? linhasBR : [p.pg || 'Sem PG'] };
+  }).sort((a, b) => (b.d > 0) - (a.d > 0) || b.v - a.v);
+  const sel = linhas.filter(l => l.d > 0);
+  const totAntes = sel.reduce((s, l) => s + l.v, 0), totNovo = sel.reduce((s, l) => s + l.novo, 0), totLucro = sel.reduce((s, l) => s + l.lucro, 0);
+  const negativos = sel.filter(l => l.lucro < 0).length;
+
+  const salvarItem = async (l, pct, observacao) => {
+    if (!reuniao) return;
+    const v = l.v, m = l.m, custo = v * (1 - m / 100), novo = v * (1 - pct / 100);
+    const { data, error } = await supabase.rpc('fn_reuniao_item', { p_reuniao: reuniao.id, p_item: {
+      br: l.p.br, cliente: l.p.cliente, vendedor: l.p.vendedor, estagio: l.p.estagio, pg: l.linhasBR.join(' + '),
+      valor_antes: v, margem_antes: m, desconto_pct: pct, valor_novo: novo, margem_nova: novo > 0 ? (novo - custo) / novo * 100 : 0,
+      observacao: observacao ?? obs[l.p.br] ?? '', itens: l.its.map(i => ({ cod: i.cod_produto, descricao: i.descricao, qtd: i.quantidade, un: i.unidade, linha: i.linha })),
+    } });
+    if (error || data?.ok === false) setAviso({ erro: true, t: error?.message || data?.erro });
+  };
+  const mudar = (l, pct) => { const x = Math.max(0, Math.min(95, Number(pct) || 0)); setDesc(o => ({ ...o, [l.p.br]: x })); };
+  const iniciar = async () => {
+    setOcupado(true); const { data, error } = await supabase.rpc('fn_reuniao_abrir'); setOcupado(false);
+    if (error || !data?.ok) { setAviso({ erro: true, t: error?.message || data?.erro }); return; }
+    await carregar();
+    // grava o que já estava marcado na simulação
+    for (const l of linhas.filter(x => x.d > 0)) await salvarItemCom(data.id, l);
+    await carregar();
+    setAviso({ t: 'Reunião aberta. Cada desconto fica salvo — dá para sair e voltar.' });
+  };
+  const salvarItemCom = async (id, l) => {
+    const novo = l.v * (1 - l.d / 100), custo = l.v * (1 - l.m / 100);
+    await supabase.rpc('fn_reuniao_item', { p_reuniao: id, p_item: { br: l.p.br, cliente: l.p.cliente, vendedor: l.p.vendedor, estagio: l.p.estagio, pg: l.linhasBR.join(' + '),
+      valor_antes: l.v, margem_antes: l.m, desconto_pct: l.d, valor_novo: novo, margem_nova: novo > 0 ? (novo - custo) / novo * 100 : 0, observacao: obs[l.p.br] || '',
+      itens: l.its.map(i => ({ cod: i.cod_produto, descricao: i.descricao, qtd: i.quantidade, un: i.unidade, linha: i.linha })) } });
+  };
+  const aplicarAtalho = async () => {
+    const alvo = linhas.filter(l => l.d > 0);
+    setDesc(o => ({ ...o, ...Object.fromEntries(alvo.map(l => [l.p.br, atalho])) }));
+    if (reuniao) for (const l of alvo) await salvarItem(l, atalho);
+  };
+
+  // ---------------- relatórios ----------------
+  const montar = (r, lista) => {
+    const dataR = rdData(r.data_reuniao);
+    const linhaHtml = l => `<tr>
+      <td style="padding:6px 8px;border-bottom:1px solid #e5e8ec;font-weight:700">${rdEsc(l.p.br)}</td>
+      <td style="padding:6px 8px;border-bottom:1px solid #e5e8ec">${rdEsc(l.p.cliente)}</td>
+      <td style="padding:6px 8px;border-bottom:1px solid #e5e8ec">${rdEsc(l.p.vendedor)}</td>
+      <td style="padding:6px 8px;border-bottom:1px solid #e5e8ec">${rdEsc(l.linhasBR.join(' + '))}</td>
+      <td style="padding:6px 8px;border-bottom:1px solid #e5e8ec;text-align:right">${rdBRL(l.v)}</td>
+      <td style="padding:6px 8px;border-bottom:1px solid #e5e8ec;text-align:right">${l.m.toFixed(1)}%</td>
+      <td style="padding:6px 8px;border-bottom:1px solid #e5e8ec;text-align:right;font-weight:700">${l.d.toLocaleString('pt-BR')}%</td>
+      <td style="padding:6px 8px;border-bottom:1px solid #e5e8ec;text-align:right;font-weight:700">${rdBRL(l.novo)}</td>
+      <td style="padding:6px 8px;border-bottom:1px solid #e5e8ec;text-align:right;color:${l.lucro >= 0 ? '#2e7d32' : '#c62828'}">${l.margemNova.toFixed(1)}%</td>
+      <td style="padding:6px 8px;border-bottom:1px solid #e5e8ec;text-align:right;color:#c62828">${rdBRL(l.v - l.novo)}</td></tr>
+      ${l.its.length || obs[l.p.br] ? `<tr><td></td><td colspan="9" style="padding:2px 8px 8px;font-size:11px;color:#5b6773">${obs[l.p.br] ? `<b>Obs.:</b> ${rdEsc(obs[l.p.br])}<br>` : ''}${l.its.slice(0, 8).map(i => `• ${rdEsc(i.quantidade ?? '')} ${rdEsc(i.unidade || '')} ${rdEsc(i.descricao)} <i>(${rdEsc(i.linha)})</i>`).join('<br>')}${l.its.length > 8 ? `<br>… +${l.its.length - 8} item(ns)` : ''}</td></tr>` : ''}`;
+    const tA = lista.reduce((s, l) => s + l.v, 0), tN = lista.reduce((s, l) => s + l.novo, 0), tL = lista.reduce((s, l) => s + l.lucro, 0);
+    const diretoria = `<div style="font-family:Arial,sans-serif;color:#1e2a36">
+      <h2 style="color:#14324f;margin:0">Reunião de desconto — ${dataR}</h2>
+      <p style="margin:6px 0 14px;color:#5b6773">Participantes: ${rdEsc(r.participantes || '—')}${r.observacao ? `<br>Observações: ${rdEsc(r.observacao)}` : ''}<br>Fechada por ${rdEsc(quem?.nome || '')} em ${new Date().toLocaleString('pt-BR')}</p>
+      <p><b>${lista.length} projeto(s)</b> · valor antes ${rdBRL(tA)} · novo valor ${rdBRL(tN)} · abre mão de <b>${rdBRL(tA - tN)}</b> · margem depois ${tN ? (tL / tN * 100).toFixed(1) : '0'}%</p>
+      <table style="border-collapse:collapse;width:100%;font-size:12px"><thead><tr style="background:#14324f;color:#fff">
+      ${['BR', 'Cliente', 'Vendedor', 'Produto', 'Preço anterior', 'Margem antes', 'Desconto', 'Novo preço', 'Margem depois', 'Abre mão'].map(h => `<th style="padding:7px 8px;text-align:left">${h}</th>`).join('')}
+      </tr></thead><tbody>${lista.map(linhaHtml).join('')}</tbody></table>
+      <p style="font-size:11px;color:#7a8592;margin-top:14px">Registro gerado pelo Portal de Engenharia — Kalenborn do Brasil.</p></div>`;
+    const porVend = {};
+    lista.forEach(l => { (porVend[l.p.vendedor || '—'] = porVend[l.p.vendedor || '—'] || []).push(l); });
+    const vendedores = Object.entries(porVend).map(([v, ls]) => ({
+      vendedor: v, email: cfg?.vendedores?.[v] || '',
+      corpo: `<div style="font-family:Arial,sans-serif;color:#1e2a36">
+        <p>Olá, ${rdEsc(v)}.</p>
+        <p>Na reunião comercial de <b>${dataR}</b> foram aprovados novos preços para as propostas abaixo. Pode repassar ao comprador.</p>
+        <table style="border-collapse:collapse;width:100%;font-size:12.5px"><thead><tr style="background:#14324f;color:#fff">
+        ${['BR', 'Cliente', 'Produto / equipamento', 'Preço anterior', 'Novo preço'].map(h => `<th style="padding:7px 8px;text-align:left">${h}</th>`).join('')}</tr></thead><tbody>
+        ${ls.map(l => `<tr><td style="padding:7px 8px;border-bottom:1px solid #e5e8ec;font-weight:700">${rdEsc(l.p.br)}</td>
+          <td style="padding:7px 8px;border-bottom:1px solid #e5e8ec">${rdEsc(l.p.cliente)}</td>
+          <td style="padding:7px 8px;border-bottom:1px solid #e5e8ec;font-size:11.5px">${rdEsc(l.linhasBR.join(' + '))}${l.its.length ? '<br>' + l.its.slice(0, 5).map(i => `• ${rdEsc(i.quantidade ?? '')} ${rdEsc(i.unidade || '')} ${rdEsc(i.descricao)}`).join('<br>') + (l.its.length > 5 ? `<br>… +${l.its.length - 5} item(ns)` : '') : ''}${obs[l.p.br] ? `<br><b>Obs.:</b> ${rdEsc(obs[l.p.br])}` : ''}</td>
+          <td style="padding:7px 8px;border-bottom:1px solid #e5e8ec;text-align:right;color:#7a8592;text-decoration:line-through">${rdBRL(l.v)}</td>
+          <td style="padding:7px 8px;border-bottom:1px solid #e5e8ec;text-align:right;font-weight:800;color:#14324f">${rdBRL(l.novo)}</td></tr>`).join('')}
+        </tbody></table>
+        <p style="font-size:11px;color:#7a8592;margin-top:14px">Mensagem automática do Portal de Engenharia — Kalenborn do Brasil.</p></div>`,
+    }));
+    return { diretoria, vendedores, dataR };
+  };
+  const imprimir = (html, titulo) => {
+    const w = window.open('', '_blank'); if (!w) return;
+    w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${rdEsc(titulo)}</title></head><body style="margin:24px">${html}<script>setTimeout(()=>print(),300)<\/script></body></html>`); w.document.close();
+  };
+  const fechar = async () => {
+    if (!sel.length) { setAviso({ erro: true, t: 'Coloque desconto em pelo menos um BR antes de fechar.' }); return; }
+    const semEmail = [...new Set(sel.map(l => l.p.vendedor))].filter(v => !cfg?.vendedores?.[v]);
+    if (!window.confirm(`Fechar a reunião com ${sel.length} projeto(s)?\n\nVai para: ${cfg?.emails_diretoria || '(sem destinatários da diretoria)'} + ${[...new Set(sel.map(l => l.p.vendedor))].length} vendedor(es).${semEmail.length ? `\nSem e-mail cadastrado: ${semEmail.join(', ')}` : ''}`)) return;
+    setOcupado(true);
+    await supabase.rpc('fn_reuniao_dados', { p_reuniao: reuniao.id, p_participantes: reuniao.participantes || '', p_observacao: reuniao.observacao || '', p_data: reuniao.data_reuniao });
+    for (const l of sel) await salvarItem(l, l.d);
+    const rel = montar(reuniao, sel);
+    const emails = [{ para: cfg?.emails_diretoria || '', assunto: `Reunião de desconto — ${rel.dataR} — decisões`, corpo: rel.diretoria },
+      ...rel.vendedores.map(v => ({ para: v.email, assunto: `Novos preços aprovados — reunião de ${rel.dataR}`, corpo: v.corpo }))];
+    const { data, error } = await supabase.rpc('fn_reuniao_fechar', { p_reuniao: reuniao.id, p_relatorio_html: rel.diretoria, p_emails: emails });
+    setOcupado(false);
+    if (error || !data?.ok) { setAviso({ erro: true, t: error?.message || data?.erro }); return; }
+    setAviso({ t: `Reunião fechada. ${data.emails} e-mail(s) na fila de envio (diretoria + vendedores).${semEmail.length ? ` Sem e-mail: ${semEmail.join(', ')}.` : ''}` });
+    imprimir(rel.diretoria, `Reunião de desconto ${rel.dataR}`);
+    setDesc({}); setObs({}); carregar();
+  };
+  const verRelatorio = async (id, reenviar) => {
+    if (reenviar) {
+      if (!window.confirm('Reenviar os e-mails desta reunião?')) return;
+      const { data } = await supabase.rpc('fn_reuniao_reenviar', { p_reuniao: id });
+      setAviso({ t: `${data?.emails || 0} e-mail(s) colocados de novo na fila.` }); return;
+    }
+    const { data } = await supabase.from('comercial_reuniao_desconto').select('relatorio_html, data_reuniao').eq('id', id).maybeSingle();
+    if (data?.relatorio_html) imprimir(data.relatorio_html, `Reunião de desconto ${rdData(data.data_reuniao)}`);
+  };
+
+  const campo = { ...inputStyle(), padding: '5px 8px', fontSize: 12 };
+  const btn = (forte, cor) => ({ fontFamily: 'inherit', fontSize: 12, fontWeight: 700, padding: '6px 12px', borderRadius: 7, cursor: 'pointer', whiteSpace: 'nowrap',
+    border: `1px solid ${forte ? (cor || T.ink) : T.line}`, background: forte ? (cor || T.ink) : T.panel, color: forte ? '#fff' : T.inkDim });
+  const vis = verTodos ? linhas : linhas.slice(0, 60);
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      {/* barra da reunião */}
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', padding: '10px 12px', borderRadius: 10,
+        background: reuniao ? T.oliveSoft : T.panelAlt, border: `1px solid ${reuniao ? T.olive : T.line}` }}>
+        {reuniao ? (
+          <>
+            <strong style={{ color: T.oliveText, fontSize: 13 }}>● Reunião aberta</strong>
+            <label style={{ fontSize: 11.5, color: T.inkDim }}>data <input type="date" value={reuniao.data_reuniao || ''} onChange={e => setReuniao(r => ({ ...r, data_reuniao: e.target.value }))}
+              onBlur={() => supabase.rpc('fn_reuniao_dados', { p_reuniao: reuniao.id, p_participantes: reuniao.participantes || '', p_observacao: reuniao.observacao || '', p_data: reuniao.data_reuniao })} style={{ ...campo, width: 140 }} /></label>
+            <input value={reuniao.participantes || ''} onChange={e => setReuniao(r => ({ ...r, participantes: e.target.value }))} placeholder="participantes"
+              onBlur={() => supabase.rpc('fn_reuniao_dados', { p_reuniao: reuniao.id, p_participantes: reuniao.participantes || '', p_observacao: reuniao.observacao || '', p_data: reuniao.data_reuniao })} style={{ ...campo, width: 230 }} />
+            <input value={reuniao.observacao || ''} onChange={e => setReuniao(r => ({ ...r, observacao: e.target.value }))} placeholder="observações gerais da reunião"
+              onBlur={() => supabase.rpc('fn_reuniao_dados', { p_reuniao: reuniao.id, p_participantes: reuniao.participantes || '', p_observacao: reuniao.observacao || '', p_data: reuniao.data_reuniao })} style={{ ...campo, flex: '1 1 220px' }} />
+            {pode && <button disabled={ocupado} onClick={fechar} style={btn(true, T.rust)}>{ocupado ? 'Fechando…' : `Fechar reunião (${sel.length})`}</button>}
+          </>
+        ) : (
+          <>
+            <span style={{ fontSize: 12.5, color: T.inkDim }}>Coloque o desconto de cada BR na coluna <b>Desconto</b>. Para registrar e enviar, abra uma reunião.</span>
+            {pode && <button disabled={ocupado} onClick={iniciar} style={btn(true, T.olive)}>Iniciar reunião</button>}
+          </>
+        )}
+        {sel.length > 0 && <button onClick={aplicarAtalho} style={btn(false)}>Aplicar {atalho}% nos marcados</button>}
+      </div>
+      {aviso && <div style={{ fontSize: 12, fontWeight: 600, padding: '7px 10px', borderRadius: 7, background: aviso.erro ? T.rustSoft : T.oliveSoft, color: aviso.erro ? T.rustText : T.oliveText }}>{aviso.t}</div>}
+
+      {/* totais dos marcados */}
+      <div style={{ display: 'grid', gap: 8, gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))' }}>
+        {[['Projetos com desconto', String(sel.length), T.ink], ['Valor hoje', val(totAntes), T.inkDim], ['Novo valor', val(totNovo), T.amberText],
+          ['Abre mão de', val(totAntes - totNovo), T.rustText], ['Lucro depois', `${val(totLucro)}${totNovo ? ` · ${(totLucro / totNovo * 100).toFixed(1)}%` : ''}`, T.oliveText]].map(([r, v, c]) => (
+          <div key={r} style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '9px 12px' }}>
+            <div style={{ fontSize: 10.5, color: T.inkFaint }}>{r}</div><div style={{ fontSize: 16, fontWeight: 800, color: c }}>{v}</div>
+          </div>
+        ))}
+      </div>
+      {negativos > 0 && <div style={{ fontSize: 11.5, color: T.rustText, background: T.rustSoft, borderRadius: 7, padding: '8px 11px' }}>{negativos} projeto(s) ficariam com margem NEGATIVA no desconto escolhido.</div>}
+
+      {/* tabela */}
+      <div style={{ overflowX: 'auto', maxHeight: 560, overflowY: 'auto', border: `1px solid ${T.line}`, borderRadius: 8 }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 1050 }}>
+          <thead style={{ position: 'sticky', top: 0, zIndex: 1 }}><tr style={{ background: T.panelAlt }}>
+            {['BR', 'Cliente', 'Vendedor', 'Produto', 'Estágio', 'Valor hoje', 'Margem hoje', 'Desconto', 'Novo preço', 'Margem depois'].map((h, i) => (
+              <th key={h} style={{ padding: '7px 9px', fontSize: 10.5, fontWeight: 700, color: T.inkFaint, textAlign: i <= 4 ? 'left' : 'right', whiteSpace: 'nowrap' }}>{h}</th>))}
+          </tr></thead>
+          <tbody>
+            {vis.map(l => {
+              const ab = aberto === l.p.br;
+              return (
+                <React.Fragment key={l.p.br}>
+                  <tr style={{ borderBottom: `1px solid ${T.lineSoft}`, background: l.d > 0 ? (l.lucro < 0 ? `${T.rustSoft}66` : `${T.amberSoft}88`) : 'transparent' }}>
+                    <td onClick={() => setAberto(ab ? null : l.p.br)} style={{ padding: '7px 9px', fontSize: 11.5, fontWeight: 700, whiteSpace: 'nowrap', cursor: 'pointer' }}>{ab ? '▾' : '▸'} {l.p.br}</td>
+                    <td style={{ padding: '7px 9px', fontSize: 11, color: T.inkDim, maxWidth: 200, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={l.p.cliente}>{l.p.cliente}</td>
+                    <td style={{ padding: '7px 9px', fontSize: 10.5, color: T.inkFaint, whiteSpace: 'nowrap' }}>{l.p.vendedor}</td>
+                    <td style={{ padding: '7px 9px', whiteSpace: 'nowrap' }}>{l.linhasBR.map(x => <span key={x} style={{ fontSize: 10, fontWeight: 700, color: '#fff', background: RD_COR[x] || '#9AA5B1', borderRadius: 4, padding: '2px 6px', marginRight: 3 }}>{x}</span>)}</td>
+                    <td style={{ padding: '7px 9px', fontSize: 10.5, color: T.inkDim, whiteSpace: 'nowrap' }}>{l.p.estagio}</td>
+                    <td style={{ padding: '7px 9px', fontSize: 11.5, textAlign: 'right' }}>{val(l.v)}</td>
+                    <td style={{ padding: '7px 9px', fontSize: 11, textAlign: 'right', color: T.oliveText, fontWeight: 600 }}>{l.m.toFixed(1)}%</td>
+                    <td style={{ padding: '4px 9px', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                      <input type="number" min="0" max="95" step="0.5" value={l.d || ''} placeholder="0" disabled={!!reuniao && !pode}
+                        onChange={e => mudar(l, e.target.value)} onBlur={e => salvarItem(l, Math.max(0, Math.min(95, Number(e.target.value) || 0)))}
+                        style={{ ...campo, width: 64, textAlign: 'right', fontWeight: 700 }} /> %
+                    </td>
+                    <td style={{ padding: '7px 9px', fontSize: 11.5, textAlign: 'right', color: l.d ? T.amberText : T.inkFaint, fontWeight: l.d ? 700 : 400 }}>{l.d ? val(l.novo) : '—'}</td>
+                    <td style={{ padding: '7px 9px', fontSize: 11, textAlign: 'right', fontWeight: 700, color: !l.d ? T.inkFaint : l.lucro >= 0 ? T.oliveText : T.rustText }}>{l.d ? `${l.margemNova.toFixed(1)}%` : '—'}</td>
+                  </tr>
+                  {ab && (
+                    <tr><td colSpan={10} style={{ padding: '10px 14px', background: T.panelAlt, borderBottom: `2px solid ${T.blueText}` }}>
+                      <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', fontSize: 12, marginBottom: 8 }}>
+                        <span>Valor hoje: <b>{val(l.v)}</b></span><span>Custo orçado: <b>{val(l.custo)}</b></span>
+                        <span>Com {l.d || 0}% de desconto: <b style={{ color: T.amberText }}>{val(l.novo)}</b></span>
+                        <span>Abre mão de: <b style={{ color: T.rustText }}>{val(l.v - l.novo)}</b></span>
+                        <span>Margem: <b>{l.m.toFixed(1)}% → <span style={{ color: l.lucro >= 0 ? T.oliveText : T.rustText }}>{l.margemNova.toFixed(1)}%</span></b></span>
+                        <span>{l.p.dias_aberto} dias em aberto</span>
+                      </div>
+                      <div style={{ fontSize: 11.5, fontWeight: 800, color: T.inkFaint, marginBottom: 4 }}>Itens da proposta (equipamento e linha de produto)</div>
+                      {!l.its.length && <div style={{ fontSize: 12, color: T.inkFaint }}>Sem itens do orçamento no Sankhya para este BR.</div>}
+                      {l.its.map((i, k) => (
+                        <div key={k} style={{ display: 'flex', gap: 8, fontSize: 12, padding: '2px 0' }}>
+                          <span style={{ fontSize: 10, fontWeight: 700, color: '#fff', background: RD_COR[i.linha] || '#9AA5B1', borderRadius: 4, padding: '1px 6px', flex: 'none', alignSelf: 'flex-start' }}>{i.linha}</span>
+                          <span style={{ color: T.inkDim, flex: 'none', width: 70, textAlign: 'right' }}>{i.quantidade != null ? Number(i.quantidade).toLocaleString('pt-BR') : ''} {i.unidade || ''}</span>
+                          <span>{i.cod_produto} · {i.descricao}</span>
+                        </div>
+                      ))}
+                      <div style={{ marginTop: 8 }}>
+                        <input value={obs[l.p.br] || ''} onChange={e => setObs(o => ({ ...o, [l.p.br]: e.target.value }))} onBlur={e => l.d > 0 && salvarItem(l, l.d, e.target.value)}
+                          placeholder="observação da reunião para este BR (vai no relatório e para o vendedor)" style={{ ...campo, width: '100%', boxSizing: 'border-box' }} />
+                      </div>
+                    </td></tr>
+                  )}
+                </React.Fragment>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      {linhas.length > 60 && <button onClick={() => setVerTodos(x => !x)} style={{ ...btn(false), alignSelf: 'flex-start' }}>{verTodos ? 'Mostrar 60' : `Mostrar todas (${linhas.length})`}</button>}
+
+      {/* destinatários e histórico */}
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', fontSize: 12, color: T.inkDim }}>
+        <span>Relatório completo vai para: <b>{cfg?.emails_diretoria || '—'}</b></span>
+        {quem?.gestor && (editEmails == null
+          ? <button onClick={() => setEditEmails(cfg?.emails_diretoria || '')} style={btn(false)}>Alterar</button>
+          : <>
+              <input value={editEmails} onChange={e => setEditEmails(e.target.value)} placeholder="email1@kalenborn.com.br; email2@kalenborn.com.br" style={{ ...campo, width: 380 }} />
+              <button onClick={async () => { const { data } = await supabase.rpc('fn_reuniao_emails_diretoria', { p_valor: editEmails }); setAviso(data?.ok ? { t: 'Destinatários salvos.' } : { erro: true, t: data?.erro }); setEditEmails(null); carregar(); }} style={btn(true)}>Salvar</button>
+              <button onClick={() => setEditEmails(null)} style={btn(false)}>Cancelar</button>
+            </>)}
+      </div>
+      {hist.length > 0 && (
+        <div style={{ border: `1px solid ${T.line}`, borderRadius: 8, padding: '10px 12px' }}>
+          <div style={{ fontSize: 12.5, fontWeight: 800, marginBottom: 6 }}>Histórico de reuniões</div>
+          {hist.map(h => (
+            <div key={h.id} style={{ display: 'flex', gap: 10, alignItems: 'center', fontSize: 12, padding: '4px 0', borderBottom: `1px solid ${T.lineSoft}`, flexWrap: 'wrap' }}>
+              <strong>{rdData(h.data_reuniao)}</strong><span style={{ color: T.inkDim, flex: 1 }}>{h.participantes || '—'} · fechada por {h.fechado_por || '—'}</span>
+              <button onClick={() => verRelatorio(h.id)} style={btn(false)}>Ver relatório</button>
+              {pode && <button onClick={() => verRelatorio(h.id, true)} style={btn(false)}>Reenviar e-mails</button>}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -7181,87 +7482,10 @@ IMPORTANTE: Responda SOMENTE com base nos dados acima. Se a pergunta pede algo q
             </span>
           </div>
 
-          {comDesconto.length === 0 ? (
-            <div style={{ fontSize: 11.5, color: T.inkFaint, padding: '18px 0', textAlign: 'center' }}>
-              {t.dscVazio}
-            </div>
+          {dscBase.length === 0 ? (
+            <div style={{ fontSize: 11.5, color: T.inkFaint, padding: '18px 0', textAlign: 'center' }}>{t.dscVazio}</div>
           ) : (
-            <>
-              <div style={{ display: 'grid', gap: 8, gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
-                marginBottom: 12 }}>
-                {[
-                  { t: t.dscProjetos, v: String(comDesconto.length), p: G.azul },
-                  { t: t.dscValorHoje, v: val(dscTotHoje), p: G.cinza },
-                  { t: t.dscValorNovo, v: val(dscTotNovo), p: G.ambar },
-                  { t: t.dscAbreMao, v: val(dscTotHoje - dscTotNovo), p: G.vermelho },
-                  { t: t.dscLucroDepois, v: val(dscTotLucro), p: G.verde,
-                    s: dscTotNovo > 0 ? `${(dscTotLucro / dscTotNovo * 100).toFixed(1)}% ${t.dscMargemDepois.toLowerCase()}` : null },
-                ].map((k, i) => (
-                  <div key={k.t} className="g-card g-linha" style={{ background: T.panel,
-                    border: `1px solid ${T.line}`, borderRadius: 10, padding: '11px 13px',
-                    position: 'relative', overflow: 'hidden', animationDelay: `${i * 50}ms` }}>
-                    <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 3,
-                      background: `linear-gradient(90deg, ${k.p[0]}, ${k.p[1]})` }} />
-                    <div style={{ fontSize: 10.5, color: T.inkFaint, minHeight: 24 }}>{k.t}</div>
-                    <div style={{ fontSize: 17, fontWeight: 800, color: k.p[1],
-                      fontVariantNumeric: 'tabular-nums' }}>{k.v}</div>
-                    {k.s && <div style={{ fontSize: 9.5, color: T.inkFaint, marginTop: 2 }}>{k.s}</div>}
-                  </div>
-                ))}
-              </div>
-
-              {dscNegativos > 0 && (
-                <div style={{ fontSize: 11, color: T.rustText, background: T.rustSoft,
-                  border: `1px solid ${T.rustText}33`, borderRadius: 7, padding: '9px 12px',
-                  marginBottom: 11 }}>
-                  {t.dscNegativo.replace('{n}', String(dscNegativos))}
-                </div>
-              )}
-
-              <div style={{ overflowX: 'auto', maxHeight: 420, overflowY: 'auto' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 880 }}>
-                  <thead style={{ position: 'sticky', top: 0, zIndex: 1 }}><tr style={{ background: T.panelAlt }}>
-                    {['BR', t.cliente, t.vendedor, t.estagio, t.idade, t.dscValorHoje, t.dscMargemHoje,
-                      t.dscValorNovo, t.dscLucroDepois, t.dscMargemDepois].map((h, i) => (
-                      <th key={h} style={{ padding: '7px 10px', fontSize: 10.5, fontWeight: 600,
-                        color: T.inkFaint, textAlign: i <= 3 ? 'left' : 'right', whiteSpace: 'nowrap' }}>{h}</th>
-                    ))}
-                  </tr></thead>
-                  <tbody>
-                    {comDesconto.slice(0, 60).map((x, i) => (
-                      <tr key={x.br} className="g-linha" style={{ borderBottom: `1px solid ${T.lineSoft}`,
-                        animationDelay: `${Math.min(i, 20) * 30}ms`,
-                        background: x._lucro < 0 ? `${T.rustSoft}44` : 'transparent' }}>
-                        <td style={{ padding: '7px 10px', fontSize: 11.5, fontWeight: 700, whiteSpace: 'nowrap' }}>{x.br}</td>
-                        <td style={{ padding: '7px 10px', fontSize: 11, color: T.inkDim, maxWidth: 190,
-                          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={x.cliente}>{x.cliente}</td>
-                        <td style={{ padding: '7px 10px', fontSize: 10.5, color: T.inkFaint, whiteSpace: 'nowrap' }}>{x.vendedor}</td>
-                        <td style={{ padding: '7px 10px', fontSize: 10.5, whiteSpace: 'nowrap',
-                          color: x.estagio_codigo ? T.inkDim : T.amberText }}>{x.estagio}</td>
-                        <td style={{ padding: '7px 10px', fontSize: 10.5, textAlign: 'right', whiteSpace: 'nowrap',
-                          color: Number(x.dias_aberto) > 90 ? T.rustText : T.inkFaint }}>{x.dias_aberto} {t.dias}</td>
-                        <td style={{ padding: '7px 10px', fontSize: 11.5, textAlign: 'right',
-                          fontVariantNumeric: 'tabular-nums' }}>{val(x._valor)}</td>
-                        <td style={{ padding: '7px 10px', fontSize: 11, textAlign: 'right', color: T.oliveText,
-                          fontWeight: 600 }}>{x._margem.toFixed(1)}%</td>
-                        <td style={{ padding: '7px 10px', fontSize: 11.5, textAlign: 'right', color: T.amberText,
-                          fontVariantNumeric: 'tabular-nums' }}>{val(x._novo)}</td>
-                        <td style={{ padding: '7px 10px', fontSize: 11.5, textAlign: 'right', fontWeight: 600,
-                          color: x._lucro >= 0 ? T.oliveText : T.rustText,
-                          fontVariantNumeric: 'tabular-nums' }}>{val(x._lucro)}</td>
-                        <td style={{ padding: '7px 10px', fontSize: 11, textAlign: 'right', fontWeight: 700,
-                          color: x._margemNova >= 0 ? T.oliveText : T.rustText }}>{x._margemNova.toFixed(1)}%</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              {comDesconto.length > 60 && (
-                <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 8 }}>
-                  {t.mostrando.replace('{n}', '60').replace('{t}', String(comDesconto.length))}
-                </div>
-              )}
-            </>
+            <ReuniaoDesconto candidatos={dscBase} atalho={dscPct} val={val} />
           )}
 
           {dscMostraAviso && (
