@@ -9179,7 +9179,6 @@ function PainelComercial({ currentUser }) {
           { id: 'followup', label: 'Follow Up' },
           { id: 'crm', label: 'CRM' },
           { id: 'diretoria', label: 'Diretoria' },
-          { id: 'aprovacoes', label: 'Aprovações Comerciais' },
           { id: 'modelo', label: 'Modelo Preditivo' }].map(ab => (
           <button key={ab.id} onClick={() => setSubAba(ab.id)} style={{
             background: 'none', border: 'none', cursor: 'pointer', padding: '9px 16px',
@@ -9192,7 +9191,7 @@ function PainelComercial({ currentUser }) {
         ))}
       </div>
 
-      {subAba === 'aprovacoes' ? <AprovacoesComerciais currentUser={currentUser} /> : subAba === 'modelo' ? <ModeloPreditivo /> : subAba === 'followup' ? <FollowUpComercial currentUser={currentUser} /> : subAba === 'crm' ? <CRM currentUser={currentUser} /> : subAba === 'diretoria' ? <PainelDiretoria /> : <>
+      {subAba === 'modelo' ? <ModeloPreditivo /> : subAba === 'followup' ? <FollowUpComercial currentUser={currentUser} /> : subAba === 'crm' ? <CRM currentUser={currentUser} /> : subAba === 'diretoria' ? <PainelDiretoria /> : <>
 
       {/* Filtro de período — de/até */}
       <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '14px 18px' }}>
