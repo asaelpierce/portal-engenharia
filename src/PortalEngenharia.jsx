@@ -15650,8 +15650,58 @@ function MonitoramentoOP({ currentUser }) {
     await Promise.all([
       carregarConhecPronto(),
       carregarOpsGeradas(),
+      carregarDuvidas(),
       fetch(`${SUPABASE_URL}/functions/v1/sankhya-op-por-br-direto-sync`, { method: 'POST' }).catch(e => console.error('Erro sincronizando OP direta:', e)),
     ]);
+    setProcessandoCard(null);
+  };
+
+  // Cards finalizados "com dúvida" (Dúvidas Técnicas / aguardando aprovação do cliente):
+  // antes sumiam das duas listas e não havia como seguir. Aqui dá pra ver e, resolvida a
+  // dúvida, mandar pra OP's Geradas — ou voltar pra em andamento se precisar refazer.
+  const [cardsDuvida, setCardsDuvida] = useState([]);
+  const [resolvendoDuvida, setResolvendoDuvida] = useState(null);   // { card, nota }
+  const carregarDuvidas = useCallback(async () => {
+    const { data } = await supabase.from('v_monitoramento_op_cards_planner').select('*')
+      .not('data_finalizado', 'is', null).eq('finalizado_com_duvida', true).eq('planner_excluido', false)
+      .order('data_finalizado', { ascending: true });
+    setCardsDuvida(await enriquecerComCliente(data || []));
+  }, []);  // eslint-disable-line
+  useEffect(() => {
+    if (abaMonitoramento !== 'conhecimento_pronto') return;
+    carregarDuvidas();
+    const id = setInterval(() => carregarDuvidas(), 30000);
+    return () => clearInterval(id);
+  }, [abaMonitoramento, carregarDuvidas]);
+  const resolverDuvida = async (card, nota) => {
+    setProcessandoCard(card.id);
+    await supabase.from('monitoramento_op_cards_planner').update({
+      finalizado_com_duvida: false,
+      duvida_resolvida_em: new Date().toISOString(),
+      duvida_resolvida_por: currentUser?.nome || null,
+      duvida_resolucao: (nota || '').trim() || null,
+    }).eq('id', card.id);
+    await supabase.from('solicitacoes_mover_card_planner').insert({
+      planner_task_id: card.planner_task_id, br: card.br, bucket_destino: BUCKETS_PLANNER.OPS_GERADAS, status: 'pendente',
+    });
+    setResolvendoDuvida(null);
+    await Promise.all([
+      carregarDuvidas(), carregarOpsGeradas(),
+      fetch(`${SUPABASE_URL}/functions/v1/sankhya-op-por-br-direto-sync`, { method: 'POST' }).catch(e => console.error('Erro sincronizando OP direta:', e)),
+    ]);
+    setProcessandoCard(null);
+  };
+  const voltarDuvidaParaAndamento = async (card) => {
+    setProcessandoCard(card.id);
+    await supabase.from('monitoramento_op_cards_planner').update({
+      data_finalizado: null, finalizado_com_duvida: false,
+      duvida_resolvida_em: new Date().toISOString(), duvida_resolvida_por: currentUser?.nome || null,
+      duvida_resolucao: 'Voltou para em andamento',
+    }).eq('id', card.id);
+    await supabase.from('solicitacoes_mover_card_planner').insert({
+      planner_task_id: card.planner_task_id, br: card.br, bucket_destino: BUCKETS_PLANNER.PROJETOS_EM_ANDAMENTO, status: 'pendente',
+    });
+    await Promise.all([carregarDuvidas(), carregarConhecPronto()]);
     setProcessandoCard(null);
   };
 
@@ -16780,6 +16830,63 @@ function MonitoramentoOP({ currentUser }) {
         </Overlay>
         );
       })()}
+
+      {abaMonitoramento === 'conhecimento_pronto' && visualizacaoConhecPronto === 'cards' && (
+        <>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '22px 0 4px' }}>
+            <span style={{ fontFamily: FONT_DISPLAY, fontSize: 13, fontWeight: 700, color: T.amberText, textTransform: 'uppercase', letterSpacing: 0.5 }}>⚠ Em Dúvidas Técnicas / aguardando aprovação ({cardsDuvida.length})</span>
+            <div style={{ flex: 1, height: 1, background: T.line }} />
+          </div>
+          <div style={{ fontSize: 12, color: T.inkFaint, margin: '0 0 8px' }}>
+            Cards finalizados "com dúvida" (ex.: aguardando o cliente aprovar o desenho). Quando resolver, clique em <b>Resolvido → OP's Geradas</b> e o card segue para a verificação das OPs.
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {cardsDuvida.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: 18, color: T.inkFaint, fontSize: 12.5 }}>Nenhum card em Dúvidas Técnicas.</div>
+            ) : cardsDuvida.map(c => {
+              const dias = c.data_finalizado ? Math.floor((Date.now() - new Date(c.data_finalizado).getTime()) / 86400000) : 0;
+              return (
+                <div key={c.id} style={{ background: T.amberSoft, border: `1px solid ${T.amber}55`, borderRadius: 10, padding: '12px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ fontSize: 14, fontWeight: 700 }}>
+                      <span style={{ fontFamily: FONT_DISPLAY, color: T.blueText }}>{c.br}</span>
+                      {c.cliente_nome && <span style={{ fontSize: 12, fontWeight: 400, color: T.inkDim }}> — {c.cliente_nome}</span>}
+                    </div>
+                    <div style={{ fontSize: 12.5, color: T.amberText, fontWeight: 700, marginTop: 3 }}>⚠ {c.observacao_duvida || 'Sem descrição da dúvida'}</div>
+                    <div style={{ fontSize: 11, color: T.inkFaint, marginTop: 3 }}>
+                      Enviado em {fmtData(c.data_finalizado)}{c.projetista ? ` · Projetista: ${c.projetista}` : ''} · há {dias} dia(s)
+                    </div>
+                    {resolvendoDuvida?.card?.id === c.id && (
+                      <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+                        <input autoFocus value={resolvendoDuvida.nota} onChange={e => setResolvendoDuvida(r => ({ ...r, nota: e.target.value }))}
+                          placeholder="como foi resolvido (ex.: desenho aprovado pelo cliente em 14/10)" style={{ ...inputStyle(), flex: '1 1 320px', padding: '6px 9px', fontSize: 12.5 }} />
+                        <button onClick={() => resolverDuvida(c, resolvendoDuvida.nota)} disabled={processandoCard === c.id}
+                          style={{ fontSize: 12, fontWeight: 700, color: '#fff', background: T.olive, border: 'none', borderRadius: 6, padding: '7px 14px', cursor: 'pointer' }}>
+                          {processandoCard === c.id ? 'Enviando…' : "Confirmar → OP's Geradas"}
+                        </button>
+                        <button onClick={() => setResolvendoDuvida(null)} style={{ fontSize: 12, color: T.inkDim, background: 'transparent', border: `1px solid ${T.line}`, borderRadius: 6, padding: '7px 12px', cursor: 'pointer' }}>Cancelar</button>
+                      </div>
+                    )}
+                  </div>
+                  {resolvendoDuvida?.card?.id !== c.id && (
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <button onClick={() => voltarDuvidaParaAndamento(c)} disabled={processandoCard === c.id}
+                        title="A resposta exige refazer o projeto: volta para 'em andamento' (o card volta para a Etapa 1, já iniciado)"
+                        style={{ fontSize: 11.5, fontWeight: 600, color: T.inkDim, background: T.panel, border: `1px solid ${T.line}`, borderRadius: 6, padding: '8px 12px', cursor: 'pointer' }}>
+                        ↺ Voltar para em andamento
+                      </button>
+                      <button onClick={() => setResolvendoDuvida({ card: c, nota: '' })}
+                        style={{ fontSize: 12, fontWeight: 700, color: '#fff', background: T.olive, border: 'none', borderRadius: 6, padding: '8px 16px', cursor: 'pointer' }}>
+                        ✓ Resolvido → OP's Geradas
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
 
       {abaMonitoramento === 'conhecimento_pronto' && visualizacaoConhecPronto === 'cards' && (
         <>
