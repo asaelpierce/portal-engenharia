@@ -10919,27 +10919,38 @@ function AlmoxMovimentar({ currentUser, codigoInicial }) {
       // aba 1: itens
       const wi = wb.addWorksheet('Itens', { views: [{ state: 'frozen', ySplit: 1 }] });
       wi.columns = [
-        { header: 'OP', key: 'op', width: 9 }, { header: 'BR', key: 'br', width: 13 }, { header: 'Situação da OP', key: 'sit', width: 13 },
+        { header: 'Mês', key: 'mes', width: 10 }, { header: 'OP', key: 'op', width: 9 }, { header: 'BR', key: 'br', width: 13 }, { header: 'Situação da OP', key: 'sit', width: 13 },
         { header: 'Cód. matéria-prima', key: 'cod', width: 11 }, { header: 'Descrição', key: 'desc', width: 60 }, { header: 'Un.', key: 'un', width: 6 },
         { header: 'Tipo', key: 'motivo', width: 18 }, { header: 'Qtd. prevista na OP', key: 'prev', width: 12 }, { header: 'Qtd. requisitada', key: 'req', width: 12 },
         { header: 'Nova necessidade', key: 'nova', width: 12 }, { header: 'Requisições (nº, TOP, data, quem)', key: 'reqs', width: 70 },
         { header: 'Primeira requisição', key: 'pri', width: 12 }, { header: 'Última requisição', key: 'ult', width: 12 },
       ];
       lista.forEach(n => wi.addRow({
-        op: Number(n.op) || n.op, br: n.br || infoOp[String(n.op)]?.br || '', sit: n.situacao_op || infoOp[String(n.op)]?.situacao_op || '',
+        mes: n.ultima_data ? rotMesNN(String(n.ultima_data).slice(0, 7)) : '', op: Number(n.op) || n.op, br: n.br || infoOp[String(n.op)]?.br || '', sit: n.situacao_op || infoOp[String(n.op)]?.situacao_op || '',
         cod: Number(n.cod_materia_prima) || n.cod_materia_prima, desc: n.descricao, un: n.unidade, motivo: n.motivo,
         prev: n.na_lista ? Number(n.qtd_prevista) || 0 : null, req: Number(n.qtd_requisitada) || 0, nova: Number(n.qtd_nova) || 0,
         reqs: n.requisicoes, pri: dt(n.primeira_data), ult: dt(n.ultima_data),
       }));
       cab(wi);
-      ['H', 'I', 'J'].forEach(c => { wi.getColumn(c).numFmt = '#,##0.###'; });
-      ['L', 'M'].forEach(c => { wi.getColumn(c).numFmt = 'dd/mm/yyyy'; });
-      wi.getColumn('E').alignment = { wrapText: true, vertical: 'top' }; wi.getColumn('K').alignment = { wrapText: true, vertical: 'top' };
-      wi.autoFilter = { from: 'A1', to: { row: 1, column: 13 } };
+      ['I', 'J', 'K'].forEach(c => { wi.getColumn(c).numFmt = '#,##0.###'; });
+      ['M', 'N'].forEach(c => { wi.getColumn(c).numFmt = 'dd/mm/yyyy'; });
+      wi.getColumn('F').alignment = { wrapText: true, vertical: 'top' }; wi.getColumn('L').alignment = { wrapText: true, vertical: 'top' };
+      wi.autoFilter = { from: 'A1', to: { row: 1, column: 14 } };
       for (let r = 2; r <= lista.length + 1; r++) {
-        if (wi.getCell(`G${r}`).value === 'fora da lista') wi.getCell(`G${r}`).font = { bold: true, color: { argb: 'FFC00000' } };
-        wi.getCell(`J${r}`).font = { bold: true };
+        if (wi.getCell(`H${r}`).value === 'fora da lista') wi.getCell(`H${r}`).font = { bold: true, color: { argb: 'FFC00000' } };
+        wi.getCell(`K${r}`).font = { bold: true };
       }
+      // aba Por mês
+      const porMes = {};
+      lista.forEach(n => { const m = String(n.ultima_data || '').slice(0, 7) || '—'; const x = porMes[m] = porMes[m] || { itens: 0, ops: new Set(), fora: 0, acima: 0 };
+        x.itens++; x.ops.add(String(n.op)); if (n.motivo === 'fora da lista') x.fora++; else x.acima++; });
+      const wm = wb.addWorksheet('Por mês', { views: [{ state: 'frozen', ySplit: 1 }] });
+      wm.columns = [{ header: 'Mês', key: 'mes', width: 12 }, { header: 'OPs', key: 'ops', width: 8 }, { header: 'Itens', key: 'itens', width: 8 },
+        { header: 'Fora da lista', key: 'fora', width: 11 }, { header: 'Acima do previsto', key: 'acima', width: 11 }];
+      Object.keys(porMes).sort().reverse().forEach(m => wm.addRow({ mes: m === '—' ? '—' : rotMesNN(m), ops: porMes[m].ops.size, itens: porMes[m].itens, fora: porMes[m].fora, acima: porMes[m].acima }));
+      cab(wm);
+      wm.addRow({}); wm.addRow({ mes: 'Total', ops: new Set(lista.map(n => String(n.op))).size, itens: lista.length,
+        fora: lista.filter(n => n.motivo === 'fora da lista').length, acima: lista.filter(n => n.motivo !== 'fora da lista').length }).font = { bold: true };
       // aba 2: resumo por OP
       const porOp = {};
       lista.forEach(n => { const k = String(n.op); (porOp[k] = porOp[k] || []).push(n); });
