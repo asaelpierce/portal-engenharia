@@ -19883,22 +19883,25 @@ function RevisaoResponsaveisPropostas() {
 
   const carregar = useCallback(async () => {
     setLoading(true);
-    const [{ data: colabs }, { data: asaelRow }] = await Promise.all([
+    const [{ data: colabs }, { data: asaelRow }, { data: inicioRpc }] = await Promise.all([
       supabase.from('colaboradores').select('id,nome').eq('ativo', true).order('nome'),
       supabase.from('colaboradores').select('id').eq('nome', 'Asael Abdon').maybeSingle(),
+      supabase.rpc('fn_produtividade_inicio'),
     ]);
     setColaboradores(colabs || []);
+    // a contagem de produtividade começa nesta data (comercial_parametro.produtividade_inicio): antes dela nada é cobrado
+    const inicio = inicioRpc || '2026-10-26';
 
     const queries = [];
     if (asaelRow?.id) {
       queries.push(
-        supabase.from('propostas').select('id,br,cliente,valor_liquido,responsavel_id').eq('responsavel_id', asaelRow.id)
+        supabase.from('propostas').select('id,br,cliente,valor_liquido,responsavel_id').eq('responsavel_id', asaelRow.id).gte('data_abertura', inicio)
       );
     }
     const { data: urgentes } = await supabase.from('propostas_revisao_manual_urgente').select('proposta_id,br,motivo');
     const idsUrgentes = (urgentes || []).map(u => u.proposta_id);
     if (idsUrgentes.length) {
-      queries.push(supabase.from('propostas').select('id,br,cliente,valor_liquido,responsavel_id').in('id', idsUrgentes));
+      queries.push(supabase.from('propostas').select('id,br,cliente,valor_liquido,responsavel_id').in('id', idsUrgentes).gte('data_abertura', inicio));
     }
 
     const resultados = await Promise.all(queries);
