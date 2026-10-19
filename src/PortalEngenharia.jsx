@@ -10883,6 +10883,82 @@ function AlmoxMovimentar({ currentUser, codigoInicial }) {
   }, []);
   useEffect(() => { carregarListas(); }, [carregarListas]);
 
+  // Excel das OPs com nova necessidade (requisição do Sankhya fora da lista da OP ou acima do previsto)
+  const [soNova, setSoNova] = useState(false);
+  const [gerandoXls, setGerandoXls] = useState(false);
+  const exportarNovaNecessidade = async () => {
+    setGerandoXls(true);
+    try {
+      const [{ data: itensNN }, { data: opsTodas }] = await Promise.all([
+        supabase.from('v_almox_nova_necessidade').select('*').order('op').order('descricao'),
+        supabase.from('v_almox_fluxo_ops').select('op, br, situacao_op, qtd_materiais, itens_entregues'),
+      ]);
+      const infoOp = Object.fromEntries((opsTodas || []).map(o => [String(o.op), o]));
+      const lista = itensNN || [];
+      if (!lista.length) { window.alert('Nenhuma OP com nova necessidade no momento.'); return; }
+      const { default: ExcelJS } = await import('exceljs');
+      const wb = new ExcelJS.Workbook();
+      const cab = (ws) => {
+        const r = ws.getRow(1); r.font = { bold: true, color: { argb: 'FFFFFFFF' } }; r.alignment = { wrapText: true, vertical: 'middle' };
+        r.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F4E79' } }; r.height = 30;
+      };
+      const dt = v => (v ? new Date(`${String(v).slice(0, 10)}T12:00:00`) : null);
+      // aba 1: itens
+      const wi = wb.addWorksheet('Itens', { views: [{ state: 'frozen', ySplit: 1 }] });
+      wi.columns = [
+        { header: 'OP', key: 'op', width: 9 }, { header: 'BR', key: 'br', width: 13 }, { header: 'Situação da OP', key: 'sit', width: 13 },
+        { header: 'Cód. matéria-prima', key: 'cod', width: 11 }, { header: 'Descrição', key: 'desc', width: 60 }, { header: 'Un.', key: 'un', width: 6 },
+        { header: 'Tipo', key: 'motivo', width: 18 }, { header: 'Qtd. prevista na OP', key: 'prev', width: 12 }, { header: 'Qtd. requisitada', key: 'req', width: 12 },
+        { header: 'Nova necessidade', key: 'nova', width: 12 }, { header: 'Requisições (nº, TOP, data, quem)', key: 'reqs', width: 70 },
+        { header: 'Primeira requisição', key: 'pri', width: 12 }, { header: 'Última requisição', key: 'ult', width: 12 },
+      ];
+      lista.forEach(n => wi.addRow({
+        op: Number(n.op) || n.op, br: n.br || infoOp[String(n.op)]?.br || '', sit: infoOp[String(n.op)]?.situacao_op || '',
+        cod: Number(n.cod_materia_prima) || n.cod_materia_prima, desc: n.descricao, un: n.unidade, motivo: n.motivo,
+        prev: n.na_lista ? Number(n.qtd_prevista) || 0 : null, req: Number(n.qtd_requisitada) || 0, nova: Number(n.qtd_nova) || 0,
+        reqs: n.requisicoes, pri: dt(n.primeira_data), ult: dt(n.ultima_data),
+      }));
+      cab(wi);
+      ['H', 'I', 'J'].forEach(c => { wi.getColumn(c).numFmt = '#,##0.###'; });
+      ['L', 'M'].forEach(c => { wi.getColumn(c).numFmt = 'dd/mm/yyyy'; });
+      wi.getColumn('E').alignment = { wrapText: true, vertical: 'top' }; wi.getColumn('K').alignment = { wrapText: true, vertical: 'top' };
+      wi.autoFilter = { from: 'A1', to: { row: 1, column: 13 } };
+      for (let r = 2; r <= lista.length + 1; r++) {
+        if (wi.getCell(`G${r}`).value === 'fora da lista') wi.getCell(`G${r}`).font = { bold: true, color: { argb: 'FFC00000' } };
+        wi.getCell(`J${r}`).font = { bold: true };
+      }
+      // aba 2: resumo por OP
+      const porOp = {};
+      lista.forEach(n => { const k = String(n.op); (porOp[k] = porOp[k] || []).push(n); });
+      const wo = wb.addWorksheet('Por OP', { views: [{ state: 'frozen', ySplit: 1 }] });
+      wo.columns = [
+        { header: 'OP', key: 'op', width: 9 }, { header: 'BR', key: 'br', width: 13 }, { header: 'Situação da OP', key: 'sit', width: 13 },
+        { header: 'Itens com nova necessidade', key: 'n', width: 13 }, { header: 'Fora da lista', key: 'fora', width: 10 }, { header: 'Acima do previsto', key: 'acima', width: 10 },
+        { header: 'Materiais na lista da OP', key: 'mat', width: 11 }, { header: 'Última requisição', key: 'ult', width: 12 },
+      ];
+      Object.entries(porOp).sort((a, c) => String(c[1][0]?.ultima_data).localeCompare(String(a[1][0]?.ultima_data))).forEach(([op, ns]) => wo.addRow({
+        op: Number(op) || op, br: ns[0].br || infoOp[op]?.br || '', sit: infoOp[op]?.situacao_op || '', n: ns.length,
+        fora: ns.filter(x => x.motivo === 'fora da lista').length, acima: ns.filter(x => x.motivo !== 'fora da lista').length,
+        mat: infoOp[op]?.qtd_materiais ?? null, ult: dt(ns.map(x => x.ultima_data).sort().pop()),
+      }));
+      cab(wo); wo.getColumn('H').numFmt = 'dd/mm/yyyy';
+      wo.autoFilter = { from: 'A1', to: { row: 1, column: 8 } };
+      const nOps = Object.keys(porOp).length;
+      wo.addRow([]); const tr = wo.addRow(['Total', '', '', lista.length, lista.filter(x => x.motivo === 'fora da lista').length, lista.filter(x => x.motivo !== 'fora da lista').length]); tr.font = { bold: true };
+      // aba 3: regra
+      const wr = wb.addWorksheet('Como ler');
+      [['OPs com nova necessidade — Fluxo de Materiais'], [`Gerado em ${new Date().toLocaleString('pt-BR')} por ${currentUser?.nome || '—'} · ${nOps} OP(s), ${lista.length} item(ns)`], [],
+        ['Nova necessidade = requisição do Sankhya ligada à OP (TOPs de requisição, TIPMOV J) com item fora da lista de materiais da OP ou com quantidade acima do previsto.'],
+        ['"Fora da lista": o item não estava previsto na OP. "Acima do previsto": a soma das requisições passou da quantidade prevista; a coluna Nova necessidade mostra só o excedente.'],
+        ['Os dados vêm do Sankhya e são atualizados a cada 5 minutos.']].forEach(l => wr.addRow(l));
+      wr.getRow(1).font = { bold: true, size: 13 }; wr.getColumn(1).width = 150;
+      const buf = await wb.xlsx.writeBuffer();
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+      a.download = `OPs_nova_necessidade_${new Date().toISOString().slice(0, 10)}.xlsx`; document.body.appendChild(a); a.click(); a.remove();
+    } finally { setGerandoXls(false); }
+  };
+
   const carregarOp = useCallback(async (o) => {
     if (!o) return;
     setCarregandoOp(true);
@@ -11092,8 +11168,15 @@ function AlmoxMovimentar({ currentUser, codigoInicial }) {
       <div className="grid-2col" style={{ display: 'grid', gridTemplateColumns: '300px 1fr', gap: 14, alignItems: 'flex-start' }}>
         <Panel title="OPs em andamento" subtitle="sem finalizadas, canceladas ou já entregues · a busca acha qualquer OP">
           <input value={buscaOp} onChange={e => setBuscaOp(e.target.value)} placeholder="buscar OP ou BR" style={{ ...campo, width: '100%', boxSizing: 'border-box', marginBottom: 8 }} />
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8 }}>
+            <label style={{ fontSize: 11.5, color: T.inkDim, display: 'flex', gap: 5, alignItems: 'center', cursor: 'pointer' }}>
+              <input type="checkbox" checked={soNova} onChange={e => setSoNova(e.target.checked)} /> só com nova necessidade ({Object.keys(novaPorOp).length})
+            </label>
+            <button onClick={exportarNovaNecessidade} disabled={gerandoXls} title="Excel com as OPs que tiveram nova necessidade (itens fora da lista ou acima do previsto)"
+              style={{ ...botao(false, T.oliveText), padding: '5px 9px', fontSize: 11.5 }}>{gerandoXls ? 'gerando…' : '📥 Excel nova necessidade'}</button>
+          </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 520, overflowY: 'auto' }}>
-            {opsF.map(o => (
+            {opsF.filter(o => !soNova || novaPorOp[String(o.op)]).map(o => (
               <button key={o.op} onClick={() => abrirOp(o)} style={{ textAlign: 'left', padding: '8px 10px', borderRadius: 7, cursor: 'pointer', fontSize: 12.5, fontFamily: 'inherit',
                 border: `1px solid ${opSel?.op === o.op ? T.terracotta : T.line}`, background: opSel?.op === o.op ? T.rustSoft : T.panelAlt, color: T.ink }}>
                 <strong>OP {o.op}</strong> · {o.br || 'sem BR'}
