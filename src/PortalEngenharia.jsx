@@ -5236,6 +5236,55 @@ function AprovacoesComerciais({ currentUser }) {
 }
 
 
+
+// Filtro de múltipla escolha (caixinhas), usado nas tabelas do comercial. A lista abre em
+// posição fixa para não ser cortada por tabelas com rolagem. valor = array ([] = todos).
+function FiltroMulti({ valor, opcoes, onChange, todosRotulo = 'todos', largura = '100%', fonte = 11 }) {
+  const [aberto, setAberto] = useState(null);   // { x, y, w }
+  const ref = useRef(null);
+  const sel = Array.isArray(valor) ? valor : [];
+  useEffect(() => {
+    if (!aberto) return;
+    const fechar = e => { if (!e.target.closest || !e.target.closest('[data-filtro-multi]')) setAberto(null); };
+    const rolar = () => setAberto(null);
+    document.addEventListener('mousedown', fechar); window.addEventListener('scroll', rolar, true);
+    return () => { document.removeEventListener('mousedown', fechar); window.removeEventListener('scroll', rolar, true); };
+  }, [aberto]);
+  const rot = sel.length === 0 ? todosRotulo : sel.length === 1 ? (opcoes.find(o => o.v === sel[0])?.r ?? sel[0]) : `${sel.length} selecionados`;
+  const alternar = v => onChange(sel.includes(v) ? sel.filter(x => x !== v) : [...sel, v]);
+  return (
+    <span data-filtro-multi style={{ display: 'inline-block', width: largura }}>
+      <button ref={ref} type="button" onClick={() => {
+          if (aberto) { setAberto(null); return; }
+          const r = ref.current.getBoundingClientRect();
+          setAberto({ x: Math.min(r.left, window.innerWidth - 250), y: r.bottom + 3, w: Math.max(r.width, 210) });
+        }}
+        style={{ fontFamily: 'inherit', fontSize: fonte, padding: '3px 6px', width: '100%', textAlign: 'left', cursor: 'pointer',
+          borderRadius: 4, border: `1px solid ${sel.length ? T.terracotta : T.line}`, background: T.panel,
+          color: sel.length ? T.ink : T.inkFaint, fontWeight: sel.length ? 600 : 400, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+        {rot} <span style={{ float: 'right', color: T.inkFaint }}>▾</span>
+      </button>
+      {aberto && (
+        <div data-filtro-multi style={{ position: 'fixed', left: aberto.x, top: aberto.y, width: aberto.w, zIndex: 60, background: T.panel,
+          border: `1px solid ${T.line}`, borderRadius: 8, boxShadow: '0 8px 24px rgba(0,0,0,.16)', padding: 6, maxHeight: 320, overflowY: 'auto', textAlign: 'left' }}>
+          <div style={{ display: 'flex', gap: 6, padding: '2px 4px 6px', borderBottom: `1px solid ${T.lineSoft}`, marginBottom: 4 }}>
+            <button type="button" onClick={() => onChange(opcoes.map(o => o.v))} style={{ fontFamily: 'inherit', fontSize: 11, border: 'none', background: 'none', color: T.blueText, fontWeight: 700, cursor: 'pointer', padding: 0 }}>marcar todos</button>
+            <button type="button" onClick={() => onChange([])} style={{ fontFamily: 'inherit', fontSize: 11, border: 'none', background: 'none', color: T.rustText, fontWeight: 700, cursor: 'pointer', padding: 0 }}>limpar</button>
+          </div>
+          {opcoes.map(o => (
+            <label key={o.v} style={{ display: 'flex', gap: 7, alignItems: 'center', padding: '5px 4px', fontSize: 12, fontWeight: 400, color: T.ink, cursor: 'pointer', borderRadius: 5,
+              background: sel.includes(o.v) ? T.panelAlt : 'transparent' }}>
+              <input type="checkbox" checked={sel.includes(o.v)} onChange={() => alternar(o.v)} />
+              <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{o.r}</span>
+            </label>
+          ))}
+          {opcoes.length === 0 && <div style={{ fontSize: 11.5, color: T.inkFaint, padding: 6 }}>sem opções</div>}
+        </div>
+      )}
+    </span>
+  );
+}
+
 // Resumo do vendedor (2ª automação do Follow Up): e-mail com barras + link do painel "Minha carteira".
 function ResumoVendedorControle() {
   const [info, setInfo] = useState(null);
@@ -5315,6 +5364,12 @@ function ReuniaoDesconto({ candidatos, atalho, val }) {
   const [ocupado, setOcupado] = useState(false);
   const [editEmails, setEditEmails] = useState(null);
   const [verTodos, setVerTodos] = useState(false);
+  // filtros da tabela (várias opções por filtro)
+  const [fBusca, setFBusca] = useState('');
+  const [fVend, setFVend] = useState([]);
+  const [fLinha, setFLinha] = useState([]);
+  const [fEst, setFEst] = useState([]);
+  const [fDesc, setFDesc] = useState('todos');   // todos | com | sem
   const carregar = useCallback(async () => {
     const [q, c, r, h] = await Promise.all([
       supabase.rpc('fn_reuniao_quem'), supabase.rpc('fn_reuniao_config'),
@@ -5457,7 +5512,17 @@ function ReuniaoDesconto({ candidatos, atalho, val }) {
   const campo = { ...inputStyle(), padding: '5px 8px', fontSize: 12 };
   const btn = (forte, cor) => ({ fontFamily: 'inherit', fontSize: 12, fontWeight: 700, padding: '6px 12px', borderRadius: 7, cursor: 'pointer', whiteSpace: 'nowrap',
     border: `1px solid ${forte ? (cor || T.ink) : T.line}`, background: forte ? (cor || T.ink) : T.panel, color: forte ? '#fff' : T.inkDim });
-  const vis = verTodos ? linhas : linhas.slice(0, 60);
+  const bq = fBusca.trim().toLowerCase();
+  const filtradas = linhas.filter(l => (!bq || `${l.p.br} ${l.p.cliente}`.toLowerCase().includes(bq))
+    && (!fVend.length || fVend.includes(l.p.vendedor))
+    && (!fLinha.length || l.linhasBR.some(x => fLinha.includes(x)))
+    && (!fEst.length || fEst.includes(l.p.estagio || '—'))
+    && (fDesc === 'todos' || (fDesc === 'com' ? l.d > 0 : !(l.d > 0))));
+  const temFiltro = bq || fVend.length || fLinha.length || fEst.length || fDesc !== 'todos';
+  const opVend = [...new Set(linhas.map(l => l.p.vendedor).filter(Boolean))].sort().map(v => ({ v, r: v }));
+  const opLinha = [...new Set(linhas.flatMap(l => l.linhasBR))].sort().map(v => ({ v, r: v }));
+  const opEst = [...new Set(linhas.map(l => l.p.estagio || '—'))].sort().map(v => ({ v, r: v }));
+  const vis = verTodos ? filtradas : filtradas.slice(0, 60);
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       {/* barra da reunião */}
@@ -5494,6 +5559,24 @@ function ReuniaoDesconto({ candidatos, atalho, val }) {
         ))}
       </div>
       {negativos > 0 && <div style={{ fontSize: 11.5, color: T.rustText, background: T.rustSoft, borderRadius: 7, padding: '8px 11px' }}>{negativos} projeto(s) ficariam com margem NEGATIVA no desconto escolhido.</div>}
+
+      {/* filtros da tabela */}
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', padding: '8px 10px', background: T.panelAlt, borderRadius: 8 }}>
+        <input value={fBusca} onChange={e => setFBusca(e.target.value)} placeholder="buscar BR ou cliente" style={{ ...campo, width: 190 }} />
+        <span style={{ fontSize: 11, color: T.inkFaint }}>Vendedor</span>
+        <FiltroMulti valor={fVend} onChange={setFVend} opcoes={opVend} largura={150} fonte={12} />
+        <span style={{ fontSize: 11, color: T.inkFaint }}>Produto</span>
+        <FiltroMulti valor={fLinha} onChange={setFLinha} opcoes={opLinha} largura={150} fonte={12} />
+        <span style={{ fontSize: 11, color: T.inkFaint }}>Estágio</span>
+        <FiltroMulti valor={fEst} onChange={setFEst} opcoes={opEst} largura={140} fonte={12} />
+        <select value={fDesc} onChange={e => setFDesc(e.target.value)} style={{ ...campo, width: 'auto' }}>
+          <option value="todos">com e sem desconto</option>
+          <option value="com">só com desconto</option>
+          <option value="sem">só sem desconto</option>
+        </select>
+        <span style={{ fontSize: 11.5, color: T.inkDim, marginLeft: 'auto' }}>{filtradas.length} de {linhas.length} BR</span>
+        {temFiltro ? <button onClick={() => { setFBusca(''); setFVend([]); setFLinha([]); setFEst([]); setFDesc('todos'); }} style={btn(false)}>Limpar filtros</button> : null}
+      </div>
 
       {/* tabela */}
       <div style={{ overflowX: 'auto', maxHeight: 560, overflowY: 'auto', border: `1px solid ${T.line}`, borderRadius: 8 }}>
@@ -5553,7 +5636,7 @@ function ReuniaoDesconto({ candidatos, atalho, val }) {
           </tbody>
         </table>
       </div>
-      {linhas.length > 60 && <button onClick={() => setVerTodos(x => !x)} style={{ ...btn(false), alignSelf: 'flex-start' }}>{verTodos ? 'Mostrar 60' : `Mostrar todas (${linhas.length})`}</button>}
+      {filtradas.length > 60 && <button onClick={() => setVerTodos(x => !x)} style={{ ...btn(false), alignSelf: 'flex-start' }}>{verTodos ? 'Mostrar 60' : `Mostrar todas (${filtradas.length})`}</button>}
 
       {/* destinatários e histórico */}
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', fontSize: 12, color: T.inkDim }}>
@@ -7800,9 +7883,10 @@ function FollowUpComercial({ currentUser }) {
   };
   // Filtros por coluna, como no Excel. Texto para BR e Cliente, lista para
   // Vendedor e os dois estagios.
-  const [filtros, setFiltros] = useState({ br: '', cliente: '', vendedor: '', estC: '', estV: '' });
-  const setFiltro = (k, v) => setFiltros(f => ({ ...f, [k]: v }));
-  const limparFiltros = () => setFiltros({ br: '', cliente: '', vendedor: '', estC: '', estV: '' });
+  const [filtros, setFiltros] = useState({ br: '', cliente: '', vendedor: [], estC: [], estV: [] });
+  // vendedor/estC/estV aceitam várias opções (array); um valor solto (ex.: vindo do gráfico) vira [valor]
+  const setFiltro = (k, v) => setFiltros(f => ({ ...f, [k]: ['vendedor', 'estC', 'estV'].includes(k) && !Array.isArray(v) ? (v ? [v] : []) : v }));
+  const limparFiltros = () => setFiltros({ br: '', cliente: '', vendedor: [], estC: [], estV: [] });
   const moeda = (v) => fmtMoedaCompacta(v);
 
   const carregar = useCallback(async () => {
@@ -7906,16 +7990,15 @@ function FollowUpComercial({ currentUser }) {
     // Perdidos sempre visíveis (antes havia um checkbox que os escondia)
     .filter(l => contem(l.br, filtros.br))
     .filter(l => contem(l.cliente, filtros.cliente))
-    .filter(l => !filtros.vendedor || l.vendedor === filtros.vendedor)
+    .filter(l => !filtros.vendedor.length || filtros.vendedor.includes(l.vendedor))
     // No estágio comercial, "pedido em carteira" e "já faturado" filtram pela
     // situação do Sankhya: tem pedido e ainda sem nota × já tem nota.
-    .filter(l => !filtros.estC
-      || (filtros.estC === '(carteira)' ? l.situacao === 'pedido confirmado'
-        : filtros.estC === '(faturado)' ? l.situacao === 'faturado'
-        : filtros.estC === '(vazio)' ? !l.estagio_comercial
-        : l.estagio_comercial === filtros.estC))
-    .filter(l => !filtros.estV || (filtros.estV === '(vazio)'
-      ? !l.estagio_vendedor : l.estagio_vendedor === filtros.estV))
+    .filter(l => !filtros.estC.length || filtros.estC.some(v =>
+        v === '(carteira)' ? l.situacao === 'pedido confirmado'
+        : v === '(faturado)' ? l.situacao === 'faturado'
+        : v === '(vazio)' ? !l.estagio_comercial
+        : l.estagio_comercial === v))
+    .filter(l => !filtros.estV.length || filtros.estV.some(v => (v === '(vazio)' ? !l.estagio_vendedor : l.estagio_vendedor === v)))
     .sort((a, b) => (Number(b.valor_proposta) || 0) - (Number(a.valor_proposta) || 0)
                  || (Number(b.valor_proposta) || 0) - (Number(a.valor_proposta) || 0));
 
@@ -8502,9 +8585,9 @@ function FollowUpComercial({ currentUser }) {
               {porEstagio.map(e2 => (
                 <div key={e2.estagio} onClick={() => abrirGrafico('estagio', e2.estagio)}
                   title={`Clique para ver as ${e2.n} propostas em ${e2.rotulo} por vendedor`}
-                  style={{ background: filtros.estV === e2.estagio ? T.panelAlt : T.panel, borderRadius: 8,
+                  style={{ background: filtros.estV.includes(e2.estagio) ? T.panelAlt : T.panel, borderRadius: 8,
                     padding: '10px 12px', cursor: 'pointer',
-                    border: `1px solid ${filtros.estV === e2.estagio ? CORES_EST[e2.estagio] : T.line}`,
+                    border: `1px solid ${filtros.estV.includes(e2.estagio) ? CORES_EST[e2.estagio] : T.line}`,
                     borderLeft: `3px solid ${CORES_EST[e2.estagio] || T.line}` }}>
                   <div style={{ fontSize: 10.5, color: T.inkFaint, display: 'flex', justifyContent: 'space-between' }}>
                     <span>{e2.rotulo}</span>
@@ -8517,7 +8600,7 @@ function FollowUpComercial({ currentUser }) {
               {semEstagio.length > 0 && (
                 <div onClick={() => abrirGrafico('estagio', 'sem')}
                   title={`Clique para ver as ${semEstagio.length} propostas sem classificação do vendedor, por vendedor`}
-                  style={{ background: filtros.estV === '(vazio)' ? T.amberSoft : T.panel, borderRadius: 8,
+                  style={{ background: filtros.estV.includes('(vazio)') ? T.amberSoft : T.panel, borderRadius: 8,
                     padding: '10px 12px', cursor: 'pointer', border: `1px dashed ${T.amberText}` }}>
                   <div style={{ fontSize: 10.5, color: T.amberText, display: 'flex', justifyContent: 'space-between' }}>
                     <span>Vendedor não classificou</span>
@@ -8922,7 +9005,7 @@ function FollowUpComercial({ currentUser }) {
           <input type="checkbox" checked={ocultarPerdidos} onChange={e => setOcultarPerdidos(e.target.checked)} />
           ocultar os {base.filter(l => l.situacao === 'perdido').length} perdido(s) da tabela
         </label>
-        {Object.values(filtros).some(Boolean) && (
+        {Object.values(filtros).some(v => (Array.isArray(v) ? v.length > 0 : !!v)) && (
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 11.5, color: T.terracotta }}>
             {lista.length} {lista.length === 1 ? 'linha' : 'linhas'} no filtro
             <button onClick={limparFiltros}
@@ -8967,18 +9050,12 @@ function FollowUpComercial({ currentUser }) {
                         background: T.panel, color: T.ink, fontWeight: 400 }} />
                   )}
                   {f?.tipo === 'lista' && (
-                    <select value={filtros[f.k]} onChange={e => setFiltro(f.k, e.target.value)}
-                      style={{ fontFamily: 'inherit', fontSize: 11, padding: '3px 4px', width: '100%',
-                        borderRadius: 4, border: `1px solid ${filtros[f.k] ? T.terracotta : T.line}`,
-                        background: T.panel, color: filtros[f.k] ? T.ink : T.inkFaint, fontWeight: 400 }}>
-                      <option value="">todos</option>
-                      {f.estagio
+                    <FiltroMulti valor={filtros[f.k]} onChange={v => setFiltro(f.k, v)}
+                      opcoes={f.estagio
                         ? [...estagios.map(e2 => ({ v: e2.estagio, r: e2.rotulo })),
                            { v: '(vazio)', r: 'sem classificação' },
-                           ...(f.k === 'estC' ? [{ v: '(carteira)', r: 'pedido em carteira' }, { v: '(faturado)', r: 'já faturado' }] : [])].map(o => (
-                            <option key={o.v} value={o.v}>{o.r}</option>))
-                        : (f.ops || []).map(o => <option key={o} value={o}>{o}</option>)}
-                    </select>
+                           ...(f.k === 'estC' ? [{ v: '(carteira)', r: 'pedido em carteira' }, { v: '(faturado)', r: 'já faturado' }] : [])]
+                        : (f.ops || []).map(o => ({ v: o, r: o }))} />
                   )}
                 </th>
               ))}
