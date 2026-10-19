@@ -136,20 +136,6 @@ export default function PainelVendedor({ supabase, chave }) {
             </div>
           </div>
         </div>
-        {/* por mês */}
-        <div style={cartao}>
-          {titulo('Propostas por mês de criação — e onde cada uma está hoje')}
-          <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 'auto' }} onMouseLeave={() => setDica(null)}>
-            {[0, 0.25, 0.5, 0.75, 1].map(k => <g key={k}><line x1={ml} x2={W - 10} y1={y(topo * k)} y2={y(topo * k)} stroke={LINHA} /><text x={ml - 8} y={y(topo * k) + 4} textAnchor="end" fontSize="11" fill={CINZA}>{mil(topo * k)}</text></g>)}
-            {V.meses.map((m, i) => { let acc = 0; const bw = lg * 0.6, bx = ml + i * lg + (lg - bw) / 2; const on = f.mes === m;
-              return (<g key={m} opacity={f.mes && !on ? 0.4 : 1} style={{ cursor: 'pointer' }} onClick={() => alt('mes', m)}>
-                {SIT.map(s => { const v = V.porMes[m][s.k]; if (!v) return null; const y1 = y(acc + v), y0 = y(acc); acc += v;
-                  return <rect key={s.k} x={bx} y={y1} width={bw} height={Math.max(0, y0 - y1)} fill={s.cor} onMouseMove={ev => mostrar(ev, [`${s.rot} · ${MESES[Number(m.slice(5)) - 1]}/${m.slice(2, 4)}`, brl(v)])} />; })}
-                <text x={bx + bw / 2} y={y(somaMes[i]) - 6} textAnchor="middle" fontSize="12" fontWeight="800" fill={NAVY}>{mil(somaMes[i])}</text>
-                <text x={bx + bw / 2} y={H - 12} textAnchor="middle" fontSize="12.5" fontWeight="700" fill="#33404D">{MESES[Number(m.slice(5)) - 1]}</text></g>); })}
-          </svg>
-          <div style={{ display: 'flex', gap: 16, justifyContent: 'center', flexWrap: 'wrap', fontSize: 12.5, fontWeight: 700 }}>{SIT.map(s => <span key={s.k} style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}><span style={{ width: 12, height: 12, borderRadius: 3, background: s.cor }} />{s.rot}</span>)}</div>
-        </div>
         {/* atenção */}
         {V.atencao.length > 0 && (
           <div style={{ ...cartao, borderLeft: '6px solid #D2621A' }}>
