@@ -10886,16 +10886,29 @@ function AlmoxMovimentar({ currentUser, codigoInicial }) {
   // Excel das OPs com nova necessidade (requisição do Sankhya fora da lista da OP ou acima do previsto)
   const [soNova, setSoNova] = useState(false);
   const [gerandoXls, setGerandoXls] = useState(false);
+  const [mesNN, setMesNN] = useState(() => new Date().toISOString().slice(0, 7));   // 'AAAA-MM' ou 'tudo'
+  const mesesNN = useMemo(() => {
+    const out = []; const d = new Date(); d.setDate(1);
+    for (let k = 0; k < 18; k++) { out.push(d.toISOString().slice(0, 7)); d.setMonth(d.getMonth() - 1); }
+    return out;
+  }, []);
+  const rotMesNN = m => { const [a, mm] = m.split('-'); return `${['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'][Number(mm) - 1]}/${a}`; };
   const exportarNovaNecessidade = async () => {
     setGerandoXls(true);
     try {
+      // histórico: a nova necessidade fica registrada mesmo depois que a OP é finalizada
+      let q = supabase.from('almox_nova_necessidade_hist').select('*').order('op').order('descricao');
+      if (mesNN !== 'tudo') {
+        const [a, m] = mesNN.split('-').map(Number);
+        const fim = new Date(a, m, 1).toISOString().slice(0, 10);
+        q = q.gte('ultima_data', `${mesNN}-01`).lt('ultima_data', fim);
+      }
       const [{ data: itensNN }, { data: opsTodas }] = await Promise.all([
-        supabase.from('v_almox_nova_necessidade').select('*').order('op').order('descricao'),
-        supabase.from('v_almox_fluxo_ops').select('op, br, situacao_op, qtd_materiais, itens_entregues'),
+        q, supabase.from('v_almox_fluxo_ops').select('op, br, situacao_op, qtd_materiais, itens_entregues'),
       ]);
       const infoOp = Object.fromEntries((opsTodas || []).map(o => [String(o.op), o]));
       const lista = itensNN || [];
-      if (!lista.length) { window.alert('Nenhuma OP com nova necessidade no momento.'); return; }
+      if (!lista.length) { window.alert(`Nenhuma nova necessidade em ${mesNN === 'tudo' ? 'todo o período' : rotMesNN(mesNN)}.`); return; }
       const { default: ExcelJS } = await import('exceljs');
       const wb = new ExcelJS.Workbook();
       const cab = (ws) => {
@@ -10913,7 +10926,7 @@ function AlmoxMovimentar({ currentUser, codigoInicial }) {
         { header: 'Primeira requisição', key: 'pri', width: 12 }, { header: 'Última requisição', key: 'ult', width: 12 },
       ];
       lista.forEach(n => wi.addRow({
-        op: Number(n.op) || n.op, br: n.br || infoOp[String(n.op)]?.br || '', sit: infoOp[String(n.op)]?.situacao_op || '',
+        op: Number(n.op) || n.op, br: n.br || infoOp[String(n.op)]?.br || '', sit: n.situacao_op || infoOp[String(n.op)]?.situacao_op || '',
         cod: Number(n.cod_materia_prima) || n.cod_materia_prima, desc: n.descricao, un: n.unidade, motivo: n.motivo,
         prev: n.na_lista ? Number(n.qtd_prevista) || 0 : null, req: Number(n.qtd_requisitada) || 0, nova: Number(n.qtd_nova) || 0,
         reqs: n.requisicoes, pri: dt(n.primeira_data), ult: dt(n.ultima_data),
@@ -10937,7 +10950,7 @@ function AlmoxMovimentar({ currentUser, codigoInicial }) {
         { header: 'Materiais na lista da OP', key: 'mat', width: 11 }, { header: 'Última requisição', key: 'ult', width: 12 },
       ];
       Object.entries(porOp).sort((a, c) => String(c[1][0]?.ultima_data).localeCompare(String(a[1][0]?.ultima_data))).forEach(([op, ns]) => wo.addRow({
-        op: Number(op) || op, br: ns[0].br || infoOp[op]?.br || '', sit: infoOp[op]?.situacao_op || '', n: ns.length,
+        op: Number(op) || op, br: ns[0].br || infoOp[op]?.br || '', sit: ns[0].situacao_op || infoOp[op]?.situacao_op || '', n: ns.length,
         fora: ns.filter(x => x.motivo === 'fora da lista').length, acima: ns.filter(x => x.motivo !== 'fora da lista').length,
         mat: infoOp[op]?.qtd_materiais ?? null, ult: dt(ns.map(x => x.ultima_data).sort().pop()),
       }));
@@ -10947,7 +10960,8 @@ function AlmoxMovimentar({ currentUser, codigoInicial }) {
       wo.addRow([]); const tr = wo.addRow(['Total', '', '', lista.length, lista.filter(x => x.motivo === 'fora da lista').length, lista.filter(x => x.motivo !== 'fora da lista').length]); tr.font = { bold: true };
       // aba 3: regra
       const wr = wb.addWorksheet('Como ler');
-      [['OPs com nova necessidade — Fluxo de Materiais'], [`Gerado em ${new Date().toLocaleString('pt-BR')} por ${currentUser?.nome || '—'} · ${nOps} OP(s), ${lista.length} item(ns)`], [],
+      [[`OPs com nova necessidade — ${mesNN === 'tudo' ? 'todo o período' : rotMesNN(mesNN)}`], [`Gerado em ${new Date().toLocaleString('pt-BR')} por ${currentUser?.nome || '—'} · ${nOps} OP(s), ${lista.length} item(ns)`], [],
+        ['Mês = mês da última requisição do item (a que gerou ou aumentou a nova necessidade). Inclui OPs já finalizadas.'],
         ['Nova necessidade = requisição do Sankhya ligada à OP (TOPs de requisição, TIPMOV J) com item fora da lista de materiais da OP ou com quantidade acima do previsto.'],
         ['"Fora da lista": o item não estava previsto na OP. "Acima do previsto": a soma das requisições passou da quantidade prevista; a coluna Nova necessidade mostra só o excedente.'],
         ['Os dados vêm do Sankhya e são atualizados a cada 5 minutos.']].forEach(l => wr.addRow(l));
@@ -10955,7 +10969,7 @@ function AlmoxMovimentar({ currentUser, codigoInicial }) {
       const buf = await wb.xlsx.writeBuffer();
       const a = document.createElement('a');
       a.href = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
-      a.download = `OPs_nova_necessidade_${new Date().toISOString().slice(0, 10)}.xlsx`; document.body.appendChild(a); a.click(); a.remove();
+      a.download = `OPs_nova_necessidade_${mesNN === 'tudo' ? 'todo_periodo' : mesNN}.xlsx`; document.body.appendChild(a); a.click(); a.remove();
     } finally { setGerandoXls(false); }
   };
 
@@ -11172,6 +11186,10 @@ function AlmoxMovimentar({ currentUser, codigoInicial }) {
             <label style={{ fontSize: 11.5, color: T.inkDim, display: 'flex', gap: 5, alignItems: 'center', cursor: 'pointer' }}>
               <input type="checkbox" checked={soNova} onChange={e => setSoNova(e.target.checked)} /> só com nova necessidade ({Object.keys(novaPorOp).length})
             </label>
+            <select value={mesNN} onChange={e => setMesNN(e.target.value)} title="mês da nova necessidade" style={{ ...campo, padding: '4px 6px', fontSize: 11.5, width: 'auto' }}>
+              {mesesNN.map(m => <option key={m} value={m}>{rotMesNN(m)}</option>)}
+              <option value="tudo">todo o período</option>
+            </select>
             <button onClick={exportarNovaNecessidade} disabled={gerandoXls} title="Excel com as OPs que tiveram nova necessidade (itens fora da lista ou acima do previsto)"
               style={{ ...botao(false, T.oliveText), padding: '5px 9px', fontSize: 11.5 }}>{gerandoXls ? 'gerando…' : '📥 Excel nova necessidade'}</button>
           </div>
