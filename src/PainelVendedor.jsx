@@ -28,6 +28,7 @@ export default function PainelVendedor({ supabase, chave }) {
   const [busca, setBusca] = useState('');
   const [ordem, setOrdem] = useState({ col: 'valor', desc: true });
   const [dica, setDica] = useState(null);
+  const [ordemAt, setOrdemAt] = useState('valor');   // 'valor' | 'antigo'
   useEffect(() => { supabase.rpc('fn_publico_vendedor', { p_chave: chave }).then(({ data, error }) => { if (error || !data?.ok) setErro(true); else setD(data); }); }, [supabase, chave]);
   useEffect(() => { if (d) document.title = `Minha carteira · ${d.vendedor}`; }, [d]);
   const alt = (k, v) => setF(x => ({ ...x, [k]: x[k] === v ? null : v }));
@@ -137,17 +138,43 @@ export default function PainelVendedor({ supabase, chave }) {
           </div>
         </div>
         {/* atenção */}
-        {V.atencao.length > 0 && (
-          <div style={{ ...cartao, borderLeft: '6px solid #D2621A' }}>
-            {titulo(`Precisa de atenção (${V.atencao.length})`)}
-            <div style={{ fontSize: 13, color: '#4A5663', marginBottom: 8 }}>Em aberto sem classificação de estágio, há mais de 90 dias ou com o próximo contato vencido.</div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-              {V.atencao.sort((a, z) => z.valor - a.valor).slice(0, 24).map(l => (
-                <span key={l.br} style={{ background: '#FDF3E7', color: '#8A4B08', borderRadius: 8, padding: '6px 10px', fontSize: 12.5 }}>
-                  <b>{l.br}</b> · {l.cliente} · {brl(l.valor)} · {l.est === '-' ? 'sem estágio' : `${l.dias} dias`}</span>))}
+        {V.atencao.length > 0 && (() => {
+          const hoje = new Date().toISOString().slice(0, 10);
+          const motivos = l => [l.est === '-' && 'Sem estágio', (l.dias || 0) > 90 && `${l.dias} dias em aberto`, l.proximo_contato && l.proximo_contato < hoje && 'Contato vencido'].filter(Boolean);
+          const lista = [...V.atencao].sort((a, z) => ordemAt === 'valor' ? z.valor - a.valor : String(a.criado_em || '').localeCompare(String(z.criado_em || '')));
+          const btn = (k, r) => <button onClick={() => setOrdemAt(k)} style={{ border: 'none', cursor: 'pointer', fontFamily: 'inherit', fontSize: 12.5, fontWeight: 700, padding: '6px 12px', borderRadius: 7, background: ordemAt === k ? NAVY : 'transparent', color: ordemAt === k ? '#fff' : '#33404D' }}>{r}</button>;
+          const tha = (r, al = 'left') => <th style={{ textAlign: al, padding: '9px 10px', fontSize: 12, color: '#fff', background: '#B5520F', whiteSpace: 'nowrap', position: 'sticky', top: 0 }}>{r}</th>;
+          return (
+            <div style={{ ...cartao, borderLeft: '6px solid #D2621A' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10, marginBottom: 6 }}>
+                <h2 style={{ fontSize: 17, fontWeight: 800, color: NAVY, margin: 0 }}>Precisa de atenção ({lista.length})</h2>
+                <span style={{ display: 'inline-flex', background: '#EEF2F6', borderRadius: 9, padding: 3, gap: 2 }}>{btn('valor', 'Maior valor')}{btn('antigo', 'Mais antigo')}</span>
+              </div>
+              <div style={{ fontSize: 13, color: '#4A5663', marginBottom: 10 }}>Propostas em aberto sem classificação de estágio, há mais de 90 dias ou com o próximo contato vencido.</div>
+              <div style={{ maxHeight: 460, overflow: 'auto', border: `1px solid ${LINHA}`, borderRadius: 10 }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead><tr>{tha('#', 'right')}{tha('BR')}{tha('Cliente')}{tha('Valor', 'right')}{tha('Criado em')}{tha('Dias', 'right')}{tha('Estágio')}{tha('Por que está aqui')}</tr></thead>
+                  <tbody>{lista.map((l, k) => { const e = EST.find(x => x.k === l.est);
+                    return (<tr key={l.br} style={{ background: k % 2 ? '#FFFBF6' : '#fff' }}>
+                      <td style={{ ...td, textAlign: 'right', color: CINZA }}>{k + 1}</td>
+                      <td style={{ ...td, fontWeight: 800, whiteSpace: 'nowrap' }}>{l.br}</td>
+                      <td style={td}>{l.cliente}</td>
+                      <td style={{ ...td, textAlign: 'right', fontWeight: 800, whiteSpace: 'nowrap', color: NAVY }}>{brl(l.valor)}</td>
+                      <td style={{ ...td, whiteSpace: 'nowrap' }}>{dataBR(l.criado_em)}</td>
+                      <td style={{ ...td, textAlign: 'right', fontWeight: (l.dias || 0) > 90 ? 800 : 400, color: (l.dias || 0) > 180 ? '#C62828' : (l.dias || 0) > 90 ? '#B5520F' : '#1E2A36' }}>{l.dias ?? '—'}</td>
+                      <td style={td}><span style={{ fontSize: 11.5, fontWeight: 700, color: e?.k === '-' ? '#5B6773' : '#fff', background: e?.cor || '#EEF1F4', borderRadius: 5, padding: '2px 8px', whiteSpace: 'nowrap' }}>{e?.rot || '—'}</span></td>
+                      <td style={td}>{motivos(l).map(m => <span key={m} style={{ display: 'inline-block', fontSize: 11.5, fontWeight: 700, color: '#8A4B08', background: '#FDF3E7', borderRadius: 5, padding: '2px 7px', margin: '1px 4px 1px 0', whiteSpace: 'nowrap' }}>{m}</span>)}</td>
+                    </tr>); })}</tbody>
+                  <tfoot><tr>
+                    <td colSpan={3} style={{ ...td, fontWeight: 800, background: '#F8FAFC' }}>Total</td>
+                    <td style={{ ...td, textAlign: 'right', fontWeight: 800, background: '#F8FAFC', whiteSpace: 'nowrap' }}>{brl(lista.reduce((s2, l) => s2 + l.valor, 0))}</td>
+                    <td colSpan={4} style={{ ...td, background: '#F8FAFC' }} />
+                  </tr></tfoot>
+                </table>
+              </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
         {/* tabela */}
         <div style={cartao}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10, marginBottom: 10 }}>
