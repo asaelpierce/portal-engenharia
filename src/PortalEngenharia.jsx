@@ -936,7 +936,6 @@ function PortalConteudo({ currentUser, session }) {
           {renderTab('ciclo_comercial', <TabErrorBoundary tab="Ciclo Comercial"><CicloComercial /></TabErrorBoundary>)}
           {renderTab('produtividade', <Produtividade propostas={propostas} mesFiltro={mesFiltro} currentUser={currentUser} />)}
           {renderTab('faturamento', <Faturamento />)}
-          {renderTab('consumo_mp', <TabErrorBoundary tab="Consumo de MP"><ConsumoMP /></TabErrorBoundary>)}
           {renderTab('placas_kalocer', <TabErrorBoundary tab="Placas Kalocer"><ConsumoPlacasKalocer /></TabErrorBoundary>)}
           {renderTab('analitico_mp', <TabErrorBoundary tab="Analítico"><AnaliticoMP /></TabErrorBoundary>)}
           {renderTab('carteira_estoque', <TabErrorBoundary tab="Carteira x Estoque"><CarteiraEstoque /></TabErrorBoundary>)}
@@ -1002,7 +1001,6 @@ function Sidebar({ view, setView, pendCount, papel, telasPermitidas }) {
     { id: 'produtividade',label: 'Produtividade',          icon: Gauge },
     { id: 'comercial',    label: 'Painel Comercial',       icon: TrendingUp },
     { id: 'faturamento',  label: 'Faturamento (Sankhya)',  icon: DollarSign },
-    { id: 'consumo_mp',   label: 'Consumo de MP',          icon: Layers },
     { id: 'placas_kalocer', label: 'Placas Kalocer',       icon: Layers },
     { id: 'analitico_mp', label: 'Analítico',              icon: BarChart2 },
     { id: 'carteira_estoque', label: 'Carteira x Estoque',  icon: Package },
@@ -33631,7 +33629,6 @@ const TELAS_CATALOGO = [
   { id: 'produtividade',label: 'Produtividade' },
   { id: 'comercial',    label: 'Painel Comercial' },
   { id: 'faturamento',  label: 'Faturamento (Sankhya)' },
-  { id: 'consumo_mp',   label: 'Consumo de MP' },
   { id: 'placas_kalocer', label: 'Placas Kalocer' },
   { id: 'analitico_mp', label: 'Analítico' },
   { id: 'carteira_estoque', label: 'Carteira x Estoque' },
