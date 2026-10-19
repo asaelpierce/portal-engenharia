@@ -4,6 +4,7 @@ import { createClient } from '@supabase/supabase-js';
 import QRCode from 'qrcode';
 import jsQR from 'jsqr';
 import PainelSegmentos from './PainelSegmentos.jsx';
+import PainelVendedor from './PainelVendedor.jsx';
 import {
   LayoutGrid, FileStack, ClipboardCheck, Gauge, SlidersHorizontal, Workflow,
   Plus, Search, UploadCloud, AlertTriangle, Clock3, Check, X, LogOut,
@@ -290,7 +291,7 @@ export default function PortalEngenharia() {
   const [painelPublico] = useState(() => {
     try {
       const q = new URLSearchParams(window.location.search);
-      return q.get('painel') === 'segmentos' && q.get('k') ? { chave: q.get('k').trim() } : null;
+      return ['segmentos', 'vendedor'].includes(q.get('painel')) && q.get('k') ? { tipo: q.get('painel'), chave: q.get('k').trim() } : null;
     } catch { return null; }
   });
   const [qrPublico] = useState(() => {
@@ -338,7 +339,9 @@ export default function PortalEngenharia() {
   }, [session]);
 
   if (painelPublico) {
-    return <PainelSegmentos supabase={supabase} chave={painelPublico.chave} />;
+    return painelPublico.tipo === 'vendedor'
+      ? <PainelVendedor supabase={supabase} chave={painelPublico.chave} />
+      : <PainelSegmentos supabase={supabase} chave={painelPublico.chave} />;
   }
   // QR de etiqueta com chave (…/?e=V000123&k=…): página própria, sem login
   if (qrPublico) {
@@ -5232,6 +5235,52 @@ function AprovacoesComerciais({ currentUser }) {
   );
 }
 
+
+// Resumo do vendedor (2ª automação do Follow Up): e-mail com barras + link do painel "Minha carteira".
+function ResumoVendedorControle() {
+  const [info, setInfo] = useState(null);
+  const [msg, setMsg] = useState(null);
+  const [enviando, setEnviando] = useState(null);
+  const carregar = useCallback(async () => { const { data } = await supabase.rpc('fn_resumo_vendedor_links'); setInfo(data || null); }, []);
+  useEffect(() => { carregar(); }, [carregar]);
+  if (!info) return null;
+  const enviar = async (v) => {
+    const destino = info.destino || 'cada vendedor';
+    if (!window.confirm(`Enviar o resumo ${v ? `de ${v}` : 'de todos os vendedores'} para ${destino}?`)) return;
+    setEnviando(v || 'todos');
+    const { data, error } = await supabase.rpc('fn_resumo_vendedor_disparar', { p_vendedor: v || null });
+    setEnviando(null);
+    setMsg(error || !data?.ok ? { erro: true, t: error?.message || data?.erro } : { t: `${data.emails} resumo(s) na fila para ${data.destino}.${data.sem_email?.length ? ` Sem e-mail: ${data.sem_email.join(', ')}.` : ''}` });
+    carregar();
+  };
+  const vends = Object.keys(info.links || {}).sort();
+  return (
+    <div style={{ marginTop: 12, borderTop: `1px solid ${T.line}`, paddingTop: 10 }}>
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+        <strong style={{ fontSize: 12.5 }}>Resumo do vendedor (dashboard)</strong>
+        <span style={{ fontSize: 11, color: T.inkFaint }}>vai para: <b>{info.destino || 'cada vendedor'}</b>{info.destino ? ' (teste)' : ''}</span>
+        <button onClick={() => enviar(null)} disabled={!!enviando}
+          style={{ fontFamily: 'inherit', fontSize: 11.5, fontWeight: 700, padding: '5px 12px', borderRadius: 6, cursor: 'pointer', border: 'none', background: T.blueText, color: '#fff' }}>
+          {enviando === 'todos' ? 'enviando…' : 'Enviar resumo de todos'}</button>
+      </div>
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
+        {vends.map(v => (
+          <span key={v} style={{ display: 'inline-flex', border: `1px solid ${T.line}`, borderRadius: 6, overflow: 'hidden', fontSize: 11 }}>
+            <button onClick={() => enviar(v)} disabled={!!enviando} title={`Enviar o resumo de ${v}`}
+              style={{ fontFamily: 'inherit', fontSize: 11, padding: '4px 8px', border: 'none', background: T.panel, cursor: 'pointer', color: T.ink }}>{enviando === v ? 'enviando…' : `✉ ${v}`}</button>
+            <a href={info.links[v]} target="_blank" rel="noopener noreferrer" title="Abrir o painel deste vendedor"
+              style={{ padding: '4px 8px', background: T.panelAlt, color: T.blueText, textDecoration: 'none', fontWeight: 700 }}>painel ↗</a>
+          </span>
+        ))}
+      </div>
+      {msg && <div style={{ marginTop: 6, fontSize: 11.5, fontWeight: 600, color: msg.erro ? T.rustText : T.oliveText }}>{msg.t}</div>}
+      {info.ultimos?.length > 0 && <div style={{ marginTop: 6, fontSize: 10.5, color: T.inkFaint }}>
+        Últimos: {info.ultimos.slice(0, 4).map(u => `${new Date(u.solicitado_em).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })} ${u.status === 'pendente' ? '(na fila)' : '(enviado)'}`).join(' · ')}
+      </div>}
+    </div>
+  );
+}
+
 // ============================================================================
 // REUNIÃO DE DESCONTO (Diretoria > Onde cabe desconto): cada BR recebe o seu desconto,
 // decidido em reunião. Fechar a reunião grava o histórico e enfileira os e-mails
@@ -8592,6 +8641,8 @@ function FollowUpComercial({ currentUser }) {
                 </span>
               ))}
             </div>
+
+            <ResumoVendedorControle />
 
             {verHistorico && (
               <div style={{ marginTop: 12, borderTop: `1px solid ${T.line}`, paddingTop: 10, overflowX: 'auto' }}>
