@@ -27277,8 +27277,13 @@ function CRMFaturamentoBR({ negocio: n, autor, onMudou }) {
   if (!d) return <div style={{ ...caixa, fontSize: 12.5, color: CRMC.ink3 }}>Consultando pedidos e notas no Sankhya…</div>;
   const vendas = d.notas.filter(x => x.venda), remessas = d.notas.filter(x => !x.venda);
   const ajPorPed = {}; (d.ajustes || []).forEach(a => { if (!ajPorPed[a.nunota_pedido]) ajPorPed[a.nunota_pedido] = a; });
-  const totPed = d.pedidos.reduce((x, p) => x + p.itens.reduce((y, i) => y + (Number(i.valor) || 0), 0), 0);
-  const totEnt = d.pedidos.reduce((x, p) => x + p.itens.reduce((y, i) => y + (Number(i.valor) || 0) * Math.min(1, (Number(i.entregue) || 0) / (Number(i.qtd) || 1)), 0), 0);
+  // tudo em LÍQUIDO (valor da nota − impostos), como o resto do portal: a parte entregue de cada pedido é
+  // proporcional ao valor dos itens entregues, aplicada sobre o líquido do pedido
+  const fracEnt = (p) => { const b = p.itens.reduce((y, i) => y + (Number(i.valor) || 0), 0);
+    return b ? p.itens.reduce((y, i) => y + (Number(i.valor) || 0) * Math.min(1, (Number(i.entregue) || 0) / (Number(i.qtd) || 1)), 0) / b : 0; };
+  const liqPed = (p) => Number(p.liquido ?? p.itens.reduce((y, i) => y + (Number(i.valor) || 0), 0)) || 0;
+  const totPed = d.pedidos.reduce((x, p) => x + liqPed(p), 0);
+  const totEnt = d.pedidos.reduce((x, p) => x + liqPed(p) * fracEnt(p), 0);
   const comSaldo = d.pedidos.filter(p => p.itens.some(i => Number(i.qtd) - Number(i.entregue) > 0.0001));
   return (
     <div>
@@ -27288,8 +27293,8 @@ function CRMFaturamentoBR({ negocio: n, autor, onMudou }) {
       </div>
       <div style={{ display: 'grid', gap: 8, gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', marginBottom: 10 }}>
         {[[`${totPed ? Math.round(100 * totEnt / totPed) : 0}% entregue`, `${d.pedidos.length} pedido(s) · ${comSaldo.length} com saldo`, comSaldo.length ? CRMC.warn : CRMC.win],
-          [moeda(vendas.reduce((x, v) => x + (Number(v.valor) || 0), 0)), `faturado em ${vendas.length} nota(s) de venda`, CRMC.win],
-          [moeda(Math.max(0, totPed - totEnt)), 'saldo a faturar (pelo valor do pedido)', comSaldo.length ? CRMC.primary : CRMC.ink3]].map(([v, r, c]) => (
+          [moeda(vendas.reduce((x, v) => x + (Number(v.valor) || 0), 0)), `faturado (líquido) em ${vendas.length} nota(s) de venda`, CRMC.win],
+          [moeda(Math.max(0, totPed - totEnt)), 'saldo a faturar (líquido do pedido)', comSaldo.length ? CRMC.primary : CRMC.ink3]].map(([v, r, c]) => (
           <div key={r} style={{ ...caixa, padding: '9px 11px' }}>
             <div style={{ fontSize: 16, fontWeight: 700, color: c }}>{v}</div>
             <div style={{ fontSize: 11.5, color: CRMC.ink3 }}>{r}</div>
@@ -27311,6 +27316,8 @@ function CRMFaturamentoBR({ negocio: n, autor, onMudou }) {
                 <strong style={{ fontSize: 13 }}>Pedido {p.numnota || p.nunota}</strong>
                 <span style={{ fontSize: 11, fontWeight: 700, color: st[1], background: st[2], padding: '1px 8px', borderRadius: 10 }}>{st[0]}</span>
                 <span style={{ fontSize: 11.5, color: CRMC.ink3 }}>de {fmtD(p.dtneg)}{p.top_descr ? ` · ${p.top_descr}` : ''}</span>
+                {p.liquido != null && <span title={`Valor da nota do pedido ${moeda(p.vlrnota)} · itens (com ICMS) ${moeda(p.bruto_itens)} · líquido = sem todos os impostos`}
+                  style={{ fontSize: 11.5, color: CRMC.ink2, fontWeight: 600 }}>{moeda(p.liquido)} líquido</span>}
                 <span style={{ flex: 1 }} />
                 {saldo && <span style={{ fontSize: 12, fontWeight: 600, color: atras ? CRMC.loss : CRMC.ink2 }}>{aj ? 'Reprogramado: ' : 'Previsto: '}{fmtD(dataEf)}</span>}
               </div>
@@ -27354,12 +27361,12 @@ function CRMFaturamentoBR({ negocio: n, autor, onMudou }) {
       </div>
       {vendas.length > 0 && (
         <div style={{ marginTop: 10 }}>
-          <div style={{ fontSize: 12, fontWeight: 700, color: CRMC.ink2, marginBottom: 5 }}>Notas de venda ({vendas.length})</div>
+          <div style={{ fontSize: 12, fontWeight: 700, color: CRMC.ink2, marginBottom: 5 }}>Notas de venda ({vendas.length}) <span style={{ fontWeight: 400, color: CRMC.ink3 }}>· valores líquidos (sem impostos)</span></div>
           {vendas.map(v => (
             <details key={v.nunota} style={{ borderTop: `1px solid ${CRMC.lineSoft}`, padding: '6px 0' }}>
               <summary style={{ cursor: 'pointer', fontSize: 12.5, display: 'flex', gap: 10, listStyle: 'revert' }}>
                 <span style={{ fontWeight: 600 }}>NF {v.numnota}</span><span style={{ color: CRMC.ink3 }}>{fmtD(v.data)}</span>
-                <span style={{ flex: 1 }} /><span style={{ fontWeight: 600, color: CRMC.win }}>{moeda(v.valor)}</span>
+                <span style={{ flex: 1 }} /><span title={`Valor da nota ${moeda(v.vlrnota)} · itens (com ICMS) ${moeda(v.bruto_itens)} · líquido = sem todos os impostos`} style={{ fontWeight: 600, color: CRMC.win }}>{moeda(v.valor)}</span>
               </summary>
               {v.itens.map((i, k) => <div key={k} style={{ fontSize: 12, color: CRMC.ink2, padding: '2px 0 2px 14px' }}>• {qtd(i.qtd)} {i.un} · {i.descr}</div>)}
             </details>
