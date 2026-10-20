@@ -9265,7 +9265,6 @@ function FollowUpComercial({ currentUser }) {
 
 function PainelComercial({ currentUser }) {
   const [subAba, setSubAba] = useState('faturamento');
-  const subAbaAnterior = useRef(null);   // de onde veio ao abrir o CRM em tela cheia
   const hoje = new Date();
   const mesAtual = `${hoje.getFullYear()}-${String(hoje.getMonth()+1).padStart(2,'0')}`;
   const [registros, setRegistros] = useState([]);
@@ -9536,7 +9535,14 @@ function PainelComercial({ currentUser }) {
           { id: 'crm', label: 'CRM' },
           { id: 'diretoria', label: 'Diretoria' },
           { id: 'modelo', label: 'Modelo Preditivo' }].map(ab => (
-          <button key={ab.id} onClick={() => { if (ab.id === 'crm' && subAba !== 'crm') subAbaAnterior.current = subAba; setSubAba(ab.id); }} style={{
+          ab.id === 'crm' ? (
+            // CRM tem página própria em tela inteira (…/?pagina=crm): o botão é um link direto
+            <a key={ab.id} href="/?pagina=crm" title="Abre o CRM em tela inteira (Ctrl+clique abre numa aba nova)" style={{
+              padding: '9px 16px', fontSize: 13, fontFamily: 'inherit', fontWeight: 500, color: T.inkFaint, textDecoration: 'none',
+              borderBottom: '2px solid transparent', marginBottom: -1, display: 'inline-flex', alignItems: 'center', gap: 5,
+            }}>{ab.label} <span aria-hidden="true" style={{ fontSize: 11 }}>↗</span></a>
+          ) : (
+          <button key={ab.id} onClick={() => setSubAba(ab.id)} style={{
             background: 'none', border: 'none', cursor: 'pointer', padding: '9px 16px',
             fontSize: 13, fontFamily: 'inherit',
             fontWeight: subAba === ab.id ? 700 : 500,
@@ -9544,10 +9550,10 @@ function PainelComercial({ currentUser }) {
             borderBottom: `2px solid ${subAba === ab.id ? T.terracotta : 'transparent'}`,
             marginBottom: -1,
           }}>{ab.label}</button>
+          )
         ))}
       </div>
 
-      {subAba === 'crm' && <CRMTelaCheia currentUser={currentUser} onSair={() => setSubAba(subAbaAnterior.current || 'faturamento')} />}
       {subAba === 'modelo' ? <ModeloPreditivo /> : subAba === 'followup' ? <FollowUpComercial currentUser={currentUser} /> : subAba === 'crm' ? null : subAba === 'diretoria' ? <PainelDiretoria /> : <>
 
       {/* Filtro de período — de/até */}
@@ -25886,22 +25892,6 @@ const crmIniciais = (nome) => String(nome || '?').trim().split(/\s+/).slice(0, 2
 // previsão de fechamento é texto "MM/AAAA": vencida = mês anterior ao atual
 const crmPrevVencida = (prev) => { const m = /^(\d{2})\/(\d{4})$/.exec(String(prev || '').trim()); if (!m) return false;
   const hoje = new Date(); return Number(m[2]) * 12 + Number(m[1]) < hoje.getFullYear() * 12 + hoje.getMonth() + 1; };
-
-// CRM em tela cheia (Asael, 20/10/2026): ao clicar em CRM no Painel Comercial, o CRM cobre a tela inteira,
-// sem o menu do portal. Esc ou "Voltar ao portal" fecha. Janelas internas do CRM (z-index 80) ficam por cima.
-function CRMTelaCheia({ currentUser, onSair }) {
-  useEffect(() => {
-    const tecla = e => { if (e.key === 'Escape' && !document.querySelector('[data-crm-modal]')) onSair(); };
-    window.addEventListener('keydown', tecla);
-    const antes = document.body.style.overflow; document.body.style.overflow = 'hidden';
-    return () => { window.removeEventListener('keydown', tecla); document.body.style.overflow = antes; };
-  }, [onSair]);
-  return (
-    <div role="dialog" aria-label="CRM Comercial em tela cheia" style={{ position: 'fixed', inset: 0, zIndex: 70, background: CRMC.bg, overflow: 'auto' }}>
-      <CRM currentUser={currentUser} telaCheia onSair={onSair} />
-    </div>
-  );
-}
 
 // CRM em página própria (…/?pagina=crm): para deixar aberto numa aba separada do navegador.
 // Mesma regra de acesso do Painel Comercial (colaborador_telas).
