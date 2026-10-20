@@ -26119,7 +26119,7 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
             {perfil.ve_tudo ? (resp ? `Carteira de ${resp}` : 'Toda a equipe') : `Sua carteira · ${perfil.vendedor}`}
           </span>
         </div>
-        {segmento([['dashboard', 'Dashboard'], ['funil', 'Funil'], ['tarefas', <span key="t">Tarefas{atividades.length ? <span style={{ marginLeft: 6, fontSize: 11, fontWeight: 700, padding: '1px 7px', borderRadius: 10, background: atrasadasTot ? CRMC.lossSoft : CRMC.lineSoft, color: atrasadasTot ? CRMC.loss : CRMC.ink2 }}>{atividades.filter(a => !resp || a.responsavel === resp).length}</span> : null}</span>], ['empresas', 'Empresas']], aba, setAba, true)}
+        {segmento([['dashboard', 'Dashboard'], ['funil', 'Funil'], ['tarefas', <span key="t">Tarefas{atividades.length ? <span style={{ marginLeft: 6, fontSize: 11, fontWeight: 700, padding: '1px 7px', borderRadius: 10, background: atrasadasTot ? CRMC.lossSoft : CRMC.lineSoft, color: atrasadasTot ? CRMC.loss : CRMC.ink2 }}>{atividades.filter(a => !resp || a.responsavel === resp).length}</span> : null}</span>], ['calendario', 'Calendário'], ['empresas', 'Empresas']], aba, setAba, true)}
         <span style={{ flex: 1 }} />
         <select className="crm-resp" value={resp} onChange={e => setResp(e.target.value)} disabled={!perfil.ve_tudo} style={{ ...campo, minWidth: 190, border: 'none', height: 36 }}
           aria-label="Responsável" title={perfil.ve_tudo ? '' : 'Vendedor vê os próprios negócios'}>
@@ -26406,6 +26406,11 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
         <CRMDashboard negocios={negocios} empresas={empresas} atividades={atividades} etapas={etapas} devemFechar={devemFechar}
           resp={resp} onAbrirEmpresa={setEmpresaAberta} onAbrirNegocio={setAbertoId}
           irParaFunil={(p) => { setPipeline(p); setAba('funil'); }} />
+      )}
+
+      {aba === 'calendario' && (
+        <CRMCalendario resp={resp} negocios={negocios} atividades={atividades} onAbrirNegocio={setAbertoId}
+          abertos={negocios.filter(n => n.pipeline_id === 'vendas' && etapaPorId[n.etapa_id]?.tipo === 'aberta')} />
       )}
 
       {aba === 'tarefas' && (() => {
@@ -26721,6 +26726,205 @@ function CRMRosca({ itens, centro, sub, fmt }) {
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+// Calendário do CRM (20/10/2026): previsão de faturamento dos ganhos (pedidos em carteira, data prevista do
+// Sankhya), notas faturadas (data da nota) e tarefas (vencimento), mês a mês. Mesmo filtro de responsável do CRM.
+function CRMCalendario({ resp, negocios, atividades, abertos, onAbrirNegocio }) {
+  const hoje0 = new Date(); hoje0.setHours(0, 0, 0, 0);
+  const [mes, setMes] = useState(() => new Date(hoje0.getFullYear(), hoje0.getMonth(), 1));
+  const [dia, setDia] = useState(() => hoje0.toISOString().slice(0, 10));
+  const [camadas, setCamadas] = useState({ prev: true, fat: true, tar: true });
+  const [carteira, setCarteira] = useState(null);
+  const [notas, setNotas] = useState([]);
+  const moeda = (v) => fmtMoedaCompacta(v);
+  const iso = (d) => { const x = new Date(d); return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`; };
+  useEffect(() => {
+    (async () => {
+      const [c, f, tops] = await Promise.all([
+        supabase.from('comercial_pedido_pendente').select('nunota,numnota,br,cliente,vendedor,net_offer_value,dt_faturamento_prevista,dt_entrega_prevista').limit(5000),
+        supabase.from('faturamento_resumo').select('nunota,numero_nota,br,cliente_nome,vendedor_nome,net_offer_value,data_faturamento,codtipoper,status_nota').gte('data_faturamento', '2026-01-01').limit(5000),
+        supabase.from('sankhya_tops_venda').select('codtipoper'),
+      ]);
+      const tv = new Set((tops.data || []).map(t => t.codtipoper));
+      setCarteira(c.data || []);
+      setNotas((f.data || []).filter(n => tv.has(n.codtipoper) && (n.status_nota || 'L') === 'L'));
+    })();
+  }, []);
+  if (!carteira) return <div style={{ padding: 30, textAlign: 'center', color: CRMC.ink3 }}>Carregando o calendário…</div>;
+
+  const meu = (v) => !resp || String(v || '').toUpperCase() === resp.toUpperCase();
+  const negPorBr = Object.fromEntries(negocios.filter(n => n.br).map(n => [n.br, n]));
+  const cart = carteira.filter(p => meu(p.vendedor));
+  const nts = notas.filter(n => meu(n.vendedor_nome));
+  const tars = atividades.filter(a => a.vencimento && (!resp || a.responsavel === resp));
+  const hojeIso = iso(hoje0);
+  const atrasados = cart.filter(p => p.dt_faturamento_prevista && p.dt_faturamento_prevista < hojeIso)
+    .map(p => ({ ...p, dias: Math.round((hoje0 - new Date(`${p.dt_faturamento_prevista}T00:00:00`)) / 86400000) })).sort((a, b) => b.dias - a.dias);
+  const somaV = (l, k = 'net_offer_value') => l.reduce((x, i) => x + (Number(i[k]) || 0), 0);
+
+  // eventos por dia
+  const ev = {};
+  const add = (d, e) => { if (!d) return; (ev[d] = ev[d] || []).push(e); };
+  if (camadas.prev) cart.forEach(p => add(p.dt_faturamento_prevista, { tipo: 'prev', p, v: Number(p.net_offer_value) || 0, atras: p.dt_faturamento_prevista < hojeIso }));
+  if (camadas.fat) nts.forEach(n => add(n.data_faturamento, { tipo: 'fat', n, v: Number(n.net_offer_value) || 0 }));
+  if (camadas.tar) tars.forEach(a => add(iso(a.vencimento), { tipo: 'tar', a }));
+
+  const ano = mes.getFullYear(), m = mes.getMonth();
+  const ini = new Date(ano, m, 1); const desloc = (ini.getDay() + 6) % 7;     // segunda = 0
+  const diasMes = new Date(ano, m + 1, 0).getDate();
+  const celulas = Array.from({ length: Math.ceil((desloc + diasMes) / 7) * 7 }, (_, k) => { const d = new Date(ano, m, k - desloc + 1); return { d, iso: iso(d), fora: d.getMonth() !== m }; });
+  const doMes = (dt) => dt && dt.slice(0, 7) === `${ano}-${String(m + 1).padStart(2, '0')}`;
+  const prevMes = cart.filter(p => doMes(p.dt_faturamento_prevista));
+  const fatMes = nts.filter(n => doMes(n.data_faturamento));
+  const chaveMes = `${String(m + 1).padStart(2, '0')}/${ano}`;
+  const oportMes = abertos.filter(n => String(n.previsao_fechamento || '').trim() === chaveMes && (!resp || n.responsavel === resp));
+  const MESES = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
+  // ganhos a faturar por mês (carteira): atrasados + próximos 6 meses
+  const colunas = [{ k: 'Atrasados', v: somaV(atrasados), rot: moeda(somaV(atrasados)), sub: `${atrasados.length} pedido(s)`, cor: CRMC.loss },
+    ...Array.from({ length: 6 }, (_, k) => { const d = new Date(hoje0.getFullYear(), hoje0.getMonth() + k, 1); const ch = iso(d).slice(0, 7);
+      const l = cart.filter(p => p.dt_faturamento_prevista && p.dt_faturamento_prevista.slice(0, 7) === ch && p.dt_faturamento_prevista >= hojeIso);
+      return { k: `${MESES[d.getMonth()].slice(0, 3)}/${String(d.getFullYear()).slice(2)}`, v: somaV(l), rot: moeda(somaV(l)), sub: `${l.length} pedido(s)`, cor: CRMC.primary }; })];
+
+  const COR = { prev: CRMC.primary, fat: CRMC.win, tar: CRMC.warn };
+  const rotEv = (e) => e.tipo === 'prev' ? `${e.p.br || 'sem BR'} · ${e.p.cliente || ''}` : e.tipo === 'fat' ? `NF ${e.n.numero_nota || e.n.nunota} · ${e.n.cliente_nome || ''}` : `${crmRotuloTipo(e.a.tipo)} · ${e.a.titulo}`;
+  const abrir = (e) => { const br = e.tipo === 'prev' ? e.p.br : e.tipo === 'fat' ? e.n.br : null; const n = br ? negPorBr[br] : negocios.find(x => x.id === e.a?.negocio_id); if (n) onAbrirNegocio(n.id); };
+  const chip = (k, r, cor) => (
+    <button key={k} onClick={() => setCamadas(c => ({ ...c, [k]: !c[k] }))} aria-pressed={camadas[k]}
+      style={{ fontFamily: 'inherit', fontSize: 12.5, fontWeight: 600, padding: '6px 12px', borderRadius: 20, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7,
+        border: `1px solid ${camadas[k] ? cor : CRMC.line}`, background: camadas[k] ? `${cor}14` : CRMC.surface, color: camadas[k] ? cor : CRMC.ink3 }}>
+      <span aria-hidden="true" style={{ width: 9, height: 9, borderRadius: 3, background: camadas[k] ? cor : CRMC.line }} />{r}
+    </button>
+  );
+  const resumo = (rot, v, sub, cor) => (
+    <div style={{ background: CRMC.surface, border: `1px solid ${CRMC.line}`, borderRadius: 12, padding: '13px 15px', minWidth: 0 }}>
+      <div style={{ fontSize: 12, color: CRMC.ink2, fontWeight: 500 }}>{rot}</div>
+      <div style={{ fontSize: 22, fontWeight: 700, color: cor || CRMC.ink, fontVariantNumeric: 'tabular-nums', letterSpacing: -0.4, marginTop: 3 }}>{v}</div>
+      <div style={{ fontSize: 11.5, color: CRMC.ink3 }}>{sub}</div>
+    </div>
+  );
+  const evDia = (ev[dia] || []).slice().sort((a, b) => (a.tipo > b.tipo ? 1 : -1) || (b.v || 0) - (a.v || 0));
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))' }}>
+        {resumo(`A faturar em ${MESES[m]}`, moeda(somaV(prevMes)), `${prevMes.length} pedido(s) ganho(s) com previsão no mês`, CRMC.primary)}
+        {resumo(`Faturado em ${MESES[m]}`, moeda(somaV(fatMes)), `${fatMes.length} nota(s) · ${somaV(prevMes) + somaV(fatMes) ? Math.round(100 * somaV(fatMes) / (somaV(prevMes) + somaV(fatMes))) : 0}% do mês (faturado + a faturar)`, CRMC.win)}
+        {resumo('Atrasados', moeda(somaV(atrasados)), `${atrasados.length} pedido(s) com previsão vencida e sem nota`, atrasados.length ? CRMC.loss : CRMC.win)}
+        {resumo(`Fechamento previsto em ${MESES[m]}`, moeda(oportMes.reduce((x, n) => x + (Number(n.valor) || 0), 0)), `${oportMes.length} oportunidade(s) com previsão ${chaveMes}`)}
+      </div>
+
+      <section style={{ background: CRMC.surface, border: `1px solid ${CRMC.line}`, borderRadius: 12, padding: '16px 18px' }}>
+        <h3 style={{ fontSize: 14.5, fontWeight: 600, margin: 0 }}>Ganhos a faturar por mês</h3>
+        <div style={{ fontSize: 12, color: CRMC.ink3, margin: '3px 0 14px' }}>pedidos em carteira (já ganhos, ainda sem nota) pela data prevista de faturamento do Sankhya · Net Offer Value</div>
+        <CRMColunas itens={colunas} altura={150} />
+      </section>
+
+      <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+        <section style={{ flex: '1 1 720px', minWidth: 0, background: CRMC.surface, border: `1px solid ${CRMC.line}`, borderRadius: 12, padding: '14px 16px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 12 }}>
+            <button onClick={() => setMes(new Date(ano, m - 1, 1))} aria-label="Mês anterior" style={{ fontFamily: 'inherit', border: `1px solid ${CRMC.line}`, background: CRMC.surface, borderRadius: 8, width: 32, height: 32, cursor: 'pointer', color: CRMC.ink2 }}>‹</button>
+            <h3 style={{ fontSize: 17, fontWeight: 700, margin: 0, minWidth: 170, textTransform: 'capitalize' }}>{MESES[m]} {ano}</h3>
+            <button onClick={() => setMes(new Date(ano, m + 1, 1))} aria-label="Próximo mês" style={{ fontFamily: 'inherit', border: `1px solid ${CRMC.line}`, background: CRMC.surface, borderRadius: 8, width: 32, height: 32, cursor: 'pointer', color: CRMC.ink2 }}>›</button>
+            <button onClick={() => { setMes(new Date(hoje0.getFullYear(), hoje0.getMonth(), 1)); setDia(hojeIso); }}
+              style={{ fontFamily: 'inherit', fontSize: 12.5, fontWeight: 600, border: `1px solid ${CRMC.line}`, background: CRMC.surface, borderRadius: 8, padding: '6px 12px', cursor: 'pointer', color: CRMC.ink2 }}>Hoje</button>
+            <span style={{ flex: 1 }} />
+            {chip('prev', 'Faturamento previsto', COR.prev)}{chip('fat', 'Faturado', COR.fat)}{chip('tar', 'Tarefas', COR.tar)}
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, minmax(0, 1fr))', border: `1px solid ${CRMC.line}`, borderRadius: 10, overflow: 'hidden' }}>
+            {['seg', 'ter', 'qua', 'qui', 'sex', 'sáb', 'dom'].map(d => (
+              <div key={d} style={{ padding: '7px 8px', fontSize: 11.5, fontWeight: 600, color: CRMC.ink3, textTransform: 'uppercase', background: CRMC.surface2, borderBottom: `1px solid ${CRMC.line}` }}>{d}</div>
+            ))}
+            {celulas.map(({ d, iso: di, fora }, k) => {
+              const es = ev[di] || []; const sel = di === dia; const ehHoje = di === hojeIso;
+              const vPrev = es.filter(e => e.tipo === 'prev').reduce((x, e) => x + e.v, 0), vFat = es.filter(e => e.tipo === 'fat').reduce((x, e) => x + e.v, 0);
+              return (
+                <div key={di} onClick={() => setDia(di)} role="button" tabIndex={0} onKeyDown={e => { if (e.key === 'Enter') setDia(di); }}
+                  aria-label={`${d.toLocaleDateString('pt-BR')}: ${es.length} evento(s)`}
+                  style={{ minHeight: 112, padding: '6px 7px', cursor: 'pointer', background: sel ? CRMC.primarySoft : fora ? '#FAFBFC' : CRMC.surface,
+                    borderRight: (k % 7) < 6 ? `1px solid ${CRMC.lineSoft}` : 'none', borderBottom: `1px solid ${CRMC.lineSoft}`, outline: sel ? `2px solid ${CRMC.primary}` : 'none', outlineOffset: -2, minWidth: 0 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 4 }}>
+                    <span style={{ fontSize: 12.5, fontWeight: ehHoje ? 700 : 500, color: fora ? CRMC.ink3 : CRMC.ink, opacity: fora ? 0.6 : 1,
+                      ...(ehHoje ? { background: CRMC.primary, color: '#fff', borderRadius: 11, minWidth: 22, height: 22, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' } : {}) }}>{d.getDate()}</span>
+                    <span style={{ fontSize: 10.5, fontWeight: 600, textAlign: 'right', lineHeight: 1.25 }}>
+                      {vPrev > 0 && <span style={{ color: CRMC.primary, display: 'block' }}>{moeda(vPrev)}</span>}
+                      {vFat > 0 && <span style={{ color: CRMC.win, display: 'block' }}>✓ {moeda(vFat)}</span>}
+                    </span>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 3, marginTop: 4 }}>
+                    {es.slice(0, 3).map((e, q) => (
+                      <div key={q} title={rotEv(e)} style={{ fontSize: 11, padding: '2px 6px', borderRadius: 5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                        background: e.atras ? CRMC.lossSoft : `${COR[e.tipo]}14`, color: e.atras ? CRMC.loss : COR[e.tipo], borderLeft: `3px solid ${e.atras ? CRMC.loss : COR[e.tipo]}` }}>{rotEv(e)}</div>
+                    ))}
+                    {es.length > 3 && <div style={{ fontSize: 11, color: CRMC.ink3, paddingLeft: 4 }}>+{es.length - 3} mais</div>}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+
+        <aside style={{ flex: '0 1 340px', minWidth: 280, background: CRMC.surface, border: `1px solid ${CRMC.line}`, borderRadius: 12, padding: '14px 16px', position: 'sticky', top: 12 }}>
+          <h3 style={{ fontSize: 14.5, fontWeight: 600, margin: 0, textTransform: 'capitalize' }}>{new Date(`${dia}T12:00:00`).toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: 'long' })}</h3>
+          <div style={{ fontSize: 12, color: CRMC.ink3, margin: '3px 0 12px' }}>{evDia.length ? `${evDia.length} evento(s) · clique para abrir o negócio` : 'Nada neste dia'}</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 560, overflowY: 'auto' }}>
+            {evDia.map((e, q) => (
+              <div key={q} onClick={() => abrir(e)} style={{ padding: '9px 11px', borderRadius: 9, border: `1px solid ${CRMC.line}`, borderLeft: `3px solid ${e.atras ? CRMC.loss : COR[e.tipo]}`, cursor: 'pointer' }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: e.atras ? CRMC.loss : COR[e.tipo], textTransform: 'uppercase', letterSpacing: 0.4 }}>
+                  {e.tipo === 'prev' ? (e.atras ? 'Faturamento atrasado' : 'Faturamento previsto') : e.tipo === 'fat' ? 'Faturado' : 'Tarefa'}
+                </div>
+                {e.tipo === 'tar' ? (
+                  <>
+                    <div style={{ fontSize: 13, fontWeight: 600, marginTop: 2 }}>{crmRotuloTipo(e.a.tipo)} · {new Date(e.a.vencimento).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</div>
+                    <div style={{ fontSize: 12.5, color: CRMC.ink2 }}>{e.a.titulo}</div>
+                    <div style={{ fontSize: 11.5, color: CRMC.ink3 }}>{e.a.responsavel || '—'}</div>
+                  </>
+                ) : (
+                  <>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginTop: 2 }}>
+                      <span style={{ fontSize: 13, fontWeight: 600 }}>{e.tipo === 'prev' ? (e.p.br || 'sem BR') : `NF ${e.n.numero_nota || e.n.nunota}`}</span>
+                      <span style={{ fontSize: 13, fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{moeda(e.v)}</span>
+                    </div>
+                    <div style={{ fontSize: 12.5, color: CRMC.ink2 }}>{e.tipo === 'prev' ? e.p.cliente : e.n.cliente_nome}</div>
+                    <div style={{ fontSize: 11.5, color: CRMC.ink3 }}>{e.tipo === 'prev' ? `pedido ${e.p.numnota || e.p.nunota} · ${e.p.vendedor || '—'}` : `${e.n.br || 'sem BR'} · ${e.n.vendedor_nome || '—'}`}</div>
+                  </>
+                )}
+              </div>
+            ))}
+          </div>
+        </aside>
+      </div>
+
+      <section style={{ background: CRMC.surface, border: `1px solid ${CRMC.line}`, borderRadius: 12, padding: '16px 18px' }}>
+        <h3 style={{ fontSize: 14.5, fontWeight: 600, margin: 0 }}>Pedidos atrasados ({atrasados.length})</h3>
+        <div style={{ fontSize: 12, color: CRMC.ink3, margin: '3px 0 12px' }}>ganhos com a previsão de faturamento vencida e ainda sem nota · mais atrasados primeiro · clique para abrir</div>
+        {atrasados.length === 0 ? <div style={{ fontSize: 12.5, color: CRMC.win }}>Nenhum pedido atrasado.</div> : (
+          <div style={{ overflowX: 'auto', maxHeight: 420, overflowY: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+              <thead><tr>
+                {['BR', 'Cliente', 'Vendedor', 'Pedido', 'Previsão', 'Atraso', 'Valor'].map((h, i2) => (
+                  <th key={h} style={{ padding: '8px 10px', fontSize: 11.5, fontWeight: 600, color: CRMC.ink3, textAlign: i2 >= 5 ? 'right' : 'left', position: 'sticky', top: 0, background: CRMC.surface, borderBottom: `1px solid ${CRMC.line}` }}>{h}</th>
+                ))}
+              </tr></thead>
+              <tbody>
+                {atrasados.map(p => (
+                  <tr key={p.nunota} onClick={() => abrir({ tipo: 'prev', p })} style={{ borderTop: `1px solid ${CRMC.lineSoft}`, cursor: negPorBr[p.br] ? 'pointer' : 'default' }}>
+                    <td style={{ padding: '9px 10px', fontWeight: 600, color: CRMC.primary, whiteSpace: 'nowrap' }}>{p.br || '—'}</td>
+                    <td style={{ padding: '9px 10px' }}>{p.cliente}</td>
+                    <td style={{ padding: '9px 10px', color: CRMC.ink2, whiteSpace: 'nowrap' }}>{p.vendedor || '—'}</td>
+                    <td style={{ padding: '9px 10px', color: CRMC.ink2 }}>{p.numnota || p.nunota}</td>
+                    <td style={{ padding: '9px 10px', whiteSpace: 'nowrap' }}>{new Date(`${p.dt_faturamento_prevista}T12:00:00`).toLocaleDateString('pt-BR')}</td>
+                    <td style={{ padding: '9px 10px', textAlign: 'right' }}><span style={{ fontSize: 12, fontWeight: 700, color: CRMC.loss, background: CRMC.lossSoft, padding: '2px 9px', borderRadius: 10, whiteSpace: 'nowrap' }}>{p.dias} dias</span></td>
+                    <td style={{ padding: '9px 10px', textAlign: 'right', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{moeda(p.net_offer_value)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
     </div>
   );
 }
