@@ -358,7 +358,9 @@ export default function PortalEngenharia() {
     return <TelaCarregando texto="Carregando seu perfil…" />;
   }
   // CRM em página própria (…/?pagina=crm): mesma sessão e mesma permissão do Painel Comercial
-  const soCrm = Array.isArray(currentUser.telasPermitidas) && currentUser.telasPermitidas.length > 0 && currentUser.telasPermitidas.every(t => t === 'crm');
+  // marcas internas da tela de Permissões (ex.: "__bloqueado_tudo__") não são telas
+  const telasReais = Array.isArray(currentUser.telasPermitidas) ? currentUser.telasPermitidas.filter(t => !String(t).startsWith('__')) : null;
+  const soCrm = !!telasReais && telasReais.length > 0 && telasReais.every(t => t === 'crm');
   if (paginaCrm || soCrm) {
     return <CRMPagina currentUser={currentUser} />;
   }
@@ -25947,7 +25949,7 @@ async function crmAgendarSugestao(n, sug, autor) {
 // Mesma regra de acesso do Painel Comercial (colaborador_telas).
 function CRMPagina({ currentUser }) {
   // sem telas cadastradas = acesso total (regra antiga); o papel 'comercial' legado também inclui o Painel Comercial
-  const permitidos = currentUser.telasPermitidas || null;
+  const permitidos = Array.isArray(currentUser.telasPermitidas) ? currentUser.telasPermitidas.filter(t => !String(t).startsWith('__')) : null;
   useEffect(() => { document.title = 'CRM Comercial · Kalenborn'; }, []);
   if (permitidos && !permitidos.includes('comercial') && !permitidos.includes('crm')) {
     return <div style={{ padding: 40, fontFamily: 'inherit', color: CRMC.ink }}>Seu usuário não tem acesso ao Painel Comercial. <a href="/">Voltar ao portal</a></div>;
