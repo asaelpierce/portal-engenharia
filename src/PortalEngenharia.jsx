@@ -26425,7 +26425,9 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
                     .map(([k, nome, cor, f]) => ({ ...e0, chave: `${e0.id}:${k}`, nome, corCol: cor, filtroCol: f }));
                 }).map(et => {
                   const cards = doPipe.filter(n => n.etapa_id === et.id && (!et.filtroCol || et.filtroCol(n))).sort((a, b) => valorDe(b) - valorDe(a));
-                  const totEt = cards.reduce((x, n) => x + valorDe(n), 0);
+                  // Faturado: soma o que saiu nas notas (líquido), não o valor do BR
+                  const subK = et.filtroCol ? et.chave.split(':')[1] : null;
+                  const totEt = subK === 'faturado' ? cards.reduce((x, n) => x + (Number(n.br && sitBr[n.br]?.faturado) || 0), 0) : cards.reduce((x, n) => x + valorDe(n), 0);
                   const sobre = dragSobre === et.chave && arrastando && arrastando.etapa_id !== et.id;
                   const corEt = et.corCol || CRM_COR_ETAPA[et.codigo] || et.cor || CRMC.ink3;
                   const totPipe = doPipe.filter(n => etapaPorId[n.etapa_id]?.tipo === 'aberta').reduce((x, n) => x + valorDe(n), 0) || 1;
@@ -26445,7 +26447,8 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
                         <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 6 }}>
                           <span style={{ fontSize: 18, fontWeight: 700, fontVariantNumeric: 'tabular-nums', letterSpacing: -0.3 }}>{moeda(totEt)}</span>
                           {et.probabilidade != null && !et.filtroCol && <span style={{ fontSize: 11.5, color: CRMC.ink3 }}>{et.probabilidade}% de chance</span>}
-                          {et.filtroCol && <span style={{ fontSize: 11.5, color: CRMC.ink3 }}>ganho · {CRM_SIT_GANHO[et.chave.split(':')[1]]?.d || 'faturamento com a data vencida'}</span>}
+                          {et.filtroCol && <span style={{ fontSize: 11.5, color: CRMC.ink3 }}>
+                            {subK === 'faturado' ? 'faturado nas notas (líquido) · BRs abertos em 2026, 100% faturados' : `ganho · ${CRM_SIT_GANHO[subK]?.d || 'faturamento com a data vencida'}`}</span>}
                         </div>
                         {et.tipo === 'aberta' && (
                           <div title={`${Math.round(100 * totEt / totPipe)}% do pipeline aberto`} style={{ height: 4, borderRadius: 2, background: CRMC.lineSoft, marginTop: 8, overflow: 'hidden' }}>
