@@ -26006,9 +26006,14 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
         currentUser?.email ? supabase.from('v_crm_usuario').select('*').ilike('email', currentUser.email).maybeSingle().then(r => r.data) : Promise.resolve(null),
       ]);
       setEtapas(et); setNegocios(ng); setEmpresas(em); setAtividades(at);
-      const { data: cp } = await supabase.from('comercial_pedido_pendente').select('br,dt_faturamento_prevista').not('br', 'is', null).limit(5000);
-      const fp = {}; (cp || []).forEach(x => { if (!x.dt_faturamento_prevista) return; const o = fp[x.br];
-        fp[x.br] = !o ? { data: x.dt_faturamento_prevista, n: 1 } : { data: x.dt_faturamento_prevista < o.data ? x.dt_faturamento_prevista : o.data, n: o.n + 1 }; });
+      const [{ data: cp }, { data: aj }] = await Promise.all([
+        supabase.from('comercial_pedido_pendente').select('nunota,br,dt_faturamento_prevista').not('br', 'is', null).limit(5000),
+        supabase.from('v_crm_faturamento_ajuste').select('br,nunota_pedido,nova_data,motivo').limit(5000),
+      ]);
+      const ajPed = Object.fromEntries((aj || []).map(a => [String(a.nunota_pedido), a]));
+      const fp = {}; (cp || []).forEach(x => { const a = ajPed[String(x.nunota)]; const dEf = a?.nova_data || x.dt_faturamento_prevista; if (!dEf) return; const o = fp[x.br];
+        const reg = { data: dEf, n: 1, reprog: !!a, motivo: a?.motivo || null };
+        fp[x.br] = !o ? reg : (dEf < o.data ? { ...reg, n: o.n + 1 } : { ...o, n: o.n + 1 }); });
       setFatPrev(fp);
       const { data: rel } = await supabase.from('v_comercial_cliente_relacionamento').select('cliente,score,pedidos_36m');
       setRelCli(Object.fromEntries((rel || []).map(r => [r.cliente, r])));
@@ -26299,12 +26304,13 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
                                 const dOpo = aberta ? n.previsao_faturamento : null;
                                 const d = dGanho || dOpo; if (!d) return null;
                                 const atras = d < new Date().toISOString().slice(0, 10);
+                                const reprog = dGanho && fatPrev[n.br]?.reprog;
                                 return (
                                   <div title={dGanho ? 'Data prevista de faturamento do pedido no Sankhya' : 'Data prevista de faturamento informada no CRM'}
                                     style={{ display: 'inline-flex', alignItems: 'center', gap: 5, marginTop: 7, fontSize: 11.5, fontWeight: 600, padding: '2px 8px', borderRadius: 6,
                                       background: atras ? CRMC.lossSoft : CRMC.primarySoft, color: atras ? CRMC.loss : CRMC.primary }}>
                                     <CalendarDays size={12} aria-hidden="true" />
-                                    {atras ? 'Faturamento atrasado' : 'Fatura em'} {new Date(`${d}T12:00:00`).toLocaleDateString('pt-BR')}
+                                    {atras ? (reprog ? 'Reprogramado e vencido' : 'Faturamento atrasado') : (reprog ? '↻ Reprogramado: fatura em' : 'Fatura em')} {new Date(`${d}T12:00:00`).toLocaleDateString('pt-BR')}
                                   </div>
                                 );
                               })()}
@@ -26763,13 +26769,16 @@ function CRMCalendario({ resp, negocios, atividades, abertos, onAbrirNegocio }) 
   const moeda = (v) => fmtMoedaCompacta(v);
   useEffect(() => {
     (async () => {
-      const [c, f, tops] = await Promise.all([
+      const [c, f, tops, aj] = await Promise.all([
         supabase.from('comercial_pedido_pendente').select('nunota,numnota,br,cliente,vendedor,net_offer_value,dt_faturamento_prevista,dt_entrega_prevista').limit(5000),
         supabase.from('faturamento_resumo').select('nunota,numero_nota,br,cliente_nome,vendedor_nome,net_offer_value,data_faturamento,codtipoper,status_nota').gte('data_faturamento', '2026-01-01').limit(5000),
         supabase.from('sankhya_tops_venda').select('codtipoper'),
+        supabase.from('v_crm_faturamento_ajuste').select('nunota_pedido,nova_data,motivo').limit(5000),
       ]);
+      const ajPed = Object.fromEntries((aj.data || []).map(a => [String(a.nunota_pedido), a]));
       const tv = new Set((tops.data || []).map(t => t.codtipoper));
-      setCarteira(c.data || []);
+      setCarteira((c.data || []).map(p => { const a = ajPed[String(p.nunota)];
+        return a ? { ...p, dt_original: p.dt_faturamento_prevista, dt_faturamento_prevista: a.nova_data, reprog: a.motivo } : p; }));
       setNotas((f.data || []).filter(n => tv.has(n.codtipoper) && (n.status_nota || 'L') === 'L'));
     })();
   }, []);
@@ -26790,7 +26799,8 @@ function CRMCalendario({ resp, negocios, atividades, abertos, onAbrirNegocio }) 
   const ROT = { ped: 'Pedido a faturar', opo: 'Oportunidade (previsão)', fat: 'Faturado', tar: 'Tarefa' };
   const ev = {};
   const add = (d, e) => { if (d) (ev[d] = ev[d] || []).push(e); };
-  if (camadas.ped) ped.forEach(p => add(p.dt_faturamento_prevista, { tipo: 'ped', br: p.br, cli: p.cliente, quem: p.vendedor, doc: `pedido ${p.numnota || p.nunota}`, v: p.net_offer_value, atras: p.dt_faturamento_prevista < hojeIso }));
+  if (camadas.ped) ped.forEach(p => add(p.dt_faturamento_prevista, { tipo: 'ped', br: p.br, cli: p.cliente, quem: p.vendedor,
+    doc: `pedido ${p.numnota || p.nunota}${p.reprog ? ` · ↻ reprogramado (${p.reprog})` : ''}`, v: p.net_offer_value, atras: p.dt_faturamento_prevista < hojeIso }));
   if (camadas.opo) opo.forEach(n => add(n.previsao_faturamento, { tipo: 'opo', br: n.br || n.titulo, cli: null, neg: n, quem: n.responsavel, doc: 'previsão do CRM', v: n.valor, atras: n.previsao_faturamento < hojeIso }));
   if (camadas.fat) nts.forEach(n => add(n.data_faturamento, { tipo: 'fat', br: n.br, cli: n.cliente_nome, quem: n.vendedor_nome, doc: `NF ${n.numero_nota || n.nunota}`, v: n.net_offer_value }));
   if (camadas.tar) tars.forEach(a => add(iso(a.vencimento), { tipo: 'tar', br: null, a, quem: a.responsavel, doc: crmRotuloTipo(a.tipo) }));
@@ -26938,7 +26948,7 @@ function CRMCalendario({ resp, negocios, atividades, abertos, onAbrirNegocio }) 
                     <td style={{ padding: '9px 10px' }}>{p.cliente}</td>
                     <td style={{ padding: '9px 10px', color: CRMC.ink2, whiteSpace: 'nowrap' }}>{p.vendedor || '—'}</td>
                     <td style={{ padding: '9px 10px', color: CRMC.ink2 }}>{p.numnota || p.nunota}</td>
-                    <td style={{ padding: '9px 10px', whiteSpace: 'nowrap', fontWeight: 600 }}>{new Date(`${p.dt_faturamento_prevista}T12:00:00`).toLocaleDateString('pt-BR')}</td>
+                    <td style={{ padding: '9px 10px', whiteSpace: 'nowrap', fontWeight: 600 }}>{new Date(`${p.dt_faturamento_prevista}T12:00:00`).toLocaleDateString('pt-BR')}{p.reprog ? <span style={{ fontWeight: 400, color: CRMC.ink3 }}> ↻ reprogramado</span> : null}</td>
                     <td style={{ padding: '9px 10px', textAlign: 'right' }}><span style={{ fontSize: 12, fontWeight: 700, color: CRMC.loss, background: CRMC.lossSoft, padding: '2px 9px', borderRadius: 10, whiteSpace: 'nowrap' }}>{p.dias} dias</span></td>
                   </tr>
                 ))}
@@ -27236,6 +27246,136 @@ function CRMDashboard({ negocios, empresas, atividades, etapas, devemFechar, res
 }
 
 // Ficha do negócio/lead: etapa, dados editáveis, tarefas, anotação, contatos, histórico
+// Faturamento do BR na ficha (consulta na hora no Sankhya: fn_crm_br_faturamento): pedidos item a item
+// (pedido, entregue, pendente), notas de venda e remessas; e "Sinalizar nova data" (crm_faturamento_ajuste).
+const CRM_MOTIVOS_FAT = ['Nova data combinada com o cliente', 'Faturamento parcial combinado', 'Aguardando liberação do cliente', 'Produção / PCP', 'Logística / transporte', 'Outro'];
+function CRMFaturamentoBR({ negocio: n, autor, onMudou }) {
+  const [d, setD] = useState(null);
+  const [erro, setErro] = useState(null);
+  const [form, setForm] = useState(null);   // { nunota, data, motivo, obs }
+  const moeda = (v) => fmtMoedaCompacta(v);
+  const qtd = (v) => Number(v || 0).toLocaleString('pt-BR', { maximumFractionDigits: 3 });
+  const fmtD = (x) => (x ? new Date(`${String(x).slice(0, 10)}T12:00:00`).toLocaleDateString('pt-BR') : '—');
+  const hoje = new Date().toISOString().slice(0, 10);
+  const carregar = useCallback(async () => {
+    setErro(null);
+    const { data, error } = await supabase.rpc('fn_crm_br_faturamento', { p_br: n.br });
+    if (error || !data?.ok) { setErro(error?.message || data?.erro || 'Não foi possível consultar o Sankhya.'); return; }
+    setD(data);
+  }, [n.br]);
+  useEffect(() => { carregar(); }, [carregar]);
+  const salvar = async () => {
+    const f = form; if (!f?.data || !f?.motivo) return;
+    const { error } = await supabase.from('crm_faturamento_ajuste').insert({ br: n.br, nunota_pedido: f.nunota, nova_data: f.data, motivo: f.motivo, observacao: f.obs || null, autor });
+    if (error) { alert(error.message); return; }
+    await supabase.from('crm_historico').insert({ negocio_id: n.id, empresa_id: n.empresa_id, tipo: 'anotacao', autor,
+      texto: `Faturamento do pedido ${f.numnota} reprogramado para ${fmtD(f.data)} — ${f.motivo}${f.obs ? `: ${f.obs}` : ''}` });
+    setForm(null); carregar(); onMudou && onMudou();
+  };
+  const caixa = { border: `1px solid ${CRMC.line}`, borderRadius: 10, padding: '11px 13px', background: CRMC.surface };
+  if (erro) return <div style={{ ...caixa, fontSize: 12.5, color: CRMC.loss }}>Faturamento: {erro} <button onClick={carregar} style={{ marginLeft: 8, fontFamily: 'inherit', fontSize: 12, border: 'none', background: 'none', color: CRMC.primary, cursor: 'pointer' }}>tentar de novo</button></div>;
+  if (!d) return <div style={{ ...caixa, fontSize: 12.5, color: CRMC.ink3 }}>Consultando pedidos e notas no Sankhya…</div>;
+  const vendas = d.notas.filter(x => x.venda), remessas = d.notas.filter(x => !x.venda);
+  const ajPorPed = {}; (d.ajustes || []).forEach(a => { if (!ajPorPed[a.nunota_pedido]) ajPorPed[a.nunota_pedido] = a; });
+  const totPed = d.pedidos.reduce((x, p) => x + p.itens.reduce((y, i) => y + (Number(i.valor) || 0), 0), 0);
+  const totEnt = d.pedidos.reduce((x, p) => x + p.itens.reduce((y, i) => y + (Number(i.valor) || 0) * Math.min(1, (Number(i.entregue) || 0) / (Number(i.qtd) || 1)), 0), 0);
+  const comSaldo = d.pedidos.filter(p => p.itens.some(i => Number(i.qtd) - Number(i.entregue) > 0.0001));
+  return (
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8, marginBottom: 8 }}>
+        <div style={{ fontSize: 12.5, fontWeight: 700 }}>Faturamento no Sankhya</div>
+        <button onClick={carregar} style={{ fontFamily: 'inherit', fontSize: 11.5, border: 'none', background: 'none', color: CRMC.primary, cursor: 'pointer' }}>atualizar</button>
+      </div>
+      <div style={{ display: 'grid', gap: 8, gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', marginBottom: 10 }}>
+        {[[`${totPed ? Math.round(100 * totEnt / totPed) : 0}% entregue`, `${d.pedidos.length} pedido(s) · ${comSaldo.length} com saldo`, comSaldo.length ? CRMC.warn : CRMC.win],
+          [moeda(vendas.reduce((x, v) => x + (Number(v.valor) || 0), 0)), `faturado em ${vendas.length} nota(s) de venda`, CRMC.win],
+          [moeda(Math.max(0, totPed - totEnt)), 'saldo a faturar (pelo valor do pedido)', comSaldo.length ? CRMC.primary : CRMC.ink3]].map(([v, r, c]) => (
+          <div key={r} style={{ ...caixa, padding: '9px 11px' }}>
+            <div style={{ fontSize: 16, fontWeight: 700, color: c }}>{v}</div>
+            <div style={{ fontSize: 11.5, color: CRMC.ink3 }}>{r}</div>
+          </div>
+        ))}
+      </div>
+      {d.pedidos.length === 0 && <div style={{ fontSize: 12.5, color: CRMC.ink3, marginBottom: 8 }}>Nenhum pedido de venda para este BR no Sankhya.</div>}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {d.pedidos.map(p => {
+          const saldo = p.itens.some(i => Number(i.qtd) - Number(i.entregue) > 0.0001);
+          const parcial = saldo && p.itens.some(i => Number(i.entregue) > 0);
+          const aj = ajPorPed[p.nunota];
+          const dataEf = aj?.nova_data || p.dtprevent;
+          const atras = saldo && dataEf && dataEf < hoje;
+          const st = !saldo ? ['Atendido', CRMC.win, CRMC.winSoft] : atras ? ['Atrasado', CRMC.loss, CRMC.lossSoft] : parcial ? ['Parcial', CRMC.warn, CRMC.warnSoft] : ['Pendente', CRMC.primary, CRMC.primarySoft];
+          return (
+            <div key={p.nunota} style={{ ...caixa, borderLeft: `3px solid ${st[1]}` }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <strong style={{ fontSize: 13 }}>Pedido {p.numnota || p.nunota}</strong>
+                <span style={{ fontSize: 11, fontWeight: 700, color: st[1], background: st[2], padding: '1px 8px', borderRadius: 10 }}>{st[0]}</span>
+                <span style={{ fontSize: 11.5, color: CRMC.ink3 }}>de {fmtD(p.dtneg)}{p.top_descr ? ` · ${p.top_descr}` : ''}</span>
+                <span style={{ flex: 1 }} />
+                {saldo && <span style={{ fontSize: 12, fontWeight: 600, color: atras ? CRMC.loss : CRMC.ink2 }}>{aj ? 'Reprogramado: ' : 'Previsto: '}{fmtD(dataEf)}</span>}
+              </div>
+              {aj && <div style={{ fontSize: 11.5, color: CRMC.ink2, marginTop: 4 }}>↻ {aj.motivo}{aj.observacao ? ` — ${aj.observacao}` : ''} · {aj.autor || '—'}, {new Date(aj.criado_em).toLocaleDateString('pt-BR')}{p.dtprevent ? ` · data original ${fmtD(p.dtprevent)}` : ''}</div>}
+              <div style={{ overflowX: 'auto', marginTop: 7 }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                  <thead><tr>{['Item', 'Pedido', 'Entregue', 'Pendente'].map((h, k) => <th key={h} style={{ textAlign: k ? 'right' : 'left', padding: '4px 6px', fontSize: 11, fontWeight: 600, color: CRMC.ink3, borderBottom: `1px solid ${CRMC.lineSoft}` }}>{h}</th>)}</tr></thead>
+                  <tbody>{p.itens.map((i, k) => { const pend = Math.max(0, Number(i.qtd) - Number(i.entregue));
+                    return (
+                      <tr key={k}>
+                        <td style={{ padding: '4px 6px', maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={`${i.cod} · ${i.descr}`}>{i.descr}</td>
+                        <td style={{ padding: '4px 6px', textAlign: 'right', whiteSpace: 'nowrap' }}>{qtd(i.qtd)} {i.un}</td>
+                        <td style={{ padding: '4px 6px', textAlign: 'right', whiteSpace: 'nowrap', color: CRMC.win }}>{qtd(i.entregue)}</td>
+                        <td style={{ padding: '4px 6px', textAlign: 'right', whiteSpace: 'nowrap', fontWeight: pend > 0 ? 700 : 400, color: pend > 0 ? CRMC.warn : CRMC.ink3 }}>{pend > 0 ? `${qtd(pend)} ${i.un}` : '—'}</td>
+                      </tr>
+                    ); })}</tbody>
+                </table>
+              </div>
+              {saldo && form?.nunota !== p.nunota && (
+                <button onClick={() => setForm({ nunota: p.nunota, numnota: p.numnota || p.nunota, data: '', motivo: CRM_MOTIVOS_FAT[0], obs: '' })}
+                  style={{ marginTop: 8, fontFamily: 'inherit', fontSize: 12, fontWeight: 600, padding: '5px 11px', borderRadius: 7, border: `1px solid ${CRMC.line}`, background: CRMC.surface, color: CRMC.primary, cursor: 'pointer' }}>
+                  Sinalizar nova data de faturamento
+                </button>
+              )}
+              {form?.nunota === p.nunota && (
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8, padding: 8, background: CRMC.surface2, borderRadius: 8 }}>
+                  <input type="date" value={form.data} onChange={e => setForm(f => ({ ...f, data: e.target.value }))} aria-label="Nova data de faturamento"
+                    style={{ fontFamily: 'inherit', fontSize: 12.5, padding: '6px 9px', borderRadius: 7, border: `1px solid ${CRMC.line}` }} />
+                  <select value={form.motivo} onChange={e => setForm(f => ({ ...f, motivo: e.target.value }))} style={{ fontFamily: 'inherit', fontSize: 12.5, padding: '6px 9px', borderRadius: 7, border: `1px solid ${CRMC.line}` }}>
+                    {CRM_MOTIVOS_FAT.map(m => <option key={m} value={m}>{m}</option>)}
+                  </select>
+                  <input value={form.obs} onChange={e => setForm(f => ({ ...f, obs: e.target.value }))} placeholder="observação (ex.: saldo de 1,38 m² sai junto com o próximo lote)"
+                    style={{ flex: '1 1 220px', fontFamily: 'inherit', fontSize: 12.5, padding: '6px 9px', borderRadius: 7, border: `1px solid ${CRMC.line}` }} />
+                  <button disabled={!form.data} onClick={salvar} style={{ fontFamily: 'inherit', fontSize: 12.5, fontWeight: 600, padding: '6px 13px', borderRadius: 7, border: 'none', background: CRMC.primary, color: '#fff', cursor: form.data ? 'pointer' : 'default', opacity: form.data ? 1 : 0.5 }}>Salvar</button>
+                  <button onClick={() => setForm(null)} style={{ fontFamily: 'inherit', fontSize: 12.5, padding: '6px 11px', borderRadius: 7, border: `1px solid ${CRMC.line}`, background: CRMC.surface, color: CRMC.ink2, cursor: 'pointer' }}>Cancelar</button>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      {vendas.length > 0 && (
+        <div style={{ marginTop: 10 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: CRMC.ink2, marginBottom: 5 }}>Notas de venda ({vendas.length})</div>
+          {vendas.map(v => (
+            <details key={v.nunota} style={{ borderTop: `1px solid ${CRMC.lineSoft}`, padding: '6px 0' }}>
+              <summary style={{ cursor: 'pointer', fontSize: 12.5, display: 'flex', gap: 10, listStyle: 'revert' }}>
+                <span style={{ fontWeight: 600 }}>NF {v.numnota}</span><span style={{ color: CRMC.ink3 }}>{fmtD(v.data)}</span>
+                <span style={{ flex: 1 }} /><span style={{ fontWeight: 600, color: CRMC.win }}>{moeda(v.valor)}</span>
+              </summary>
+              {v.itens.map((i, k) => <div key={k} style={{ fontSize: 12, color: CRMC.ink2, padding: '2px 0 2px 14px' }}>• {qtd(i.qtd)} {i.un} · {i.descr}</div>)}
+            </details>
+          ))}
+        </div>
+      )}
+      {remessas.length > 0 && (
+        <details style={{ marginTop: 8 }}>
+          <summary style={{ cursor: 'pointer', fontSize: 12, color: CRMC.ink3 }}>Outras notas ({remessas.length}) — remessas, não contam como faturamento</summary>
+          {remessas.map(v => <div key={v.nunota} style={{ fontSize: 12, color: CRMC.ink3, padding: '3px 0 3px 14px' }}>NF {v.numnota} · {fmtD(v.data)} · {v.top_descr || `TOP ${v.top}`} · {moeda(v.valor)}</div>)}
+        </details>
+      )}
+    </div>
+  );
+}
+
 function CRMFichaNegocio({ negocio: n, etapas, empresa, vendedores, autor, onFechar, onMover, onMudou, fatPrevPedido = null }) {
   const [ativs, setAtivs] = useState([]);
   const [hist, setHist] = useState([]);
@@ -27384,6 +27524,8 @@ function CRMFichaNegocio({ negocio: n, etapas, empresa, vendedores, autor, onFec
                 }} style={botao(false)}>Ligar BR</button>
             </div>
           )}
+
+          {n.br && n.pipeline_id !== 'leads' && (n.pipeline_id === 'posvendas' || etAtual?.tipo !== 'aberta' || fatPrevPedido) && <CRMFaturamentoBR negocio={n} autor={autor} onMudou={onMudou} />}
 
           {etAtual?.tipo === 'aberta' && !ativs.some(x => !x.concluida_em && !x.cancelada_em) && (() => {
             const sg = crmSugestao(n, etAtual.codigo, n.etapa_desde ? Math.floor((Date.now() - new Date(n.etapa_desde).getTime()) / 86400000) : null);
