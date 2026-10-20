@@ -26258,7 +26258,8 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
 
       {aba === 'funil' && (
         <>
-          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+          <div style={{ background: CRMC.surface, border: `1px solid ${CRMC.line}`, borderRadius: 14, boxShadow: '0 1px 3px rgba(16,24,40,.06)' }}>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', padding: '12px 16px', borderBottom: `1px solid ${CRMC.lineSoft}`, background: `linear-gradient(180deg, ${CRMC.surface}, ${CRMC.surface2})`, borderRadius: '14px 14px 0 0' }}>
             {segmento(['leads', 'vendas', 'posvendas'].map(p => [p, nomePipe[p]]), pipeline, setPipeline)}
             {segmento([['quadro', 'Quadro'], ['lista', 'Lista']], visao, setVisao)}
             {segmento([['abertos', 'Em andamento'], ['todos', pipeline === 'vendas' ? 'Com ganhos e perdidos' : pipeline === 'leads' ? 'Com convertidos e descartados' : 'Com encerrados']],
@@ -26337,7 +26338,7 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
             const kpi = (rot, valor, sub, cor, alvo, Icone) => (
               <button key={rot} onClick={alvo ? () => setFiltroRisco(f => (f === alvo ? null : alvo)) : undefined} disabled={!alvo}
                 aria-pressed={alvo ? filtroRisco === alvo : undefined}
-                style={{ textAlign: 'left', fontFamily: 'inherit', background: filtroRisco && filtroRisco === alvo ? `${cor}10` : 'transparent', borderRadius: 0, padding: '10px 16px', cursor: alvo ? 'pointer' : 'default', boxShadow: 'none', borderLeft: `1px solid ${CRMC.lineSoft}`,
+                style={{ textAlign: 'left', fontFamily: 'inherit', background: filtroRisco && filtroRisco === alvo ? `${cor}10` : 'transparent', borderRadius: 0, padding: '12px 18px', cursor: alvo ? 'pointer' : 'default', boxShadow: 'none', borderLeft: rot.startsWith('Pipeline aberto') || rot.startsWith('Potencial') ? 'none' : `1px solid ${CRMC.lineSoft}`,
                   borderTop: 'none', borderRight: 'none', borderBottom: `2px solid ${filtroRisco && filtroRisco === alvo ? cor : 'transparent'}`, transition: 'all .15s', minWidth: 0 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                   {Icone && <Icone size={13} aria-hidden="true" color={cor || CRMC.ink3} />}
@@ -26350,7 +26351,7 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
               </button>
             );
             return (
-              <div style={{ display: 'grid', gap: 0, gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', background: CRMC.surface, border: `1px solid ${CRMC.line}`, borderRadius: 12, overflow: 'hidden', boxShadow: '0 1px 2px rgba(16,24,40,.04)' }}>
+              <div style={{ display: 'grid', gap: 0, gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', borderRadius: '0 0 14px 14px', overflow: 'hidden' }}>
                 {kpi(pipeline === 'leads' ? 'Potencial em aberto' : 'Pipeline aberto', moeda(tot), `${abertosP.length} ${pipeline === 'leads' ? 'leads' : 'oportunidades'}`, null, null, DollarSign)}
                 {pipeline !== 'posvendas' && kpi('Pipeline ponderado', moeda(pond), 'valor × chance da etapa', null, null, TrendingUp)}
                 {pipeline === 'vendas' && kpi('Devem fechar', moeda(fechamTot.v), `${fechamTot.k} pedidos · regra da Diretoria`, CRMC.win, null, CheckCircle2)}
@@ -26359,6 +26360,7 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
               </div>
             );
           })()}
+          </div>
           {pipeline === 'vendas' && (analise || painelFiltro) && (
             <section aria-label="Análise e filtros" style={{ background: CRMC.surface, border: `1px solid ${analise ? CRMC.primary + '55' : CRMC.line}`, borderRadius: 12, padding: '10px 14px' }}>
               {analise && (
@@ -26436,7 +26438,7 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
           )}
 
           {visao === 'quadro' ? (
-            <div ref={quadroRef} title="Clique no fundo e arraste para os lados"
+            <div ref={quadroRef}
               onMouseDown={e => { if (e.button !== 0 || e.target.closest('article, button, a, input, select, textarea')) return;
                 pan.current = { x: e.clientX, l: quadroRef.current.scrollLeft }; quadroRef.current.style.cursor = 'grabbing'; e.preventDefault(); }}
               onMouseMove={e => { if (!pan.current) return; quadroRef.current.scrollLeft = pan.current.l - (e.clientX - pan.current.x); }}
