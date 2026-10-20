@@ -26661,6 +26661,70 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
   );
 }
 
+// Gráficos do CRM (cores sólidas da paleta, sem gradiente)
+function CRMBarrasH({ itens, aoClicar }) {
+  const max = Math.max(1, ...itens.map(x => x.v || 0));
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 11 }}>
+      {itens.map(it => (
+        <div key={it.k} onClick={aoClicar ? () => aoClicar(it) : undefined} title={`${it.k}: ${it.rot}${it.extra ? ` · ${it.extra}` : ''}`}
+          style={{ cursor: aoClicar ? 'pointer' : 'default' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 12.5 }}>
+            <span style={{ color: CRMC.ink2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.k}</span>
+            <span style={{ fontWeight: 600, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>{it.rot}{it.extra ? <span style={{ color: CRMC.ink3, fontWeight: 400 }}> · {it.extra}</span> : null}</span>
+          </div>
+          <div style={{ position: 'relative', height: 8, borderRadius: 4, background: CRMC.lineSoft, marginTop: 5, overflow: 'hidden' }}>
+            <div style={{ width: `${100 * (it.v || 0) / max}%`, height: '100%', background: it.cor || CRMC.primary, borderRadius: 4, opacity: it.parte != null ? 0.32 : 1 }} />
+            {it.parte != null && <div style={{ position: 'absolute', left: 0, top: 0, width: `${100 * it.parte / max}%`, height: '100%', background: it.cor || CRMC.primary, borderRadius: 4 }} />}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+function CRMColunas({ itens, altura = 190 }) {
+  const max = Math.max(1, ...itens.map(x => x.v || 0));
+  return (
+    <div style={{ display: 'flex', alignItems: 'flex-end', gap: 14, height: altura + 52, borderBottom: `1px solid ${CRMC.line}`, paddingBottom: 4 }}>
+      {itens.map(it => (
+        <div key={it.k} title={`${it.k}: ${it.rot}${it.sub ? ` · ${it.sub}` : ''}`}
+          style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-end', height: '100%' }}>
+          <div style={{ fontSize: 12.5, fontWeight: 600, marginBottom: 5, fontVariantNumeric: 'tabular-nums', color: it.v ? CRMC.ink : CRMC.ink3 }}>{it.rot}</div>
+          <div style={{ width: '100%', maxWidth: 110, height: Math.max(3, altura * (it.v || 0) / max), background: it.cor || CRMC.primary, borderRadius: '6px 6px 2px 2px', opacity: it.v ? 1 : 0.25 }} />
+          <div style={{ fontSize: 12, color: CRMC.ink2, marginTop: 7, fontWeight: 600 }}>{it.k}</div>
+          {it.sub && <div style={{ fontSize: 11, color: CRMC.ink3 }}>{it.sub}</div>}
+        </div>
+      ))}
+    </div>
+  );
+}
+function CRMRosca({ itens, centro, sub, fmt }) {
+  const tot = itens.reduce((x, i) => x + (i.v || 0), 0) || 1;
+  const R = 58, C = 2 * Math.PI * R; let acc = 0;
+  return (
+    <div style={{ display: 'flex', gap: 18, alignItems: 'center', flexWrap: 'wrap' }}>
+      <svg viewBox="0 0 160 160" width="150" height="150" role="img" aria-label={`${centro} · ${sub}`} style={{ flex: 'none' }}>
+        <circle cx="80" cy="80" r={R} fill="none" stroke={CRMC.lineSoft} strokeWidth="18" />
+        {itens.map(it => { const len = C * (it.v || 0) / tot; const el = (
+          <circle key={it.k} cx="80" cy="80" r={R} fill="none" stroke={it.cor} strokeWidth="18" strokeDasharray={`${Math.max(0, len - 1.5)} ${C}`}
+            strokeDashoffset={-acc} transform="rotate(-90 80 80)"><title>{`${it.k}: ${fmt(it.v)} (${Math.round(100 * it.v / tot)}%)`}</title></circle>); acc += len; return el; })}
+        <text x="80" y="78" textAnchor="middle" fontSize="17" fontWeight="700" fill={CRMC.ink}>{centro}</text>
+        <text x="80" y="96" textAnchor="middle" fontSize="10.5" fill={CRMC.ink3}>{sub}</text>
+      </svg>
+      <div style={{ flex: '1 1 160px', display: 'flex', flexDirection: 'column', gap: 7, minWidth: 0 }}>
+        {itens.map(it => (
+          <div key={it.k} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5 }}>
+            <span aria-hidden="true" style={{ width: 9, height: 9, borderRadius: 3, background: it.cor, flex: 'none' }} />
+            <span style={{ flex: 1, color: CRMC.ink2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.k}{it.n != null ? <span style={{ color: CRMC.ink3 }}> · {it.n}</span> : null}</span>
+            <span style={{ fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{fmt(it.v)}</span>
+            <span style={{ width: 38, textAlign: 'right', color: CRMC.ink3, fontVariantNumeric: 'tabular-nums' }}>{Math.round(100 * it.v / tot)}%</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // Dashboard do CRM (fase 2, 29/09/2026). Reaproveita os gráficos da Diretoria
 // (Rosca, BarrasH, Colunas) sobre os dados do CRM. O filtro de responsável do
 // topo do CRM vale para o painel inteiro.
@@ -26776,7 +26840,7 @@ function CRMDashboard({ negocios, empresas, atividades, etapas, devemFechar, res
       {corpo}
     </div>
   );
-  const vazio = (t) => <div style={{ fontSize: 11.5, color: CRMC.ink3, padding: '8px 0' }}>{t}</div>;
+  const vazio = (t) => <div style={{ fontSize: 12.5, color: CRMC.ink3, padding: '8px 0' }}>{t}</div>;
   const kpis = [
     { t: 'Pipeline aberto (Vendas)', v: moeda(soma(abertos)), s: `${abertos.length} negócios` },
     { t: 'Pipeline ponderado', v: moeda(ponderado), s: 'valor × chance da etapa', h: 'Soma de cada negócio aberto multiplicado pela chance da etapa dele' },
@@ -26793,96 +26857,148 @@ function CRMDashboard({ negocios, empresas, atividades, etapas, devemFechar, res
     { t: 'Clientes sem contato', v: String(semContato.length), s: `60+ dias · ${moeda(soma(semContato))} em aberto`, cor: semContato.length ? CRMC.loss : CRMC.win },
   ];
 
+  const kpiDe = (t) => kpis.find(x => x.t.startsWith(t));
+  const grupos = [
+    ['Pipeline', ['Pipeline aberto', 'Pipeline ponderado', 'Devem fechar', 'Propostas aguardando']],
+    ['Resultado', ['Ganhos', 'Perdidos', 'Taxa de conversão', 'Vendido em', 'Ticket médio']],
+    ['Atenção', ['Sem próxima ação', 'Tarefas atrasadas', 'Clientes sem contato', 'Leads em aberto']],
+  ].map(([g, ts]) => [g, ts.map(kpiDe).filter(Boolean)]);
+  const abertasV = etapas.filter(e => e.pipeline_id === 'vendas' && e.tipo === 'aberta');
+  const funilC = abertasV.map(e => { const l = abertos.filter(n => n.etapa_id === e.id); const d = l.filter(n => devemFechar.has(n.id));
+    return { k: e.nome, v: soma(l), parte: ['baixo', 'medio', 'alto', 'avancado'].includes(e.codigo) ? soma(d) : null, rot: moeda(soma(l)),
+      extra: `${l.length}${d.length ? ` · ${d.length} fecham` : ''}`, cor: CRM_COR_ETAPA[e.codigo] || CRMC.primary }; });
+  const paradoC = abertasV.map(e => { const l = abertos.filter(n => n.etapa_id === e.id);
+    const med = l.length ? Math.round(l.reduce((x, n) => x + (diasDe(n.etapa_desde) || 0), 0) / l.length) : 0;
+    return { k: e.nome, v: med, rot: `${med} dias`, extra: `${l.length}`, cor: med >= 90 ? CRMC.loss : med >= 45 ? CRMC.warn : CRMC.win }; });
+  const CORES_SEQ = ['#2F7BEA', '#16A34A', '#EA7A33', '#7C3AED', '#0D9488', '#DB2777', '#D9A21B', '#64748B'];
+  const vazios = [!origem.length && 'leads por origem', !motivos.length && 'motivos de perda', !feitas.length && 'atividades concluídas'].filter(Boolean);
+  const secao = (titulo, sub, corpo, extra) => (
+    <section style={{ background: CRMC.surface, border: `1px solid ${CRMC.line}`, borderRadius: 12, padding: '16px 18px', minWidth: 0, boxShadow: '0 1px 2px rgba(16,24,40,.04)' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'baseline', flexWrap: 'wrap' }}>
+        <h3 style={{ fontSize: 14.5, fontWeight: 600, margin: 0, color: CRMC.ink }}>{titulo}</h3>{extra}
+      </div>
+      {sub && <div style={{ fontSize: 12, color: CRMC.ink3, margin: '3px 0 14px' }}>{sub}</div>}
+      {corpo}
+    </section>
+  );
+
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-      <div style={{ display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fit, minmax(175px, 1fr))' }}>
-        {kpis.map(k => (
-          <div key={k.t} title={k.h || ''} style={{ background: CRMC.surface, border: `1px solid ${CRMC.line}`, borderRadius: 12, padding: '13px 15px', minWidth: 0 }}>
-            <div style={{ fontSize: 12, color: CRMC.ink3, fontWeight: 500 }}>{k.t}</div>
-            <div style={{ fontSize: 21, fontWeight: 700, color: k.cor || CRMC.ink, fontVariantNumeric: 'tabular-nums', marginTop: 3 }}>{k.v}</div>
-            <div style={{ fontSize: 11.5, color: CRMC.ink3, marginTop: 1 }}>{k.s}</div>
-          </div>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {/* indicadores em 3 blocos */}
+      <div style={{ display: 'grid', gap: 14, gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))' }}>
+        {grupos.map(([g, ks]) => (
+          <section key={g} style={{ background: CRMC.surface, border: `1px solid ${CRMC.line}`, borderRadius: 12, padding: '14px 16px', boxShadow: '0 1px 2px rgba(16,24,40,.04)' }}>
+            <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.2, color: CRMC.ink3, textTransform: 'uppercase', marginBottom: 10 }}>{g}</div>
+            <div style={{ display: 'grid', gap: '14px 18px', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))' }}>
+              {ks.map(x => (
+                <div key={x.t} title={x.h || ''} style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 12, color: CRMC.ink2, fontWeight: 500 }}>{x.t}</div>
+                  <div style={{ fontSize: 23, fontWeight: 700, color: x.cor || CRMC.ink, fontVariantNumeric: 'tabular-nums', letterSpacing: -0.4, marginTop: 2 }}>{x.v}</div>
+                  <div style={{ fontSize: 11.5, color: CRMC.ink3 }}>{x.s}</div>
+                </div>
+              ))}
+            </div>
+          </section>
         ))}
       </div>
 
-      {card('Previsão de fechamento por mês', `pela previsão (MM/AAAA) preenchida no negócio · ${abertos.length - semPrev.length} de ${abertos.length} abertos têm previsão; ${semPrev.length} sem previsão (${moeda(soma(semPrev))}) ficam fora do gráfico`,
-        abertos.length - semPrev.length ? <Colunas dados={prevMensal} par={G.azul} altura={170} /> : vazio('Nenhum negócio aberto com previsão de fechamento preenchida.'))}
+      {secao('Previsão de fechamento por mês',
+        `pela previsão (MM/AAAA) preenchida no negócio · ${abertos.length - semPrev.length} de ${abertos.length} abertos têm previsão; ${semPrev.length} sem previsão (${moeda(soma(semPrev))}) ficam fora`,
+        abertos.length - semPrev.length
+          ? <CRMColunas itens={prevMensal.map((x, k) => ({ k: x.k, v: x.total, rot: x.rot, sub: x.sub, cor: k === 0 ? CRMC.loss : CRMC.primary }))} />
+          : vazio('Nenhum negócio aberto com previsão de fechamento preenchida.'))}
 
-      <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))' }}>
-        {card('Funil de Vendas por etapa', 'valor em aberto · a parte forte é o que deve fechar, com o valor cheio · clique para abrir o funil',
-          <BarrasH dados={funil} aoClicar={() => irParaFunil('vendas')} />)}
-        {card('Tempo parado por etapa', 'média de dias desde a última mudança de etapa · vermelho acima de 90 dias',
-          <BarrasH dados={parado} />)}
+      <div style={{ display: 'grid', gap: 16, gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))' }}>
+        {secao('Funil de Vendas por etapa', 'valor em aberto · a parte mais forte da barra é o que deve fechar',
+          <CRMBarrasH itens={funilC} aoClicar={() => irParaFunil('vendas')} />,
+          <button onClick={() => irParaFunil('vendas')} style={{ fontFamily: 'inherit', fontSize: 12, border: 'none', background: 'none', color: CRMC.primary, cursor: 'pointer', fontWeight: 600 }}>abrir funil →</button>)}
+        {secao('Tempo parado por etapa', 'média de dias desde a última mudança de etapa · âmbar a partir de 45, vermelho a partir de 90',
+          <CRMBarrasH itens={paradoC} />)}
+        {secao('Em aberto por região', 'pelo cadastro do cliente no Sankhya',
+          regiao.length ? <CRMRosca itens={regiao.map((x, k) => ({ k: x.k, v: x.v, n: x.n, cor: CORES_SEQ[k % 8] }))} centro={moeda(soma(abertos))} sub={`${abertos.length} negócios`} fmt={moeda} />
+            : vazio('Sem negócios em aberto.'))}
+      </div>
 
-        {card('Por vendedor', 'em aberto, o que deve fechar (valor cheio), ganhos e perdidos no funil de 2026, tarefas atrasadas', (
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+      {secao('Por vendedor', 'em aberto, o que deve fechar (valor cheio) e ganhos no funil de 2026, perdidos e tarefas atrasadas', (
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+            <thead><tr>
+              {['Vendedor', 'Em aberto', 'Deve fechar', 'Ganho', 'Perdidos', 'Atrasadas'].map((h, i2) => (
+                <th key={h} style={{ padding: '8px 10px', fontSize: 11.5, fontWeight: 600, color: CRMC.ink3, textAlign: i2 ? 'right' : 'left', borderBottom: `1px solid ${CRMC.line}` }}>{h}</th>
+              ))}
+            </tr></thead>
+            <tbody>
+              {vends.map(x => (
+                <tr key={x.v} style={{ borderTop: `1px solid ${CRMC.lineSoft}` }}>
+                  <td style={{ padding: '10px', whiteSpace: 'nowrap' }}>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                      <span aria-hidden="true" style={{ width: 26, height: 26, borderRadius: 13, background: `${crmCorPessoa(x.v)}1A`, color: crmCorPessoa(x.v), fontSize: 10.5, fontWeight: 700, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>{crmIniciais(x.v)}</span>
+                      <span style={{ fontWeight: 600 }}>{x.v}</span>
+                    </span>
+                  </td>
+                  {[[x.aberto, x.nAb, CRMC.primary], [x.fecha, x.nFe, CRMC.win], [x.ganho, x.nGa, '#6366F1']].map(([v, n2, cor], j2) => (
+                    <td key={j2} style={{ padding: '10px', textAlign: 'right', minWidth: 150 }}>
+                      <div style={{ fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{moeda(v)} <span style={{ fontWeight: 400, color: CRMC.ink3, fontSize: 11.5 }}>· {n2}</span></div>
+                      <div style={{ height: 5, background: CRMC.lineSoft, borderRadius: 3, marginTop: 5, display: 'flex', justifyContent: 'flex-end' }}>
+                        <div style={{ height: 5, width: `${100 * v / maxV}%`, background: cor, borderRadius: 3 }} />
+                      </div>
+                    </td>
+                  ))}
+                  <td style={{ padding: '10px', textAlign: 'right', color: CRMC.ink2 }}>{x.nPe}</td>
+                  <td style={{ padding: '10px', textAlign: 'right' }}>
+                    {x.atras ? <span style={{ fontSize: 12, fontWeight: 700, color: CRMC.loss, background: CRMC.lossSoft, padding: '2px 9px', borderRadius: 10 }}>{x.atras}</span> : <span style={{ color: CRMC.ink3 }}>0</span>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ))}
+
+      <div style={{ display: 'grid', gap: 16, gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))' }}>
+        {secao('Em aberto por segmento', 'os 8 maiores · número = negócios',
+          segmento.length ? <CRMBarrasH itens={segmento.map((x, k) => ({ k: x.k, v: x.v, rot: moeda(x.v), extra: `${x.n}`, cor: CORES_SEQ[k % 8] }))} /> : vazio('Sem negócios em aberto.'))}
+        {motivos.length > 0 && secao('Motivos de perda', 'dos negócios marcados como perdidos no CRM, com motivo',
+          <CRMBarrasH itens={motivos.map(x => ({ k: x.k, v: x.v, rot: String(x.v), cor: CRMC.loss }))} />)}
+        {origem.length > 0 && secao('Leads por origem', `${leads.length} leads · ${leadsConv.length} convertidos · ${leadsDesc.length} descartados`,
+          <CRMBarrasH itens={origem.map((x, k) => ({ k: x.k, v: x.v, rot: String(x.v), cor: CORES_SEQ[k % 8] }))} />)}
+        {feitas.length > 0 && secao('Atividades concluídas por semana', 'últimas 8 semanas',
+          <CRMColunas altura={120} itens={semanas.map(x => ({ k: x.k, v: x.total, rot: String(x.total), sub: '' }))} />)}
+        {feitas.length > 0 && secao('Atividades por tipo', 'concluídas nas últimas 8 semanas',
+          <CRMBarrasH itens={porTipo.map((x, k) => ({ k: x.k, v: x.v, rot: String(x.v), cor: CORES_SEQ[k % 8] }))} />)}
+      </div>
+      {vazios.length > 0 && (
+        <div style={{ fontSize: 12.5, color: CRMC.ink2, background: CRMC.surface, border: `1px dashed ${CRMC.line}`, borderRadius: 10, padding: '10px 14px' }}>
+          Ainda sem dados para: <strong>{vazios.join(', ')}</strong>. Esses gráficos aparecem aqui quando houver registros (leads criados, perdas com motivo, tarefas concluídas).
+        </div>
+      )}
+
+      {secao(`Clientes sem contato há 60 dias ou mais (${semContato.length})`, 'com negócio em aberto e nenhuma anotação, atividade ou mudança de etapa feita por alguém · maiores primeiro · clique para abrir',
+        semContato.length === 0 ? vazio('Todos os clientes com negócio em aberto tiveram contato nos últimos 60 dias.') : (
+          <div style={{ overflowX: 'auto', maxHeight: 380, overflowY: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
               <thead><tr>
-                {['Vendedor', 'Em aberto', 'Deve fechar', 'Ganho', 'Perdidos', 'Atrasadas'].map((h, i) => (
-                  <th key={h} style={{ padding: '6px 8px', fontSize: 10.5, fontWeight: 600, color: CRMC.ink3, textAlign: i ? 'right' : 'left' }}>{h}</th>
+                {['Cliente', 'Região', 'Negócios', 'Em aberto', 'Último contato'].map((h, i2) => (
+                  <th key={h} style={{ padding: '8px 10px', fontSize: 11.5, fontWeight: 600, color: CRMC.ink3, textAlign: i2 >= 2 ? 'right' : 'left', position: 'sticky', top: 0, background: CRMC.surface, borderBottom: `1px solid ${CRMC.line}` }}>{h}</th>
                 ))}
               </tr></thead>
               <tbody>
-                {vends.map(x => (
-                  <tr key={x.v} style={{ borderTop: `1px solid ${CRMC.lineSoft}` }}>
-                    <td style={{ padding: '7px 8px', fontWeight: 600, whiteSpace: 'nowrap' }}>{x.v}</td>
-                    {[[x.aberto, x.nAb, G.ambar], [x.fecha, x.nFe, G.verde], [x.ganho, x.nGa, G.roxo]].map(([v, n, p], j) => (
-                      <td key={j} style={{ padding: '7px 8px', textAlign: 'right', minWidth: 120 }}>
-                        <div style={{ fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{moeda(v)} <span style={{ fontWeight: 400, color: CRMC.ink3, fontSize: 10.5 }}>· {n}</span></div>
-                        <div style={{ height: 4, background: CRMC.lineSoft, borderRadius: 2, marginTop: 3 }}>
-                          <div style={{ height: 4, width: `${100 * v / maxV}%`, background: `linear-gradient(90deg, ${p[0]}, ${p[1]})`, borderRadius: 2, marginLeft: 'auto' }} />
-                        </div>
-                      </td>
-                    ))}
-                    <td style={{ padding: '7px 8px', textAlign: 'right', color: CRMC.ink2 }}>{x.nPe}</td>
-                    <td style={{ padding: '7px 8px', textAlign: 'right', color: x.atras ? CRMC.loss : CRMC.ink3, fontWeight: x.atras ? 700 : 400 }}>{x.atras}</td>
+                {semContato.slice(0, 80).map(x => (
+                  <tr key={x.emp.id} onClick={() => onAbrirEmpresa(x.emp.id)} style={{ borderTop: `1px solid ${CRMC.lineSoft}`, cursor: 'pointer' }}
+                    onMouseEnter={e => { e.currentTarget.style.background = CRMC.surface2; }} onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}>
+                    <td style={{ padding: '9px 10px', fontWeight: 600 }}>{x.emp.nome}</td>
+                    <td style={{ padding: '9px 10px', color: CRMC.ink2 }}>{x.emp.regiao || '—'}</td>
+                    <td style={{ padding: '9px 10px', textAlign: 'right' }}>{x.n}</td>
+                    <td style={{ padding: '9px 10px', textAlign: 'right', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{moeda(x.valor)}</td>
+                    <td style={{ padding: '9px 10px', textAlign: 'right' }}>
+                      <span style={{ fontSize: 12, fontWeight: 600, color: CRMC.loss, background: CRMC.lossSoft, padding: '2px 9px', borderRadius: 10, whiteSpace: 'nowrap' }}>{x.dias == null ? 'nunca registrado' : `${x.dias} dias`}</span>
+                    </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-        ), true)}
-
-        {card('Em aberto por região', 'pelo cadastro do cliente no Sankhya',
-          regiao.length ? <Rosca dados={regiao} tamanho={180} espessura={28} centro={moeda(soma(abertos))} subcentro={`${abertos.length} negócios`} /> : vazio('Sem negócios em aberto.'))}
-        {card('Em aberto por segmento', 'os 8 maiores · número = negócios',
-          segmento.length ? <BarrasH dados={segmento} /> : vazio('Sem negócios em aberto.'))}
-
-        {card('Leads por origem', `${leads.length} leads · ${leadsConv.length} convertidos · ${leadsDesc.length} descartados`,
-          origem.length ? <Rosca dados={origem} tamanho={180} espessura={28} centro={String(leads.length)} subcentro="leads" /> : vazio('Nenhum lead cadastrado ainda. Crie pelo botão "+ Lead" no funil de Leads.'))}
-        {card('Motivos de perda', 'dos negócios marcados como perdidos no CRM, com motivo',
-          motivos.length ? <BarrasH dados={motivos} /> : vazio('Ainda sem perdas com motivo — o motivo passou a ser obrigatório no CRM.'))}
-
-        {card('Atividades concluídas por semana', 'últimas 8 semanas',
-          feitas.length ? <Colunas dados={semanas} par={G.ciano} altura={150} /> : vazio('Nenhuma atividade concluída nas últimas 8 semanas.'))}
-        {card('Atividades por tipo', 'concluídas nas últimas 8 semanas',
-          porTipo.length ? <BarrasH dados={porTipo} /> : vazio('Nenhuma atividade concluída nas últimas 8 semanas.'))}
-
-        {card(`Clientes sem contato há 60 dias ou mais (${semContato.length})`, 'com negócio em aberto e nenhuma anotação, atividade ou mudança de etapa feita por alguém · ordenados pelo valor em aberto · clique para abrir', (
-          semContato.length === 0 ? vazio('Todos os clientes com negócio em aberto tiveram contato nos últimos 60 dias.') : (
-            <div style={{ overflowX: 'auto', maxHeight: 360, overflowY: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-                <thead><tr>
-                  {['Cliente', 'Região', 'Negócios', 'Em aberto', 'Último contato'].map((h, i) => (
-                    <th key={h} style={{ padding: '6px 8px', fontSize: 10.5, fontWeight: 600, color: CRMC.ink3, textAlign: i >= 2 ? 'right' : 'left', position: 'sticky', top: 0, background: CRMC.surface }}>{h}</th>
-                  ))}
-                </tr></thead>
-                <tbody>
-                  {semContato.slice(0, 60).map(x => (
-                    <tr key={x.emp.id} onClick={() => onAbrirEmpresa(x.emp.id)} style={{ borderTop: `1px solid ${CRMC.lineSoft}`, cursor: 'pointer' }}>
-                      <td style={{ padding: '6px 8px', fontWeight: 600 }}>{x.emp.nome}</td>
-                      <td style={{ padding: '6px 8px', color: CRMC.ink2 }}>{x.emp.regiao || '—'}</td>
-                      <td style={{ padding: '6px 8px', textAlign: 'right' }}>{x.n}</td>
-                      <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 700 }}>{moeda(x.valor)}</td>
-                      <td style={{ padding: '6px 8px', textAlign: 'right', color: CRMC.loss }}>{x.dias == null ? 'nunca registrado' : `${x.dias} dias`}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )
-        ), true)}
-      </div>
+        ))}
     </div>
   );
 }
