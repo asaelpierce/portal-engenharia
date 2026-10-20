@@ -358,7 +358,8 @@ export default function PortalEngenharia() {
     return <TelaCarregando texto="Carregando seu perfil…" />;
   }
   // CRM em página própria (…/?pagina=crm): mesma sessão e mesma permissão do Painel Comercial
-  if (paginaCrm) {
+  const soCrm = Array.isArray(currentUser.telasPermitidas) && currentUser.telasPermitidas.length > 0 && currentUser.telasPermitidas.every(t => t === 'crm');
+  if (paginaCrm || soCrm) {
     return <CRMPagina currentUser={currentUser} />;
   }
 
@@ -25948,12 +25949,13 @@ function CRMPagina({ currentUser }) {
   // sem telas cadastradas = acesso total (regra antiga); o papel 'comercial' legado também inclui o Painel Comercial
   const permitidos = currentUser.telasPermitidas || null;
   useEffect(() => { document.title = 'CRM Comercial · Kalenborn'; }, []);
-  if (permitidos && !permitidos.includes('comercial')) {
+  if (permitidos && !permitidos.includes('comercial') && !permitidos.includes('crm')) {
     return <div style={{ padding: 40, fontFamily: 'inherit', color: CRMC.ink }}>Seu usuário não tem acesso ao Painel Comercial. <a href="/">Voltar ao portal</a></div>;
   }
   return (
     <div style={{ minHeight: '100vh', background: CRMC.bg }}>
-      <CRM currentUser={currentUser} telaCheia onSair={() => { window.location.href = '/'; }} />
+      <CRM currentUser={currentUser} telaCheia
+        onSair={permitidos && permitidos.every(t => t === 'crm') ? null : () => { window.location.href = '/'; }} />
     </div>
   );
 }
@@ -26226,6 +26228,12 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
           style={{ width: 32, height: 32, borderRadius: 16, background: crmCorPessoa(currentUser?.nome), color: '#fff', fontSize: 12, fontWeight: 700, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
           {crmIniciais(currentUser?.nome || currentUser?.email)}
         </span>
+        {telaCheia && (
+          <button onClick={async () => { await supabase.auth.signOut(); window.location.href = '/'; }} title="Sair (encerrar a sessão)"
+            style={{ fontFamily: 'inherit', fontSize: 12, padding: '8px 10px', borderRadius: 8, border: '1px solid rgba(255,255,255,.22)', background: 'transparent', color: 'rgba(255,255,255,.85)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            <LogOut size={13} aria-hidden="true" />Sair
+          </button>
+        )}
         {!(typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('pagina') === 'crm') && (
           <a href="/?pagina=crm" target="_blank" rel="noopener noreferrer" title="Abre o CRM numa aba separada do navegador, em tela inteira"
             style={{ fontSize: 12.5, fontWeight: 600, padding: '8px 12px', borderRadius: 8, border: '1px solid rgba(255,255,255,.22)', color: '#fff', textDecoration: 'none', whiteSpace: 'nowrap' }}>
@@ -26399,15 +26407,29 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
               onMouseLeave={() => { pan.current = null; if (quadroRef.current) quadroRef.current.style.cursor = 'grab'; }}
               style={{ overflowX: 'auto', paddingBottom: 10, scrollbarGutter: 'stable', cursor: 'grab', userSelect: pan.current ? 'none' : 'auto' }}>
               <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', width: 'max-content' }}>
-                {etapasPipe.map(et => {
-                  const cards = doPipe.filter(n => n.etapa_id === et.id).sort((a, b) => valorDe(b) - valorDe(a));
+                {etapasPipe.flatMap(e0 => {
+                  // Vendas: o "Ganho — pedido" vira uma coluna por situação (atrasado, carteira, parcial, pausado, faturado)
+                  if (pipeline !== 'vendas' || e0.tipo !== 'ganho') return [{ ...e0, chave: e0.id }];
+                  const atr = (n) => infoGanho(n).atraso > 0;
+                  const subs = [
+                    ['atrasado', 'Faturamento atrasado', CRMC.loss, n => { const g = sitDe(n); return (g === 'carteira' || g === 'parcial') && atr(n); }],
+                    ['carteira', 'Em carteira', CRM_SIT_GANHO.carteira.cor, n => sitDe(n) === 'carteira' && !atr(n)],
+                    ['parcial', 'Faturamento parcial', CRM_SIT_GANHO.parcial.cor, n => sitDe(n) === 'parcial' && !atr(n)],
+                    ['pausado', 'Pausado / suspenso', CRM_SIT_GANHO.pausado.cor, n => sitDe(n) === 'pausado'],
+                    ['faturado', 'Faturado', CRM_SIT_GANHO.faturado.cor, n => sitDe(n) === 'faturado'],
+                    ['sem', 'Ganho sem pedido nem nota', CRM_SIT_GANHO.sem.cor, n => sitDe(n) === 'sem'],
+                  ];
+                  return subs.filter(([k, , , f]) => k !== 'sem' || doPipe.some(n => n.etapa_id === e0.id && f(n)))
+                    .map(([k, nome, cor, f]) => ({ ...e0, chave: `${e0.id}:${k}`, nome, corCol: cor, filtroCol: f }));
+                }).map(et => {
+                  const cards = doPipe.filter(n => n.etapa_id === et.id && (!et.filtroCol || et.filtroCol(n))).sort((a, b) => valorDe(b) - valorDe(a));
                   const totEt = cards.reduce((x, n) => x + valorDe(n), 0);
-                  const sobre = dragSobre === et.id && arrastando && arrastando.etapa_id !== et.id;
-                  const corEt = CRM_COR_ETAPA[et.codigo] || et.cor || CRMC.ink3;
+                  const sobre = dragSobre === et.chave && arrastando && arrastando.etapa_id !== et.id;
+                  const corEt = et.corCol || CRM_COR_ETAPA[et.codigo] || et.cor || CRMC.ink3;
                   const totPipe = doPipe.filter(n => etapaPorId[n.etapa_id]?.tipo === 'aberta').reduce((x, n) => x + valorDe(n), 0) || 1;
                   return (
-                    <section key={et.id} aria-label={et.nome} className="crm-col"
-                      onDragOver={e => { e.preventDefault(); if (dragSobre !== et.id) setDragSobre(et.id); }}
+                    <section key={et.chave} aria-label={et.nome} className="crm-col"
+                      onDragOver={e => { e.preventDefault(); if (dragSobre !== et.chave) setDragSobre(et.chave); }}
                       onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget)) setDragSobre(null); }}
                       onDrop={e => { e.preventDefault(); setDragSobre(null); if (arrastando && arrastando.etapa_id !== et.id) mover(arrastando, et.codigo); setArrastando(null); }}
                       style={{ width: 296, flex: '0 0 296px', background: sobre ? CRMC.primarySoft : '#EBEFF5', borderRadius: 12, overflow: 'hidden',
@@ -26420,7 +26442,8 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
                         </div>
                         <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 6 }}>
                           <span style={{ fontSize: 18, fontWeight: 700, fontVariantNumeric: 'tabular-nums', letterSpacing: -0.3 }}>{moeda(totEt)}</span>
-                          {et.probabilidade != null && <span style={{ fontSize: 11.5, color: CRMC.ink3 }}>{et.probabilidade}% de chance</span>}
+                          {et.probabilidade != null && !et.filtroCol && <span style={{ fontSize: 11.5, color: CRMC.ink3 }}>{et.probabilidade}% de chance</span>}
+                          {et.filtroCol && <span style={{ fontSize: 11.5, color: CRMC.ink3 }}>ganho · {CRM_SIT_GANHO[et.chave.split(':')[1]]?.d || 'faturamento com a data vencida'}</span>}
                         </div>
                         {et.tipo === 'aberta' && (
                           <div title={`${Math.round(100 * totEt / totPipe)}% do pipeline aberto`} style={{ height: 4, borderRadius: 2, background: CRMC.lineSoft, marginTop: 8, overflow: 'hidden' }}>
@@ -26476,16 +26499,21 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
                                     display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flex: 'none' }}>{crmIniciais(n.responsavel)}</span>
                                   <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{n.responsavel || 'Sem responsável'}</span>
                                 </span>
-                                {n.pipeline_id !== 'leads' && (
+                                {n.pipeline_id !== 'leads' && aberta && (
                                   <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap', color: r.prevV ? CRMC.loss : CRMC.ink2, fontWeight: r.prevV ? 600 : 400 }}
-                                    title="Previsão de fechamento">
+                                    title="Previsão de fechamento (mês)">
                                     <CalendarDays size={13} aria-hidden="true" />{n.previsao_fechamento || 'sem previsão'}
+                                  </span>
+                                )}
+                                {et.tipo === 'ganho' && sitDe(n) === 'faturado' && n.br && sitBr[n.br]?.ultima_nota && (
+                                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap', color: CRMC.win }} title="Data da última nota de venda">
+                                    <CheckCircle2 size={13} aria-hidden="true" />NF {new Date(`${sitBr[n.br].ultima_nota}T12:00:00`).toLocaleDateString('pt-BR')}
                                   </span>
                                 )}
                                 {n.pipeline_id === 'leads' && n.fonte && <span style={{ whiteSpace: 'nowrap', color: CRMC.ink3 }}>{n.fonte}</span>}
                               </div>
                               {(() => {
-                                const dGanho = et.tipo === 'ganho' && n.br ? fatPrev[n.br]?.data : null;
+                                const dGanho = et.tipo === 'ganho' && n.br && sitDe(n) !== 'faturado' ? fatPrev[n.br]?.data : null;
                                 const dOpo = aberta ? n.previsao_faturamento : null;
                                 const d = dGanho || dOpo; if (!d) return null;
                                 const atras = d < new Date().toISOString().slice(0, 10);
@@ -34753,6 +34781,7 @@ const TELAS_CATALOGO = [
   { id: 'metricas',     label: 'Métricas' },
   { id: 'produtividade',label: 'Produtividade' },
   { id: 'comercial',    label: 'Painel Comercial' },
+  { id: 'crm',          label: 'CRM (só o CRM — vendedor entra direto nele)' },
   { id: 'faturamento',  label: 'Faturamento (Sankhya)' },
   { id: 'placas_kalocer', label: 'Placas Kalocer' },
   { id: 'analitico_mp', label: 'Analítico' },
