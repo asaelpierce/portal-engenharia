@@ -25980,6 +25980,7 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
   const [filtroGanho, setFiltroGanho] = useState(null);   // carteira | parcial | pausado | faturado | sem
   const [analise, setAnalise] = useState(null);           // chave da análise inteligente ou 'custom'
   const [painelFiltro, setPainelFiltro] = useState(false);
+  const [menuAnalises, setMenuAnalises] = useState(false);
   const FILTRO_VAZIO = { sits: [], valorMin: '', atrasoMin: '', pedidoDias: '', semAcao: false, prevVencida: false, etapas: [] };
   const [filtroCustom, setFiltroCustom] = useState(FILTRO_VAZIO);
   const [visoesSalvas, setVisoesSalvas] = useState(() => { try { return JSON.parse(localStorage.getItem('crm.visoes') || '[]'); } catch { return []; } });
@@ -26260,11 +26261,62 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
             {segmento(['leads', 'vendas', 'posvendas'].map(p => [p, nomePipe[p]]), pipeline, setPipeline)}
             {segmento([['quadro', 'Quadro'], ['lista', 'Lista']], visao, setVisao)}
-            <label style={{ fontSize: 12.5, color: CRMC.ink2, display: 'flex', alignItems: 'center', gap: 6, marginLeft: 4, cursor: 'pointer' }}>
-              <input type="checkbox" checked={mostrarFechados} onChange={e => setMostrarFechados(e.target.checked)} />
-              mostrar {pipeline === 'vendas' ? 'ganhos e perdidos' : pipeline === 'leads' ? 'convertidos e descartados' : 'reposição e encerrados'}
-            </label>
+            {segmento([['abertos', 'Em andamento'], ['todos', pipeline === 'vendas' ? 'Com ganhos e perdidos' : pipeline === 'leads' ? 'Com convertidos e descartados' : 'Com encerrados']],
+              mostrarFechados ? 'todos' : 'abertos', v => { setMostrarFechados(v === 'todos'); if (v === 'abertos') setFiltroGanho(null); })}
             <span style={{ flex: 1 }} />
+            {pipeline === 'vendas' && (
+              <div style={{ position: 'relative' }} onMouseLeave={() => setMenuAnalises(false)}>
+                <button onClick={() => setMenuAnalises(x => !x)} aria-expanded={menuAnalises} aria-haspopup="menu"
+                  style={{ fontFamily: 'inherit', fontSize: 13, fontWeight: 600, padding: '8px 13px', borderRadius: 8, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7,
+                    border: `1px solid ${analise ? CRMC.primary : CRMC.line}`, background: analise ? CRMC.primarySoft : CRMC.surface, color: analise ? CRMC.primary : CRMC.ink }}>
+                  <Zap size={14} aria-hidden="true" color={CRMC.primary} />
+                  {analise ? (ANALISES.find(x => x.k === analise)?.r || (analise === 'custom' ? 'Filtro personalizado' : `★ ${visoesSalvas[Number(analise.split(':')[1])]?.nome || 'Visão'}`)) : 'Análises'}
+                  {(() => { const crit = ANALISES.filter(x => ['fat_atrasado', 'suspeitos'].includes(x.k)).reduce((t, x) => t + doPipeBase.filter(x.f).length, 0);
+                    return !analise && crit ? <span style={{ fontSize: 11, fontWeight: 700, padding: '0 6px', borderRadius: 9, background: CRMC.lossSoft, color: CRMC.loss }}>{crit}</span> : null; })()}
+                  <ChevronDown size={14} aria-hidden="true" />
+                </button>
+                {menuAnalises && (
+                  <div role="menu" style={{ position: 'absolute', right: 0, top: '100%', paddingTop: 6, zIndex: 30, width: 380 }}>
+                    <div style={{ background: CRMC.surface, border: `1px solid ${CRMC.line}`, borderRadius: 12, boxShadow: '0 12px 32px rgba(16,24,40,.16)', padding: 6 }}>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: CRMC.ink3, textTransform: 'uppercase', letterSpacing: 0.8, padding: '6px 10px 4px' }}>Análises inteligentes</div>
+                      {ANALISES.map(x => { const nA = doPipeBase.filter(x.f).length; const on = analise === x.k; const crit = ['fat_atrasado', 'suspeitos'].includes(x.k) && nA;
+                        return (
+                          <button key={x.k} role="menuitemradio" aria-checked={on} onClick={() => { setAnalise(on ? null : x.k); if (!on && x.ganho) { setMostrarFechados(true); setFiltroGanho(null); } setMenuAnalises(false); }}
+                            style={{ display: 'flex', width: '100%', textAlign: 'left', gap: 10, alignItems: 'flex-start', fontFamily: 'inherit', padding: '8px 10px', borderRadius: 8, border: 'none', cursor: 'pointer',
+                              background: on ? CRMC.primarySoft : 'transparent' }}
+                            onMouseEnter={e => { if (!on) e.currentTarget.style.background = CRMC.surface2; }} onMouseLeave={e => { if (!on) e.currentTarget.style.background = 'transparent'; }}>
+                            <span style={{ flex: 1, minWidth: 0 }}>
+                              <span style={{ display: 'block', fontSize: 13, fontWeight: 600, color: on ? CRMC.primary : CRMC.ink }}>{x.r}</span>
+                              <span style={{ display: 'block', fontSize: 11.5, color: CRMC.ink3, marginTop: 1 }}>{x.d}</span>
+                            </span>
+                            <span style={{ fontSize: 12, fontWeight: 700, padding: '1px 8px', borderRadius: 10, background: crit ? CRMC.lossSoft : CRMC.lineSoft, color: crit ? CRMC.loss : CRMC.ink2 }}>{nA}</span>
+                          </button>
+                        ); })}
+                      {visoesSalvas.length > 0 && <div style={{ fontSize: 11, fontWeight: 700, color: CRMC.ink3, textTransform: 'uppercase', letterSpacing: 0.8, padding: '10px 10px 4px', borderTop: `1px solid ${CRMC.lineSoft}`, marginTop: 4 }}>Minhas visões</div>}
+                      {visoesSalvas.map((v, q) => { const on = analise === `salva:${q}`;
+                        return (
+                          <div key={`s${q}`} style={{ display: 'flex', alignItems: 'center', borderRadius: 8, background: on ? '#F1EBFE' : 'transparent' }}>
+                            <button onClick={() => { if (on) { setAnalise(null); setFiltroCustom(FILTRO_VAZIO); } else { setFiltroCustom(v.filtro); setAnalise(`salva:${q}`); setMostrarFechados(true); } setMenuAnalises(false); }}
+                              style={{ flex: 1, textAlign: 'left', fontFamily: 'inherit', fontSize: 13, fontWeight: 600, padding: '8px 10px', border: 'none', background: 'transparent', cursor: 'pointer', color: on ? '#7C3AED' : CRMC.ink }}>★ {v.nome}</button>
+                            <button aria-label={`Apagar a visão ${v.nome}`} onClick={() => { const nv = visoesSalvas.filter((_, k) => k !== q); setVisoesSalvas(nv); try { localStorage.setItem('crm.visoes', JSON.stringify(nv)); } catch { /* */ } if (on) setAnalise(null); }}
+                              style={{ fontFamily: 'inherit', fontSize: 12, padding: '6px 10px', border: 'none', background: 'transparent', color: CRMC.ink3, cursor: 'pointer' }}>✕</button>
+                          </div>
+                        ); })}
+                      {analise && (
+                        <button onClick={() => { setAnalise(null); setMenuAnalises(false); }} style={{ width: '100%', fontFamily: 'inherit', fontSize: 12.5, padding: '8px 10px', marginTop: 4, borderRadius: 8, border: 'none', borderTop: `1px solid ${CRMC.lineSoft}`, background: 'transparent', color: CRMC.primary, cursor: 'pointer', textAlign: 'left' }}>Limpar análise</button>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+            {pipeline === 'vendas' && (
+              <button onClick={() => setPainelFiltro(x => !x)} aria-expanded={painelFiltro}
+                style={{ fontFamily: 'inherit', fontSize: 13, fontWeight: 600, padding: '8px 13px', borderRadius: 8, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7,
+                  border: `1px solid ${filtroCustomAtivo ? CRMC.primary : CRMC.line}`, background: filtroCustomAtivo || painelFiltro ? CRMC.primarySoft : CRMC.surface, color: filtroCustomAtivo || painelFiltro ? CRMC.primary : CRMC.ink }}>
+                <SlidersHorizontal size={14} aria-hidden="true" />Filtros{filtroCustomAtivo ? ' · ativo' : ''}
+              </button>
+            )}
             {pipeline !== 'posvendas' && (
               <button onClick={() => setNovoNeg({ pipeline, titulo: '', empresa_id: '', empresa_nova: '', valor: '', potencial: '', responsavel: resp || '',
                   previsao: '', fonte: '', interesse: '', score: '', concorrente: '', proxima: '' })}
@@ -26285,18 +26337,20 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
             const kpi = (rot, valor, sub, cor, alvo, Icone) => (
               <button key={rot} onClick={alvo ? () => setFiltroRisco(f => (f === alvo ? null : alvo)) : undefined} disabled={!alvo}
                 aria-pressed={alvo ? filtroRisco === alvo : undefined}
-                style={{ textAlign: 'left', fontFamily: 'inherit', background: CRMC.surface, borderRadius: 12, padding: '14px 16px', cursor: alvo ? 'pointer' : 'default', boxShadow: '0 1px 2px rgba(16,24,40,.04)',
-                  border: `1px solid ${filtroRisco && filtroRisco === alvo ? cor : CRMC.line}`, boxShadow: filtroRisco === alvo ? `0 0 0 3px ${cor}22` : 'none', transition: 'all .15s', minWidth: 0 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  {Icone && <span aria-hidden="true" style={{ width: 28, height: 28, borderRadius: 8, background: `${cor || CRMC.primary}14`, color: cor || CRMC.primary, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flex: 'none' }}><Icone size={15} /></span>}
-                  <span style={{ fontSize: 12, color: CRMC.ink2, fontWeight: 500 }}>{rot}</span>
+                style={{ textAlign: 'left', fontFamily: 'inherit', background: filtroRisco && filtroRisco === alvo ? `${cor}10` : 'transparent', borderRadius: 0, padding: '10px 16px', cursor: alvo ? 'pointer' : 'default', boxShadow: 'none', borderLeft: `1px solid ${CRMC.lineSoft}`,
+                  borderTop: 'none', borderRight: 'none', borderBottom: `2px solid ${filtroRisco && filtroRisco === alvo ? cor : 'transparent'}`, transition: 'all .15s', minWidth: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  {Icone && <Icone size={13} aria-hidden="true" color={cor || CRMC.ink3} />}
+                  <span style={{ fontSize: 11.5, color: CRMC.ink2, fontWeight: 500, whiteSpace: 'nowrap' }}>{rot}</span>
                 </div>
-                <div style={{ fontSize: 24, fontWeight: 700, color: cor || CRMC.ink, fontVariantNumeric: 'tabular-nums', marginTop: 8, letterSpacing: -0.4 }}>{valor}</div>
-                <div style={{ fontSize: 11.5, color: CRMC.ink3, marginTop: 2 }}>{sub}</div>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 2, minWidth: 0 }}>
+                  <span style={{ fontSize: 20, fontWeight: 700, color: cor || CRMC.ink, fontVariantNumeric: 'tabular-nums', letterSpacing: -0.4 }}>{valor}</span>
+                  <span style={{ fontSize: 11, color: CRMC.ink3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{sub}</span>
+                </div>
               </button>
             );
             return (
-              <div style={{ display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))' }}>
+              <div style={{ display: 'grid', gap: 0, gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', background: CRMC.surface, border: `1px solid ${CRMC.line}`, borderRadius: 12, overflow: 'hidden', boxShadow: '0 1px 2px rgba(16,24,40,.04)' }}>
                 {kpi(pipeline === 'leads' ? 'Potencial em aberto' : 'Pipeline aberto', moeda(tot), `${abertosP.length} ${pipeline === 'leads' ? 'leads' : 'oportunidades'}`, null, null, DollarSign)}
                 {pipeline !== 'posvendas' && kpi('Pipeline ponderado', moeda(pond), 'valor × chance da etapa', null, null, TrendingUp)}
                 {pipeline === 'vendas' && kpi('Devem fechar', moeda(fechamTot.v), `${fechamTot.k} pedidos · regra da Diretoria`, CRMC.win, null, CheckCircle2)}
@@ -26305,41 +26359,20 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
               </div>
             );
           })()}
-          {pipeline === 'vendas' && (
-            <section aria-label="Análises inteligentes" style={{ background: CRMC.surface, border: `1px solid ${CRMC.line}`, borderRadius: 12, padding: '12px 14px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 700, color: CRMC.ink2, textTransform: 'uppercase', letterSpacing: 0.6, marginRight: 4 }}>
-                  <Zap size={14} aria-hidden="true" color={CRMC.primary} /> Análises
-                </span>
-                {ANALISES.map(a => { const nA = doPipeBase.filter(a.f).length; const on = analise === a.k;
-                  return (
-                    <button key={a.k} title={a.d} onClick={() => { const v = on ? null : a.k; setAnalise(v); if (v && a.ganho) { setMostrarFechados(true); setFiltroGanho(null); } }}
-                      style={{ fontFamily: 'inherit', fontSize: 12.5, fontWeight: on ? 600 : 500, padding: '5px 11px', borderRadius: 20, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6,
-                        border: `1px solid ${on ? CRMC.primary : CRMC.line}`, background: on ? CRMC.primarySoft : CRMC.surface, color: on ? CRMC.primary : CRMC.ink2 }}>
-                      {a.r}<span style={{ fontSize: 11, fontWeight: 700, padding: '0 6px', borderRadius: 9, background: nA ? (a.k === 'suspeitos' || a.k === 'fat_atrasado' ? CRMC.lossSoft : CRMC.lineSoft) : CRMC.lineSoft, color: nA && (a.k === 'suspeitos' || a.k === 'fat_atrasado') ? CRMC.loss : CRMC.ink2 }}>{nA}</span>
-                    </button>
-                  ); })}
-                {visoesSalvas.map((v, q) => { const on = analise === `salva:${q}`;
-                  return (
-                    <span key={`s${q}`} style={{ display: 'inline-flex', alignItems: 'center', border: `1px solid ${on ? '#7C3AED' : CRMC.line}`, borderRadius: 20, overflow: 'hidden' }}>
-                      <button onClick={() => { if (on) { setAnalise(null); setFiltroCustom(FILTRO_VAZIO); } else { setFiltroCustom(v.filtro); setAnalise(`salva:${q}`); setMostrarFechados(true); } }}
-                        style={{ fontFamily: 'inherit', fontSize: 12.5, fontWeight: on ? 600 : 500, padding: '5px 9px 5px 11px', border: 'none', cursor: 'pointer', background: on ? '#F1EBFE' : CRMC.surface, color: on ? '#7C3AED' : CRMC.ink2 }}>★ {v.nome}</button>
-                      <button aria-label={`Apagar a visão ${v.nome}`} onClick={() => { const nv = visoesSalvas.filter((_, k) => k !== q); setVisoesSalvas(nv); try { localStorage.setItem('crm.visoes', JSON.stringify(nv)); } catch { /* */ } if (on) setAnalise(null); }}
-                        style={{ fontFamily: 'inherit', fontSize: 11, padding: '5px 8px', border: 'none', borderLeft: `1px solid ${CRMC.line}`, cursor: 'pointer', background: CRMC.surface, color: CRMC.ink3 }}>✕</button>
-                    </span>
-                  ); })}
-                <span style={{ flex: 1 }} />
-                <button onClick={() => setPainelFiltro(x => !x)} aria-expanded={painelFiltro}
-                  style={{ fontFamily: 'inherit', fontSize: 12.5, fontWeight: 600, padding: '6px 12px', borderRadius: 8, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6,
-                    border: `1px solid ${filtroCustomAtivo ? CRMC.primary : CRMC.line}`, background: filtroCustomAtivo ? CRMC.primarySoft : CRMC.surface, color: filtroCustomAtivo ? CRMC.primary : CRMC.ink2 }}>
-                  <SlidersHorizontal size={14} aria-hidden="true" /> Filtro personalizado{filtroCustomAtivo ? ' · ativo' : ''}
-                </button>
-              </div>
-              {anAtiva && analise !== 'custom' && !analise?.startsWith('salva:') && (
-                <div style={{ fontSize: 12, color: CRMC.ink2, marginTop: 8 }}>{ANALISES.find(a => a.k === analise)?.d} · <strong>{doPipe.length}</strong> na tela · <button onClick={() => setAnalise(null)} style={{ fontFamily: 'inherit', fontSize: 12, border: 'none', background: 'none', color: CRMC.primary, cursor: 'pointer', padding: 0 }}>limpar</button></div>
+          {pipeline === 'vendas' && (analise || painelFiltro) && (
+            <section aria-label="Análise e filtros" style={{ background: CRMC.surface, border: `1px solid ${analise ? CRMC.primary + '55' : CRMC.line}`, borderRadius: 12, padding: '10px 14px' }}>
+              {analise && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontSize: 12.5, color: CRMC.ink2 }}>
+                  <Zap size={14} aria-hidden="true" color={CRMC.primary} />
+                  <strong style={{ color: CRMC.primary }}>{ANALISES.find(x => x.k === analise)?.r || (analise === 'custom' ? 'Filtro personalizado' : `★ ${visoesSalvas[Number(analise.split(':')[1])]?.nome || 'Visão salva'}`)}</strong>
+                  <span>{ANALISES.find(x => x.k === analise)?.d || 'critérios do filtro personalizado'}</span>
+                  <span>· <strong>{doPipe.length}</strong> na tela</span>
+                  <span style={{ flex: 1 }} />
+                  <button onClick={() => setAnalise(null)} style={{ fontFamily: 'inherit', fontSize: 12.5, border: `1px solid ${CRMC.line}`, borderRadius: 7, padding: '4px 10px', background: CRMC.surface, color: CRMC.ink2, cursor: 'pointer' }}>Limpar</button>
+                </div>
               )}
               {painelFiltro && (
-                <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${CRMC.lineSoft}`, display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', alignItems: 'end' }}>
+                <div style={{ marginTop: analise ? 10 : 0, paddingTop: analise ? 10 : 0, borderTop: `1px solid ${CRMC.lineSoft}`, display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', alignItems: 'end' }}>
                   <label style={{ fontSize: 11.5, color: CRMC.ink2, fontWeight: 500 }}>Etapa
                     <FiltroMulti valor={fc.etapas} onChange={v => setFiltroCustom(f => ({ ...f, etapas: v }))} largura="100%" fonte={12.5}
                       opcoes={etapas.filter(e => e.pipeline_id === 'vendas').map(e => ({ v: e.id, r: e.nome }))} />
@@ -26377,7 +26410,7 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
               )}
             </section>
           )}
-          {pipeline === 'vendas' && (() => {
+          {pipeline === 'vendas' && mostrarFechados && (() => {
             const ganhosP = doPipeBase.filter(n => etapaPorId[n.etapa_id]?.tipo === 'ganho');
             const cont = (k) => ganhosP.filter(n => sitDe(n) === k).length;
             return (
