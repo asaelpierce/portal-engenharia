@@ -26815,9 +26815,13 @@ function CRMDashboard({ negocios, empresas, atividades, etapas, devemFechar, res
   // indicadores do briefing (dados reais do CRM; "deve fechar" segue a regra da Diretoria)
   const probEt = (n) => n.probabilidade ?? etapaPorId[n.etapa_id]?.probabilidade ?? 0;
   const ponderado = abertos.reduce((x, n) => x + (Number(n.valor) || 0) * (probEt(n) / 100), 0);
-  const decididos = ganhos.length + perdidos.length;
-  const convQ = decididos ? ganhos.length / decididos : null;
-  const convV = (soma(ganhos) + soma(perdidos)) ? soma(ganhos) / (soma(ganhos) + soma(perdidos)) : null;
+  // conversão = a régua da Diretoria: o que virou pedido ÷ TUDO o que foi proposto (inclui em aberto e perdidos).
+  // Ganho ÷ (ganho + perdido) inflava o número, porque quase ninguém marca a proposta como perdida.
+  const propostosQ = ganhos.length + perdidos.length + abertos.length;
+  const propostosV = soma(ganhos) + soma(perdidos) + soma(abertos);
+  const convV = propostosV ? soma(ganhos) / propostosV : null;
+  const convQ = propostosQ ? ganhos.length / propostosQ : null;
+  const convDecV = (soma(ganhos) + soma(perdidos)) ? soma(ganhos) / (soma(ganhos) + soma(perdidos)) : null;
   const aguardando = abertos.filter(n => etapaPorId[n.etapa_id]?.codigo === 'proposta');
   const comTarefa = new Set(atividades.filter(a => a.negocio_id).map(a => a.negocio_id));
   const semAcao = abertos.filter(n => !comTarefa.has(n.id));
@@ -26846,7 +26850,9 @@ function CRMDashboard({ negocios, empresas, atividades, etapas, devemFechar, res
     { t: 'Pipeline ponderado', v: moeda(ponderado), s: 'valor × chance da etapa', h: 'Soma de cada negócio aberto multiplicado pela chance da etapa dele' },
     { t: 'Ganhos', v: moeda(soma(ganhos)), s: `${ganhos.length} pedidos no funil`, cor: CRMC.win },
     { t: 'Perdidos', v: moeda(soma(perdidos)), s: `${perdidos.length} negócios`, cor: CRMC.loss },
-    { t: 'Taxa de conversão', v: convQ == null ? '—' : `${Math.round(convQ * 100)}%`, s: convV == null ? 'sem decisões ainda' : `em quantidade · ${Math.round(convV * 100)}% em valor`, h: 'Ganhos ÷ (ganhos + perdidos)' },
+    { t: 'Taxa de conversão', v: convV == null ? '—' : `${Math.round(convV * 100)}%`,
+      s: convV == null ? 'sem propostas ainda' : `em valor · ${Math.round(convQ * 100)}% em quantidade`,
+      h: `Valor que virou pedido ÷ valor total proposto em 2026 (inclui em aberto e perdidos), a mesma régua da Diretoria.${convDecV != null ? ` Só entre as já decididas (ganho × perdido): ${Math.round(convDecV * 100)}%.` : ''}` },
     { t: 'Propostas aguardando retorno', v: String(aguardando.length), s: `${moeda(soma(aguardando))} em "Proposta enviada"`, cor: aguardando.length ? CRMC.warn : undefined },
     { t: 'Sem próxima ação', v: String(semAcao.length), s: `abertos sem tarefa · ${moeda(soma(semAcao))}`, cor: semAcao.length ? CRMC.warn : CRMC.win },
     { t: 'Devem fechar', v: moeda(soma(fecham)), s: `${fecham.length} pedidos · valor cheio`, cor: CRMC.win, h: 'Em cada etapa de negociação fecham negócios × chance, escolhidos pelo relacionamento do cliente' },
