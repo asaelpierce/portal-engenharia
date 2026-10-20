@@ -25972,7 +25972,14 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
   const [relCli, setRelCli] = useState({});
   const [fatPrev, setFatPrev] = useState({});
   const [sitBr, setSitBr] = useState({});        // BR -> v_crm_br_situacao
-  const [filtroGanho, setFiltroGanho] = useState(null);   // carteira | parcial | pausado | faturado | sem   // BR -> { data, n } data prevista de faturamento do pedido no Sankhya
+  const [filtroGanho, setFiltroGanho] = useState(null);   // carteira | parcial | pausado | faturado | sem
+  const [analise, setAnalise] = useState(null);           // chave da análise inteligente ou 'custom'
+  const [painelFiltro, setPainelFiltro] = useState(false);
+  const FILTRO_VAZIO = { sits: [], valorMin: '', atrasoMin: '', pedidoDias: '', semAcao: false, prevVencida: false, etapas: [] };
+  const [filtroCustom, setFiltroCustom] = useState(FILTRO_VAZIO);
+  const [visoesSalvas, setVisoesSalvas] = useState(() => { try { return JSON.parse(localStorage.getItem('crm.visoes') || '[]'); } catch { return []; } });
+  const [atualizadoEm, setAtualizadoEm] = useState(null);
+  const quadroRef = useRef(null); const pan = useRef(null);   // arrastar o quadro com o mouse   // BR -> { data, n } data prevista de faturamento do pedido no Sankhya
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState(null);
   const [aviso, setAviso] = useState(null);
@@ -26015,11 +26022,11 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
         supabase.from('comercial_vendedor_email').select('vendedor,ativo,em_copia').then(r => r.data || []),
         currentUser?.email ? supabase.from('v_crm_usuario').select('*').ilike('email', currentUser.email).maybeSingle().then(r => r.data) : Promise.resolve(null),
       ]);
-      setEtapas(et); setNegocios(ng); setEmpresas(em); setAtividades(at);
-      const [{ data: cp }, { data: aj }, { data: sb }] = await Promise.all([
+      setEtapas(et); setNegocios(ng); setEmpresas(em); setAtividades(at); setAtualizadoEm(new Date());
+      const [{ data: cp }, { data: aj }, sb] = await Promise.all([
         supabase.from('comercial_pedido_pendente').select('nunota,br,dt_faturamento_prevista').not('br', 'is', null).limit(5000),
         supabase.from('v_crm_faturamento_ajuste').select('br,nunota_pedido,nova_data,motivo').limit(5000),
-        supabase.from('v_crm_br_situacao').select('*').limit(10000),
+        lerTudo('v_crm_br_situacao'),   // passa de 1.000 BRs: lê em páginas (antes cortava e caía em "sem pedido")
       ]);
       setSitBr(Object.fromEntries((sb || []).map(x => [x.br, x])));
       const ajPed = Object.fromEntries((aj || []).map(a => [String(a.nunota_pedido), a]));
@@ -26078,8 +26085,46 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
     return x?.situacao || 'sem';
   };
   const doPipeBase = negocios.filter(n => n.pipeline_id === pipeline && (!resp || n.responsavel === resp) && casaBusca(n));
+  // ---- análises inteligentes (regras fixas sobre dados reais) e filtro personalizado ----
+  const hojeIsoF = new Date().toISOString().slice(0, 10);
+  const diasAte = (d) => (d ? Math.floor((Date.now() - new Date(`${String(d).slice(0, 10)}T00:00:00`).getTime()) / 86400000) : null);
+  const infoGanho = (n) => {
+    const sg = sitDe(n); const sb = n.br ? sitBr[n.br] : null; const fp = n.br ? fatPrev[n.br] : null;
+    return { sg, aberto: sg === 'carteira' || sg === 'parcial', atraso: fp?.data && fp.data < hojeIsoF ? diasAte(fp.data) : 0,
+      pedidoDias: sb?.pedido_desde ? diasAte(sb.pedido_desde) : null, notaDias: sb?.ultima_nota ? diasAte(sb.ultima_nota) : null };
+  };
+  const ANALISES = [
+    { k: 'fat_atrasado', r: 'Faturamento atrasado', d: 'ganhos em carteira ou parciais com a data de faturamento vencida (já considera as datas reprogramadas)', ganho: true,
+      f: n => { const x = infoGanho(n); return x.aberto && x.atraso > 0; } },
+    { k: 'carteira_antiga', r: 'Em carteira há mais de 60 dias', d: 'pedido aberto há 60 dias ou mais, ainda com saldo', ganho: true,
+      f: n => { const x = infoGanho(n); return x.aberto && (x.pedidoDias ?? 0) >= 60; } },
+    { k: 'suspeitos', r: 'Possivelmente suspenso ou cancelado', d: 'em carteira com faturamento atrasado 60+ dias ou pedido aberto há 180+ dias — confirmar com o cliente e o PCP', ganho: true,
+      f: n => { const x = infoGanho(n); return x.aberto && (x.atraso >= 60 || (x.pedidoDias ?? 0) >= 180); } },
+    { k: 'parcial_parado', r: 'Parcial sem nota há 60+ dias', d: 'já faturou uma parte e não sai nota há 60 dias ou mais', ganho: true,
+      f: n => { const x = infoGanho(n); return x.sg === 'parcial' && (x.notaDias ?? 0) >= 60; } },
+    { k: 'pausados', r: 'Pausados / suspensos', d: 'marcados como pausados no CRM ou com OP suspensa no Sankhya', ganho: true, f: n => sitDe(n) === 'pausado' },
+    { k: 'grandes_sem_acao', r: 'Acima de R$ 200 mil sem próxima ação', d: 'negociações abertas grandes sem nenhuma tarefa agendada', ganho: false,
+      f: n => etapaPorId[n.etapa_id]?.tipo === 'aberta' && valorDe(n) >= 200000 && riscoDe(n).semAcao },
+    { k: 'previsao_vencida', r: 'Previsão de fechamento vencida', d: 'negociações abertas com o mês previsto já passado', ganho: false,
+      f: n => etapaPorId[n.etapa_id]?.tipo === 'aberta' && riscoDe(n).prevV },
+  ];
+  const fc = filtroCustom;
+  const filtroCustomFn = (n) => {
+    const tipo = etapaPorId[n.etapa_id]?.tipo; const x = infoGanho(n);
+    if (fc.etapas.length && !fc.etapas.includes(n.etapa_id)) return false;
+    if (fc.sits.length && !(tipo === 'ganho' && fc.sits.includes(x.sg))) return false;
+    if (crmNum(fc.valorMin) != null && valorDe(n) < crmNum(fc.valorMin)) return false;
+    if (crmNum(fc.atrasoMin) != null && !(x.atraso >= crmNum(fc.atrasoMin))) return false;
+    if (crmNum(fc.pedidoDias) != null && !((x.pedidoDias ?? -1) >= crmNum(fc.pedidoDias))) return false;
+    if (fc.semAcao && !(tipo === 'aberta' && riscoDe(n).semAcao)) return false;
+    if (fc.prevVencida && !(tipo === 'aberta' && riscoDe(n).prevV)) return false;
+    return true;
+  };
+  const filtroCustomAtivo = JSON.stringify(fc) !== JSON.stringify(FILTRO_VAZIO);
+  const anAtiva = analise === 'custom' ? { f: filtroCustomFn } : ANALISES.find(a => a.k === analise) || (analise?.startsWith('salva:') ? { f: filtroCustomFn } : null);
   const doPipe = (!filtroRisco ? doPipeBase : doPipeBase.filter(n => { const r = riscoDe(n); return filtroRisco === 'atencao' ? (r.atrasada || r.prevV) : r.semAcao; }))
-    .filter(n => !filtroGanho || etapaPorId[n.etapa_id]?.tipo !== 'ganho' || sitDe(n) === filtroGanho);
+    .filter(n => !filtroGanho || etapaPorId[n.etapa_id]?.tipo !== 'ganho' || sitDe(n) === filtroGanho)
+    .filter(n => !anAtiva || anAtiva.f(n));
   const probDe = (n) => n.probabilidade ?? etapaPorId[n.etapa_id]?.probabilidade ?? null;
   const valorDe = (n) => Number(n.pipeline_id === 'leads' ? n.potencial : n.valor) || 0;
   const botao = (ativo) => ({ fontFamily: 'inherit', fontSize: 12.5, fontWeight: ativo ? 600 : 500, padding: '7px 13px', borderRadius: 8, cursor: 'pointer',
@@ -26148,7 +26193,20 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
             {perfil.ve_tudo ? (resp ? `Carteira de ${resp}` : 'Toda a equipe') : `Sua carteira · ${perfil.vendedor}`}
           </span>
         </div>
-        {segmento([['dashboard', 'Dashboard'], ['funil', 'Funil'], ['tarefas', <span key="t">Tarefas{atividades.length ? <span style={{ marginLeft: 6, fontSize: 11, fontWeight: 700, padding: '1px 7px', borderRadius: 10, background: atrasadasTot ? CRMC.lossSoft : CRMC.lineSoft, color: atrasadasTot ? CRMC.loss : CRMC.ink2 }}>{atividades.filter(a => !resp || a.responsavel === resp).length}</span> : null}</span>], ['calendario', 'Calendário'], ['empresas', 'Empresas']], aba, setAba, true)}
+        <nav aria-label="Seções do CRM" style={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+          {[['dashboard', 'Dashboard', LayoutGrid], ['funil', 'Funil', Workflow], ['tarefas', 'Tarefas', ClipboardList], ['calendario', 'Calendário', CalendarDays], ['empresas', 'Empresas', Building2]].map(([k, r, Ic]) => {
+            const on = aba === k; const nT = k === 'tarefas' ? atividades.filter(a => !resp || a.responsavel === resp).length : 0;
+            return (
+              <button key={k} onClick={() => setAba(k)} aria-current={on ? 'page' : undefined}
+                style={{ fontFamily: 'inherit', fontSize: 13, fontWeight: on ? 600 : 500, padding: '8px 12px', borderRadius: 8, border: 'none', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7,
+                  background: on ? 'rgba(255,255,255,.14)' : 'transparent', color: on ? '#fff' : 'rgba(255,255,255,.72)', boxShadow: on ? 'inset 0 -2px 0 #8FB4E8' : 'none', transition: 'all .15s' }}
+                onMouseEnter={e => { if (!on) e.currentTarget.style.color = '#fff'; }} onMouseLeave={e => { if (!on) e.currentTarget.style.color = 'rgba(255,255,255,.72)'; }}>
+                <Ic size={15} aria-hidden="true" />{r}
+                {nT > 0 && <span style={{ fontSize: 10.5, fontWeight: 700, padding: '1px 7px', borderRadius: 10, background: atrasadasTot ? '#E5484D' : 'rgba(255,255,255,.2)', color: '#fff' }}>{nT}</span>}
+              </button>
+            );
+          })}
+        </nav>
         <span style={{ flex: 1 }} />
         <select className="crm-resp" value={resp} onChange={e => setResp(e.target.value)} disabled={!perfil.ve_tudo} style={{ ...campo, minWidth: 190, border: 'none', height: 36 }}
           aria-label="Responsável" title={perfil.ve_tudo ? '' : 'Vendedor vê os próprios negócios'}>
@@ -26160,6 +26218,14 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
           <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Buscar BR, empresa, título ou concorrente" aria-label="Buscar"
             className="crm-busca" style={{ ...campo, minWidth: 300, paddingLeft: 30, border: 'none', height: 36, boxSizing: 'border-box' }} />
         </div>
+        <button onClick={() => carregar()} title={atualizadoEm ? `Dados de ${atualizadoEm.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })} — clique para atualizar` : 'Atualizar'}
+          style={{ fontFamily: 'inherit', fontSize: 12, padding: '8px 10px', borderRadius: 8, border: '1px solid rgba(255,255,255,.22)', background: 'transparent', color: 'rgba(255,255,255,.85)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          <RefreshCw size={13} aria-hidden="true" />{atualizadoEm ? atualizadoEm.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : ''}
+        </button>
+        <span title={currentUser?.nome || currentUser?.email || ''} aria-hidden="true"
+          style={{ width: 32, height: 32, borderRadius: 16, background: crmCorPessoa(currentUser?.nome), color: '#fff', fontSize: 12, fontWeight: 700, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
+          {crmIniciais(currentUser?.nome || currentUser?.email)}
+        </span>
         {!(typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('pagina') === 'crm') && (
           <a href="/?pagina=crm" target="_blank" rel="noopener noreferrer" title="Abre o CRM numa aba separada do navegador, em tela inteira"
             style={{ fontSize: 12.5, fontWeight: 600, padding: '8px 12px', borderRadius: 8, border: '1px solid rgba(255,255,255,.22)', color: '#fff', textDecoration: 'none', whiteSpace: 'nowrap' }}>
@@ -26227,6 +26293,78 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
               </div>
             );
           })()}
+          {pipeline === 'vendas' && (
+            <section aria-label="Análises inteligentes" style={{ background: CRMC.surface, border: `1px solid ${CRMC.line}`, borderRadius: 12, padding: '12px 14px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 700, color: CRMC.ink2, textTransform: 'uppercase', letterSpacing: 0.6, marginRight: 4 }}>
+                  <Zap size={14} aria-hidden="true" color={CRMC.primary} /> Análises
+                </span>
+                {ANALISES.map(a => { const nA = doPipeBase.filter(a.f).length; const on = analise === a.k;
+                  return (
+                    <button key={a.k} title={a.d} onClick={() => { const v = on ? null : a.k; setAnalise(v); if (v && a.ganho) { setMostrarFechados(true); setFiltroGanho(null); } }}
+                      style={{ fontFamily: 'inherit', fontSize: 12.5, fontWeight: on ? 600 : 500, padding: '5px 11px', borderRadius: 20, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6,
+                        border: `1px solid ${on ? CRMC.primary : CRMC.line}`, background: on ? CRMC.primarySoft : CRMC.surface, color: on ? CRMC.primary : CRMC.ink2 }}>
+                      {a.r}<span style={{ fontSize: 11, fontWeight: 700, padding: '0 6px', borderRadius: 9, background: nA ? (a.k === 'suspeitos' || a.k === 'fat_atrasado' ? CRMC.lossSoft : CRMC.lineSoft) : CRMC.lineSoft, color: nA && (a.k === 'suspeitos' || a.k === 'fat_atrasado') ? CRMC.loss : CRMC.ink2 }}>{nA}</span>
+                    </button>
+                  ); })}
+                {visoesSalvas.map((v, q) => { const on = analise === `salva:${q}`;
+                  return (
+                    <span key={`s${q}`} style={{ display: 'inline-flex', alignItems: 'center', border: `1px solid ${on ? '#7C3AED' : CRMC.line}`, borderRadius: 20, overflow: 'hidden' }}>
+                      <button onClick={() => { if (on) { setAnalise(null); setFiltroCustom(FILTRO_VAZIO); } else { setFiltroCustom(v.filtro); setAnalise(`salva:${q}`); setMostrarFechados(true); } }}
+                        style={{ fontFamily: 'inherit', fontSize: 12.5, fontWeight: on ? 600 : 500, padding: '5px 9px 5px 11px', border: 'none', cursor: 'pointer', background: on ? '#F1EBFE' : CRMC.surface, color: on ? '#7C3AED' : CRMC.ink2 }}>★ {v.nome}</button>
+                      <button aria-label={`Apagar a visão ${v.nome}`} onClick={() => { const nv = visoesSalvas.filter((_, k) => k !== q); setVisoesSalvas(nv); try { localStorage.setItem('crm.visoes', JSON.stringify(nv)); } catch { /* */ } if (on) setAnalise(null); }}
+                        style={{ fontFamily: 'inherit', fontSize: 11, padding: '5px 8px', border: 'none', borderLeft: `1px solid ${CRMC.line}`, cursor: 'pointer', background: CRMC.surface, color: CRMC.ink3 }}>✕</button>
+                    </span>
+                  ); })}
+                <span style={{ flex: 1 }} />
+                <button onClick={() => setPainelFiltro(x => !x)} aria-expanded={painelFiltro}
+                  style={{ fontFamily: 'inherit', fontSize: 12.5, fontWeight: 600, padding: '6px 12px', borderRadius: 8, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6,
+                    border: `1px solid ${filtroCustomAtivo ? CRMC.primary : CRMC.line}`, background: filtroCustomAtivo ? CRMC.primarySoft : CRMC.surface, color: filtroCustomAtivo ? CRMC.primary : CRMC.ink2 }}>
+                  <SlidersHorizontal size={14} aria-hidden="true" /> Filtro personalizado{filtroCustomAtivo ? ' · ativo' : ''}
+                </button>
+              </div>
+              {anAtiva && analise !== 'custom' && !analise?.startsWith('salva:') && (
+                <div style={{ fontSize: 12, color: CRMC.ink2, marginTop: 8 }}>{ANALISES.find(a => a.k === analise)?.d} · <strong>{doPipe.length}</strong> na tela · <button onClick={() => setAnalise(null)} style={{ fontFamily: 'inherit', fontSize: 12, border: 'none', background: 'none', color: CRMC.primary, cursor: 'pointer', padding: 0 }}>limpar</button></div>
+              )}
+              {painelFiltro && (
+                <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${CRMC.lineSoft}`, display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', alignItems: 'end' }}>
+                  <label style={{ fontSize: 11.5, color: CRMC.ink2, fontWeight: 500 }}>Etapa
+                    <FiltroMulti valor={fc.etapas} onChange={v => setFiltroCustom(f => ({ ...f, etapas: v }))} largura="100%" fonte={12.5}
+                      opcoes={etapas.filter(e => e.pipeline_id === 'vendas').map(e => ({ v: e.id, r: e.nome }))} />
+                  </label>
+                  <label style={{ fontSize: 11.5, color: CRMC.ink2, fontWeight: 500 }}>Situação do ganho
+                    <FiltroMulti valor={fc.sits} onChange={v => setFiltroCustom(f => ({ ...f, sits: v }))} largura="100%" fonte={12.5}
+                      opcoes={['carteira', 'parcial', 'pausado', 'faturado', 'sem'].map(k => ({ v: k, r: CRM_SIT_GANHO[k].r }))} />
+                  </label>
+                  <label style={{ fontSize: 11.5, color: CRMC.ink2, fontWeight: 500 }}>Valor mínimo (R$)
+                    <input value={fc.valorMin} onChange={e => setFiltroCustom(f => ({ ...f, valorMin: e.target.value }))} inputMode="decimal" placeholder="ex.: 100.000" style={{ ...campo, width: '100%', boxSizing: 'border-box', marginTop: 3 }} />
+                  </label>
+                  <label style={{ fontSize: 11.5, color: CRMC.ink2, fontWeight: 500 }}>Faturamento atrasado há (dias, mínimo)
+                    <input value={fc.atrasoMin} onChange={e => setFiltroCustom(f => ({ ...f, atrasoMin: e.target.value }))} inputMode="numeric" placeholder="ex.: 30" style={{ ...campo, width: '100%', boxSizing: 'border-box', marginTop: 3 }} />
+                  </label>
+                  <label style={{ fontSize: 11.5, color: CRMC.ink2, fontWeight: 500 }}>Pedido aberto há (dias, mínimo)
+                    <input value={fc.pedidoDias} onChange={e => setFiltroCustom(f => ({ ...f, pedidoDias: e.target.value }))} inputMode="numeric" placeholder="ex.: 90" style={{ ...campo, width: '100%', boxSizing: 'border-box', marginTop: 3 }} />
+                  </label>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12.5, color: CRMC.ink2 }}>
+                    <label style={{ display: 'flex', gap: 6, alignItems: 'center', cursor: 'pointer' }}><input type="checkbox" checked={fc.semAcao} onChange={e => setFiltroCustom(f => ({ ...f, semAcao: e.target.checked }))} /> sem próxima ação</label>
+                    <label style={{ display: 'flex', gap: 6, alignItems: 'center', cursor: 'pointer' }}><input type="checkbox" checked={fc.prevVencida} onChange={e => setFiltroCustom(f => ({ ...f, prevVencida: e.target.checked }))} /> previsão de fechamento vencida</label>
+                  </div>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', gridColumn: '1 / -1' }}>
+                    <button onClick={() => { setAnalise(filtroCustomAtivo ? 'custom' : null); if (fc.sits.length || crmNum(fc.atrasoMin) != null || crmNum(fc.pedidoDias) != null) setMostrarFechados(true); }}
+                      style={{ fontFamily: 'inherit', fontSize: 12.5, fontWeight: 600, padding: '7px 14px', borderRadius: 8, border: 'none', background: CRMC.primary, color: '#fff', cursor: 'pointer' }}>Aplicar</button>
+                    <button onClick={() => { setFiltroCustom(FILTRO_VAZIO); if (analise === 'custom' || analise?.startsWith('salva:')) setAnalise(null); }} style={botao(false)}>Limpar</button>
+                    <button disabled={!filtroCustomAtivo} onClick={() => {
+                        const nome = window.prompt('Nome desta visão (ex.: Carteira atrasada > R$ 100 mil)'); if (!nome || !nome.trim()) return;
+                        const nv = [...visoesSalvas, { nome: nome.trim(), filtro: fc }]; setVisoesSalvas(nv);
+                        try { localStorage.setItem('crm.visoes', JSON.stringify(nv)); } catch { /* */ }
+                        setAnalise(`salva:${nv.length - 1}`);
+                      }} style={{ ...botao(false), opacity: filtroCustomAtivo ? 1 : 0.5 }}>★ Salvar como visão</button>
+                    <span style={{ fontSize: 12, color: CRMC.ink3, alignSelf: 'center' }}>{filtroCustomAtivo ? `${doPipeBase.filter(filtroCustomFn).length} negócio(s) atendem` : 'escolha um ou mais critérios'} · as visões salvas ficam neste navegador</span>
+                  </div>
+                </div>
+              )}
+            </section>
+          )}
           {pipeline === 'vendas' && (() => {
             const ganhosP = doPipeBase.filter(n => etapaPorId[n.etapa_id]?.tipo === 'ganho');
             const cont = (k) => ganhosP.filter(n => sitDe(n) === k).length;
@@ -26253,7 +26391,13 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
           )}
 
           {visao === 'quadro' ? (
-            <div style={{ overflowX: 'auto', paddingBottom: 10, scrollbarGutter: 'stable' }}>
+            <div ref={quadroRef} title="Clique no fundo e arraste para os lados"
+              onMouseDown={e => { if (e.button !== 0 || e.target.closest('article, button, a, input, select, textarea')) return;
+                pan.current = { x: e.clientX, l: quadroRef.current.scrollLeft }; quadroRef.current.style.cursor = 'grabbing'; e.preventDefault(); }}
+              onMouseMove={e => { if (!pan.current) return; quadroRef.current.scrollLeft = pan.current.l - (e.clientX - pan.current.x); }}
+              onMouseUp={() => { pan.current = null; if (quadroRef.current) quadroRef.current.style.cursor = 'grab'; }}
+              onMouseLeave={() => { pan.current = null; if (quadroRef.current) quadroRef.current.style.cursor = 'grab'; }}
+              style={{ overflowX: 'auto', paddingBottom: 10, scrollbarGutter: 'stable', cursor: 'grab', userSelect: pan.current ? 'none' : 'auto' }}>
               <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', width: 'max-content' }}>
                 {etapasPipe.map(et => {
                   const cards = doPipe.filter(n => n.etapa_id === et.id).sort((a, b) => valorDe(b) - valorDe(a));
@@ -26317,12 +26461,13 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
                               </div>
                               <div style={{ fontSize: 13.5, fontWeight: 600, marginTop: 5, lineHeight: 1.3, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }} title={empresa}>{empresa}</div>
                               {!n.br && n.titulo && <div style={{ fontSize: 12, color: CRMC.ink2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={n.titulo}>{n.titulo}</div>}
-                              <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 6 }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '4px 8px', marginTop: 6, flexWrap: 'wrap', minWidth: 0 }}>
                                 <span style={{ fontSize: 17, fontWeight: 700, fontVariantNumeric: 'tabular-nums', letterSpacing: -0.3 }}>{valorDe(n) ? moeda(valorDe(n)) : '—'}</span>
                                 {(() => { const sg = sitDe(n); if (!sg) return prob != null ? <span style={{ fontSize: 11.5, color: CRMC.ink3 }}>{prob}%</span> : null;
                                   const c = CRM_SIT_GANHO[sg]; const x = n.br ? sitBr[n.br] : null;
-                                  return <span title={c.d} style={{ fontSize: 11, fontWeight: 600, color: c.cor, background: c.bg, padding: '2px 8px', borderRadius: 10, whiteSpace: 'nowrap' }}>
-                                    {c.r}{sg === 'parcial' && x ? ` · ${moeda(x.faturado)} faturado` : ''}</span>; })()}
+                                  return <span title={`${c.r}: ${c.d}${x?.faturado ? ` · faturado ${moeda(x.faturado)}` : ''}`} style={{ fontSize: 11, fontWeight: 600, color: c.cor, background: c.bg, padding: '2px 8px', borderRadius: 10,
+                                    whiteSpace: 'nowrap', maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                    {sg === 'parcial' ? `Parcial${x ? ` · ${moeda(x.faturado)} faturado` : ''}` : c.r}</span>; })()}
                                 {n.pipeline_id === 'leads' && n.score != null && <span style={{ fontSize: 11.5, color: CRMC.ink3 }}>score {n.score}</span>}
                               </div>
                               <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 7, fontSize: 12, color: CRMC.ink2 }}>
@@ -26394,6 +26539,7 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
               { c: 'titulo', t: pipeline === 'leads' ? 'Lead' : 'Negócio' }, { c: 'empresa', t: 'Empresa' }, { c: 'etapa', t: 'Etapa' },
               { c: 'valor', t: pipeline === 'leads' ? 'Potencial' : 'Valor', r: true }, { c: 'prob', t: pipeline === 'leads' ? 'Score' : 'Prob.', r: true },
               { c: 'fecha', t: 'Deve fechar' }, { c: 'previsao', t: pipeline === 'leads' ? 'Origem' : 'Previsão' },
+              ...(pipeline === 'vendas' ? [{ c: 'sit', t: 'Situação do ganho' }, { c: 'fat', t: 'Faturamento' }] : []),
               { c: 'responsavel', t: 'Responsável' }, { c: 'concorrente', t: 'Concorrente' }, { c: 'proxima', t: 'Próxima tarefa' }, { c: 'dias', t: 'Dias na etapa', r: true },
             ];
             const linhasL = doPipe.filter(n => etapasPipe.some(e => e.id === n.etapa_id)).map(n => {
@@ -26403,7 +26549,8 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
                 valor: valorDe(n), prob: prob ?? -1, fecha: devemFechar.has(n.id) ? 1 : 0,
                 previsao: n.pipeline_id === 'leads' ? (n.fonte || '') : (n.previsao_fechamento || ''), responsavel: n.responsavel || '',
                 concorrente: n.concorrente || '', proxima: prox ? new Date(prox.vencimento || '2999-01-01').getTime() : Infinity, prox,
-                dias: diasDesde(n.etapa_desde) ?? 0 };
+                dias: diasDesde(n.etapa_desde) ?? 0,
+                sit: sitDe(n) || '', fatInfo: n.br ? fatPrev[n.br] : null, fat: (n.br && fatPrev[n.br]?.data) || '' };
             }).sort((a, b) => {
               const va = a[ordem.c], vb = b[ordem.c];
               const r = typeof va === 'number' && typeof vb === 'number' ? va - vb : String(va ?? '').localeCompare(String(vb ?? ''));
@@ -26440,6 +26587,17 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
                                        : <span style={{ color: CRMC.ink3 }}>—</span>}
                             </td>
                             <td style={{ padding: '7px 10px', color: CRMC.ink2 }}>{l.previsao || '—'}</td>
+                            {pipeline === 'vendas' && (
+                              <td style={{ padding: '7px 10px', whiteSpace: 'nowrap' }}>
+                                {l.sit ? <span style={{ fontSize: 11, fontWeight: 600, color: CRM_SIT_GANHO[l.sit].cor, background: CRM_SIT_GANHO[l.sit].bg, padding: '2px 8px', borderRadius: 10 }}>{CRM_SIT_GANHO[l.sit].r}</span> : <span style={{ color: CRMC.ink3 }}>—</span>}
+                              </td>
+                            )}
+                            {pipeline === 'vendas' && (
+                              <td style={{ padding: '7px 10px', whiteSpace: 'nowrap', fontWeight: l.fat && l.fat < new Date().toISOString().slice(0, 10) ? 700 : 400,
+                                color: l.fat && l.fat < new Date().toISOString().slice(0, 10) ? CRMC.loss : CRMC.ink2 }}>
+                                {l.fat ? `${new Date(`${l.fat}T12:00:00`).toLocaleDateString('pt-BR')}${l.fatInfo?.reprog ? ' ↻' : ''}${l.fat < new Date().toISOString().slice(0, 10) ? ` · ${Math.floor((Date.now() - new Date(`${l.fat}T00:00:00`)) / 86400000)}d atraso` : ''}` : '—'}
+                              </td>
+                            )}
                             <td style={{ padding: '7px 10px', color: CRMC.ink2, whiteSpace: 'nowrap' }}>{l.responsavel || '—'}</td>
                             <td style={{ padding: '7px 10px', color: CRMC.ink2 }}>{l.concorrente || '—'}</td>
                             <td style={{ padding: '7px 10px', color: atras ? CRMC.loss : CRMC.ink2, whiteSpace: 'nowrap', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis' }}>
