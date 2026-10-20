@@ -25896,6 +25896,14 @@ const CRM_COR_ETAPA = {
 };
 const CRM_COR_PESSOA = ['#2563EB', '#7C3AED', '#0891B2', '#DB2777', '#EA580C', '#059669', '#4F46E5', '#B45309'];
 const crmCorPessoa = (nome) => { let h = 0; for (const ch of String(nome || '')) h = (h * 31 + ch.charCodeAt(0)) >>> 0; return CRM_COR_PESSOA[h % CRM_COR_PESSOA.length]; };
+// situação do BR ganho (v_crm_br_situacao + pausa marcada no CRM)
+const CRM_SIT_GANHO = {
+  carteira: { r: 'Em carteira', d: 'virou pedido, ainda sem nota', cor: '#1D5FBF', bg: '#E8F0FB' },
+  parcial: { r: 'Faturamento parcial', d: 'parte faturada, pedido com saldo', cor: '#B7791F', bg: '#FDF3E1' },
+  pausado: { r: 'Pausado / suspenso', d: 'marcado no CRM ou OP suspensa no Sankhya', cor: '#475467', bg: '#EEF2F6' },
+  faturado: { r: 'Faturado', d: 'tudo faturado, sem pedido pendente', cor: '#1E8E4F', bg: '#E6F4EC' },
+  sem: { r: 'Sem pedido em aberto', d: 'ganho sem pedido pendente nem nota de venda', cor: '#667085', bg: '#F1F3F6' },
+};
 const crmIniciais = (nome) => String(nome || '?').trim().split(/\s+/).slice(0, 2).map(x => x[0]).join('').toUpperCase();
 // previsão de fechamento é texto "MM/AAAA": vencida = mês anterior ao atual
 const crmPrevVencida = (prev) => { const m = /^(\d{2})\/(\d{4})$/.exec(String(prev || '').trim()); if (!m) return false;
@@ -25962,7 +25970,9 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
   const [vendedores, setVendedores] = useState([]);
   const [perfil, setPerfil] = useState({ ve_tudo: true, vendedor: null });
   const [relCli, setRelCli] = useState({});
-  const [fatPrev, setFatPrev] = useState({});   // BR -> { data, n } data prevista de faturamento do pedido no Sankhya
+  const [fatPrev, setFatPrev] = useState({});
+  const [sitBr, setSitBr] = useState({});        // BR -> v_crm_br_situacao
+  const [filtroGanho, setFiltroGanho] = useState(null);   // carteira | parcial | pausado | faturado | sem   // BR -> { data, n } data prevista de faturamento do pedido no Sankhya
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState(null);
   const [aviso, setAviso] = useState(null);
@@ -26006,10 +26016,12 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
         currentUser?.email ? supabase.from('v_crm_usuario').select('*').ilike('email', currentUser.email).maybeSingle().then(r => r.data) : Promise.resolve(null),
       ]);
       setEtapas(et); setNegocios(ng); setEmpresas(em); setAtividades(at);
-      const [{ data: cp }, { data: aj }] = await Promise.all([
+      const [{ data: cp }, { data: aj }, { data: sb }] = await Promise.all([
         supabase.from('comercial_pedido_pendente').select('nunota,br,dt_faturamento_prevista').not('br', 'is', null).limit(5000),
         supabase.from('v_crm_faturamento_ajuste').select('br,nunota_pedido,nova_data,motivo').limit(5000),
+        supabase.from('v_crm_br_situacao').select('*').limit(10000),
       ]);
+      setSitBr(Object.fromEntries((sb || []).map(x => [x.br, x])));
       const ajPed = Object.fromEntries((aj || []).map(a => [String(a.nunota_pedido), a]));
       const fp = {}; (cp || []).forEach(x => { const a = ajPed[String(x.nunota)]; const dEf = a?.nova_data || x.dt_faturamento_prevista; if (!dEf) return; const o = fp[x.br];
         const reg = { data: dEf, n: 1, reprog: !!a, motivo: a?.motivo || null };
@@ -26059,8 +26071,15 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
     const prevV = n.pipeline_id !== 'leads' && crmPrevVencida(n.previsao_fechamento);
     return { pend, atrasada, prevV, semAcao: pend.length === 0, dias: diasDesde(n.etapa_desde) };
   };
+  const sitDe = (n) => {
+    if (etapaPorId[n.etapa_id]?.tipo !== 'ganho' || n.pipeline_id !== 'vendas') return null;
+    const x = n.br ? sitBr[n.br] : null;
+    if (x?.situacao !== 'faturado' && (n.pausado_em || x?.op_suspensa)) return 'pausado';
+    return x?.situacao || 'sem';
+  };
   const doPipeBase = negocios.filter(n => n.pipeline_id === pipeline && (!resp || n.responsavel === resp) && casaBusca(n));
-  const doPipe = !filtroRisco ? doPipeBase : doPipeBase.filter(n => { const r = riscoDe(n); return filtroRisco === 'atencao' ? (r.atrasada || r.prevV) : r.semAcao; });
+  const doPipe = (!filtroRisco ? doPipeBase : doPipeBase.filter(n => { const r = riscoDe(n); return filtroRisco === 'atencao' ? (r.atrasada || r.prevV) : r.semAcao; }))
+    .filter(n => !filtroGanho || etapaPorId[n.etapa_id]?.tipo !== 'ganho' || sitDe(n) === filtroGanho);
   const probDe = (n) => n.probabilidade ?? etapaPorId[n.etapa_id]?.probabilidade ?? null;
   const valorDe = (n) => Number(n.pipeline_id === 'leads' ? n.potencial : n.valor) || 0;
   const botao = (ativo) => ({ fontFamily: 'inherit', fontSize: 12.5, fontWeight: ativo ? 600 : 500, padding: '7px 13px', borderRadius: 8, cursor: 'pointer',
@@ -26208,6 +26227,24 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
               </div>
             );
           })()}
+          {pipeline === 'vendas' && (() => {
+            const ganhosP = doPipeBase.filter(n => etapaPorId[n.etapa_id]?.tipo === 'ganho');
+            const cont = (k) => ganhosP.filter(n => sitDe(n) === k).length;
+            return (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <span style={{ fontSize: 12, fontWeight: 600, color: CRMC.ink3, textTransform: 'uppercase', letterSpacing: 0.6 }}>Ganhos</span>
+                {[[null, `Todos · ${ganhosP.length}`], ...['carteira', 'parcial', 'pausado', 'faturado', 'sem'].filter(k => k !== 'sem' || cont('sem')).map(k => [k, `${CRM_SIT_GANHO[k].r} · ${cont(k)}`])].map(([k, r]) => {
+                  const on = filtroGanho === k; const c = k ? CRM_SIT_GANHO[k] : { cor: CRMC.ink, bg: CRMC.surface };
+                  return (
+                    <button key={String(k)} onClick={() => { setFiltroGanho(k); if (k) setMostrarFechados(true); }} title={k ? CRM_SIT_GANHO[k].d : 'todos os ganhos'}
+                      style={{ fontFamily: 'inherit', fontSize: 12.5, fontWeight: on ? 600 : 500, padding: '5px 11px', borderRadius: 20, cursor: 'pointer',
+                        border: `1px solid ${on ? c.cor : CRMC.line}`, background: on ? c.bg : CRMC.surface, color: on ? c.cor : CRMC.ink2 }}>{r}</button>
+                  );
+                })}
+                {filtroGanho && <span style={{ fontSize: 12, color: CRMC.ink3 }}>· filtra só a coluna "Ganho — pedido"</span>}
+              </div>
+            );
+          })()}
           {filtroRisco && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, color: CRMC.ink2 }}>
               Mostrando só <strong>{filtroRisco === 'atencao' ? 'as que precisam de atenção' : 'as sem próxima ação'}</strong>
@@ -26282,7 +26319,10 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
                               {!n.br && n.titulo && <div style={{ fontSize: 12, color: CRMC.ink2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={n.titulo}>{n.titulo}</div>}
                               <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 6 }}>
                                 <span style={{ fontSize: 17, fontWeight: 700, fontVariantNumeric: 'tabular-nums', letterSpacing: -0.3 }}>{valorDe(n) ? moeda(valorDe(n)) : '—'}</span>
-                                {prob != null && <span style={{ fontSize: 11.5, color: CRMC.ink3 }}>{prob}%</span>}
+                                {(() => { const sg = sitDe(n); if (!sg) return prob != null ? <span style={{ fontSize: 11.5, color: CRMC.ink3 }}>{prob}%</span> : null;
+                                  const c = CRM_SIT_GANHO[sg]; const x = n.br ? sitBr[n.br] : null;
+                                  return <span title={c.d} style={{ fontSize: 11, fontWeight: 600, color: c.cor, background: c.bg, padding: '2px 8px', borderRadius: 10, whiteSpace: 'nowrap' }}>
+                                    {c.r}{sg === 'parcial' && x ? ` · ${moeda(x.faturado)} faturado` : ''}</span>; })()}
                                 {n.pipeline_id === 'leads' && n.score != null && <span style={{ fontSize: 11.5, color: CRMC.ink3 }}>score {n.score}</span>}
                               </div>
                               <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 7, fontSize: 12, color: CRMC.ink2 }}>
@@ -26583,6 +26623,7 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
 
       {negAberto && (
         <CRMFichaNegocio negocio={negAberto} etapas={etapas} empresa={empPorId[negAberto.empresa_id]} vendedores={vendedores} fatPrevPedido={negAberto.br ? fatPrev[negAberto.br] : null}
+          situacaoGanho={sitDe(negAberto)} sitInfo={negAberto.br ? sitBr[negAberto.br] : null}
           autor={autor} onFechar={() => setAbertoId(null)} onMover={mover} onMudou={carregar} />
       )}
       {empresaAberta && !negAberto && (
@@ -27383,7 +27424,8 @@ function CRMFaturamentoBR({ negocio: n, autor, onMudou }) {
   );
 }
 
-function CRMFichaNegocio({ negocio: n, etapas, empresa, vendedores, autor, onFechar, onMover, onMudou, fatPrevPedido = null }) {
+function CRMFichaNegocio({ negocio: n, etapas, empresa, vendedores, autor, onFechar, onMover, onMudou, fatPrevPedido = null, situacaoGanho = null, sitInfo = null }) {
+  const [pausa, setPausa] = useState(null);   // texto do motivo ao marcar como pausado
   const [ativs, setAtivs] = useState([]);
   const [hist, setHist] = useState([]);
   const [contatos, setContatos] = useState([]);
@@ -27459,6 +27501,39 @@ function CRMFichaNegocio({ negocio: n, etapas, empresa, vendedores, autor, onFec
             ))}
           </div>
           {etAtual?.tipo === 'perdido' && n.motivo_perda && <div style={{ fontSize: 11.5, color: CRMC.loss, marginTop: 6 }}>Motivo: {n.motivo_perda}</div>}
+          {situacaoGanho && (() => { const c = CRM_SIT_GANHO[situacaoGanho];
+            return (
+              <div style={{ marginTop: 10, padding: '9px 11px', borderRadius: 9, background: c.bg, border: `1px solid ${c.cor}33` }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  <strong style={{ fontSize: 13, color: c.cor }}>{c.r}</strong>
+                  <span style={{ fontSize: 12, color: CRMC.ink2 }}>
+                    {situacaoGanho === 'pausado' ? (n.pausado_em ? `${n.pausado_motivo || 'sem motivo'} · ${n.pausado_por || '—'}, ${new Date(n.pausado_em).toLocaleDateString('pt-BR')}` : 'OP suspensa no Sankhya') : c.d}
+                    {sitInfo && sitInfo.faturado > 0 ? ` · faturado ${fmtMoedaCompacta(sitInfo.faturado)} em ${sitInfo.notas} nota(s)` : ''}
+                  </span>
+                  <span style={{ flex: 1 }} />
+                  {situacaoGanho !== 'faturado' && !n.pausado_em && pausa == null && (
+                    <button onClick={() => setPausa('')} style={{ fontFamily: 'inherit', fontSize: 12, padding: '4px 10px', borderRadius: 7, border: `1px solid ${CRMC.line}`, background: CRMC.surface, color: CRMC.ink2, cursor: 'pointer' }}>Marcar como pausado</button>
+                  )}
+                  {n.pausado_em && (
+                    <button onClick={async () => {
+                        await supabase.from('crm_negocio').update({ pausado_em: null, pausado_motivo: null, pausado_por: null }).eq('id', n.id);
+                        await registrar('anotacao', 'Pedido retomado (deixou de estar pausado)'); onMudou(); }}
+                      style={{ fontFamily: 'inherit', fontSize: 12, fontWeight: 600, padding: '4px 10px', borderRadius: 7, border: 'none', background: CRMC.primary, color: '#fff', cursor: 'pointer' }}>Retomar</button>
+                  )}
+                </div>
+                {pausa != null && (
+                  <div style={{ display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
+                    <input autoFocus value={pausa} onChange={e => setPausa(e.target.value)} placeholder="motivo (ex.: cliente pediu para segurar a entrega até janeiro)"
+                      style={{ flex: '1 1 260px', fontFamily: 'inherit', fontSize: 12.5, padding: '6px 9px', borderRadius: 7, border: `1px solid ${CRMC.line}` }} />
+                    <button disabled={!pausa.trim()} onClick={async () => {
+                        await supabase.from('crm_negocio').update({ pausado_em: new Date().toISOString(), pausado_motivo: pausa.trim(), pausado_por: autor }).eq('id', n.id);
+                        await registrar('anotacao', `Pedido pausado/suspenso: ${pausa.trim()}`); setPausa(null); onMudou(); }}
+                      style={{ fontFamily: 'inherit', fontSize: 12.5, fontWeight: 600, padding: '6px 12px', borderRadius: 7, border: 'none', background: '#475467', color: '#fff', cursor: pausa.trim() ? 'pointer' : 'default', opacity: pausa.trim() ? 1 : 0.5 }}>Pausar</button>
+                    <button onClick={() => setPausa(null)} style={{ fontFamily: 'inherit', fontSize: 12.5, padding: '6px 11px', borderRadius: 7, border: `1px solid ${CRMC.line}`, background: CRMC.surface, color: CRMC.ink2, cursor: 'pointer' }}>Cancelar</button>
+                  </div>
+                )}
+              </div>
+            ); })()}
           {fatPrevPedido?.data && (
             <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 8, fontSize: 12.5, fontWeight: 600, padding: '4px 10px', borderRadius: 7,
               background: fatPrevPedido.data < new Date().toISOString().slice(0, 10) ? CRMC.lossSoft : CRMC.primarySoft,
