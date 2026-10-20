@@ -25976,6 +25976,7 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
   const [relCli, setRelCli] = useState({});
   const [fatPrev, setFatPrev] = useState({});
   const [sitBr, setSitBr] = useState({});        // BR -> v_crm_br_situacao
+  const [pont, setPont] = useState([]);          // crm_pontualidade (carteira de clientes)
   const [filtroGanho, setFiltroGanho] = useState(null);   // carteira | parcial | pausado | faturado | sem
   const [analise, setAnalise] = useState(null);           // chave da análise inteligente ou 'custom'
   const [painelFiltro, setPainelFiltro] = useState(false);
@@ -26033,6 +26034,7 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
         lerTudo('v_crm_br_situacao'),   // passa de 1.000 BRs: lê em páginas (antes cortava e caía em "sem pedido")
       ]);
       setSitBr(Object.fromEntries((sb || []).map(x => [x.br, x])));
+      try { setPont(await lerTudo('crm_pontualidade')); } catch { setPont([]); }
       const ajPed = Object.fromEntries((aj || []).map(a => [String(a.nunota_pedido), a]));
       const fp = {}; (cp || []).forEach(x => { const a = ajPed[String(x.nunota)]; const dEf = a?.nova_data || x.dt_faturamento_prevista; if (!dEf) return; const o = fp[x.br];
         const reg = { data: dEf, n: 1, reprog: !!a, motivo: a?.motivo || null };
@@ -26198,7 +26200,7 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
           </span>
         </div>
         <nav aria-label="Seções do CRM" style={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
-          {[['dashboard', 'Dashboard', LayoutGrid], ['funil', 'Funil', Workflow], ['tarefas', 'Tarefas', ClipboardList], ['calendario', 'Calendário', CalendarDays], ['empresas', 'Empresas', Building2]].map(([k, r, Ic]) => {
+          {[['dashboard', 'Dashboard', LayoutGrid], ['funil', 'Funil', Workflow], ['tarefas', 'Tarefas', ClipboardList], ['calendario', 'Calendário', CalendarDays], ['empresas', 'Clientes', Building2]].map(([k, r, Ic]) => {
             const on = aba === k; const nT = k === 'tarefas' ? atividades.filter(a => !resp || a.responsavel === resp).length : 0;
             return (
               <button key={k} onClick={() => setAba(k)} aria-current={on ? 'page' : undefined}
@@ -26775,42 +26777,10 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
         );
       })()}
 
-      {aba === 'empresas' && (() => {
-        const abertos = negocios.filter(n => n.pipeline_id !== 'posvendas' && etapaPorId[n.etapa_id]?.tipo === 'aberta');
-        const lista = empresas
-          .filter(e => !termo || [e.nome, e.razao_social, e.cnpj, e.cidade, e.segmento].some(x => String(x ?? '').toLowerCase().includes(termo)))
-          .map(e => { const ab = abertos.filter(n => n.empresa_id === e.id && (!resp || n.responsavel === resp));
-                      return { ...e, nAb: ab.length, vAb: ab.reduce((s, n) => s + valorDe(n), 0) }; })
-          .filter(e => !resp || e.nAb > 0)
-          .sort((a, b) => b.vAb - a.vAb || a.nome.localeCompare(b.nome));
-        return (
-          <div style={{ background: CRMC.surface, border: `1px solid ${CRMC.line}`, borderRadius: 10, overflow: 'hidden' }}>
-            <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-                <thead><tr style={{ background: CRMC.surface2 }}>
-                  {['Empresa', 'Segmento', 'Região', 'Cidade', 'CNPJ', 'Negócios abertos', 'Valor aberto'].map((h, i) => (
-                    <th key={h} style={{ padding: '8px 12px', fontSize: 10.5, fontWeight: 600, color: CRMC.ink3, textAlign: i >= 5 ? 'right' : 'left' }}>{h}</th>
-                  ))}
-                </tr></thead>
-                <tbody>
-                  {lista.slice(0, 400).map(e => (
-                    <tr key={e.id} onClick={() => setEmpresaAberta(e.id)} style={{ borderTop: `1px solid ${CRMC.lineSoft}`, cursor: 'pointer' }}>
-                      <td style={{ padding: '7px 12px' }}><div style={{ fontWeight: 600 }}>{e.nome}</div>
-                        {e.razao_social && e.razao_social !== e.nome && <div style={{ fontSize: 10.5, color: CRMC.ink3 }}>{e.razao_social}</div>}</td>
-                      <td style={{ padding: '7px 12px', color: CRMC.ink2 }}>{e.segmento || '—'}</td>
-                      <td style={{ padding: '7px 12px', color: CRMC.ink2 }}>{e.regiao || '—'}</td>
-                      <td style={{ padding: '7px 12px', color: CRMC.ink2 }}>{[e.cidade, e.uf].filter(Boolean).join(' / ') || '—'}</td>
-                      <td style={{ padding: '7px 12px', color: CRMC.ink2, whiteSpace: 'nowrap' }}>{e.cnpj && e.cnpj !== '—' ? e.cnpj : '—'}</td>
-                      <td style={{ padding: '7px 12px', textAlign: 'right' }}>{e.nAb || '—'}</td>
-                      <td style={{ padding: '7px 12px', textAlign: 'right', fontWeight: 600 }}>{e.vAb ? moeda(e.vAb) : '—'}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        );
-      })()}
+      {aba === 'empresas' && (
+        <CRMCarteiraClientes empresas={empresas} negocios={negocios} etapaPorId={etapaPorId} sitBr={sitBr} fatPrev={fatPrev} atividades={atividades}
+          pont={pont} resp={resp} termo={termo} onAbrirEmpresa={setEmpresaAberta} />
+      )}
 
       {negAberto && (
         <CRMFichaNegocio negocio={negAberto} etapas={etapas} empresa={empPorId[negAberto.empresa_id]} vendedores={vendedores} fatPrevPedido={negAberto.br ? fatPrev[negAberto.br] : null}
@@ -26974,6 +26944,128 @@ function CRMDetalheNegocios({ det, etapaPorId, empPorId, onAbrir, onFechar }) {
           </table>
         </div>
       </aside>
+    </div>
+  );
+}
+
+// Carteira de clientes (aba Clientes do CRM): uma linha por cliente com a análise completa — em aberto, ganho,
+// perdido, conversão, faturado, carteira, atraso, pontualidade, próxima ação e saúde. Respeita o responsável
+// (e o banco já entrega ao vendedor só os clientes dele).
+function CRMCarteiraClientes({ empresas, negocios, etapaPorId, sitBr, fatPrev, atividades, pont, resp, termo, onAbrirEmpresa }) {
+  const [ordem, setOrdem] = useState({ c: 'aberto', desc: true });
+  const [filtro, setFiltro] = useState('todos');
+  const [seg, setSeg] = useState([]);
+  const moeda = (v) => fmtMoedaCompacta(v);
+  const hoje = new Date().toISOString().slice(0, 10);
+  const meus = negocios.filter(n => !resp || n.responsavel === resp);
+  const negPorBr = Object.fromEntries(negocios.filter(n => n.br && n.pipeline_id === 'vendas').map(n => [n.br, n]));
+  const porEmp = {};
+  meus.forEach(n => { if (n.empresa_id) (porEmp[n.empresa_id] = porEmp[n.empresa_id] || []).push(n); });
+  const pontEmp = {};
+  (pont || []).forEach(x => { const ng = x.br ? negPorBr[x.br] : null; if (!ng?.empresa_id || (resp && String(x.vendedor || '').toUpperCase() !== resp.toUpperCase())) return; (pontEmp[ng.empresa_id] = pontEmp[ng.empresa_id] || []).push(x); });
+  const tarPorNeg = {}; atividades.forEach(a => { if (a.negocio_id) (tarPorNeg[a.negocio_id] = tarPorNeg[a.negocio_id] || []).push(a); });
+  const v = (n) => Number(n.valor ?? n.potencial) || 0;
+  let linhas = empresas.filter(e => porEmp[e.id]?.length).map(e => {
+    const ns = porEmp[e.id]; const vend = ns.filter(n => n.pipeline_id === 'vendas');
+    const tipo = (n) => etapaPorId[n.etapa_id]?.tipo;
+    const ab = vend.filter(n => tipo(n) === 'aberta'), ga = vend.filter(n => tipo(n) === 'ganho'), pe = vend.filter(n => tipo(n) === 'perdido');
+    const soma = (l) => l.reduce((x, n) => x + v(n), 0);
+    const fat = ga.reduce((x, n) => x + (Number(n.br && sitBr[n.br]?.faturado) || 0), 0);
+    const emCart = ga.filter(n => ['carteira', 'parcial'].includes(n.br && sitBr[n.br]?.situacao));
+    const atras = emCart.filter(n => fatPrev[n.br]?.data && fatPrev[n.br].data < hoje);
+    const pl = pontEmp[e.id] || []; const otd = pl.length ? Math.round(100 * pl.filter(x => x.dias <= 0).length / pl.length) : null;
+    const tars = ab.flatMap(n => tarPorNeg[n.id] || []).filter(a => a.vencimento).sort((a, b) => String(a.vencimento).localeCompare(String(b.vencimento)));
+    const prox = tars[0]; const semAcao = ab.length > 0 && tars.length === 0;
+    const propostoV = soma(ab) + soma(ga) + soma(pe);
+    const saude = atras.length || (otd != null && otd < 50) ? ['Atenção', CRMC.loss, CRMC.lossSoft] : semAcao ? ['Sem próxima ação', CRMC.warn, CRMC.warnSoft] : ab.length || emCart.length ? ['Em dia', CRMC.win, CRMC.winSoft] : ['Sem negócio aberto', CRMC.ink3, CRMC.lineSoft];
+    return { e, nome: e.nome, seg: e.segmento || 'Não informado', aberto: soma(ab), nAb: ab.length, ganho: soma(ga), nGa: ga.length, perdido: soma(pe), nPe: pe.length,
+      conv: propostoV ? Math.round(100 * soma(ga) / propostoV) : null, fat, nCart: emCart.length, nAtras: atras.length, otd, nEnt: pl.length,
+      prox: prox ? prox.vencimento : null, proxAtr: prox && new Date(prox.vencimento) < new Date(), semAcao, saude };
+  });
+  const segs = [...new Set(linhas.map(l => l.seg))].sort();
+  const FILTROS = { todos: ['Todos', () => true], aberto: ['Com proposta aberta', l => l.nAb > 0], carteira: ['Com pedido em carteira', l => l.nCart > 0],
+    atraso: ['Com faturamento atrasado', l => l.nAtras > 0], semacao: ['Sem próxima ação', l => l.semAcao], pont: ['Pontualidade abaixo de 50%', l => l.otd != null && l.otd < 50],
+    parado: ['Sem proposta aberta', l => l.nAb === 0] };
+  const t = (termo || '').trim().toLowerCase();
+  const vis = linhas.filter(l => FILTROS[filtro][1](l) && (!seg.length || seg.includes(l.seg)) && (!t || [l.nome, l.e.razao_social, l.e.cnpj, l.e.cidade, l.seg].some(x => String(x ?? '').toLowerCase().includes(t))))
+    .sort((a, b) => { const x = a[ordem.c] ?? -1, y = b[ordem.c] ?? -1; return (x > y ? 1 : x < y ? -1 : 0) * (ordem.desc ? -1 : 1); });
+  const tot = (k) => vis.reduce((x, l) => x + (l[k] || 0), 0);
+  const pontVis = vis.flatMap(l => pontEmp[l.e.id] || []);
+  const otdTot = pontVis.length ? Math.round(100 * pontVis.filter(x => x.dias <= 0).length / pontVis.length) : null;
+  const th = (r, c, al = 'right') => (
+    <th onClick={() => setOrdem(o => ({ c, desc: o.c === c ? !o.desc : c !== 'nome' }))}
+      style={{ padding: '9px 10px', fontSize: 11.5, fontWeight: 600, color: CRMC.ink3, textAlign: al, cursor: 'pointer', whiteSpace: 'nowrap', position: 'sticky', top: 0, background: CRMC.surface2, borderBottom: `1px solid ${CRMC.line}`, zIndex: 1 }}>
+      {r}{ordem.c === c ? (ordem.desc ? ' ▼' : ' ▲') : ''}</th>
+  );
+  const kpi = (r, val, sub, cor) => (
+    <div style={{ background: CRMC.surface, border: `1px solid ${CRMC.line}`, borderRadius: 12, padding: '12px 15px', minWidth: 0 }}>
+      <div style={{ fontSize: 12, color: CRMC.ink2, fontWeight: 500 }}>{r}</div>
+      <div style={{ fontSize: 21, fontWeight: 700, color: cor || CRMC.ink, letterSpacing: -0.3, marginTop: 2 }}>{val}</div>
+      <div style={{ fontSize: 11.5, color: CRMC.ink3 }}>{sub}</div>
+    </div>
+  );
+  const exportar = () => {
+    const csv = ['Cliente;Segmento;Em aberto;Propostas abertas;Ganho;Ganhos;Perdido;Conversão %;Faturado;Em carteira;Faturamento atrasado;Pontualidade %;Entregas;Próxima ação;Saúde',
+      ...vis.map(l => [`"${l.nome}"`, l.seg, Math.round(l.aberto), l.nAb, Math.round(l.ganho), l.nGa, Math.round(l.perdido), l.conv ?? '', Math.round(l.fat), l.nCart, l.nAtras, l.otd ?? '', l.nEnt,
+        l.prox ? new Date(l.prox).toLocaleDateString('pt-BR') : '', l.saude[0]].join(';'))].join('\n');
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8' })); a.download = `carteira_clientes${resp ? '_' + resp.replace(/\W+/g, '_').toLowerCase() : ''}.csv`; a.click();
+  };
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))' }}>
+        {kpi('Clientes na carteira', String(vis.length), `${vis.filter(l => l.nAb > 0).length} com proposta aberta`)}
+        {kpi('Em aberto', moeda(tot('aberto')), `${tot('nAb')} propostas`, CRMC.primary)}
+        {kpi('Ganho', moeda(tot('ganho')), `${tot('nGa')} pedidos · faturado ${moeda(tot('fat'))}`, CRMC.win)}
+        {kpi('Faturamento atrasado', String(vis.filter(l => l.nAtras > 0).length), `clientes · ${tot('nAtras')} pedido(s) com a data vencida`, vis.some(l => l.nAtras) ? CRMC.loss : CRMC.win)}
+        {kpi('Pontualidade da carteira', otdTot == null ? '—' : `${otdTot}%`, `${pontVis.length} entregas no prazo ou antes`, otdTot == null ? null : otdTot >= 75 ? CRMC.win : otdTot >= 50 ? CRMC.warn : CRMC.loss)}
+      </div>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+        {Object.entries(FILTROS).map(([k, [r, f]]) => { const on = filtro === k; const n = linhas.filter(f).length;
+          return <button key={k} onClick={() => setFiltro(k)} style={{ fontFamily: 'inherit', fontSize: 12.5, fontWeight: on ? 600 : 500, padding: '5px 11px', borderRadius: 20, cursor: 'pointer',
+            border: `1px solid ${on ? CRMC.primary : CRMC.line}`, background: on ? CRMC.primarySoft : CRMC.surface, color: on ? CRMC.primary : CRMC.ink2 }}>{r} · {n}</button>; })}
+        <span style={{ fontSize: 12, color: CRMC.ink3, marginLeft: 4 }}>Segmento</span>
+        <FiltroMulti valor={seg} onChange={setSeg} opcoes={segs.map(x => ({ v: x, r: x }))} largura={170} fonte={12.5} />
+        <span style={{ flex: 1 }} />
+        <button onClick={exportar} style={{ fontFamily: 'inherit', fontSize: 12.5, padding: '6px 12px', borderRadius: 8, border: `1px solid ${CRMC.line}`, background: CRMC.surface, color: CRMC.ink2, cursor: 'pointer' }}>Exportar CSV</button>
+      </div>
+      <div style={{ background: CRMC.surface, border: `1px solid ${CRMC.line}`, borderRadius: 12, overflow: 'hidden' }}>
+        <div style={{ overflow: 'auto', maxHeight: 'calc(100vh - 330px)', minHeight: 300 }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+            <thead><tr>
+              {th('Cliente', 'nome', 'left')}{th('Em aberto', 'aberto')}{th('Ganho', 'ganho')}{th('Perdido', 'perdido')}{th('Conversão', 'conv')}
+              {th('Faturado', 'fat')}{th('Em carteira', 'nCart')}{th('Fat. atrasado', 'nAtras')}{th('Pontualidade', 'otd')}{th('Próxima ação', 'prox')}{th('Saúde', 'nome', 'left')}
+            </tr></thead>
+            <tbody>
+              {vis.slice(0, 500).map(l => (
+                <tr key={l.e.id} onClick={() => onAbrirEmpresa(l.e.id)} style={{ borderTop: `1px solid ${CRMC.lineSoft}`, cursor: 'pointer' }}
+                  onMouseEnter={ev => { ev.currentTarget.style.background = CRMC.surface2; }} onMouseLeave={ev => { ev.currentTarget.style.background = 'transparent'; }}>
+                  <td style={{ padding: '9px 10px', minWidth: 220 }}>
+                    <div style={{ fontWeight: 600 }}>{l.nome}</div>
+                    <div style={{ fontSize: 11.5, color: CRMC.ink3 }}>{[l.seg, l.e.regiao, [l.e.cidade, l.e.uf].filter(Boolean).join('/')].filter(Boolean).join(' · ')}</div>
+                  </td>
+                  <td style={{ padding: '9px 10px', textAlign: 'right', whiteSpace: 'nowrap' }}><strong>{l.aberto ? moeda(l.aberto) : '—'}</strong>{l.nAb ? <div style={{ fontSize: 11.5, color: CRMC.ink3 }}>{l.nAb} proposta(s)</div> : null}</td>
+                  <td style={{ padding: '9px 10px', textAlign: 'right', whiteSpace: 'nowrap', color: l.ganho ? CRMC.win : CRMC.ink3 }}>{l.ganho ? moeda(l.ganho) : '—'}{l.nGa ? <div style={{ fontSize: 11.5, color: CRMC.ink3 }}>{l.nGa} pedido(s)</div> : null}</td>
+                  <td style={{ padding: '9px 10px', textAlign: 'right', whiteSpace: 'nowrap', color: l.perdido ? CRMC.loss : CRMC.ink3 }}>{l.perdido ? moeda(l.perdido) : '—'}{l.nPe ? <div style={{ fontSize: 11.5, color: CRMC.ink3 }}>{l.nPe}</div> : null}</td>
+                  <td style={{ padding: '9px 10px', textAlign: 'right', fontWeight: 600 }}>{l.conv == null ? '—' : `${l.conv}%`}</td>
+                  <td style={{ padding: '9px 10px', textAlign: 'right', whiteSpace: 'nowrap' }}>{l.fat ? moeda(l.fat) : '—'}</td>
+                  <td style={{ padding: '9px 10px', textAlign: 'right' }}>{l.nCart || '—'}</td>
+                  <td style={{ padding: '9px 10px', textAlign: 'right' }}>{l.nAtras ? <span style={{ fontSize: 12, fontWeight: 700, color: CRMC.loss, background: CRMC.lossSoft, padding: '2px 8px', borderRadius: 10 }}>{l.nAtras}</span> : '—'}</td>
+                  <td style={{ padding: '9px 10px', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                    {l.otd == null ? '—' : <span style={{ fontWeight: 700, color: l.otd >= 75 ? CRMC.win : l.otd >= 50 ? CRMC.warn : CRMC.loss }}>{l.otd}%</span>}
+                    {l.nEnt ? <div style={{ fontSize: 11.5, color: CRMC.ink3 }}>{l.nEnt} entrega(s)</div> : null}
+                  </td>
+                  <td style={{ padding: '9px 10px', textAlign: 'right', whiteSpace: 'nowrap', color: l.proxAtr ? CRMC.loss : CRMC.ink2, fontWeight: l.proxAtr ? 600 : 400 }}>
+                    {l.prox ? new Date(l.prox).toLocaleDateString('pt-BR') : (l.semAcao ? <span style={{ color: CRMC.warn }}>nenhuma</span> : '—')}
+                  </td>
+                  <td style={{ padding: '9px 10px', whiteSpace: 'nowrap' }}><span style={{ fontSize: 11.5, fontWeight: 600, color: l.saude[1], background: l.saude[2], padding: '2px 9px', borderRadius: 10 }}>{l.saude[0]}</span></td>
+                </tr>
+              ))}
+              {!vis.length && <tr><td colSpan={11} style={{ padding: 28, textAlign: 'center', color: CRMC.ink3 }}>Nenhum cliente neste filtro.</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div style={{ fontSize: 11.5, color: CRMC.ink3 }}>Clientes com algum negócio no CRM{resp ? ` de ${resp}` : ''}. Conversão = ganho ÷ tudo o que foi proposto ao cliente. Pontualidade = notas emitidas até a data prevista do pedido (desde 2025). Clique no cliente para abrir a ficha.</div>
     </div>
   );
 }
