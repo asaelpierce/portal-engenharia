@@ -25867,6 +25867,19 @@ const CRM_FONTES = ['Site', 'WhatsApp', 'LinkedIn', 'Indicação', 'Feira', 'E-m
 const crmRotuloTipo = (t) => (CRM_TIPOS_ATIV.find(x => x.v === t) || { r: t }).r;
 const crmNum = (v) => { const n = Number(String(v ?? '').replace(/\./g, '').replace(',', '.')); return Number.isFinite(n) && String(v ?? '').trim() !== '' ? n : null; };
 
+// Identidade visual do CRM (redesign 20/10/2026): fundo neutro, azul = ação, verde = ganho,
+// vermelho = perda/atraso, âmbar = alerta. Só o CRM usa; o resto do portal segue o tema T.
+const CRMC = {
+  bg: '#F4F6F9', surface: '#FFFFFF', surface2: '#F8FAFC', line: '#E2E7EE', lineSoft: '#EEF2F6',
+  ink: '#18212E', ink2: '#4A5568', ink3: '#7A8596',
+  primary: '#1D5FBF', primaryHover: '#174E9E', primarySoft: '#E8F0FB',
+  win: '#1E8E4F', winSoft: '#E6F4EC', loss: '#C2372D', lossSoft: '#FBEAE8', warn: '#B7791F', warnSoft: '#FDF3E1',
+};
+const crmIniciais = (nome) => String(nome || '?').trim().split(/\s+/).slice(0, 2).map(x => x[0]).join('').toUpperCase();
+// previsão de fechamento é texto "MM/AAAA": vencida = mês anterior ao atual
+const crmPrevVencida = (prev) => { const m = /^(\d{2})\/(\d{4})$/.exec(String(prev || '').trim()); if (!m) return false;
+  const hoje = new Date(); return Number(m[2]) * 12 + Number(m[1]) < hoje.getFullYear() * 12 + hoje.getMonth() + 1; };
+
 function CRM({ currentUser }) {
   const autor = currentUser?.nome || currentUser?.email || 'portal';
   const [aba, setAba] = useState('funil');
@@ -25891,6 +25904,8 @@ function CRM({ currentUser }) {
   const [perda, setPerda] = useState(null);
   const [novoNeg, setNovoNeg] = useState(null);
   const [arrastando, setArrastando] = useState(null);
+  const [dragSobre, setDragSobre] = useState(null);      // etapa sob o cartão arrastado
+  const [filtroRisco, setFiltroRisco] = useState(null);  // null | 'atencao' | 'semacao' (clique nos indicadores)
   const moeda = (v) => fmtMoedaCompacta(v);
   const fmtDH = (d) => d ? new Date(d).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
   const diasDesde = (d) => d ? Math.max(0, Math.floor((Date.now() - new Date(d).getTime()) / 86400000)) : null;
@@ -25950,18 +25965,36 @@ function CRM({ currentUser }) {
     await carregar();
   };
 
-  if (loading) return <div style={{ padding: 40, textAlign: 'center', color: T.inkFaint }}>Carregando o CRM…</div>;
-  if (erro) return <div style={{ padding: 20, color: T.rustText }}>Erro ao carregar o CRM: {erro}</div>;
+  if (loading) return <div style={{ padding: 40, textAlign: 'center', color: CRMC.ink3 }}>Carregando o CRM…</div>;
+  if (erro) return <div style={{ padding: 20, color: CRMC.loss }}>Erro ao carregar o CRM: {erro}</div>;
 
   const termo = busca.trim().toLowerCase();
   const casaBusca = (n) => !termo || [n.titulo, n.br, empPorId[n.empresa_id]?.nome, n.responsavel, n.concorrente].some(x => String(x ?? '').toLowerCase().includes(termo));
   const etapasPipe = etapas.filter(e => e.pipeline_id === pipeline).filter(e => mostrarFechados || e.tipo === 'aberta');
-  const doPipe = negocios.filter(n => n.pipeline_id === pipeline && (!resp || n.responsavel === resp) && casaBusca(n));
+  // sinais de risco do cartão: tarefa atrasada, previsão vencida, sem próxima ação, dias na etapa
+  const riscoDe = (n) => {
+    const pend = pendPorNeg[n.id] || [];
+    const atrasada = pend.some(a => a.vencimento && new Date(a.vencimento) < new Date());
+    const prevV = n.pipeline_id !== 'leads' && crmPrevVencida(n.previsao_fechamento);
+    return { pend, atrasada, prevV, semAcao: pend.length === 0, dias: diasDesde(n.etapa_desde) };
+  };
+  const doPipeBase = negocios.filter(n => n.pipeline_id === pipeline && (!resp || n.responsavel === resp) && casaBusca(n));
+  const doPipe = !filtroRisco ? doPipeBase : doPipeBase.filter(n => { const r = riscoDe(n); return filtroRisco === 'atencao' ? (r.atrasada || r.prevV) : r.semAcao; });
   const probDe = (n) => n.probabilidade ?? etapaPorId[n.etapa_id]?.probabilidade ?? null;
   const valorDe = (n) => Number(n.pipeline_id === 'leads' ? n.potencial : n.valor) || 0;
-  const botao = (ativo) => ({ fontFamily: 'inherit', fontSize: 12, padding: '6px 12px', borderRadius: 6, cursor: 'pointer',
-    border: `1px solid ${ativo ? T.ink : T.line}`, background: ativo ? T.ink : T.panel, color: ativo ? T.panel : T.inkDim });
-  const campo = { fontFamily: 'inherit', fontSize: 12.5, padding: '6px 10px', borderRadius: 6, border: `1px solid ${T.line}`, background: T.panel };
+  const botao = (ativo) => ({ fontFamily: 'inherit', fontSize: 12.5, fontWeight: ativo ? 600 : 500, padding: '7px 13px', borderRadius: 8, cursor: 'pointer',
+    border: `1px solid ${ativo ? CRMC.primary : CRMC.line}`, background: ativo ? CRMC.primarySoft : CRMC.surface, color: ativo ? CRMC.primary : CRMC.ink2, transition: 'all .15s' });
+  const campo = { fontFamily: 'inherit', fontSize: 13, padding: '7px 11px', borderRadius: 8, border: `1px solid ${CRMC.line}`, background: CRMC.surface, color: CRMC.ink };
+  const segmento = (opcoes, valor, set) => (
+    <div role="tablist" style={{ display: 'inline-flex', background: CRMC.lineSoft, borderRadius: 9, padding: 3, gap: 2 }}>
+      {opcoes.map(([k, r]) => (
+        <button key={k} role="tab" aria-selected={valor === k} onClick={() => set(k)}
+          style={{ fontFamily: 'inherit', fontSize: 12.5, fontWeight: valor === k ? 600 : 500, padding: '6px 13px', borderRadius: 7, border: 'none', cursor: 'pointer',
+            background: valor === k ? CRMC.surface : 'transparent', color: valor === k ? CRMC.ink : CRMC.ink2,
+            boxShadow: valor === k ? '0 1px 2px rgba(16,24,40,.08)' : 'none', transition: 'all .15s' }}>{r}</button>
+      ))}
+    </div>
+  );
   const negAberto = abertoId ? negocios.find(n => n.id === abertoId) : null;
   // PREVISÃO POR PEDIDOS (regra do Asael): a chance da etapa pondera a
   // QUANTIDADE. Em cada etapa de Vendas fecham round(n × chance), com o valor
@@ -25979,38 +26012,43 @@ function CRM({ currentUser }) {
   });
   const nomePipe = { leads: 'Leads', vendas: 'Vendas', posvendas: 'Pós-vendas' };
 
+  const atrasadasTot = atividades.filter(a => (!resp || a.responsavel === resp) && a.vencimento && new Date(a.vencimento) < new Date()).length;
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12, paddingTop: 14 }}>
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-        {[['dashboard', 'Dashboard'], ['funil', 'Funil'], ['tarefas', `Tarefas${atividades.length ? ` (${atividades.length})` : ''}`], ['empresas', 'Empresas']].map(([k, r]) => (
-          <button key={k} onClick={() => setAba(k)} style={botao(aba === k)}>{r}</button>
-        ))}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14, marginTop: 14, padding: 18, background: CRMC.bg, borderRadius: 14, border: `1px solid ${CRMC.line}`, color: CRMC.ink }}>
+      {/* cabeçalho: título, navegação e filtros globais numa linha */}
+      <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'center' }}>
+        <div style={{ marginRight: 6 }}>
+          <div style={{ fontSize: 18, fontWeight: 700, letterSpacing: -0.2 }}>CRM Comercial</div>
+          <div style={{ fontSize: 12, color: CRMC.ink3 }}>{perfil.ve_tudo ? (resp ? `Carteira de ${resp}` : 'Toda a equipe') : `Sua carteira · ${perfil.vendedor}`}</div>
+        </div>
+        {segmento([['dashboard', 'Dashboard'], ['funil', 'Funil'], ['tarefas', <span key="t">Tarefas{atividades.length ? <span style={{ marginLeft: 6, fontSize: 11, fontWeight: 700, padding: '1px 7px', borderRadius: 10, background: atrasadasTot ? CRMC.lossSoft : CRMC.lineSoft, color: atrasadasTot ? CRMC.loss : CRMC.ink2 }}>{atividades.filter(a => !resp || a.responsavel === resp).length}</span> : null}</span>], ['empresas', 'Empresas']], aba, setAba)}
         <span style={{ flex: 1 }} />
-        <select value={resp} onChange={e => setResp(e.target.value)} disabled={!perfil.ve_tudo} style={campo}
-          title={perfil.ve_tudo ? '' : 'Vendedor vê os próprios negócios'}>
+        <select value={resp} onChange={e => setResp(e.target.value)} disabled={!perfil.ve_tudo} style={{ ...campo, minWidth: 190 }}
+          aria-label="Responsável" title={perfil.ve_tudo ? '' : 'Vendedor vê os próprios negócios'}>
           <option value="">Todos os responsáveis</option>
           {vendedores.map(v => <option key={v} value={v}>{v}</option>)}
         </select>
-        <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="buscar BR, empresa, título, concorrente" style={{ ...campo, minWidth: 220 }} />
+        <div style={{ position: 'relative' }}>
+          <Search size={14} aria-hidden="true" style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: CRMC.ink3 }} />
+          <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Buscar BR, empresa, título ou concorrente" aria-label="Buscar"
+            style={{ ...campo, minWidth: 280, paddingLeft: 28 }} />
+        </div>
       </div>
 
       {aviso && (
-        <div onClick={() => setAviso(null)} style={{ padding: '8px 12px', borderRadius: 6, fontSize: 12, cursor: 'pointer',
-          background: aviso.tipo === 'erro' ? T.rustSoft : T.oliveSoft, color: aviso.tipo === 'erro' ? T.rustText : T.oliveText }}>
+        <div onClick={() => setAviso(null)} role="status" style={{ padding: '9px 13px', borderRadius: 8, fontSize: 12.5, cursor: 'pointer', fontWeight: 500,
+          border: `1px solid ${aviso.tipo === 'erro' ? CRMC.loss : CRMC.win}33`,
+          background: aviso.tipo === 'erro' ? CRMC.lossSoft : CRMC.winSoft, color: aviso.tipo === 'erro' ? CRMC.loss : CRMC.win }}>
           {aviso.t} <span style={{ opacity: 0.6 }}>· clique para fechar</span>
         </div>
       )}
 
       {aba === 'funil' && (
         <>
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-            {['leads', 'vendas', 'posvendas'].map(p => (
-              <button key={p} onClick={() => setPipeline(p)} style={botao(pipeline === p)}>{nomePipe[p]}</button>
-            ))}
-            <span style={{ width: 1, height: 20, background: T.line, margin: '0 4px' }} />
-            <button onClick={() => setVisao('quadro')} style={botao(visao === 'quadro')}>Quadro</button>
-            <button onClick={() => setVisao('lista')} style={botao(visao === 'lista')}>Lista</button>
-            <label style={{ fontSize: 12, color: T.inkDim, display: 'flex', alignItems: 'center', gap: 5, marginLeft: 6 }}>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+            {segmento(['leads', 'vendas', 'posvendas'].map(p => [p, nomePipe[p]]), pipeline, setPipeline)}
+            {segmento([['quadro', 'Quadro'], ['lista', 'Lista']], visao, setVisao)}
+            <label style={{ fontSize: 12.5, color: CRMC.ink2, display: 'flex', alignItems: 'center', gap: 6, marginLeft: 4, cursor: 'pointer' }}>
               <input type="checkbox" checked={mostrarFechados} onChange={e => setMostrarFechados(e.target.checked)} />
               mostrar {pipeline === 'vendas' ? 'ganhos e perdidos' : pipeline === 'leads' ? 'convertidos e descartados' : 'reposição e encerrados'}
             </label>
@@ -26018,60 +26056,153 @@ function CRM({ currentUser }) {
             {pipeline !== 'posvendas' && (
               <button onClick={() => setNovoNeg({ pipeline, titulo: '', empresa_id: '', empresa_nova: '', valor: '', potencial: '', responsavel: resp || '',
                   previsao: '', fonte: '', interesse: '', score: '', concorrente: '', proxima: '' })}
-                style={{ ...botao(false), borderColor: T.rust, color: T.rustText, fontWeight: 600 }}>
+                style={{ fontFamily: 'inherit', fontSize: 13, fontWeight: 600, padding: '8px 15px', borderRadius: 8, cursor: 'pointer', border: 'none', background: CRMC.primary, color: '#fff' }}>
                 {pipeline === 'leads' ? '+ Lead' : '+ Oportunidade'}
               </button>
             )}
           </div>
 
+          {/* indicadores do funil (dados reais, mesmo filtro de responsável e busca); clicar filtra os cartões */}
+          {(() => {
+            const abertosP = doPipeBase.filter(n => etapaPorId[n.etapa_id]?.tipo === 'aberta');
+            const tot = abertosP.reduce((x, n) => x + valorDe(n), 0);
+            const pond = abertosP.reduce((x, n) => x + valorDe(n) * ((probDe(n) || 0) / 100), 0);
+            const atencao = abertosP.filter(n => { const r = riscoDe(n); return r.atrasada || r.prevV; });
+            const semAcao = abertosP.filter(n => riscoDe(n).semAcao);
+            const fechamTot = Object.values(previstoPorEtapa).reduce((x, e) => ({ k: x.k + e.k, v: x.v + e.valor }), { k: 0, v: 0 });
+            const kpi = (rot, valor, sub, cor, alvo) => (
+              <button key={rot} onClick={alvo ? () => setFiltroRisco(f => (f === alvo ? null : alvo)) : undefined} disabled={!alvo}
+                aria-pressed={alvo ? filtroRisco === alvo : undefined}
+                style={{ textAlign: 'left', fontFamily: 'inherit', background: CRMC.surface, borderRadius: 10, padding: '11px 14px', cursor: alvo ? 'pointer' : 'default',
+                  border: `1px solid ${filtroRisco && filtroRisco === alvo ? cor : CRMC.line}`, boxShadow: filtroRisco === alvo ? `0 0 0 3px ${cor}22` : 'none', transition: 'all .15s', minWidth: 0 }}>
+                <div style={{ fontSize: 11.5, color: CRMC.ink3, fontWeight: 500 }}>{rot}</div>
+                <div style={{ fontSize: 20, fontWeight: 700, color: cor || CRMC.ink, fontVariantNumeric: 'tabular-nums', marginTop: 2 }}>{valor}</div>
+                <div style={{ fontSize: 11.5, color: CRMC.ink3, marginTop: 1 }}>{sub}</div>
+              </button>
+            );
+            return (
+              <div style={{ display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))' }}>
+                {kpi(pipeline === 'leads' ? 'Potencial em aberto' : 'Pipeline aberto', moeda(tot), `${abertosP.length} ${pipeline === 'leads' ? 'leads' : 'oportunidades'}`)}
+                {pipeline !== 'posvendas' && kpi('Pipeline ponderado', moeda(pond), 'valor × chance da etapa')}
+                {pipeline === 'vendas' && kpi('Devem fechar', moeda(fechamTot.v), `${fechamTot.k} pedidos · regra da Diretoria`, CRMC.win)}
+                {kpi('Precisam de atenção', String(atencao.length), `tarefa atrasada ou previsão vencida · ${moeda(atencao.reduce((x, n) => x + valorDe(n), 0))}`, atencao.length ? CRMC.loss : CRMC.win, 'atencao')}
+                {kpi('Sem próxima ação', String(semAcao.length), `nenhuma tarefa agendada · ${moeda(semAcao.reduce((x, n) => x + valorDe(n), 0))}`, semAcao.length ? CRMC.warn : CRMC.win, 'semacao')}
+              </div>
+            );
+          })()}
+          {filtroRisco && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, color: CRMC.ink2 }}>
+              Mostrando só <strong>{filtroRisco === 'atencao' ? 'as que precisam de atenção' : 'as sem próxima ação'}</strong>
+              <button onClick={() => setFiltroRisco(null)} style={{ ...botao(false), padding: '4px 10px', fontSize: 12 }}>mostrar todas</button>
+            </div>
+          )}
+
           {visao === 'quadro' ? (
-            <div style={{ overflowX: 'auto', paddingBottom: 8 }}>
-              <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start', minWidth: etapasPipe.length * 250 }}>
+            <div style={{ overflowX: 'auto', paddingBottom: 10, scrollbarGutter: 'stable' }}>
+              <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', width: 'max-content' }}>
                 {etapasPipe.map(et => {
                   const cards = doPipe.filter(n => n.etapa_id === et.id).sort((a, b) => valorDe(b) - valorDe(a));
+                  const totEt = cards.reduce((x, n) => x + valorDe(n), 0);
+                  const sobre = dragSobre === et.id && arrastando && arrastando.etapa_id !== et.id;
+                  const corEt = et.tipo === 'ganho' ? CRMC.win : et.tipo === 'perdido' ? CRMC.loss : (et.cor || CRMC.ink3);
                   return (
-                    <div key={et.id} onDragOver={e => e.preventDefault()}
-                      onDrop={e => { e.preventDefault(); if (arrastando && arrastando.etapa_id !== et.id) mover(arrastando, et.codigo); setArrastando(null); }}
-                      style={{ flex: '1 0 240px', maxWidth: 300, background: T.panelAlt, borderRadius: 10, border: `1px solid ${T.line}`, display: 'flex', flexDirection: 'column', maxHeight: '72vh' }}>
-                      <div style={{ padding: '9px 11px', borderBottom: `3px solid ${et.cor || T.line}` }}>
-                        <div style={{ fontSize: 12, fontWeight: 700 }}>{et.nome}{et.probabilidade != null ? <span style={{ fontWeight: 400, color: T.inkFaint }}> · {et.probabilidade}%</span> : ''}</div>
-                        <div style={{ fontSize: 11, color: T.inkFaint }}>{cards.length} · {moeda(cards.reduce((s, n) => s + valorDe(n), 0))}</div>
+                    <section key={et.id} aria-label={et.nome}
+                      onDragOver={e => { e.preventDefault(); if (dragSobre !== et.id) setDragSobre(et.id); }}
+                      onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget)) setDragSobre(null); }}
+                      onDrop={e => { e.preventDefault(); setDragSobre(null); if (arrastando && arrastando.etapa_id !== et.id) mover(arrastando, et.codigo); setArrastando(null); }}
+                      style={{ width: 292, flex: '0 0 292px', background: sobre ? CRMC.primarySoft : CRMC.surface2, borderRadius: 12,
+                        border: `1px ${sobre ? 'dashed' : 'solid'} ${sobre ? CRMC.primary : CRMC.line}`, display: 'flex', flexDirection: 'column', maxHeight: '70vh', transition: 'background .15s' }}>
+                      <header style={{ padding: '12px 14px 10px', borderBottom: `1px solid ${CRMC.line}` }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <span aria-hidden="true" style={{ width: 9, height: 9, borderRadius: 3, background: corEt, flex: 'none' }} />
+                          <span style={{ fontSize: 13, fontWeight: 600, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={et.nome}>{et.nome}</span>
+                          <span style={{ fontSize: 11.5, fontWeight: 600, padding: '1px 8px', borderRadius: 10, background: CRMC.lineSoft, color: CRMC.ink2 }}>{cards.length}</span>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 6 }}>
+                          <span style={{ fontSize: 16, fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{moeda(totEt)}</span>
+                          {et.probabilidade != null && <span style={{ fontSize: 11.5, color: CRMC.ink3 }}>{et.probabilidade}% de chance</span>}
+                        </div>
                         {previstoPorEtapa[et.id] && (
-                          <div style={{ fontSize: 10.5, color: T.oliveText, marginTop: 1 }}
+                          <div style={{ fontSize: 11.5, color: CRMC.win, marginTop: 3, fontWeight: 500 }}
                             title="Etapa com n negócios e chance p: fecham n × p, com o valor cheio, escolhidos pelo relacionamento do cliente">
                             fecham {previstoPorEtapa[et.id].k} · {moeda(previstoPorEtapa[et.id].valor)}
                           </div>
                         )}
-                      </div>
-                      <div style={{ overflowY: 'auto', padding: 8, display: 'flex', flexDirection: 'column', gap: 7 }}>
+                      </header>
+                      <div style={{ overflowY: 'auto', padding: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                        {cards.length === 0 && <div style={{ fontSize: 12, color: CRMC.ink3, textAlign: 'center', padding: '14px 4px' }}>Nenhuma {pipeline === 'leads' ? 'lead' : 'oportunidade'} nesta etapa</div>}
                         {cards.slice(0, 150).map(n => {
-                          const pend = pendPorNeg[n.id] || [];
-                          const atrasada = pend.some(a => a.vencimento && new Date(a.vencimento) < new Date());
-                          const dias = diasDesde(n.etapa_desde);
+                          const r = riscoDe(n);
+                          const prox = r.pend[0];
+                          const aberta = et.tipo === 'aberta';
+                          const empresa = empPorId[n.empresa_id]?.nome || (n.br ? n.titulo.replace(`${n.br} · `, '') : '—');
+                          const prob = n.pipeline_id === 'leads' ? null : probDe(n);
+                          const selo = !aberta ? null : r.atrasada ? ['Tarefa atrasada', CRMC.loss, CRMC.lossSoft] : r.prevV ? ['Previsão vencida', CRMC.loss, CRMC.lossSoft]
+                            : r.semAcao ? ['Sem próxima ação', CRMC.warn, CRMC.warnSoft] : null;
                           return (
-                            <div key={n.id} draggable onDragStart={() => setArrastando(n)} onClick={() => setAbertoId(n.id)}
-                              style={{ background: T.panel, borderRadius: 8, border: `1px solid ${T.line}`, padding: '8px 10px', cursor: 'pointer',
-                                borderLeft: `3px solid ${atrasada ? T.rust : pend.length ? T.gold : 'transparent'}` }}>
-                              <div style={{ fontSize: 12, fontWeight: 700, lineHeight: 1.3 }}>{n.br || n.titulo}</div>
-                              <div style={{ fontSize: 11, color: T.inkDim, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                {empPorId[n.empresa_id]?.nome || (n.br ? n.titulo.replace(`${n.br} · `, '') : '—')}
+                            <article key={n.id} draggable tabIndex={0} aria-label={`${n.br || n.titulo} — ${empresa}`}
+                              onDragStart={() => setArrastando(n)} onDragEnd={() => { setArrastando(null); setDragSobre(null); }}
+                              onClick={() => setAbertoId(n.id)} onKeyDown={e => { if (e.key === 'Enter') setAbertoId(n.id); }}
+                              onMouseEnter={e => { e.currentTarget.style.borderColor = '#C9D3E0'; e.currentTarget.style.boxShadow = '0 2px 8px rgba(16,24,40,.07)'; }}
+                              onMouseLeave={e => { e.currentTarget.style.borderColor = CRMC.line; e.currentTarget.style.boxShadow = '0 1px 1px rgba(16,24,40,.03)'; }}
+                              style={{ background: CRMC.surface, borderRadius: 10, border: `1px solid ${CRMC.line}`, padding: '11px 12px', cursor: 'grab', outlineColor: CRMC.primary,
+                                boxShadow: '0 1px 1px rgba(16,24,40,.03)', transition: 'border-color .15s, box-shadow .15s', opacity: arrastando?.id === n.id ? 0.5 : 1,
+                                borderLeft: `3px solid ${selo ? selo[1] : devemFechar.has(n.id) ? CRMC.win : CRMC.line}` }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                <span style={{ fontSize: 12, fontWeight: 600, color: CRMC.primary }}>{n.br || 'Sem BR'}</span>
+                                <span style={{ flex: 1 }} />
+                                {devemFechar.has(n.id) && aberta && <span style={{ fontSize: 10.5, fontWeight: 600, color: CRMC.win, background: CRMC.winSoft, padding: '1px 7px', borderRadius: 10 }}>deve fechar</span>}
+                                {selo && <span style={{ fontSize: 10.5, fontWeight: 600, color: selo[1], background: selo[2], padding: '1px 7px', borderRadius: 10, whiteSpace: 'nowrap' }}>{selo[0]}</span>}
                               </div>
-                              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 5, fontSize: 11 }}>
-                                <span style={{ fontWeight: 700 }}>{valorDe(n) ? moeda(valorDe(n)) : '—'}</span>
-                                <span style={{ color: T.inkFaint }}>
-                                  {n.pipeline_id === 'leads' ? (n.score != null ? `score ${n.score}` : n.fonte || '') : (n.previsao_fechamento || (dias != null ? `${dias}d na etapa` : ''))}
+                              <div style={{ fontSize: 13.5, fontWeight: 600, marginTop: 4, lineHeight: 1.3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={empresa}>{empresa}</div>
+                              {!n.br && n.titulo && <div style={{ fontSize: 12, color: CRMC.ink2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={n.titulo}>{n.titulo}</div>}
+                              <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 6 }}>
+                                <span style={{ fontSize: 16, fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{valorDe(n) ? moeda(valorDe(n)) : '—'}</span>
+                                {prob != null && <span style={{ fontSize: 11.5, color: CRMC.ink3 }}>{prob}%</span>}
+                                {n.pipeline_id === 'leads' && n.score != null && <span style={{ fontSize: 11.5, color: CRMC.ink3 }}>score {n.score}</span>}
+                              </div>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 7, fontSize: 12, color: CRMC.ink2 }}>
+                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0, flex: 1 }}>
+                                  <span aria-hidden="true" style={{ width: 22, height: 22, borderRadius: 11, background: CRMC.primarySoft, color: CRMC.primary, fontSize: 10, fontWeight: 700,
+                                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flex: 'none' }}>{crmIniciais(n.responsavel)}</span>
+                                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{n.responsavel || 'Sem responsável'}</span>
                                 </span>
+                                {n.pipeline_id !== 'leads' && (
+                                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap', color: r.prevV ? CRMC.loss : CRMC.ink2, fontWeight: r.prevV ? 600 : 400 }}
+                                    title="Previsão de fechamento">
+                                    <CalendarDays size={13} aria-hidden="true" />{n.previsao_fechamento || 'sem previsão'}
+                                  </span>
+                                )}
+                                {n.pipeline_id === 'leads' && n.fonte && <span style={{ whiteSpace: 'nowrap', color: CRMC.ink3 }}>{n.fonte}</span>}
                               </div>
-                              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 3, fontSize: 10.5, color: T.inkFaint }}>
-                                <span>{n.responsavel || 'sem responsável'}{n.concorrente ? ` · vs ${n.concorrente}` : ''}</span>
-                                {pend.length > 0 && <span style={{ color: atrasada ? T.rustText : T.amberText }}>{pend.length} tarefa{pend.length > 1 ? 's' : ''}{atrasada ? ' · atrasada' : ''}</span>}
-                              </div>
-                            </div>
+                              {aberta && (
+                                <div style={{ marginTop: 8, padding: '6px 8px', borderRadius: 7, fontSize: 11.5, lineHeight: 1.35,
+                                  background: prox ? (r.atrasada ? CRMC.lossSoft : CRMC.surface2) : CRMC.warnSoft,
+                                  color: prox ? (r.atrasada ? CRMC.loss : CRMC.ink2) : CRMC.warn }}>
+                                  {prox ? (
+                                    <span style={{ display: 'flex', gap: 5 }}>
+                                      <Clock3 size={13} aria-hidden="true" style={{ flex: 'none', marginTop: 1 }} />
+                                      <span style={{ minWidth: 0 }}>
+                                        <strong style={{ fontWeight: 600 }}>{crmRotuloTipo(prox.tipo)}</strong>{prox.vencimento ? ` · ${new Date(prox.vencimento).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })}` : ''}
+                                        <span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={prox.titulo}>{prox.titulo}</span>
+                                      </span>
+                                    </span>
+                                  ) : 'Sem próxima ação — abra para agendar'}
+                                  {r.pend.length > 1 && <span style={{ display: 'block', color: CRMC.ink3, marginTop: 2 }}>+{r.pend.length - 1} tarefa(s)</span>}
+                                </div>
+                              )}
+                              {(n.concorrente || (aberta && r.dias != null && r.dias >= 30)) && (
+                                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginTop: 6, fontSize: 11, color: CRMC.ink3 }}>
+                                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{n.concorrente ? `vs ${n.concorrente}` : ''}</span>
+                                  {aberta && r.dias != null && r.dias >= 30 && <span style={{ color: r.dias >= 90 ? CRMC.loss : CRMC.warn, fontWeight: 600, whiteSpace: 'nowrap' }}>{r.dias} dias na etapa</span>}
+                                </div>
+                              )}
+                            </article>
                           );
                         })}
-                        {cards.length > 150 && <div style={{ fontSize: 11, color: T.inkFaint, textAlign: 'center' }}>+{cards.length - 150} — use a busca</div>}
+                        {cards.length > 150 && <div style={{ fontSize: 12, color: CRMC.ink3, textAlign: 'center' }}>+{cards.length - 150} — use a busca</div>}
                       </div>
-                    </div>
+                    </section>
                   );
                 })}
               </div>
@@ -26097,13 +26228,13 @@ function CRM({ currentUser }) {
               return ordem.asc ? r : -r;
             });
             return (
-              <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
+              <div style={{ background: CRMC.surface, border: `1px solid ${CRMC.line}`, borderRadius: 10, overflow: 'hidden' }}>
                 <div style={{ overflowX: 'auto' }}>
                   <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-                    <thead><tr style={{ background: T.panelAlt }}>
+                    <thead><tr style={{ background: CRMC.surface2 }}>
                       {COLS.map(col => (
                         <th key={col.c} onClick={() => setOrdem(o => ({ c: col.c, asc: o.c === col.c ? !o.asc : false }))}
-                          style={{ padding: '8px 10px', fontSize: 10.5, fontWeight: 600, color: ordem.c === col.c ? T.ink : T.inkFaint,
+                          style={{ padding: '8px 10px', fontSize: 10.5, fontWeight: 600, color: ordem.c === col.c ? CRMC.ink : CRMC.ink3,
                             textAlign: col.r ? 'right' : 'left', whiteSpace: 'nowrap', cursor: 'pointer' }}>
                           {col.t}{ordem.c === col.c ? (ordem.asc ? ' ▲' : ' ▼') : ''}
                         </th>
@@ -26114,39 +26245,39 @@ function CRM({ currentUser }) {
                         const et = etapaPorId[n.etapa_id];
                         const atras = prox && prox.vencimento && new Date(prox.vencimento) < new Date();
                         return (
-                          <tr key={n.id} onClick={() => setAbertoId(n.id)} style={{ borderTop: `1px solid ${T.lineSoft}`, cursor: 'pointer' }}>
+                          <tr key={n.id} onClick={() => setAbertoId(n.id)} style={{ borderTop: `1px solid ${CRMC.lineSoft}`, cursor: 'pointer' }}>
                             <td style={{ padding: '7px 10px', fontWeight: 600, maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.titulo}</td>
                             <td style={{ padding: '7px 10px', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.empresa || '—'}</td>
                             <td style={{ padding: '7px 10px', whiteSpace: 'nowrap' }}>
-                              <span style={{ fontSize: 10.5, padding: '2px 7px', borderRadius: 10, background: `${et?.cor || T.inkFaint}22`, color: et?.cor || T.inkDim }}>{et?.nome}</span>
+                              <span style={{ fontSize: 10.5, padding: '2px 7px', borderRadius: 10, background: `${et?.cor || CRMC.ink3}22`, color: et?.cor || CRMC.ink2 }}>{et?.nome}</span>
                             </td>
                             <td style={{ padding: '7px 10px', textAlign: 'right' }}>{l.valor ? moeda(l.valor) : '—'}</td>
                             <td style={{ padding: '7px 10px', textAlign: 'right' }}>{l.prob >= 0 ? (pipeline === 'leads' ? l.prob : `${l.prob}%`) : '—'}</td>
                             <td style={{ padding: '7px 10px', whiteSpace: 'nowrap' }}>
-                              {l.fecha ? <span style={{ fontSize: 10.5, fontWeight: 700, color: T.oliveText, background: T.oliveSoft, padding: '2px 7px', borderRadius: 4 }}>deve fechar</span>
-                                       : <span style={{ color: T.inkFaint }}>—</span>}
+                              {l.fecha ? <span style={{ fontSize: 10.5, fontWeight: 700, color: CRMC.win, background: CRMC.winSoft, padding: '2px 7px', borderRadius: 4 }}>deve fechar</span>
+                                       : <span style={{ color: CRMC.ink3 }}>—</span>}
                             </td>
-                            <td style={{ padding: '7px 10px', color: T.inkDim }}>{l.previsao || '—'}</td>
-                            <td style={{ padding: '7px 10px', color: T.inkDim, whiteSpace: 'nowrap' }}>{l.responsavel || '—'}</td>
-                            <td style={{ padding: '7px 10px', color: T.inkDim }}>{l.concorrente || '—'}</td>
-                            <td style={{ padding: '7px 10px', color: atras ? T.rustText : T.inkDim, whiteSpace: 'nowrap', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            <td style={{ padding: '7px 10px', color: CRMC.ink2 }}>{l.previsao || '—'}</td>
+                            <td style={{ padding: '7px 10px', color: CRMC.ink2, whiteSpace: 'nowrap' }}>{l.responsavel || '—'}</td>
+                            <td style={{ padding: '7px 10px', color: CRMC.ink2 }}>{l.concorrente || '—'}</td>
+                            <td style={{ padding: '7px 10px', color: atras ? CRMC.loss : CRMC.ink2, whiteSpace: 'nowrap', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis' }}>
                               {prox ? `${prox.vencimento ? new Date(prox.vencimento).toLocaleDateString('pt-BR') + ' · ' : ''}${prox.titulo}` : '—'}
                             </td>
-                            <td style={{ padding: '7px 10px', textAlign: 'right', color: T.inkDim }}>{l.dias}</td>
+                            <td style={{ padding: '7px 10px', textAlign: 'right', color: CRMC.ink2 }}>{l.dias}</td>
                           </tr>
                         );
                       })}
                     </tbody>
                   </table>
                 </div>
-                <div style={{ padding: '7px 12px', fontSize: 11, color: T.inkFaint, borderTop: `1px solid ${T.line}` }}>
+                <div style={{ padding: '7px 12px', fontSize: 11, color: CRMC.ink3, borderTop: `1px solid ${CRMC.line}` }}>
                   {linhasL.length} {pipeline === 'leads' ? 'leads' : 'negócios'} · {moeda(linhasL.reduce((s, l) => s + (l.valor || 0), 0))}
                   {pipeline === 'vendas' ? ` · devem fechar ${linhasL.filter(l => l.fecha).length}, ${moeda(linhasL.filter(l => l.fecha).reduce((s, l) => s + (l.valor || 0), 0))} com o valor cheio` : ''}
                 </div>
               </div>
             );
           })()}
-          <div style={{ fontSize: 11, color: T.inkFaint }}>
+          <div style={{ fontSize: 11, color: CRMC.ink3 }}>
             {pipeline === 'leads' && 'Leve o lead até "Convertido em oportunidade" para abrir o negócio em Vendas, com os mesmos dados.'}
             {pipeline === 'vendas' && 'Arraste para mudar de etapa. Nos BRs, a negociação (Baixo a Avançado) é a mesma do Follow Up. Ganho entra sozinho com o pedido no Sankhya.'}
             {pipeline === 'posvendas' && 'Levar para Reposição abre uma oportunidade nova em Vendas.'}
@@ -26168,11 +26299,11 @@ function CRM({ currentUser }) {
           .filter(a => { const n = negocios.find(x => x.id === a.negocio_id); return !termo || (n && casaBusca(n)) || a.titulo.toLowerCase().includes(termo); })
           .sort((a, b) => new Date(a.vencimento || '2999-01-01') - new Date(b.vencimento || '2999-01-01'));
         const grupos = [
-          ['Atrasadas', minhas.filter(a => a.vencimento && new Date(a.vencimento) < hoje), T.rustText],
-          ['Hoje', minhas.filter(a => a.vencimento && new Date(a.vencimento) >= hoje && new Date(a.vencimento) < amanha), T.amberText],
-          ['Próximos 7 dias', minhas.filter(a => a.vencimento && new Date(a.vencimento) >= amanha && new Date(a.vencimento) < semana), T.ink],
-          ['Depois', minhas.filter(a => a.vencimento && new Date(a.vencimento) >= semana), T.inkDim],
-          ['Sem data', minhas.filter(a => !a.vencimento), T.inkFaint],
+          ['Atrasadas', minhas.filter(a => a.vencimento && new Date(a.vencimento) < hoje), CRMC.loss],
+          ['Hoje', minhas.filter(a => a.vencimento && new Date(a.vencimento) >= hoje && new Date(a.vencimento) < amanha), CRMC.warn],
+          ['Próximos 7 dias', minhas.filter(a => a.vencimento && new Date(a.vencimento) >= amanha && new Date(a.vencimento) < semana), CRMC.ink],
+          ['Depois', minhas.filter(a => a.vencimento && new Date(a.vencimento) >= semana), CRMC.ink2],
+          ['Sem data', minhas.filter(a => !a.vencimento), CRMC.ink3],
         ];
         const fechar = async (a, cancelar) => {
           await supabase.from('crm_atividade').update(cancelar ? { cancelada_em: new Date().toISOString() } : { concluida_em: new Date().toISOString() }).eq('id', a.id);
@@ -26183,26 +26314,26 @@ function CRM({ currentUser }) {
         return (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             {grupos.filter(g => g[1].length).map(([t, lista, cor]) => (
-              <div key={t} style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
-                <div style={{ padding: '8px 12px', fontSize: 12.5, fontWeight: 700, color: cor, borderBottom: `1px solid ${T.line}` }}>{t} · {lista.length}</div>
+              <div key={t} style={{ background: CRMC.surface, border: `1px solid ${CRMC.line}`, borderRadius: 10, overflow: 'hidden' }}>
+                <div style={{ padding: '8px 12px', fontSize: 12.5, fontWeight: 700, color: cor, borderBottom: `1px solid ${CRMC.line}` }}>{t} · {lista.length}</div>
                 {lista.slice(0, 200).map(a => {
                   const n = negocios.find(x => x.id === a.negocio_id);
                   return (
-                    <div key={a.id} style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '7px 12px', borderTop: `1px solid ${T.lineSoft}`, fontSize: 12, flexWrap: 'wrap' }}>
+                    <div key={a.id} style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '7px 12px', borderTop: `1px solid ${CRMC.lineSoft}`, fontSize: 12, flexWrap: 'wrap' }}>
                       <input type="checkbox" onChange={() => fechar(a, false)} title="Concluir" />
-                      <span style={{ fontSize: 10.5, padding: '2px 7px', borderRadius: 4, background: T.panelAlt, color: T.inkDim }}>{crmRotuloTipo(a.tipo)}</span>
+                      <span style={{ fontSize: 10.5, padding: '2px 7px', borderRadius: 4, background: CRMC.surface2, color: CRMC.ink2 }}>{crmRotuloTipo(a.tipo)}</span>
                       <span style={{ fontWeight: 600, flex: '1 1 240px' }}>{a.titulo}</span>
-                      {n && <span onClick={() => setAbertoId(n.id)} style={{ color: T.blueText, cursor: 'pointer' }}>{n.br || n.titulo}</span>}
-                      <span style={{ color: T.inkDim, minWidth: 110 }}>{a.responsavel || '—'}</span>
+                      {n && <span onClick={() => setAbertoId(n.id)} style={{ color: CRMC.primary, cursor: 'pointer' }}>{n.br || n.titulo}</span>}
+                      <span style={{ color: CRMC.ink2, minWidth: 110 }}>{a.responsavel || '—'}</span>
                       <span style={{ color: cor, minWidth: 110, textAlign: 'right' }}>{a.vencimento ? fmtDH(a.vencimento) : ''}</span>
                       <button onClick={() => fechar(a, true)} title="Cancelar a tarefa"
-                        style={{ fontFamily: 'inherit', fontSize: 10.5, padding: '2px 8px', borderRadius: 5, border: `1px solid ${T.line}`, background: T.panel, color: T.inkFaint, cursor: 'pointer' }}>cancelar</button>
+                        style={{ fontFamily: 'inherit', fontSize: 10.5, padding: '2px 8px', borderRadius: 5, border: `1px solid ${CRMC.line}`, background: CRMC.surface, color: CRMC.ink3, cursor: 'pointer' }}>cancelar</button>
                     </div>
                   );
                 })}
               </div>
             ))}
-            {!minhas.length && <div style={{ padding: 20, textAlign: 'center', color: T.inkFaint }}>Nenhuma tarefa pendente{resp ? ` para ${resp}` : ''}.</div>}
+            {!minhas.length && <div style={{ padding: 20, textAlign: 'center', color: CRMC.ink3 }}>Nenhuma tarefa pendente{resp ? ` para ${resp}` : ''}.</div>}
           </div>
         );
       })()}
@@ -26216,23 +26347,23 @@ function CRM({ currentUser }) {
           .filter(e => !resp || e.nAb > 0)
           .sort((a, b) => b.vAb - a.vAb || a.nome.localeCompare(b.nome));
         return (
-          <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
+          <div style={{ background: CRMC.surface, border: `1px solid ${CRMC.line}`, borderRadius: 10, overflow: 'hidden' }}>
             <div style={{ overflowX: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-                <thead><tr style={{ background: T.panelAlt }}>
+                <thead><tr style={{ background: CRMC.surface2 }}>
                   {['Empresa', 'Segmento', 'Região', 'Cidade', 'CNPJ', 'Negócios abertos', 'Valor aberto'].map((h, i) => (
-                    <th key={h} style={{ padding: '8px 12px', fontSize: 10.5, fontWeight: 600, color: T.inkFaint, textAlign: i >= 5 ? 'right' : 'left' }}>{h}</th>
+                    <th key={h} style={{ padding: '8px 12px', fontSize: 10.5, fontWeight: 600, color: CRMC.ink3, textAlign: i >= 5 ? 'right' : 'left' }}>{h}</th>
                   ))}
                 </tr></thead>
                 <tbody>
                   {lista.slice(0, 400).map(e => (
-                    <tr key={e.id} onClick={() => setEmpresaAberta(e.id)} style={{ borderTop: `1px solid ${T.lineSoft}`, cursor: 'pointer' }}>
+                    <tr key={e.id} onClick={() => setEmpresaAberta(e.id)} style={{ borderTop: `1px solid ${CRMC.lineSoft}`, cursor: 'pointer' }}>
                       <td style={{ padding: '7px 12px' }}><div style={{ fontWeight: 600 }}>{e.nome}</div>
-                        {e.razao_social && e.razao_social !== e.nome && <div style={{ fontSize: 10.5, color: T.inkFaint }}>{e.razao_social}</div>}</td>
-                      <td style={{ padding: '7px 12px', color: T.inkDim }}>{e.segmento || '—'}</td>
-                      <td style={{ padding: '7px 12px', color: T.inkDim }}>{e.regiao || '—'}</td>
-                      <td style={{ padding: '7px 12px', color: T.inkDim }}>{[e.cidade, e.uf].filter(Boolean).join(' / ') || '—'}</td>
-                      <td style={{ padding: '7px 12px', color: T.inkDim, whiteSpace: 'nowrap' }}>{e.cnpj && e.cnpj !== '—' ? e.cnpj : '—'}</td>
+                        {e.razao_social && e.razao_social !== e.nome && <div style={{ fontSize: 10.5, color: CRMC.ink3 }}>{e.razao_social}</div>}</td>
+                      <td style={{ padding: '7px 12px', color: CRMC.ink2 }}>{e.segmento || '—'}</td>
+                      <td style={{ padding: '7px 12px', color: CRMC.ink2 }}>{e.regiao || '—'}</td>
+                      <td style={{ padding: '7px 12px', color: CRMC.ink2 }}>{[e.cidade, e.uf].filter(Boolean).join(' / ') || '—'}</td>
+                      <td style={{ padding: '7px 12px', color: CRMC.ink2, whiteSpace: 'nowrap' }}>{e.cnpj && e.cnpj !== '—' ? e.cnpj : '—'}</td>
                       <td style={{ padding: '7px 12px', textAlign: 'right' }}>{e.nAb || '—'}</td>
                       <td style={{ padding: '7px 12px', textAlign: 'right', fontWeight: 600 }}>{e.vAb ? moeda(e.vAb) : '—'}</td>
                     </tr>
@@ -26255,11 +26386,11 @@ function CRM({ currentUser }) {
 
       {perda && (
         <div onClick={() => setPerda(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(20,18,15,0.45)', zIndex: 80, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
-          <div onClick={e => e.stopPropagation()} style={{ background: T.panel, borderRadius: 10, padding: 18, width: '100%', maxWidth: 440 }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: CRMC.surface, borderRadius: 10, padding: 18, width: '100%', maxWidth: 440 }}>
             <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 4 }}>
               {perda.negocio.pipeline_id === 'leads' ? 'Por que descartar' : 'Por que perdeu'} {perda.negocio.br || perda.negocio.titulo}?
             </div>
-            <div style={{ fontSize: 11.5, color: T.inkFaint, marginBottom: 10 }}>O motivo é obrigatório e fica no histórico.</div>
+            <div style={{ fontSize: 11.5, color: CRMC.ink3, marginBottom: 10 }}>O motivo é obrigatório e fica no histórico.</div>
             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
               {(perda.negocio.pipeline_id === 'leads'
                 ? ['Sem perfil', 'Sem orçamento', 'Sem retorno', 'Já é cliente de concorrente', 'Duplicado']
@@ -26308,9 +26439,9 @@ function CRM({ currentUser }) {
         };
         return (
           <div onClick={() => setNovoNeg(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(20,18,15,0.45)', zIndex: 80, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
-            <div onClick={e => e.stopPropagation()} style={{ background: T.panel, borderRadius: 10, padding: 18, width: '100%', maxWidth: 520, display: 'flex', flexDirection: 'column', gap: 8, maxHeight: '90vh', overflowY: 'auto' }}>
+            <div onClick={e => e.stopPropagation()} style={{ background: CRMC.surface, borderRadius: 10, padding: 18, width: '100%', maxWidth: 520, display: 'flex', flexDirection: 'column', gap: 8, maxHeight: '90vh', overflowY: 'auto' }}>
               <div style={{ fontSize: 14, fontWeight: 700 }}>{ehLead ? 'Novo lead' : 'Nova oportunidade'}</div>
-              <div style={{ fontSize: 11.5, color: T.inkFaint }}>
+              <div style={{ fontSize: 11.5, color: CRMC.ink3 }}>
                 {ehLead ? 'Contato que ainda precisa ser qualificado. Quando virar negócio, leve até "Convertido".'
                         : 'Para o que ainda não tem BR: visita, contato, indicação. Quando a proposta sair, é só ligar o BR na ficha.'}
               </div>
@@ -26440,36 +26571,65 @@ function CRMDashboard({ negocios, empresas, atividades, etapas, devemFechar, res
     }).sort((a, b) => b.aberto - a.aberto);
   const maxV = Math.max(1, ...vends.map(x => Math.max(x.aberto, x.ganho)));
 
+  // indicadores do briefing (dados reais do CRM; "deve fechar" segue a regra da Diretoria)
+  const probEt = (n) => n.probabilidade ?? etapaPorId[n.etapa_id]?.probabilidade ?? 0;
+  const ponderado = abertos.reduce((x, n) => x + (Number(n.valor) || 0) * (probEt(n) / 100), 0);
+  const decididos = ganhos.length + perdidos.length;
+  const convQ = decididos ? ganhos.length / decididos : null;
+  const convV = (soma(ganhos) + soma(perdidos)) ? soma(ganhos) / (soma(ganhos) + soma(perdidos)) : null;
+  const aguardando = abertos.filter(n => etapaPorId[n.etapa_id]?.codigo === 'proposta');
+  const comTarefa = new Set(atividades.filter(a => a.negocio_id).map(a => a.negocio_id));
+  const semAcao = abertos.filter(n => !comTarefa.has(n.id));
+  // previsão de fechamento por mês (texto MM/AAAA no negócio): vencidas, próximos 6 meses, sem previsão
+  const hojeM = new Date(); const chaveM = (a, m) => a * 12 + m;
+  const agoraM = chaveM(hojeM.getFullYear(), hojeM.getMonth() + 1);
+  const meses6 = Array.from({ length: 6 }, (_, k) => { const t = agoraM + k; return { a: Math.floor((t - 1) / 12), m: ((t - 1) % 12) + 1, t }; });
+  const prevDe = (n) => { const x = /^(\d{2})\/(\d{4})$/.exec(String(n.previsao_fechamento || '').trim()); return x ? chaveM(Number(x[2]), Number(x[1])) : null; };
+  const vencidasPrev = abertos.filter(n => prevDe(n) != null && prevDe(n) < agoraM);
+  const semPrev = abertos.filter(n => prevDe(n) == null);
+  const prevMensal = [
+    { k: 'Vencidas', total: soma(vencidasPrev), rot: moeda(soma(vencidasPrev)), sub: `${vencidasPrev.length} negócio(s)` },
+    ...meses6.map(x => { const l = abertos.filter(n => prevDe(n) === x.t);
+      return { k: `${['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'][x.m - 1]}/${String(x.a).slice(2)}`, total: soma(l), rot: moeda(soma(l)), sub: `${l.length} negócio(s)` }; }),
+  ];
   const card = (titulo, sub, corpo, span) => (
-    <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 11, padding: '13px 15px', gridColumn: span ? '1 / -1' : undefined, minWidth: 0 }}>
-      <div style={{ fontSize: 12.5, fontWeight: 700 }}>{titulo}</div>
-      {sub && <div style={{ fontSize: 10.5, color: T.inkFaint, marginBottom: 10 }}>{sub}</div>}
+    <div style={{ background: CRMC.surface, border: `1px solid ${CRMC.line}`, borderRadius: 12, padding: '15px 17px', gridColumn: span ? '1 / -1' : undefined, minWidth: 0 }}>
+      <div style={{ fontSize: 14, fontWeight: 600, color: CRMC.ink }}>{titulo}</div>
+      {sub && <div style={{ fontSize: 12, color: CRMC.ink3, marginBottom: 12, marginTop: 2 }}>{sub}</div>}
       {corpo}
     </div>
   );
-  const vazio = (t) => <div style={{ fontSize: 11.5, color: T.inkFaint, padding: '8px 0' }}>{t}</div>;
+  const vazio = (t) => <div style={{ fontSize: 11.5, color: CRMC.ink3, padding: '8px 0' }}>{t}</div>;
   const kpis = [
-    { t: 'Em aberto (Vendas)', v: moeda(soma(abertos)), s: `${abertos.length} negócios`, p: G.ambar },
-    { t: 'Devem fechar', v: moeda(soma(fecham)), s: `${fecham.length} pedidos · valor cheio`, p: G.verde, h: 'Em cada etapa de negociação fecham negócios × chance, escolhidos pelo relacionamento do cliente' },
-    ...(!resp && kdbAno ? [{ t: `Vendido em ${kdbAno.ano} (KdB)`, v: moeda(Number(kdbAno.vendido)), s: `${kdbAno.entradas} pedidos`, p: G.roxo }] : []),
-    ...(!resp && kdbAno ? [{ t: 'Ticket médio', v: moeda(Number(kdbAno.vendido) / Math.max(1, Number(kdbAno.brs))), s: `por BR vendido em ${kdbAno.ano}`, p: G.azul }] : []),
-    { t: 'Leads em aberto', v: String(leadsAbertos.length), s: leadsConv.length + leadsDesc.length ? `${Math.round(100 * leadsConv.length / (leadsConv.length + leadsDesc.length))}% convertem` : 'sem histórico ainda', p: G.ciano },
-    { t: 'Tarefas atrasadas', v: String(atrasadas.length), s: `de ${ativs.length} pendentes`, p: atrasadas.length ? G.vermelho : G.verde },
-    { t: 'Clientes sem contato', v: String(semContato.length), s: `60+ dias · ${moeda(soma(semContato))} em aberto`, p: semContato.length ? G.vermelho : G.verde },
+    { t: 'Pipeline aberto (Vendas)', v: moeda(soma(abertos)), s: `${abertos.length} negócios` },
+    { t: 'Pipeline ponderado', v: moeda(ponderado), s: 'valor × chance da etapa', h: 'Soma de cada negócio aberto multiplicado pela chance da etapa dele' },
+    { t: 'Ganhos', v: moeda(soma(ganhos)), s: `${ganhos.length} pedidos no funil`, cor: CRMC.win },
+    { t: 'Perdidos', v: moeda(soma(perdidos)), s: `${perdidos.length} negócios`, cor: CRMC.loss },
+    { t: 'Taxa de conversão', v: convQ == null ? '—' : `${Math.round(convQ * 100)}%`, s: convV == null ? 'sem decisões ainda' : `em quantidade · ${Math.round(convV * 100)}% em valor`, h: 'Ganhos ÷ (ganhos + perdidos)' },
+    { t: 'Propostas aguardando retorno', v: String(aguardando.length), s: `${moeda(soma(aguardando))} em "Proposta enviada"`, cor: aguardando.length ? CRMC.warn : undefined },
+    { t: 'Sem próxima ação', v: String(semAcao.length), s: `abertos sem tarefa · ${moeda(soma(semAcao))}`, cor: semAcao.length ? CRMC.warn : CRMC.win },
+    { t: 'Devem fechar', v: moeda(soma(fecham)), s: `${fecham.length} pedidos · valor cheio`, cor: CRMC.win, h: 'Em cada etapa de negociação fecham negócios × chance, escolhidos pelo relacionamento do cliente' },
+    ...(!resp && kdbAno ? [{ t: `Vendido em ${kdbAno.ano} (KdB)`, v: moeda(Number(kdbAno.vendido)), s: `${kdbAno.entradas} pedidos` }] : []),
+    ...(!resp && kdbAno ? [{ t: 'Ticket médio', v: moeda(Number(kdbAno.vendido) / Math.max(1, Number(kdbAno.brs))), s: `por BR vendido em ${kdbAno.ano}` }] : []),
+    { t: 'Leads em aberto', v: String(leadsAbertos.length), s: leadsConv.length + leadsDesc.length ? `${Math.round(100 * leadsConv.length / (leadsConv.length + leadsDesc.length))}% convertem` : 'sem histórico ainda' },
+    { t: 'Tarefas atrasadas', v: String(atrasadas.length), s: `de ${ativs.length} pendentes`, cor: atrasadas.length ? CRMC.loss : CRMC.win },
+    { t: 'Clientes sem contato', v: String(semContato.length), s: `60+ dias · ${moeda(soma(semContato))} em aberto`, cor: semContato.length ? CRMC.loss : CRMC.win },
   ];
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      <div style={{ display: 'grid', gap: 9, gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <div style={{ display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fit, minmax(175px, 1fr))' }}>
         {kpis.map(k => (
-          <div key={k.t} title={k.h || ''} style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 11, padding: '12px 14px', position: 'relative', overflow: 'hidden' }}>
-            <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 3, background: `linear-gradient(90deg, ${k.p[0]}, ${k.p[1]})` }} />
-            <div style={{ fontSize: 10.5, color: T.inkFaint }}>{k.t}</div>
-            <div style={{ fontSize: 20, fontWeight: 800, color: k.p[1], fontVariantNumeric: 'tabular-nums' }}>{k.v}</div>
-            <div style={{ fontSize: 10, color: T.inkFaint }}>{k.s}</div>
+          <div key={k.t} title={k.h || ''} style={{ background: CRMC.surface, border: `1px solid ${CRMC.line}`, borderRadius: 12, padding: '13px 15px', minWidth: 0 }}>
+            <div style={{ fontSize: 12, color: CRMC.ink3, fontWeight: 500 }}>{k.t}</div>
+            <div style={{ fontSize: 21, fontWeight: 700, color: k.cor || CRMC.ink, fontVariantNumeric: 'tabular-nums', marginTop: 3 }}>{k.v}</div>
+            <div style={{ fontSize: 11.5, color: CRMC.ink3, marginTop: 1 }}>{k.s}</div>
           </div>
         ))}
       </div>
+
+      {card('Previsão de fechamento por mês', `pela previsão (MM/AAAA) preenchida no negócio · ${abertos.length - semPrev.length} de ${abertos.length} abertos têm previsão; ${semPrev.length} sem previsão (${moeda(soma(semPrev))}) ficam fora do gráfico`,
+        abertos.length - semPrev.length ? <Colunas dados={prevMensal} par={G.azul} altura={170} /> : vazio('Nenhum negócio aberto com previsão de fechamento preenchida.'))}
 
       <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))' }}>
         {card('Funil de Vendas por etapa', 'valor em aberto · a parte forte é o que deve fechar, com o valor cheio · clique para abrir o funil',
@@ -26482,23 +26642,23 @@ function CRMDashboard({ negocios, empresas, atividades, etapas, devemFechar, res
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
               <thead><tr>
                 {['Vendedor', 'Em aberto', 'Deve fechar', 'Ganho', 'Perdidos', 'Atrasadas'].map((h, i) => (
-                  <th key={h} style={{ padding: '6px 8px', fontSize: 10.5, fontWeight: 600, color: T.inkFaint, textAlign: i ? 'right' : 'left' }}>{h}</th>
+                  <th key={h} style={{ padding: '6px 8px', fontSize: 10.5, fontWeight: 600, color: CRMC.ink3, textAlign: i ? 'right' : 'left' }}>{h}</th>
                 ))}
               </tr></thead>
               <tbody>
                 {vends.map(x => (
-                  <tr key={x.v} style={{ borderTop: `1px solid ${T.lineSoft}` }}>
+                  <tr key={x.v} style={{ borderTop: `1px solid ${CRMC.lineSoft}` }}>
                     <td style={{ padding: '7px 8px', fontWeight: 600, whiteSpace: 'nowrap' }}>{x.v}</td>
                     {[[x.aberto, x.nAb, G.ambar], [x.fecha, x.nFe, G.verde], [x.ganho, x.nGa, G.roxo]].map(([v, n, p], j) => (
                       <td key={j} style={{ padding: '7px 8px', textAlign: 'right', minWidth: 120 }}>
-                        <div style={{ fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{moeda(v)} <span style={{ fontWeight: 400, color: T.inkFaint, fontSize: 10.5 }}>· {n}</span></div>
-                        <div style={{ height: 4, background: T.lineSoft, borderRadius: 2, marginTop: 3 }}>
+                        <div style={{ fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{moeda(v)} <span style={{ fontWeight: 400, color: CRMC.ink3, fontSize: 10.5 }}>· {n}</span></div>
+                        <div style={{ height: 4, background: CRMC.lineSoft, borderRadius: 2, marginTop: 3 }}>
                           <div style={{ height: 4, width: `${100 * v / maxV}%`, background: `linear-gradient(90deg, ${p[0]}, ${p[1]})`, borderRadius: 2, marginLeft: 'auto' }} />
                         </div>
                       </td>
                     ))}
-                    <td style={{ padding: '7px 8px', textAlign: 'right', color: T.inkDim }}>{x.nPe}</td>
-                    <td style={{ padding: '7px 8px', textAlign: 'right', color: x.atras ? T.rustText : T.inkFaint, fontWeight: x.atras ? 700 : 400 }}>{x.atras}</td>
+                    <td style={{ padding: '7px 8px', textAlign: 'right', color: CRMC.ink2 }}>{x.nPe}</td>
+                    <td style={{ padding: '7px 8px', textAlign: 'right', color: x.atras ? CRMC.loss : CRMC.ink3, fontWeight: x.atras ? 700 : 400 }}>{x.atras}</td>
                   </tr>
                 ))}
               </tbody>
@@ -26527,17 +26687,17 @@ function CRMDashboard({ negocios, empresas, atividades, etapas, devemFechar, res
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                 <thead><tr>
                   {['Cliente', 'Região', 'Negócios', 'Em aberto', 'Último contato'].map((h, i) => (
-                    <th key={h} style={{ padding: '6px 8px', fontSize: 10.5, fontWeight: 600, color: T.inkFaint, textAlign: i >= 2 ? 'right' : 'left', position: 'sticky', top: 0, background: T.panel }}>{h}</th>
+                    <th key={h} style={{ padding: '6px 8px', fontSize: 10.5, fontWeight: 600, color: CRMC.ink3, textAlign: i >= 2 ? 'right' : 'left', position: 'sticky', top: 0, background: CRMC.surface }}>{h}</th>
                   ))}
                 </tr></thead>
                 <tbody>
                   {semContato.slice(0, 60).map(x => (
-                    <tr key={x.emp.id} onClick={() => onAbrirEmpresa(x.emp.id)} style={{ borderTop: `1px solid ${T.lineSoft}`, cursor: 'pointer' }}>
+                    <tr key={x.emp.id} onClick={() => onAbrirEmpresa(x.emp.id)} style={{ borderTop: `1px solid ${CRMC.lineSoft}`, cursor: 'pointer' }}>
                       <td style={{ padding: '6px 8px', fontWeight: 600 }}>{x.emp.nome}</td>
-                      <td style={{ padding: '6px 8px', color: T.inkDim }}>{x.emp.regiao || '—'}</td>
+                      <td style={{ padding: '6px 8px', color: CRMC.ink2 }}>{x.emp.regiao || '—'}</td>
                       <td style={{ padding: '6px 8px', textAlign: 'right' }}>{x.n}</td>
                       <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 700 }}>{moeda(x.valor)}</td>
-                      <td style={{ padding: '6px 8px', textAlign: 'right', color: T.rustText }}>{x.dias == null ? 'nunca registrado' : `${x.dias} dias`}</td>
+                      <td style={{ padding: '6px 8px', textAlign: 'right', color: CRMC.loss }}>{x.dias == null ? 'nunca registrado' : `${x.dias} dias`}</td>
                     </tr>
                   ))}
                 </tbody>
