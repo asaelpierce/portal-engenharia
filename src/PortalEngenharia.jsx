@@ -288,6 +288,7 @@ export default function PortalEngenharia() {
 
   const [session, setSession] = useState(undefined); // undefined = carregando, null = sem sessão
   // painel público de faturamento por segmento (…/?painel=segmentos&k=…): sem login
+  const [paginaCrm] = useState(() => { try { return new URLSearchParams(window.location.search).get('pagina') === 'crm'; } catch { return false; } });
   const [painelPublico] = useState(() => {
     try {
       const q = new URLSearchParams(window.location.search);
@@ -355,6 +356,10 @@ export default function PortalEngenharia() {
   }
   if (!currentUser) {
     return <TelaCarregando texto="Carregando seu perfil…" />;
+  }
+  // CRM em página própria (…/?pagina=crm): mesma sessão e mesma permissão do Painel Comercial
+  if (paginaCrm) {
+    return <CRMPagina currentUser={currentUser} />;
   }
 
   return <PortalConteudo currentUser={currentUser} session={session} />;
@@ -9260,6 +9265,7 @@ function FollowUpComercial({ currentUser }) {
 
 function PainelComercial({ currentUser }) {
   const [subAba, setSubAba] = useState('faturamento');
+  const subAbaAnterior = useRef(null);   // de onde veio ao abrir o CRM em tela cheia
   const hoje = new Date();
   const mesAtual = `${hoje.getFullYear()}-${String(hoje.getMonth()+1).padStart(2,'0')}`;
   const [registros, setRegistros] = useState([]);
@@ -9530,7 +9536,7 @@ function PainelComercial({ currentUser }) {
           { id: 'crm', label: 'CRM' },
           { id: 'diretoria', label: 'Diretoria' },
           { id: 'modelo', label: 'Modelo Preditivo' }].map(ab => (
-          <button key={ab.id} onClick={() => setSubAba(ab.id)} style={{
+          <button key={ab.id} onClick={() => { if (ab.id === 'crm' && subAba !== 'crm') subAbaAnterior.current = subAba; setSubAba(ab.id); }} style={{
             background: 'none', border: 'none', cursor: 'pointer', padding: '9px 16px',
             fontSize: 13, fontFamily: 'inherit',
             fontWeight: subAba === ab.id ? 700 : 500,
@@ -9541,7 +9547,8 @@ function PainelComercial({ currentUser }) {
         ))}
       </div>
 
-      {subAba === 'modelo' ? <ModeloPreditivo /> : subAba === 'followup' ? <FollowUpComercial currentUser={currentUser} /> : subAba === 'crm' ? <CRM currentUser={currentUser} /> : subAba === 'diretoria' ? <PainelDiretoria /> : <>
+      {subAba === 'crm' && <CRMTelaCheia currentUser={currentUser} onSair={() => setSubAba(subAbaAnterior.current || 'faturamento')} />}
+      {subAba === 'modelo' ? <ModeloPreditivo /> : subAba === 'followup' ? <FollowUpComercial currentUser={currentUser} /> : subAba === 'crm' ? null : subAba === 'diretoria' ? <PainelDiretoria /> : <>
 
       {/* Filtro de período — de/até */}
       <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '14px 18px' }}>
@@ -25880,7 +25887,39 @@ const crmIniciais = (nome) => String(nome || '?').trim().split(/\s+/).slice(0, 2
 const crmPrevVencida = (prev) => { const m = /^(\d{2})\/(\d{4})$/.exec(String(prev || '').trim()); if (!m) return false;
   const hoje = new Date(); return Number(m[2]) * 12 + Number(m[1]) < hoje.getFullYear() * 12 + hoje.getMonth() + 1; };
 
-function CRM({ currentUser }) {
+// CRM em tela cheia (Asael, 20/10/2026): ao clicar em CRM no Painel Comercial, o CRM cobre a tela inteira,
+// sem o menu do portal. Esc ou "Voltar ao portal" fecha. Janelas internas do CRM (z-index 80) ficam por cima.
+function CRMTelaCheia({ currentUser, onSair }) {
+  useEffect(() => {
+    const tecla = e => { if (e.key === 'Escape' && !document.querySelector('[data-crm-modal]')) onSair(); };
+    window.addEventListener('keydown', tecla);
+    const antes = document.body.style.overflow; document.body.style.overflow = 'hidden';
+    return () => { window.removeEventListener('keydown', tecla); document.body.style.overflow = antes; };
+  }, [onSair]);
+  return (
+    <div role="dialog" aria-label="CRM Comercial em tela cheia" style={{ position: 'fixed', inset: 0, zIndex: 70, background: CRMC.bg, overflow: 'auto' }}>
+      <CRM currentUser={currentUser} telaCheia onSair={onSair} />
+    </div>
+  );
+}
+
+// CRM em página própria (…/?pagina=crm): para deixar aberto numa aba separada do navegador.
+// Mesma regra de acesso do Painel Comercial (colaborador_telas).
+function CRMPagina({ currentUser }) {
+  // sem telas cadastradas = acesso total (regra antiga); o papel 'comercial' legado também inclui o Painel Comercial
+  const permitidos = currentUser.telasPermitidas || null;
+  useEffect(() => { document.title = 'CRM Comercial · Kalenborn'; }, []);
+  if (permitidos && !permitidos.includes('comercial')) {
+    return <div style={{ padding: 40, fontFamily: 'inherit', color: CRMC.ink }}>Seu usuário não tem acesso ao Painel Comercial. <a href="/">Voltar ao portal</a></div>;
+  }
+  return (
+    <div style={{ minHeight: '100vh', background: CRMC.bg }}>
+      <CRM currentUser={currentUser} telaCheia onSair={() => { window.location.href = '/'; }} />
+    </div>
+  );
+}
+
+function CRM({ currentUser, telaCheia = false, onSair = null }) {
   const autor = currentUser?.nome || currentUser?.email || 'portal';
   const [aba, setAba] = useState('funil');
   const [pipeline, setPipeline] = useState('vendas');
@@ -26014,11 +26053,19 @@ function CRM({ currentUser }) {
 
   const atrasadasTot = atividades.filter(a => (!resp || a.responsavel === resp) && a.vencimento && new Date(a.vencimento) < new Date()).length;
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 14, marginTop: 14, padding: 18, background: CRMC.bg, borderRadius: 14, border: `1px solid ${CRMC.line}`, color: CRMC.ink }}>
+    <div style={telaCheia
+      ? { display: 'flex', flexDirection: 'column', gap: 14, padding: '16px 24px 28px', background: CRMC.bg, color: CRMC.ink, minHeight: '100%', boxSizing: 'border-box' }
+      : { display: 'flex', flexDirection: 'column', gap: 14, marginTop: 14, padding: 18, background: CRMC.bg, borderRadius: 14, border: `1px solid ${CRMC.line}`, color: CRMC.ink }}>
       {/* cabeçalho: título, navegação e filtros globais numa linha */}
       <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'center' }}>
+        {onSair && (
+          <button onClick={onSair} title="Voltar ao portal (Esc)"
+            style={{ fontFamily: 'inherit', fontSize: 12.5, fontWeight: 600, padding: '7px 12px', borderRadius: 8, cursor: 'pointer', border: `1px solid ${CRMC.line}`, background: CRMC.surface, color: CRMC.ink2 }}>
+            ← Voltar ao portal
+          </button>
+        )}
         <div style={{ marginRight: 6 }}>
-          <div style={{ fontSize: 18, fontWeight: 700, letterSpacing: -0.2 }}>CRM Comercial</div>
+          <div style={{ fontSize: telaCheia ? 20 : 18, fontWeight: 700, letterSpacing: -0.2 }}>CRM Comercial</div>
           <div style={{ fontSize: 12, color: CRMC.ink3 }}>{perfil.ve_tudo ? (resp ? `Carteira de ${resp}` : 'Toda a equipe') : `Sua carteira · ${perfil.vendedor}`}</div>
         </div>
         {segmento([['dashboard', 'Dashboard'], ['funil', 'Funil'], ['tarefas', <span key="t">Tarefas{atividades.length ? <span style={{ marginLeft: 6, fontSize: 11, fontWeight: 700, padding: '1px 7px', borderRadius: 10, background: atrasadasTot ? CRMC.lossSoft : CRMC.lineSoft, color: atrasadasTot ? CRMC.loss : CRMC.ink2 }}>{atividades.filter(a => !resp || a.responsavel === resp).length}</span> : null}</span>], ['empresas', 'Empresas']], aba, setAba)}
@@ -26033,6 +26080,12 @@ function CRM({ currentUser }) {
           <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Buscar BR, empresa, título ou concorrente" aria-label="Buscar"
             style={{ ...campo, minWidth: 280, paddingLeft: 28 }} />
         </div>
+        {!(typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('pagina') === 'crm') && (
+          <a href="/?pagina=crm" target="_blank" rel="noopener noreferrer" title="Abre o CRM numa aba separada do navegador, em tela inteira"
+            style={{ fontSize: 12.5, fontWeight: 600, padding: '7px 12px', borderRadius: 8, border: `1px solid ${CRMC.line}`, background: CRMC.surface, color: CRMC.primary, textDecoration: 'none', whiteSpace: 'nowrap' }}>
+            Abrir em nova aba ↗
+          </a>
+        )}
       </div>
 
       {aviso && (
@@ -26111,7 +26164,7 @@ function CRM({ currentUser }) {
                       onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget)) setDragSobre(null); }}
                       onDrop={e => { e.preventDefault(); setDragSobre(null); if (arrastando && arrastando.etapa_id !== et.id) mover(arrastando, et.codigo); setArrastando(null); }}
                       style={{ width: 292, flex: '0 0 292px', background: sobre ? CRMC.primarySoft : CRMC.surface2, borderRadius: 12,
-                        border: `1px ${sobre ? 'dashed' : 'solid'} ${sobre ? CRMC.primary : CRMC.line}`, display: 'flex', flexDirection: 'column', maxHeight: '70vh', transition: 'background .15s' }}>
+                        border: `1px ${sobre ? 'dashed' : 'solid'} ${sobre ? CRMC.primary : CRMC.line}`, display: 'flex', flexDirection: 'column', maxHeight: telaCheia ? 'calc(100vh - 290px)' : '70vh', minHeight: telaCheia ? 320 : undefined, transition: 'background .15s' }}>
                       <header style={{ padding: '12px 14px 10px', borderBottom: `1px solid ${CRMC.line}` }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                           <span aria-hidden="true" style={{ width: 9, height: 9, borderRadius: 3, background: corEt, flex: 'none' }} />
@@ -26385,7 +26438,7 @@ function CRM({ currentUser }) {
       )}
 
       {perda && (
-        <div onClick={() => setPerda(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(20,18,15,0.45)', zIndex: 80, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+        <div data-crm-modal onClick={() => setPerda(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(20,18,15,0.45)', zIndex: 80, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
           <div onClick={e => e.stopPropagation()} style={{ background: CRMC.surface, borderRadius: 10, padding: 18, width: '100%', maxWidth: 440 }}>
             <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 4 }}>
               {perda.negocio.pipeline_id === 'leads' ? 'Por que descartar' : 'Por que perdeu'} {perda.negocio.br || perda.negocio.titulo}?
@@ -26438,7 +26491,7 @@ function CRM({ currentUser }) {
           await carregar(); setAbertoId(data.id);
         };
         return (
-          <div onClick={() => setNovoNeg(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(20,18,15,0.45)', zIndex: 80, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+          <div data-crm-modal onClick={() => setNovoNeg(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(20,18,15,0.45)', zIndex: 80, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
             <div onClick={e => e.stopPropagation()} style={{ background: CRMC.surface, borderRadius: 10, padding: 18, width: '100%', maxWidth: 520, display: 'flex', flexDirection: 'column', gap: 8, maxHeight: '90vh', overflowY: 'auto' }}>
               <div style={{ fontSize: 14, fontWeight: 700 }}>{ehLead ? 'Novo lead' : 'Nova oportunidade'}</div>
               <div style={{ fontSize: 11.5, color: CRMC.ink3 }}>
