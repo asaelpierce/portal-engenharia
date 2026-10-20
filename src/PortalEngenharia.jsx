@@ -26813,7 +26813,7 @@ function CRMFichaNegocio({ negocio: n, etapas, empresa, vendedores, autor, onFec
   };
 
   return (
-    <div onClick={onFechar} style={{ position: 'fixed', inset: 0, background: 'rgba(20,18,15,0.35)', zIndex: 70, display: 'flex', justifyContent: 'flex-end' }}>
+    <div data-crm-modal onClick={onFechar} style={{ position: 'fixed', inset: 0, background: 'rgba(20,18,15,0.35)', zIndex: 70, display: 'flex', justifyContent: 'flex-end' }}>
       <div onClick={e => e.stopPropagation()} style={{ background: T.panel, width: 'min(620px, 100vw)', height: '100%', overflowY: 'auto', boxShadow: '-8px 0 30px rgba(0,0,0,0.2)' }}>
         <div style={{ padding: '14px 18px', borderBottom: `1px solid ${T.line}`, position: 'sticky', top: 0, background: T.panel, zIndex: 1 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10 }}>
@@ -27012,7 +27012,7 @@ function CRMFichaEmpresa({ empresa: e, negocios, etapaPorId, autor, onFechar, on
   if (!e) return null;
   const linha = (rot, v) => v ? <div style={{ fontSize: 12, color: T.inkDim }}><span style={{ color: T.inkFaint }}>{rot} </span>{v}</div> : null;
   return (
-    <div onClick={onFechar} style={{ position: 'fixed', inset: 0, background: 'rgba(20,18,15,0.35)', zIndex: 70, display: 'flex', justifyContent: 'flex-end' }}>
+    <div data-crm-modal onClick={onFechar} style={{ position: 'fixed', inset: 0, background: 'rgba(20,18,15,0.35)', zIndex: 70, display: 'flex', justifyContent: 'flex-end' }}>
       <div onClick={ev => ev.stopPropagation()} style={{ background: T.panel, width: 'min(580px, 100vw)', height: '100%', overflowY: 'auto', padding: '14px 18px', boxShadow: '-8px 0 30px rgba(0,0,0,0.2)' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10 }}>
           <div>
