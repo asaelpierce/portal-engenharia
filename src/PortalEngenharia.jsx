@@ -10975,6 +10975,39 @@ function AlmoxRegistro({ currentUser }) {
   );
 }
 
+// Registros do formulário GUE (planilha histórica) dizem o material por CATEGORIA ("Placa KLC", "Chapa",
+// "Elemento de Fixação"...), não por item. Liga cada item da OP à categoria pela descrição, para a tela mostrar
+// onde o formulário diz que ele está quando ainda não há etiqueta QR.
+const almoxSemAcento = (t) => String(t || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase();
+const almoxCategoriaItem = (descr) => {
+  const d = almoxSemAcento(descr);
+  if (/STUD|WELDING/.test(d)) return 'stud';
+  if (/PASTILHA/.test(d)) return 'pastilha';
+  if (/\bABT\b/.test(d)) return 'abt';
+  if (/KLC|KALOCER|TEOR\s*9/.test(d) || (/PLACA/.test(d) && /CERAM/.test(d))) return 'placa';
+  if (/CHAPA/.test(d)) return 'chapa';
+  if (/FITA/.test(d)) return 'fita';
+  if (/COLA|ADESIV|CHEMITAC|MASSA/.test(d)) return 'cola';
+  if (/PARAFUSO|PORCA|ARRUELA|CHUMBADOR|REBITE|BUCHA|PINO/.test(d)) return 'fixacao';
+  if (/FLANGE|ANEL\b|ANEIS/.test(d)) return 'flange';
+  if (/TUBO/.test(d)) return 'tubo';
+  if (/CILINDRO/.test(d)) return 'cilindro';
+  if (/METALLIC|MWP/.test(d)) return 'mwp';
+  if (/KALCRET/.test(d)) return 'kalcret';
+  if (/\bACO\b|BARRA|CANTONEIRA|PERFIL|VIGA|TARUGO/.test(d)) return 'aco';
+  return null;
+};
+const almoxCategoriasRegistro = (material) => {
+  const d = almoxSemAcento(material); const c = new Set();
+  if (/STUD/.test(d)) c.add('stud'); if (/PASTILHA/.test(d)) c.add('pastilha'); if (/ABT/.test(d)) c.add('abt');
+  if (/PLACA\s*KLC|KLC/.test(d) && !/PASTILHA KLC/.test(d.replace(/PLACA\s*KLC/g, ''))) c.add('placa');
+  if (/PLACA\s*KLC/.test(d)) c.add('placa');
+  if (/CHAPA/.test(d)) c.add('chapa'); if (/FITA/.test(d)) c.add('fita'); if (/COLA/.test(d)) c.add('cola'); if (/FIXA/.test(d)) c.add('fixacao');
+  if (/FLANGE|ANEL|ANEIS/.test(d)) c.add('flange'); if (/TUBO/.test(d)) c.add('tubo'); if (/CILINDRO/.test(d)) c.add('cilindro');
+  if (/METALLIC/.test(d)) c.add('mwp'); if (/KALCRET/.test(d)) c.add('kalcret'); if (/\bACO\b/.test(d)) c.add('aco');
+  return c;
+};
+
 function AlmoxMovimentar({ currentUser, codigoInicial }) {
   const pode = currentUser?.movimentaEstoque === true;   // sem permissão: só consulta
   const [ops, setOps] = useState([]);
@@ -10984,6 +11017,7 @@ function AlmoxMovimentar({ currentUser, codigoInicial }) {
   const [itens, setItens] = useState([]);
   const [vols, setVols] = useState([]);
   const [solicOp, setSolicOp] = useState([]);
+  const [formOp, setFormOp] = useState([]);   // registros do formulário GUE da OP (planilha histórica)
   const [hist, setHist] = useState([]);
   const [pendentes, setPendentes] = useState([]);
   const [marc, setMarc] = useState({});
@@ -11130,13 +11164,14 @@ function AlmoxMovimentar({ currentUser, codigoInicial }) {
   const carregarOp = useCallback(async (o) => {
     if (!o) return;
     setCarregandoOp(true);
-    const [m, v, s, h] = await Promise.all([
+    const [m, v, s, h, fg] = await Promise.all([
       supabase.from('almoxarifado_op_materiais').select('*').eq('op', o.op).order('materia_prima_descricao'),
       supabase.from('almox_volume').select('*').eq('op', o.op).neq('status', 'cancelado').order('id'),
       supabase.from('solicitacoes_movimentacao_almoxarifado').select('*').eq('op', o.op).eq('status', 'pendente').order('solicitado_em'),
       supabase.from('almox_entrega').select('*').eq('op', o.op).order('criado_em', { ascending: false }).limit(300),
+      supabase.from('almoxarifado_movimentacoes').select('carimbo_data_hora,material,setor,observacao,origem').eq('op', String(o.op)).neq('origem', 'qr').order('carimbo_data_hora').limit(500),
     ]);
-    setItens(m.data || []); setVols(v.data || []); setSolicOp(s.data || []); setHist(h.data || []);
+    setItens(m.data || []); setVols(v.data || []); setSolicOp(s.data || []); setHist(h.data || []); setFormOp(fg.data || []);
     const { data: nv } = await supabase.from('v_almox_nova_necessidade').select('*').eq('op', o.op).order('descricao');
     setNovas(nv || []);
     const vids = (v.data || []).map(x => x.id);
@@ -11192,8 +11227,11 @@ function AlmoxMovimentar({ currentUser, codigoInicial }) {
     }
     const peds = solicOp.filter(s => almoxChaveItem(s.op, s.cod_materia_prima, s.material) === kBase && (!s.volume_id || doItem.some(v => v.id === s.volume_id) || !m.nova));
     const h = hist.filter(e => doItem.some(v => v.id === e.volume_id) || (!m.nova && almoxChaveItem(e.op, null, e.material) === almoxChaveItem(m.op, null, m.materia_prima_descricao)));
-    return { m, k, vol, peds, h };
-  }), [itens, novas, vols, solicOp, hist]);
+    const cat = almoxCategoriaItem(m.materia_prima_descricao);
+    const form = cat ? formOp.filter(r => r.setor && r.setor !== 'Projeto Faturado' && almoxCategoriasRegistro(r.material).has(cat)) : [];
+    return { m, k, vol, peds, h, cat, form, ultForm: form[form.length - 1] || null };
+  }), [itens, novas, vols, solicOp, hist, formOp]);
+  const opFaturadaGue = formOp.find(r => r.setor === 'Projeto Faturado' || almoxSemAcento(r.material).includes('PROJETO FATURADO'));
 
   const itemParaEtiqueta = (m) => {
     const k = (m.nova ? 'N|' : '') + almoxChaveItem(m.op, m.cod_materia_prima, m.materia_prima_descricao);
@@ -11281,7 +11319,10 @@ function AlmoxMovimentar({ currentUser, codigoInicial }) {
   const selComEtiqueta = selec.filter(l => l.vol);
   const pendPorOp = pendentes.reduce((a, s) => { a[s.op] = (a[s.op] || 0) + 1; return a; }, {});
 
+  const dtGue = (d) => new Date(d).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit' });
   const situacao = (l) => {
+    if (!l.vol && l.ultForm) return { t: `Pelo GUE: ${l.ultForm.setor} · ${dtGue(l.ultForm.carimbo_data_hora)}`, bg: '#F1EBFE', c: '#6D28D9',
+      dica: `Registros do formulário GUE para "${l.ultForm.material}":\n${l.form.map(r => `${dtGue(r.carimbo_data_hora)} → ${r.setor}${r.observacao ? ` (${r.observacao})` : ''}`).join('\n')}` };
     if (!l.vol) return { t: 'Ainda não deu entrada', bg: T.panelAlt, c: T.inkFaint };
     if (l.vol.status === 'finalizado') return { t: `Finalizado · ${l.vol.setor_atual}`, bg: T.oliveSoft, c: T.oliveText };
     if (l.vol.setor_atual === 'Ponto de Estoque') return { t: 'No Ponto de Estoque', bg: T.amberSoft, c: T.amberText };
@@ -11390,6 +11431,16 @@ function AlmoxMovimentar({ currentUser, codigoInicial }) {
             <div style={{ fontSize: 12.5, padding: '9px 12px', borderRadius: 8, marginBottom: 10, background: T.rustSoft, border: `1px solid ${T.terracotta}`, color: T.ink }}>
               <strong style={{ color: T.terracotta }}>🆕 Esta OP tem nova necessidade: {novas.length} item(ns) além da lista de materiais.</strong>
               <div style={{ color: T.inkDim, marginTop: 2 }}>Pedido(s) de requisição no Sankhya: {[...new Set(novas.map(n => n.requisicoes))].join(' · ')}. Os itens aparecem no fim da lista, marcados — dê entrada e gere o QR próprio de cada um.</div>
+            </div>
+          )}
+          {opSel && !carregandoOp && formOp.length > 0 && (
+            <div style={{ fontSize: 12.5, padding: '9px 12px', borderRadius: 8, marginBottom: 10, background: '#F6F2FE', border: '1px solid #DDD0FB', color: T.ink }}>
+              <strong style={{ color: '#6D28D9' }}>Formulário GUE: {formOp.length} registro(s) desta OP</strong>
+              <span style={{ color: T.inkDim }}> · o GUE registra por categoria (Placa KLC, Chapa…); os itens sem etiqueta QR mostram "Pelo GUE" com o último setor registrado.</span>
+              <div style={{ marginTop: 4, color: T.inkDim, lineHeight: 1.5 }}>
+                {formOp.map((r, k) => <div key={k}>{dtGue(r.carimbo_data_hora)} · <strong>{r.material}</strong> → {r.setor}{r.observacao ? ` · ${r.observacao}` : ''}</div>)}
+              </div>
+              {opFaturadaGue && <div style={{ marginTop: 4, fontWeight: 700, color: T.rustText }}>Pelo GUE esta OP foi marcada como "Projeto Faturado" em {dtGue(opFaturadaGue.carimbo_data_hora)}.</div>}
             </div>
           )}
           {aviso && <div style={{ fontSize: 12.5, fontWeight: 600, padding: '8px 10px', borderRadius: 7, marginBottom: 10,
@@ -11511,7 +11562,17 @@ function AlmoxMovimentar({ currentUser, codigoInicial }) {
                             ) : almoxFmtQtd(l.vol.quantidade ?? l.m.quantidade_mp)}
                           </td>
                           <td style={{ padding: '8px 10px', borderBottom: `1px solid ${T.lineSoft}`, verticalAlign: 'top' }}>
-                            <span style={{ display: 'inline-block', fontSize: 11.5, fontWeight: 700, padding: '3px 8px', borderRadius: 6, background: sit.bg, color: sit.c, whiteSpace: 'nowrap' }}>{sit.t}</span>
+                            <span title={sit.dica || ''} style={{ display: 'inline-block', fontSize: 11.5, fontWeight: 700, padding: '3px 8px', borderRadius: 6, background: sit.bg, color: sit.c, whiteSpace: 'nowrap', cursor: sit.dica ? 'help' : 'default' }}>{sit.t}</span>
+                            {l.form.length > 0 && (
+                              <div title={sit.dica || ''} style={{ fontSize: 10.5, color: '#6D28D9', marginTop: 4, lineHeight: 1.45, maxWidth: 240 }}>
+                                GUE ({l.ultForm.material}): {l.form.map(r => `${dtGue(r.carimbo_data_hora).slice(0, 5)} ${r.setor}`).join(' → ')}
+                              </div>
+                            )}
+                            {l.vol && l.ultForm && new Date(l.ultForm.carimbo_data_hora) < new Date(l.vol.criado_em) && l.ultForm.setor !== l.vol.setor_atual && l.vol.setor_atual === 'Ponto de Estoque' && (
+                              <div style={{ fontSize: 10.5, fontWeight: 700, color: T.rustText, marginTop: 4, maxWidth: 240 }}>
+                                ⚠ pelo GUE, já foi para {l.ultForm.setor} em {dtGue(l.ultForm.carimbo_data_hora)} — conferir antes de movimentar
+                              </div>
+                            )}
                             {l.vol && saldosOp.filter(x => x.volume_id === l.vol.id).length > 1 && (
                               <div style={{ fontSize: 11, color: T.blueText, marginTop: 4, lineHeight: 1.5 }}>
                                 {saldosOp.filter(x => x.volume_id === l.vol.id).map(x => <div key={x.setor}>{x.setor}: <strong>{almoxFmtQtd(x.saldo)}</strong></div>)}
