@@ -32779,13 +32779,23 @@ function KalocerDetalhe({ item, ini, fim, onFechar }) {
   const [aba, setAba] = useState('resumo');
   const [f, setF] = useState({ mes: '', cat: '', local: '', busca: '' });
   const [hover, setHover] = useState(null);
+  const [mesSel, setMesSel] = useState(null);        // mês aberto na visão "Mês"
+  const [mesOps, setMesOps] = useState('');          // filtro de mês da aba Consumo por OP
+  const [cheia, setCheia] = useState(false);         // tela cheia
+  const rolagemRef = useRef(null); const caixaRef = useRef(null);
+  useEffect(() => { if (rolagemRef.current) rolagemRef.current.scrollTop = 0; }, [aba, mesSel]);
+  const alternarCheia = async () => {
+    const vai = !cheia; setCheia(vai);
+    try { if (vai && caixaRef.current?.requestFullscreen) await caixaRef.current.requestFullscreen(); else if (!vai && document.fullscreenElement) await document.exitFullscreen(); } catch { /* navegador sem tela cheia: fica a janela ampliada */ }
+  };
+  useEffect(() => { const sair = () => { if (!document.fullscreenElement) setCheia(false); }; document.addEventListener('fullscreenchange', sair); return () => document.removeEventListener('fullscreenchange', sair); }, []);
   useEffect(() => {
     supabase.rpc('fn_kalocer_kardex', { p_cod: Number(item.codigo_mp), p_ini: ini, p_fim: fim }).then(({ data, error }) => {
       if (error || !data?.ok) setErro(error?.message || data?.erro || 'Não foi possível consultar o Sankhya.'); else setD(data);
     });
   }, [item.codigo_mp, ini, fim]);
   useEffect(() => {
-    const t = (e) => { if (e.key === 'Escape') onFechar(); };
+    const t = (e) => { if (e.key !== 'Escape' || document.fullscreenElement) return; onFechar(); };
     window.addEventListener('keydown', t);
     const antes = document.body.style.overflow; document.body.style.overflow = 'hidden';
     return () => { window.removeEventListener('keydown', t); document.body.style.overflow = antes; };
@@ -32814,6 +32824,7 @@ function KalocerDetalhe({ item, ini, fim, onFechar }) {
     checagem = Math.round(((Number(d.saldo_inicial) || 0) + tot('liq') - (resumo.length ? resumo[resumo.length - 1].saldo : 0)) * 1000) / 1000;
   }
   const verMovs = (mes, cat) => { setF({ mes: mes || '', cat: cat || '', local: '', busca: '' }); setAba('movs'); };
+  const verMes = (mes) => { setMesSel(mes); setAba('mes'); };
 
   const exportar = async () => {
     if (!d) return;
@@ -32873,7 +32884,7 @@ function KalocerDetalhe({ item, ini, fim, onFechar }) {
           const x0 = ml + passo * k; const bw = Math.min(26, passo * 0.28);
           const on = hover === k;
           return (
-            <g key={r.m} style={{ cursor: 'pointer' }} onClick={() => verMovs(r.m)} onMouseEnter={() => setHover(k)} opacity={r.futuro ? 0.35 : 1}>
+            <g key={r.m} style={{ cursor: 'pointer' }} onClick={() => verMes(r.m)} onMouseEnter={() => setHover(k)} opacity={r.futuro ? 0.35 : 1}>
               <rect x={x0} y={mt} width={passo} height={H - mt - mb} fill={on ? C.surface2 : 'transparent'} />
               <rect x={x0 + passo / 2 - bw - 2} y={yB(r.entrada)} width={bw} height={Math.max(0, H - mb - yB(r.entrada))} rx="3" fill={KLC_CATS.entrada.cor} />
               <rect x={x0 + passo / 2 + 2} y={yB(r.consumo)} width={bw} height={Math.max(0, H - mb - yB(r.consumo))} rx="3" fill={KLC_CATS.consumo.cor} />
@@ -32926,13 +32937,13 @@ function KalocerDetalhe({ item, ini, fim, onFechar }) {
               </div>
             </div>
             {grafico()}
-            <div style={{ fontSize: 11.5, color: C.ink3, marginTop: 4 }}>Passe o mouse para ver os números do mês · clique para abrir os movimentos</div>
+            <div style={{ fontSize: 11.5, color: C.ink3, marginTop: 4 }}>Passe o mouse para ver os números do mês · clique para abrir o mês (OPs que consumiram e movimentos)</div>
           </section>
 
           <section style={{ background: C.surface, border: `1px solid ${C.line}`, borderRadius: 12, overflow: 'hidden', boxShadow: '0 1px 2px rgba(16,24,40,.04)' }}>
             <div style={{ padding: '14px 18px', borderBottom: `1px solid ${C.line}` }}>
               <h3 style={{ margin: 0, fontSize: 15, fontWeight: 600 }}>Resumo mês a mês</h3>
-              <div style={{ fontSize: 12, color: C.ink3, marginTop: 2 }}>clique no mês ou num valor para ver os movimentos que formam o número</div>
+              <div style={{ fontSize: 12, color: C.ink3, marginTop: 2 }}>clique no mês para ver as OPs e os movimentos dele · clique num valor para ver só os movimentos daquele tipo</div>
             </div>
             <div style={{ overflowX: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
@@ -32943,7 +32954,7 @@ function KalocerDetalhe({ item, ini, fim, onFechar }) {
                 <tbody>
                   {resumo.map((r, k) => (
                     <tr key={r.m} style={{ background: k % 2 ? C.surface2 : C.surface, opacity: r.futuro ? 0.45 : 1 }}>
-                      <td onClick={() => verMovs(r.m)} style={{ padding: '10px 14px', fontWeight: 600, color: C.primary, cursor: 'pointer', whiteSpace: 'nowrap' }}>{MES[Number(r.m.slice(5)) - 1]}/{r.m.slice(2, 4)}</td>
+                      <td onClick={() => verMes(r.m)} title="abrir o mês: OPs e movimentos" style={{ padding: '10px 14px', fontWeight: 600, color: C.primary, cursor: 'pointer', whiteSpace: 'nowrap' }}>{MES[Number(r.m.slice(5)) - 1]}/{r.m.slice(2, 4)}</td>
                       {cel(r, 'entrada', 'entrada', KLC_CATS.entrada.cor)}{cel(r, 'consumo', 'consumo', KLC_CATS.consumo.cor)}{cel(r, 'remessa', 'remessa')}{cel(r, 'retorno', 'retorno')}{cel(r, 'outra', 'outra')}
                       <td style={{ padding: '10px 14px', textAlign: 'right' }}>
                         {r.liq ? <span style={{ fontSize: 12, fontWeight: 700, padding: '2px 8px', borderRadius: 10, fontVariantNumeric: 'tabular-nums', color: r.liq < 0 ? C.loss : C.win, background: r.liq < 0 ? C.lossSoft : C.winSoft }}>{r.liq > 0 ? '+' : ''}{q(r.liq)}</span> : <span style={{ color: C.ink3 }}>—</span>}
@@ -32957,6 +32968,97 @@ function KalocerDetalhe({ item, ini, fim, onFechar }) {
                     <td style={{ padding: '12px 14px', textAlign: 'right', fontWeight: 700, color: tot('liq') < 0 ? C.loss : C.win }}>{tot('liq') > 0 ? '+' : ''}{q(tot('liq'))}</td>
                     <td style={{ padding: '12px 14px', textAlign: 'right', fontWeight: 700 }}>{q(resumo.length ? resumo[resumo.length - 1].saldo : d.saldo_inicial)}</td>
                   </tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+      );
+    }
+    if (aba === 'mes' && mesSel) {
+      const r = resumo.find(x => x.m === mesSel) || { entrada: 0, consumo: 0, remessa: 0, retorno: 0, outra: 0, liq: 0, saldo: 0 };
+      const idx = resumo.findIndex(x => x.m === mesSel);
+      const opsMes = (item.itens || []).filter(it => String(it.data_ref || '').startsWith(mesSel));
+      const porOp = {}; opsMes.forEach(it => { const k = it.nro_ordem_producao ?? it.nuapo; const o = porOp[k] || (porOp[k] = { op: k, prod: it.produto, desc: it.descricao_produto, br: it.br, cli: it.cliente_nome, lote: 0, qtd: 0, un: it.unidade_mp, datas: new Set() });
+        o.lote += Number(it.qtd_lote_pa) || 0; o.qtd += Number(it.qtd_mp) || 0; o.datas.add(it.data_ref); });
+      const ops = Object.values(porOp).sort((a2, b2) => b2.qtd - a2.qtd);
+      const totOps = ops.reduce((t, o) => t + o.qtd, 0);
+      const movsMes = movs.filter(m => m.mes === mesSel);
+      const nomeMes = `${['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'][Number(mesSel.slice(5)) - 1]} de ${mesSel.slice(0, 4)}`;
+      const nav = (dlt) => { const k = idx + dlt; if (resumo[k]) setMesSel(resumo[k].m); };
+      const mini = (rot, v, cor, cat) => (
+        <div onClick={cat && v ? () => verMovs(mesSel, cat) : undefined} style={{ background: C.surface, border: `1px solid ${C.line}`, borderRadius: 12, padding: '12px 14px', cursor: cat && v ? 'pointer' : 'default' }}>
+          <div style={{ fontSize: 12, color: C.ink2 }}>{rot}</div>
+          <div style={{ fontSize: 21, fontWeight: 700, color: v ? (cor || C.ink) : C.ink3, marginTop: 3, fontVariantNumeric: 'tabular-nums' }}>{v ? q(v) : '—'}</div>
+        </div>
+      );
+      return (
+        <div style={{ padding: '18px 24px 28px', display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <button onClick={() => setAba('resumo')} style={{ fontFamily: 'inherit', fontSize: 12.5, padding: '7px 12px', borderRadius: 8, border: `1px solid ${C.line}`, background: C.surface, color: C.ink2, cursor: 'pointer' }}>← Resumo</button>
+            <button onClick={() => nav(-1)} disabled={idx <= 0} aria-label="Mês anterior" style={{ fontFamily: 'inherit', width: 34, height: 34, borderRadius: 8, border: `1px solid ${C.line}`, background: C.surface, cursor: idx > 0 ? 'pointer' : 'default', color: C.ink2, opacity: idx > 0 ? 1 : 0.4 }}>‹</button>
+            <h3 style={{ margin: 0, fontSize: 20, fontWeight: 700, textTransform: 'capitalize', minWidth: 200 }}>{nomeMes}</h3>
+            <button onClick={() => nav(1)} disabled={idx >= resumo.length - 1} aria-label="Próximo mês" style={{ fontFamily: 'inherit', width: 34, height: 34, borderRadius: 8, border: `1px solid ${C.line}`, background: C.surface, cursor: idx < resumo.length - 1 ? 'pointer' : 'default', color: C.ink2, opacity: idx < resumo.length - 1 ? 1 : 0.4 }}>›</button>
+            <span style={{ fontSize: 12.5, color: C.ink3 }}>{movsMes.length} movimento(s) · {ops.length} OP(s) com consumo</span>
+          </div>
+          <div style={{ display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))' }}>
+            {mini('Entradas', r.entrada, KLC_CATS.entrada.cor, 'entrada')}{mini('Consumo produção', r.consumo, KLC_CATS.consumo.cor, 'consumo')}
+            {mini('Remessa industrializ.', r.remessa, KLC_CATS.remessa.cor, 'remessa')}{mini('Retorno industrializ.', r.retorno, KLC_CATS.retorno.cor, 'retorno')}
+            {mini('Outras saídas', r.outra, KLC_CATS.outra.cor, 'outra')}
+            <div style={{ background: C.surface, border: `1px solid ${C.line}`, borderRadius: 12, padding: '12px 14px' }}>
+              <div style={{ fontSize: 12, color: C.ink2 }}>Saldo no fim do mês</div>
+              <div style={{ fontSize: 21, fontWeight: 700, color: C.primary, marginTop: 3, fontVariantNumeric: 'tabular-nums' }}>{q(r.saldo)} <span style={{ fontSize: 12, fontWeight: 600, color: r.liq < 0 ? C.loss : C.win }}>({r.liq > 0 ? '+' : ''}{q(r.liq)})</span></div>
+            </div>
+          </div>
+          <section style={{ background: C.surface, border: `1px solid ${C.line}`, borderRadius: 12, overflow: 'hidden' }}>
+            <div style={{ padding: '14px 18px', borderBottom: `1px solid ${C.line}`, display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}>
+              <h3 style={{ margin: 0, fontSize: 15, fontWeight: 600 }}>OPs que consumiram a placa no mês</h3>
+              <span style={{ fontSize: 12.5, color: C.ink2 }}>total apontado <strong style={{ color: KLC_CATS.consumo.cor }}>{q(totOps)} {un}</strong>{Math.abs(totOps - r.consumo) > 0.001 && r.consumo ? <span style={{ color: C.ink3 }}> · no kardex {q(r.consumo)} (datas de apontamento x nota podem cair em meses diferentes)</span> : null}</span>
+            </div>
+            {!ops.length ? <div style={{ padding: 24, color: C.ink3, textAlign: 'center' }}>Nenhum apontamento de produção com esta placa no mês.</div> : (
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                  <thead><tr style={{ background: C.surface2 }}>{['OP', 'Produto acabado', 'Projeto / cliente', 'Dia(s)', 'Qtd lote (PA)', 'Consumo da placa', '% do mês'].map((h, k) => (
+                    <th key={h} style={{ padding: '10px 14px', fontSize: 11.5, fontWeight: 600, color: C.ink3, textAlign: k >= 4 ? 'right' : 'left', whiteSpace: 'nowrap', borderBottom: `1px solid ${C.line}` }}>{h}</th>))}</tr></thead>
+                  <tbody>{ops.map((o, k) => (
+                    <tr key={o.op} style={{ background: k % 2 ? C.surface2 : C.surface }}>
+                      <td style={{ padding: '9px 14px', fontWeight: 700 }}>{o.op}</td>
+                      <td style={{ padding: '9px 14px', maxWidth: 340, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={o.desc}><span style={{ fontWeight: 600 }}>{o.prod}</span> <span style={{ color: C.ink2 }}>{o.desc}</span></td>
+                      <td style={{ padding: '9px 14px', color: C.ink2, whiteSpace: 'nowrap' }}>{[o.br, o.cli].filter(Boolean).join(' · ') || '—'}</td>
+                      <td style={{ padding: '9px 14px', color: C.ink2, whiteSpace: 'nowrap' }}>{[...o.datas].sort().map(x => String(x).slice(8, 10)).join(', ')}</td>
+                      <td style={{ padding: '9px 14px', textAlign: 'right', color: C.ink2, fontVariantNumeric: 'tabular-nums' }}>{q(o.lote)}</td>
+                      <td style={{ padding: '9px 14px', textAlign: 'right', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{q(o.qtd)} {o.un}</td>
+                      <td style={{ padding: '9px 14px', textAlign: 'right', minWidth: 110 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'flex-end' }}>
+                          <div style={{ width: 60, height: 6, borderRadius: 3, background: C.lineSoft, overflow: 'hidden' }}><div style={{ width: `${totOps ? 100 * o.qtd / totOps : 0}%`, height: '100%', background: KLC_CATS.consumo.cor }} /></div>
+                          <span style={{ fontSize: 12, color: C.ink2, width: 36, textAlign: 'right' }}>{totOps ? Math.round(100 * o.qtd / totOps) : 0}%</span>
+                        </div>
+                      </td>
+                    </tr>))}</tbody>
+                </table>
+              </div>
+            )}
+          </section>
+          <section style={{ background: C.surface, border: `1px solid ${C.line}`, borderRadius: 12, overflow: 'hidden' }}>
+            <div style={{ padding: '14px 18px', borderBottom: `1px solid ${C.line}`, display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 10 }}>
+              <h3 style={{ margin: 0, fontSize: 15, fontWeight: 600 }}>Movimentos do mês</h3>
+              <button onClick={() => verMovs(mesSel)} style={{ fontFamily: 'inherit', fontSize: 12.5, border: 'none', background: 'none', color: C.primary, cursor: 'pointer', fontWeight: 600 }}>abrir no kardex com filtros →</button>
+            </div>
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                <thead><tr style={{ background: C.surface2 }}>{['Data', 'Nota', 'Operação (TOP)', 'Tipo', 'Local', 'Quantidade', 'Saldo após'].map((h, k) => (
+                  <th key={h} style={{ padding: '9px 12px', fontSize: 11.5, fontWeight: 600, color: C.ink3, textAlign: k >= 5 ? 'right' : 'left', whiteSpace: 'nowrap', borderBottom: `1px solid ${C.line}` }}>{h}</th>))}</tr></thead>
+                <tbody>{movsMes.map((m, k) => (
+                  <tr key={k} style={{ background: k % 2 ? C.surface2 : C.surface }}>
+                    <td style={{ padding: '8px 12px', color: C.ink2, whiteSpace: 'nowrap' }}>{new Date(`${m.data}T12:00:00`).toLocaleDateString('pt-BR')}</td>
+                    <td style={{ padding: '8px 12px', fontWeight: 600 }}>{m.numnota}</td>
+                    <td style={{ padding: '8px 12px', maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={m.top_descr}><span style={{ fontSize: 11.5, fontWeight: 700, color: C.ink2, background: C.lineSoft, padding: '1px 6px', borderRadius: 5, marginRight: 6 }}>{m.top}</span>{m.top_descr}</td>
+                    <td style={{ padding: '8px 12px', whiteSpace: 'nowrap' }}><span style={{ fontSize: 11.5, fontWeight: 600, color: KLC_CATS[m.cat].cor, background: `${KLC_CATS[m.cat].cor}14`, padding: '2px 8px', borderRadius: 10 }}>{KLC_CATS[m.cat].r}</span></td>
+                    <td style={{ padding: '8px 12px', color: C.ink2, whiteSpace: 'nowrap' }}>{m.local_descr || m.local}</td>
+                    <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 700, color: m.qtd > 0 ? C.win : C.loss, fontVariantNumeric: 'tabular-nums' }}>{m.qtd > 0 ? '+' : ''}{q(m.qtd)}</td>
+                    <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{q(m.saldo)}</td>
+                  </tr>))}
+                  {!movsMes.length && <tr><td colSpan={7} style={{ padding: 22, textAlign: 'center', color: C.ink3 }}>Nenhum movimento no mês.</td></tr>}
                 </tbody>
               </table>
             </div>
@@ -33022,14 +33124,25 @@ function KalocerDetalhe({ item, ini, fim, onFechar }) {
         </div>
       );
     }
+    const itensOps = (item.itens || []).filter(it => !mesOps || String(it.data_ref || '').startsWith(mesOps));
+    const mesesOps = [...new Set((item.itens || []).map(it => String(it.data_ref || '').slice(0, 7)).filter(Boolean))].sort();
     return (
       <div style={{ overflow: 'auto', height: '100%', background: C.surface }}>
-        {!item.itens?.length && <div style={{ padding: 40, color: C.ink3, textAlign: 'center' }}>Nenhum apontamento de produção no período.</div>}
         {!!item.itens?.length && (
+          <div style={{ padding: '12px 24px', display: 'flex', gap: 10, alignItems: 'center', borderBottom: `1px solid ${C.line}`, flexWrap: 'wrap' }}>
+            <select value={mesOps} onChange={e => setMesOps(e.target.value)} aria-label="Mês" style={{ fontFamily: 'inherit', fontSize: 12.5, padding: '7px 10px', borderRadius: 8, border: `1px solid ${C.line}`, background: C.surface }}>
+              <option value="">Todos os meses</option>
+              {mesesOps.map(m => <option key={m} value={m}>{MES[Number(m.slice(5)) - 1]}/{m.slice(0, 4)}</option>)}
+            </select>
+            <span style={{ fontSize: 12.5, color: C.ink2 }}><strong>{itensOps.length}</strong> apontamento(s) · consumo <strong style={{ color: KLC_CATS.consumo.cor }}>{q(itensOps.reduce((t, it) => t + (Number(it.qtd_mp) || 0), 0))} {un}</strong></span>
+          </div>
+        )}
+        {!itensOps.length && <div style={{ padding: 40, color: C.ink3, textAlign: 'center' }}>Nenhum apontamento de produção {mesOps ? 'neste mês' : 'no período'}.</div>}
+        {!!itensOps.length && (
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
             <thead><tr>{['Produto acabado', 'OP · data · projeto', 'Qtd lote (PA)', 'Consumo da placa'].map((h, k) => (
               <th key={h} style={{ padding: '10px 14px', fontSize: 11.5, fontWeight: 600, color: C.ink3, textAlign: k >= 2 ? 'right' : 'left', position: 'sticky', top: 0, background: C.surface2, borderBottom: `1px solid ${C.line}` }}>{h}</th>))}</tr></thead>
-            <tbody>{item.itens.map((it, k) => (
+            <tbody>{itensOps.map((it, k) => (
               <tr key={k} style={{ background: k % 2 ? C.surface2 : C.surface }}>
                 <td style={{ padding: '10px 14px' }}><span style={{ fontWeight: 600 }}>{it.produto}</span> <span style={{ color: C.ink2 }}>{it.descricao_produto}</span></td>
                 <td style={{ padding: '10px 14px', color: C.ink2, whiteSpace: 'nowrap' }}>OP {it.nro_ordem_producao ?? it.nuapo} · {fmtDataCurta(it.data_ref)}{it.br ? ` · ${it.br}` : ''}{it.cliente_nome ? ` · ${it.cliente_nome}` : ''}</td>
@@ -33042,11 +33155,12 @@ function KalocerDetalhe({ item, ini, fim, onFechar }) {
     );
   };
 
-  const abas = [['resumo', 'Resumo mensal', null], ['movs', 'Movimentos (kardex)', d ? d.movimentos.length : null], ['ops', 'Consumo por OP', item.itens?.length || null]];
+  const abas = [['resumo', 'Resumo mensal', null], ...(mesSel ? [['mes', `Mês: ${MES[Number(mesSel.slice(5)) - 1]}/${mesSel.slice(2, 4)}`, null]] : []),
+    ['movs', 'Movimentos (kardex)', d ? d.movimentos.length : null], ['ops', 'Consumo por OP', item.itens?.length || null]];
   return (
-    <div onClick={onFechar} style={{ position: 'fixed', inset: 0, zIndex: 80, background: 'rgba(15,35,64,.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '2vh 2vw' }}>
-      <div role="dialog" aria-label={`Movimentação do item ${item.codigo_mp}`} onClick={e => e.stopPropagation()} className="scale-in"
-        style={{ width: '100%', maxWidth: 1500, height: '96vh', background: C.bg, borderRadius: 16, overflow: 'hidden', display: 'flex', flexDirection: 'column', boxShadow: '0 30px 80px rgba(0,0,0,.30)', fontFamily: FONT_BODY, color: C.ink, WebkitFontSmoothing: 'antialiased' }}>
+    <div onClick={onFechar} style={{ position: 'fixed', inset: 0, zIndex: 80, background: 'rgba(15,35,64,.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: cheia ? 0 : '2vh 2vw' }}>
+      <div ref={caixaRef} role="dialog" aria-label={`Movimentação do item ${item.codigo_mp}`} onClick={e => e.stopPropagation()} className="scale-in"
+        style={{ width: '100%', maxWidth: cheia ? 'none' : 1500, height: cheia ? '100vh' : '96vh', background: C.bg, borderRadius: cheia ? 0 : 16, overflow: 'hidden', display: 'flex', flexDirection: 'column', boxShadow: '0 30px 80px rgba(0,0,0,.30)', fontFamily: FONT_BODY, color: C.ink, WebkitFontSmoothing: 'antialiased' }}>
         <div style={{ background: '#0F2340', color: '#fff', padding: '16px 24px', display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
           <span style={{ fontSize: 13, fontWeight: 700, background: 'rgba(255,255,255,.12)', padding: '6px 10px', borderRadius: 8, letterSpacing: 0.3 }}>{item.codigo_mp}</span>
           <div style={{ flex: 1, minWidth: 0 }}>
@@ -33057,6 +33171,9 @@ function KalocerDetalhe({ item, ini, fim, onFechar }) {
           </div>
           <button onClick={exportar} disabled={!d} style={{ fontFamily: 'inherit', fontSize: 12.5, fontWeight: 600, padding: '8px 13px', borderRadius: 8, border: '1px solid rgba(255,255,255,.25)', background: 'transparent', color: '#fff', cursor: d ? 'pointer' : 'default', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
             <Download size={14} aria-hidden="true" />Exportar Excel
+          </button>
+          <button onClick={alternarCheia} title={cheia ? 'Sair da tela cheia' : 'Tela cheia'} style={{ fontFamily: 'inherit', fontSize: 12.5, fontWeight: 600, padding: '8px 13px', borderRadius: 8, border: '1px solid rgba(255,255,255,.25)', background: 'transparent', color: '#fff', cursor: 'pointer' }}>
+            {cheia ? '⤡ Sair da tela cheia' : '⤢ Tela cheia'}
           </button>
           <button onClick={onFechar} title="Fechar (Esc)" style={{ fontFamily: 'inherit', fontSize: 12.5, fontWeight: 600, padding: '8px 13px', borderRadius: 8, border: 'none', background: '#fff', color: '#0F2340', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
             <X size={14} aria-hidden="true" />Fechar <span style={{ fontSize: 10.5, color: C.ink3, fontWeight: 500 }}>Esc</span>
@@ -33073,7 +33190,7 @@ function KalocerDetalhe({ item, ini, fim, onFechar }) {
             ))}
           </div>
         </div>
-        <div style={{ flex: 1, overflow: 'auto' }}>{corpo()}</div>
+        <div ref={rolagemRef} style={{ flex: 1, overflow: 'auto' }}>{corpo()}</div>
       </div>
     </div>
   );
@@ -33144,7 +33261,7 @@ function ConsumoPlacasKalocer() {
         produto: ap.cod_prod_acabado, descricao_produto: ap.desc_prod_acabado,
         data_ref: ap.data_ref, qtd_lote_pa: Number(ap.qtd_lote_pa) || 0,
         qtd_mp: qtd, unidade_mp: ap.unidade_mp,
-        br: ap.br, cliente_nome: ap.cliente_nome,
+        br: ap.br, cliente_nome: ap.cliente_nome, nro_ordem_producao: ap.nro_ordem_producao,
       });
     });
 
