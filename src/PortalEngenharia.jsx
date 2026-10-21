@@ -11192,7 +11192,8 @@ function AlmoxMovimentar({ currentUser, codigoInicial }) {
       supabase.from('almoxarifado_movimentacoes').select('carimbo_data_hora,material,setor,observacao,origem').eq('op', String(o.op)).neq('origem', 'qr').order('carimbo_data_hora').limit(500),
     ]);
     setItens(m.data || []); setVols(v.data || []); setSolicOp(s.data || []); setHist(h.data || []); setFormOp(fg.data || []);
-    const { data: nv } = await supabase.from('v_almox_nova_necessidade').select('*').eq('op', o.op).order('descricao');
+    // nova necessidade POR REQUISIÇÃO: cada requisição do Sankhya é uma linha própria (não soma com as anteriores)
+    const { data: nv } = await supabase.from('v_almox_nova_necessidade_req').select('*').eq('op', o.op).order('descricao').order('dtneg');
     setNovas(nv || []);
     const vids = (v.data || []).map(x => x.id);
     if (vids.length) { const { data: ss } = await supabase.from('v_almox_saldo_setor').select('volume_id,setor,saldo').in('volume_id', vids); setSaldosOp(ss || []); } else setSaldosOp([]);
@@ -11227,12 +11228,15 @@ function AlmoxMovimentar({ currentUser, codigoInicial }) {
   const linhas = useMemo(() => [
     ...itens,
     ...novas.map(n => ({ op: n.op, br: n.br, cod_materia_prima: n.cod_materia_prima, materia_prima_descricao: n.descricao, quantidade_mp: Number(n.qtd_nova),
-      unidade: n.unidade, nova: true, motivo: n.motivo, requisicoes: n.requisicoes, qtd_prevista: n.qtd_prevista, qtd_requisitada: n.qtd_requisitada })),
+      unidade: n.unidade, nova: true, motivo: n.motivo, requisicao_nunota: n.nunota, numnota: n.numnota, dtneg: n.dtneg, usuario: n.usuario, qtd_requisicao: Number(n.qtd_requisicao),
+      requisicoes: `nº ${n.numnota} (TOP ${n.codtipoper}, ${n.dtneg ? new Date(`${n.dtneg}T12:00:00`).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }) : ''}${n.usuario ? `, ${n.usuario}` : ''})`,
+      qtd_prevista: n.qtd_prevista, qtd_requisitada: n.qtd_acumulada })),
   ].map(m => {
     const kBase = almoxChaveItem(m.op, m.cod_materia_prima, m.materia_prima_descricao);
     const orig = m.nova ? 'nova_necessidade' : 'lista';
-    const k = (m.nova ? 'N|' : '') + kBase;
-    const doItem = vols.filter(v => almoxChaveItem(v.op, v.cod_materia_prima, v.material) === kBase && (v.origem_item || 'lista') === orig);
+    const k = (m.nova ? 'N|' : '') + kBase + (m.nova && m.requisicao_nunota ? `|${m.requisicao_nunota}` : '');
+    const doItem = vols.filter(v => almoxChaveItem(v.op, v.cod_materia_prima, v.material) === kBase && (v.origem_item || 'lista') === orig
+      && (!m.nova || !m.requisicao_nunota || String(v.requisicao_nunota || '') === String(m.requisicao_nunota)));
     let vol = doItem.find(v => v.status === 'ativo') || doItem[doItem.length - 1] || null;
     // nova necessidade com requisição depois da última etiqueta: mostra só o SALDO a etiquetar e libera
     // dar entrada de novo (a etiqueta anterior já foi entregue; a função cria outra em vez de sobrescrever)
@@ -11270,7 +11274,7 @@ function AlmoxMovimentar({ currentUser, codigoInicial }) {
   const itemParaEtiqueta = (m) => {
     const k = (m.nova ? 'N|' : '') + almoxChaveItem(m.op, m.cod_materia_prima, m.materia_prima_descricao);
     return { br: m.br || opSel?.br || null, op: m.op, cod_materia_prima: m.cod_materia_prima, material: m.materia_prima_descricao,
-      unidade: m.unidade || null, origem_item: m.nova ? 'nova_necessidade' : 'lista',
+      unidade: m.unidade || null, origem_item: m.nova ? 'nova_necessidade' : 'lista', requisicao_nunota: m.nova ? (m.requisicao_nunota || null) : null,
       quantidade: qtd[k] !== undefined && qtd[k] !== '' ? almoxNum(qtd[k]) : m.quantidade_mp };
   };
 
@@ -11607,8 +11611,11 @@ function AlmoxMovimentar({ currentUser, codigoInicial }) {
                             {l.m.substitutaDe && l.m.motivoSubst && <div style={{ fontSize: 11, color: '#6D28D9', marginTop: 2 }}>motivo: {l.m.motivoSubst}</div>}
                             {l.m.nova && (
                               <div style={{ fontSize: 11, fontWeight: 700, color: T.terracotta, marginTop: 2 }}>
-                                🆕 NOVA NECESSIDADE · {l.m.motivo === 'fora da lista' ? 'fora da lista da OP' : `acima do previsto (previsto ${almoxFmtQtd(l.m.qtd_prevista)}, requisitado ${almoxFmtQtd(l.m.qtd_requisitada)})`}
-                                <div style={{ fontWeight: 500, color: T.inkDim }}>requisição {l.m.requisicoes}</div>
+                                🆕 NOVA NECESSIDADE · requisição {l.m.requisicoes}
+                                <div style={{ fontWeight: 500, color: T.inkDim }}>
+                                  {l.m.motivo === 'fora da lista' ? `fora da lista da OP · ${almoxFmtQtd(l.m.qtd_requisicao)} ${l.m.unidade || ''}`
+                                    : `acima do previsto · esta requisição: ${almoxFmtQtd(l.m.qtd_requisicao)} ${l.m.unidade || ''} (previsto na OP ${almoxFmtQtd(l.m.qtd_prevista)}, já requisitado ${almoxFmtQtd(l.m.qtd_requisitada)})`}
+                                </div>
                                 {l.m.jaEtiquetado ? <div style={{ fontWeight: 700, color: T.rustText }}>já etiquetado {almoxFmtQtd(l.m.jaEtiquetado)} de {almoxFmtQtd(l.m.totalNovo)} {l.m.unidade || ''} · falta {almoxFmtQtd(l.m.quantidade_mp)} (requisição nova)</div> : null}
                               </div>
                             )}
