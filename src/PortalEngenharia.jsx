@@ -11036,6 +11036,7 @@ function AlmoxMovimentar({ currentUser, codigoInicial }) {
   const [itens, setItens] = useState([]);
   const [vols, setVols] = useState([]);
   const [solicOp, setSolicOp] = useState([]);
+  const [troca, setTroca] = useState(null);   // { k, m, cod, prod, qtd, motivo, buscando, erro } troca manual de material
   const [formOp, setFormOp] = useState([]);   // registros do formulário GUE da OP (planilha histórica)
   const [hist, setHist] = useState([]);
   const [pendentes, setPendentes] = useState([]);
@@ -11256,6 +11257,13 @@ function AlmoxMovimentar({ currentUser, codigoInicial }) {
     const cat = almoxCategoriaItem(m.materia_prima_descricao);
     const form = cat ? formOp.filter(r => r.setor && r.setor !== 'Projeto Faturado' && almoxCategoriasRegistro(r.material).has(cat)) : [];
     return { m, k, vol, peds, h, cat, form, ultForm: form[form.length - 1] || null };
+  }).flatMap(l => {
+    if (l.m.nova) return [l];
+    const subsL = vols.filter(v => v.substitui_cod && String(v.op) === String(l.m.op) && String(v.substitui_cod) === String(l.m.cod_materia_prima) && v.status !== 'cancelado')
+      .map(v => ({ m: { op: v.op, br: v.br, cod_materia_prima: v.cod_materia_prima, materia_prima_descricao: v.material, quantidade_mp: Number(v.quantidade), unidade: v.unidade,
+          substitutaDe: l.m.cod_materia_prima, motivoSubst: v.substituicao_motivo },
+        k: `S|${v.id}`, vol: v, peds: solicOp.filter(s2 => s2.volume_id === v.id), h: hist.filter(e => e.volume_id === v.id), cat: null, form: [], ultForm: null }));
+    return [l, ...subsL];
   }), [itens, novas, vols, solicOp, hist, formOp]);
   const opFaturadaGue = formOp.find(r => r.setor === 'Projeto Faturado' || almoxSemAcento(r.material).includes('PROJETO FATURADO'));
 
@@ -11277,6 +11285,34 @@ function AlmoxMovimentar({ currentUser, codigoInicial }) {
     setMarc({});
     await almoxImprimirEtiquetas(data, cfgEt);
     const ids = data.map(v => v.id);
+    if (ids.length) await supabase.from('almox_volume').update({ impresso_em: new Date().toISOString() }).in('id', ids);
+    recarregar();
+  };
+
+  const buscarSubstituto = async () => {
+    const cod = parseInt(String(troca?.cod || '').replace(/\D/g, ''), 10);
+    if (!cod) { setTroca(t => ({ ...t, erro: 'Digite o código do material no Sankhya.' })); return; }
+    if (String(cod) === String(troca.m.cod_materia_prima)) { setTroca(t => ({ ...t, erro: 'É o mesmo código do item da OP.' })); return; }
+    setTroca(t => ({ ...t, buscando: true, erro: null, prod: null }));
+    const { data, error } = await supabase.rpc('fn_almox_produto_sankhya', { p_cod: cod });
+    setTroca(t => ({ ...t, buscando: false, erro: error?.message || (data?.ok ? null : data?.erro || 'Não encontrado'), prod: data?.ok ? data : null }));
+  };
+  const gerarSubstituto = async () => {
+    const t = troca; if (!t?.prod) return;
+    const q = almoxNum(t.qtd);
+    if (q == null || q <= 0) { setTroca(x => ({ ...x, erro: 'Informe a quantidade.' })); return; }
+    if (!(t.motivo || '').trim()) { setTroca(x => ({ ...x, erro: 'Informe o motivo da troca.' })); return; }
+    if (!window.confirm(`Trocar ${almoxFmtQtd(q)} do cód. ${t.m.cod_materia_prima} pelo cód. ${t.prod.codprod} (${t.prod.descricao}) nesta OP?\n\nVai gerar a etiqueta QR do material substituto, com entrada no Ponto de Estoque.`)) return;
+    setOcupado(true); setAviso(null);
+    const { data, error } = await supabase.rpc('fn_almox_dar_entrada', { p_usuario: currentUser?.nome || null, p_itens: [{
+      br: t.m.br || opSel?.br || null, op: t.m.op, cod_materia_prima: String(t.prod.codprod), material: t.prod.descricao, unidade: t.prod.unidade || null,
+      origem_item: 'lista', quantidade: q, substitui_cod: String(t.m.cod_materia_prima), substituicao_motivo: t.motivo.trim() }] });
+    setOcupado(false);
+    if (error) { setTroca(x => ({ ...x, erro: error.message })); return; }
+    setTroca(null);
+    setAviso({ t: `Troca registrada: etiqueta ${data?.[0]?.codigo || ''} do cód. ${t.prod.codprod} (substitui o ${t.m.cod_materia_prima}) com entrada no Ponto de Estoque. A janela de impressão do QR vai abrir.` });
+    await almoxImprimirEtiquetas(data, cfgEt);
+    const ids = (data || []).map(v => v.id);
     if (ids.length) await supabase.from('almox_volume').update({ impresso_em: new Date().toISOString() }).in('id', ids);
     recarregar();
   };
@@ -11562,7 +11598,13 @@ function AlmoxMovimentar({ currentUser, codigoInicial }) {
                             <input type="checkbox" checked={!!marc[l.k]} onChange={e => setMarc(x => ({ ...x, [l.k]: e.target.checked }))} />
                           </td>
                           <td style={{ padding: '8px 10px', borderBottom: `1px solid ${T.lineSoft}`, verticalAlign: 'top' }}>
+                            {l.m.substitutaDe && (
+                              <div style={{ fontSize: 10.5, fontWeight: 800, color: '#6D28D9', background: '#F1EBFE', display: 'inline-block', padding: '2px 7px', borderRadius: 5, marginBottom: 3 }}>
+                                🔁 SUBSTITUI o cód. {l.m.substitutaDe}
+                              </div>
+                            )}
                             <div style={{ fontWeight: 600 }}>{l.m.cod_materia_prima ? `${l.m.cod_materia_prima} · ` : ''}{l.m.materia_prima_descricao}</div>
+                            {l.m.substitutaDe && l.m.motivoSubst && <div style={{ fontSize: 11, color: '#6D28D9', marginTop: 2 }}>motivo: {l.m.motivoSubst}</div>}
                             {l.m.nova && (
                               <div style={{ fontSize: 11, fontWeight: 700, color: T.terracotta, marginTop: 2 }}>
                                 🆕 NOVA NECESSIDADE · {l.m.motivo === 'fora da lista' ? 'fora da lista da OP' : `acima do previsto (previsto ${almoxFmtQtd(l.m.qtd_prevista)}, requisitado ${almoxFmtQtd(l.m.qtd_requisitada)})`}
@@ -11624,7 +11666,40 @@ function AlmoxMovimentar({ currentUser, codigoInicial }) {
                                 style={botao(ordemDe === l.k, T.blueText)} title="passa a tarefa para a equipe e avisa no Teams">Mandar para…</button>}
                               {l.vol && <button onClick={() => almoxImprimirEtiquetas([l.vol], cfgEt)} style={botao(false)}>QR</button>}
                               {(!l.vol || ativo) && <button onClick={() => { setPedindo(p => p === l.k ? null : l.k); setPedSetor(''); setPedQtd(''); }} style={botao(pedindo === l.k)}>Pedir</button>}
+                              {pode && !l.m.nova && !l.m.substitutaDe && l.m.cod_materia_prima && (
+                                <button onClick={() => setTroca(t => t?.k === l.k ? null : { k: l.k, m: l.m, cod: '', prod: null, qtd: almoxFmtQtd(l.m.quantidade_mp), motivo: 'Material obsoleto — uso acordado entre engenharia, produção e estoque', erro: null })}
+                                  style={botao(troca?.k === l.k, '#6D28D9')} title="usar outro código no lugar deste (ex.: material obsoleto) — gera um QR novo do substituto">🔁 Trocar material</button>
+                              )}
                             </div>
+                            {troca?.k === l.k && (
+                              <div style={{ marginTop: 6, padding: 10, borderRadius: 8, background: '#F6F2FE', border: '1px solid #DDD0FB', display: 'flex', flexDirection: 'column', gap: 7, maxWidth: 560 }}>
+                                <div style={{ fontSize: 12, fontWeight: 700, color: '#6D28D9' }}>Trocar o cód. {l.m.cod_materia_prima} por outro material nesta OP</div>
+                                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                                  <input value={troca.cod} onChange={e => setTroca(t => ({ ...t, cod: e.target.value, prod: null }))} onKeyDown={e => { if (e.key === 'Enter') buscarSubstituto(); }}
+                                    placeholder="código do substituto" inputMode="numeric" style={{ ...campo, width: 150 }} />
+                                  <button onClick={buscarSubstituto} disabled={troca.buscando} style={botao(false, '#6D28D9')}>{troca.buscando ? 'buscando…' : 'Buscar no Sankhya'}</button>
+                                </div>
+                                {troca.prod && (
+                                  <div style={{ fontSize: 12, background: T.panel, borderRadius: 6, padding: '6px 8px', border: `1px solid ${T.line}` }}>
+                                    <strong>{troca.prod.codprod} · {troca.prod.descricao}</strong> ({troca.prod.unidade})
+                                    <div style={{ color: troca.prod.estoque > 0 ? T.oliveText : T.rustText, fontWeight: 600, marginTop: 2 }}>
+                                      Estoque no Sankhya: {almoxFmtQtd(troca.prod.estoque)}{troca.prod.reservado ? ` · reservado ${almoxFmtQtd(troca.prod.reservado)}` : ''}{!troca.prod.ativo ? ' · produto INATIVO no Sankhya' : ''}
+                                    </div>
+                                    {troca.prod.unidade && l.m.unidade && troca.prod.unidade !== l.m.unidade && <div style={{ color: T.amberText, fontWeight: 600 }}>Atenção: unidade diferente do item da OP ({l.m.unidade}).</div>}
+                                  </div>
+                                )}
+                                {troca.prod && (
+                                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                                    <input value={troca.qtd} onChange={e => setTroca(t => ({ ...t, qtd: e.target.value }))} placeholder="quantidade" inputMode="decimal" style={{ ...campo, width: 110 }} />
+                                    <input value={troca.motivo} onChange={e => setTroca(t => ({ ...t, motivo: e.target.value }))} placeholder="motivo da troca" style={{ ...campo, flex: '1 1 260px' }} />
+                                    <button onClick={gerarSubstituto} disabled={ocupado} style={botao(true, '#6D28D9')}>Gerar QR do substituto</button>
+                                  </div>
+                                )}
+                                {troca.prod && almoxNum(troca.qtd) > Number(troca.prod.estoque || 0) && <div style={{ fontSize: 11.5, color: T.amberText, fontWeight: 600 }}>A quantidade é maior que o estoque do Sankhya ({almoxFmtQtd(troca.prod.estoque)}).</div>}
+                                {troca.erro && <div style={{ fontSize: 12, color: T.rustText, fontWeight: 600 }}>{troca.erro}</div>}
+                                <div style={{ fontSize: 11, color: T.inkDim }}>A OP no Sankhya não muda. O portal cria a etiqueta do substituto (entrada no Ponto de Estoque) marcada como substituta deste item; a quantidade conta no saldo dele.</div>
+                              </div>
+                            )}
                             {ordemDe === l.k && (
                               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', marginTop: 6, padding: 8, borderRadius: 8, background: T.blueSoft }}>
                                 <select value={ordem.setor} onChange={e => setOrdem(o => ({ ...o, setor: e.target.value }))} style={{ ...campo, width: 170 }}>
