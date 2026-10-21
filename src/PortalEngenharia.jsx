@@ -426,7 +426,8 @@ function AlmoxQrPublico({ codigo, chave, nomeLogado }) {
       // ordem aberta para esta etiqueta: o destino e a quantidade da ordem já vêm marcados
       const ord = (data.ordens || [])[0];
       setPara(ord?.setor_destino && ord.setor_destino !== v.setor_atual ? ord.setor_destino : (v.setor_destino && v.setor_destino !== v.setor_atual ? v.setor_destino : ''));
-      setQtdEnt(almoxFmtQtd(ord?.quantidade_solicitada ?? v.saldo_setor_atual ?? v.quantidade));
+      // ordem SEM quantidade mas COM observação: não preenche (a observação costuma dizer que o envio é parcial)
+      setQtdEnt(ord && ord.quantidade_solicitada == null && (ord.observacao || '').trim() ? '' : almoxFmtQtd(ord?.quantidade_solicitada ?? v.saldo_setor_atual ?? v.quantidade));
     }
     setCarregando(false);
   }, [codigo, chave]);
@@ -441,6 +442,11 @@ function AlmoxQrPublico({ codigo, chave, nomeLogado }) {
     if (!para) { setAviso('Escolha para onde o material vai.'); return; }
     if (!recebido.trim()) { setAviso('Escreva quem recebeu o material.'); return; }
     if (!fotoMat) { setAviso('Tire a foto do material.'); return; }
+    const ordObs = (dados.ordens || []).map(o => (o.observacao || '').trim()).filter(Boolean);
+    if (dados.tipo !== 'grupo' && almoxNum(qtdEnt) == null && ordObs.length) {
+      const tudo = almoxFmtQtd(dados.volume.saldo_setor_atual ?? dados.volume.quantidade);
+      if (!window.confirm(`A ordem tem esta observação:\n\n"${ordObs.join(' | ')}"\n\nO campo de quantidade está vazio, então vai registrar TUDO (${tudo}). Confirma?\n\nSe o envio é parcial, cancele e digite a quantidade que está levando.`)) return;
+    }
     setSalvando(true);
     try {
       const pasta = `publico/${dados.volume.codigo}/${chave}`;
@@ -585,7 +591,13 @@ function AlmoxQrPublico({ codigo, chave, nomeLogado }) {
               {dados.ordens.map(o => (
                 <div key={o.id} style={{ fontSize: 16, marginTop: 4 }}>
                   Levar para <strong>{o.setor_destino}</strong>{o.quantidade_solicitada != null ? <> · <strong>{String(o.quantidade_solicitada).replace('.', ',')}</strong>{v.unidade ? ` ${v.unidade}` : ''}</> : ''}
-                  <div style={{ fontSize: 13, color: T.inkDim }}>Pedido por {o.solicitado_por || '—'} · para {o.atribuido_a || 'a equipe'}{o.observacao ? ` · ${o.observacao}` : ''}</div>
+                  <div style={{ fontSize: 13, color: T.inkDim }}>Pedido por {o.solicitado_por || '—'} · para {o.atribuido_a || 'a equipe'}</div>
+                  {o.observacao && (
+                    <div style={{ marginTop: 6, padding: '8px 10px', borderRadius: 8, background: '#FFF7E0', border: '1px solid #E8C35A', fontSize: 15, fontWeight: 700, color: '#7A5200' }}>
+                      ⚠ {o.observacao}
+                      {o.quantidade_solicitada == null && <div style={{ fontSize: 13, fontWeight: 600, marginTop: 4 }}>A ordem não diz a quantidade: confira e digite abaixo quanto está levando.</div>}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -10946,9 +10958,9 @@ function AlmoxRegistro({ currentUser }) {
       <Panel title={`Movimentações (${filtradas.length})`} subtitle="Cada entrega registrada, com a quantidade, quem levou e quem recebeu. 'Onde está agora' mostra o saldo de cada setor da etiqueta.">
         <div style={{ overflow: 'auto', maxHeight: 620, border: `1px solid ${T.line}`, borderRadius: 8 }}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead><tr>{['Quando', 'OP', 'Etiqueta', 'Material', 'Qtd', 'De → Para', 'Entregue por', 'Recebido por', 'Fotos', 'Onde está agora'].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
+            <thead><tr>{['Quando', 'OP', 'Etiqueta', 'Material', 'Qtd', 'De → Para', 'Entregue por', 'Recebido por', 'Observação', 'Fotos', 'Onde está agora'].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
             <tbody>
-              {!filtradas.length && <tr><td colSpan={10} style={{ ...td, textAlign: 'center', color: T.inkFaint, padding: 20 }}>Nenhuma movimentação no período.</td></tr>}
+              {!filtradas.length && <tr><td colSpan={11} style={{ ...td, textAlign: 'center', color: T.inkFaint, padding: 20 }}>Nenhuma movimentação no período.</td></tr>}
               {filtradas.map(l => (
                 <tr key={l.id}>
                   <td style={{ ...td, whiteSpace: 'nowrap' }}>{dh(l.criado_em)}</td>
@@ -10959,6 +10971,13 @@ function AlmoxRegistro({ currentUser }) {
                   <td style={{ ...td, whiteSpace: 'nowrap' }}>{l.de_setor || '—'} → <strong>{l.para_setor}</strong></td>
                   <td style={td}>{l.entregue_por || '—'}</td>
                   <td style={td}>{l.recebido_por || '—'}</td>
+                  <td style={{ ...td, maxWidth: 320, minWidth: 160 }}>
+                    {l.observacao ? (
+                      <span style={{ fontSize: 12, lineHeight: 1.4, display: 'block', padding: '4px 7px', borderRadius: 6,
+                        background: /FALTA|PARCIAL|PENDENTE|COMPRA/i.test(l.observacao) ? T.amberSoft : 'transparent', color: /FALTA|PARCIAL|PENDENTE|COMPRA/i.test(l.observacao) ? T.amberText : T.inkDim,
+                        fontWeight: /FALTA|PARCIAL|PENDENTE|COMPRA/i.test(l.observacao) ? 600 : 400 }}>{l.observacao}</span>
+                    ) : <span style={{ color: T.inkFaint }}>—</span>}
+                  </td>
                   <td style={{ ...td, whiteSpace: 'nowrap' }}>
                     {l.foto_material || l.foto_documento
                       ? <button onClick={() => verFotos(l)} style={{ ...ghostBtn(T.blueText), cursor: 'pointer', padding: '4px 9px' }}>📷 ver{l.foto_documento ? ' (2)' : ''}</button>
@@ -11471,6 +11490,7 @@ function AlmoxMovimentar({ currentUser, codigoInicial }) {
                       {equipe.map(n => <option key={n} value={n}>{n}</option>)}
                     </select>
                     <input value={lote.obs} onChange={e => setLote(o => ({ ...o, obs: e.target.value }))} placeholder="explicação para quem vai levar" style={{ ...campo, width: 240 }} />
+                    <span style={{ fontSize: 11.5, color: T.amberText, flexBasis: '100%' }}>Em lote cada etiqueta vai INTEIRA. Se algum item vai só em parte, mande a ordem dele pela própria linha, com a quantidade.</span>
                     <button onClick={() => criarOrdensLote(selComEtiqueta)} style={botao(true, T.blueText)}>Enviar {selComEtiqueta.filter(l => l.vol.status === 'ativo').length} ordem(ns)</button>
                     <span style={{ fontSize: 11, color: T.inkDim }}>cada item vai inteiro (o que tiver no setor); para quantidade parcial use o "Mandar para…" da linha</span>
                   </span>
@@ -11603,7 +11623,8 @@ function AlmoxMovimentar({ currentUser, codigoInicial }) {
                                   {equipe.map(n => <option key={n} value={n}>{n}</option>)}
                                 </select>
                                 <input value={ordem.qtd} onChange={e => setOrdem(o => ({ ...o, qtd: e.target.value }))} placeholder={`qtd (tudo: ${almoxFmtQtd(l.vol.quantidade)})`} inputMode="decimal" style={{ ...campo, width: 120 }} />
-                                {ordem.qtd && <span style={{ fontSize: 11.5, color: T.blueText }}>= {almoxFmtQtd(almoxNum(ordem.qtd))}</span>}
+                                {ordem.qtd ? <span style={{ fontSize: 11.5, color: T.blueText }}>= {almoxFmtQtd(almoxNum(ordem.qtd))}</span>
+                                  : <span style={{ fontSize: 11.5, color: T.amberText }}>sem quantidade = leva tudo ({almoxFmtQtd(l.vol.quantidade)})</span>}
                                 <input value={ordem.obs} onChange={e => setOrdem(o => ({ ...o, obs: e.target.value }))} placeholder="observação" style={{ ...campo, width: 180 }} />
                                 <button onClick={() => criarOrdem(l)} style={botao(true, T.blueText)}>Enviar ordem</button>
                               </div>
@@ -12460,7 +12481,7 @@ function AlmoxarifadoFluxo({ currentUser, etiquetaInicial }) {
                     <td style={{ padding: '7px 12px', fontWeight: 600 }}>{d.setor}</td>
                     <td style={{ padding: '7px 12px', textAlign: 'center', fontWeight: 700 }}>{d.dias_em_producao ?? '—'}</td>
                     <td style={{ padding: '7px 12px', textAlign: 'center' }}>{d.dias_parado_ponto_estoque ?? '—'}</td>
-                    <td style={{ padding: '7px 12px', color: T.inkFaint, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={d.observacao}>{d.observacao || '—'}</td>
+                    <td style={{ padding: '7px 12px', color: /Ordem:|FALTA|PARCIAL/i.test(d.observacao || '') ? T.amberText : T.inkFaint, fontWeight: /FALTA|PARCIAL/i.test(d.observacao || '') ? 600 : 400, maxWidth: 380, minWidth: 200, fontSize: 12, lineHeight: 1.4 }}>{d.observacao || '—'}</td>
                   </tr>
                 ))}
               </tbody>
