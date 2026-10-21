@@ -11235,13 +11235,20 @@ function AlmoxMovimentar({ currentUser, codigoInicial }) {
     let vol = doItem.find(v => v.status === 'ativo') || doItem[doItem.length - 1] || null;
     // nova necessidade com requisição depois da última etiqueta: mostra só o SALDO a etiquetar e libera
     // dar entrada de novo (a etiqueta anterior já foi entregue; a função cria outra em vez de sobrescrever)
-    if (m.nova) {
-      const jaEtiq = doItem.filter(v => v.status === 'ativo' || v.status === 'finalizado').reduce((t, v) => t + (Number(v.quantidade) || 0), 0);
+    // o mesmo vale para itens da LISTA entregues em parte (ex.: OP 8167, chapa 318: 62 + 34 da substituta 19422
+    // de 300 -> falta 204). Etiquetas de material substituto (substitui_cod) contam no saldo do item substituído.
+    const subs = m.nova ? [] : vols.filter(v => String(v.op) === String(m.op) && v.substitui_cod && String(v.substitui_cod) === String(m.cod_materia_prima));
+    {
+      const etiq = [...doItem, ...subs].filter(v => v.status === 'ativo' || v.status === 'finalizado');
+      const jaEtiq = etiq.reduce((t, v) => t + (Number(v.quantidade) || 0), 0);
       const saldoNovo = Math.round((Number(m.quantidade_mp) - jaEtiq) * 1000) / 1000;
       const aindaNoEstoque = doItem.some(v => v.status === 'ativo' && (v.setor_atual || 'Ponto de Estoque') === 'Ponto de Estoque');
       if (jaEtiq > 0 && saldoNovo > 0 && !aindaNoEstoque) {
-        m = { ...m, quantidade_mp: saldoNovo, jaEtiquetado: jaEtiq, totalNovo: Number(m.quantidade_mp) };
+        m = { ...m, quantidade_mp: saldoNovo, jaEtiquetado: jaEtiq, totalNovo: Number(m.quantidade_mp),
+              etiquetasTxt: etiq.map(v => `${v.codigo}: ${almoxFmtQtd(v.quantidade)}${v.substitui_cod ? ` do cód. ${v.cod_materia_prima} (substituta)` : ''} · ${v.status === 'finalizado' ? 'finalizado' : v.setor_atual}`).join(' · ') };
         vol = null;
+      } else if (subs.length) {
+        m = { ...m, etiquetasTxt: subs.map(v => `${v.codigo}: ${almoxFmtQtd(v.quantidade)} do cód. ${v.cod_materia_prima} (substituta) · ${v.setor_atual}`).join(' · ') };
       }
     }
     const peds = solicOp.filter(s => almoxChaveItem(s.op, s.cod_materia_prima, s.material) === kBase && (!s.volume_id || doItem.some(v => v.id === s.volume_id) || !m.nova));
@@ -11563,6 +11570,12 @@ function AlmoxMovimentar({ currentUser, codigoInicial }) {
                                 {l.m.jaEtiquetado ? <div style={{ fontWeight: 700, color: T.rustText }}>já etiquetado {almoxFmtQtd(l.m.jaEtiquetado)} de {almoxFmtQtd(l.m.totalNovo)} {l.m.unidade || ''} · falta {almoxFmtQtd(l.m.quantidade_mp)} (requisição nova)</div> : null}
                               </div>
                             )}
+                            {!l.m.nova && l.m.jaEtiquetado ? (
+                              <div style={{ fontSize: 11, fontWeight: 700, color: T.rustText, marginTop: 3 }}>
+                                ENTREGUE EM PARTE · já etiquetado {almoxFmtQtd(l.m.jaEtiquetado)} de {almoxFmtQtd(l.m.totalNovo)} · falta {almoxFmtQtd(l.m.quantidade_mp)}
+                                <div style={{ fontWeight: 500, color: T.inkDim }}>{l.m.etiquetasTxt}</div>
+                              </div>
+                            ) : (!l.m.nova && l.m.etiquetasTxt ? <div style={{ fontSize: 11, color: T.inkDim, marginTop: 3 }}>+ {l.m.etiquetasTxt}</div> : null)}
                             {l.peds.map(p => (
                               <div key={p.id} style={{ fontSize: 11, color: p.origem === 'ordem' ? T.blueText : T.amberText, fontWeight: 700, marginTop: 2 }}>
                                 {p.origem === 'ordem' ? '📋 ordem' : '⏳ pedido'} → {p.tipo === 'para_estoque' ? 'Ponto de Estoque' : p.setor_destino}{p.quantidade_solicitada != null ? ` · qtd ${String(p.quantidade_solicitada).replace('.', ',')}` : ''}
