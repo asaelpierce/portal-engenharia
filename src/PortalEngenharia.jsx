@@ -944,7 +944,7 @@ function PortalConteudo({ currentUser, session }) {
           {renderTab('ciclo_comercial', <TabErrorBoundary tab="Ciclo Comercial"><CicloComercial /></TabErrorBoundary>)}
           {renderTab('produtividade', <Produtividade propostas={propostas} mesFiltro={mesFiltro} currentUser={currentUser} />)}
           {renderTab('faturamento', <Faturamento />)}
-          {renderTab('placas_kalocer', <TabErrorBoundary tab="Placas Kalocer"><ConsumoPlacasKalocer /></TabErrorBoundary>)}
+          {renderTab('placas_kalocer', <TabErrorBoundary tab="Cerâmicas"><CeramicasVale currentUser={currentUser} /></TabErrorBoundary>)}
           {renderTab('analitico_mp', <TabErrorBoundary tab="Analítico"><AnaliticoMP /></TabErrorBoundary>)}
           {renderTab('carteira_estoque', <TabErrorBoundary tab="Carteira x Estoque"><CarteiraEstoque /></TabErrorBoundary>)}
           {renderTab('preco_compra', <TabErrorBoundary tab="Preço de Compra"><PrecoCompra /></TabErrorBoundary>)}
@@ -966,7 +966,7 @@ function PortalConteudo({ currentUser, session }) {
           {renderTab('analise_comercial', <TabErrorBoundary tab="Follow Up Comercial"><AnaliseComercial currentUser={currentUser} /></TabErrorBoundary>)}
           {renderTab('prospeccao_clientes', <TabErrorBoundary tab="Prospecção de Clientes"><ProspeccaoClientes /></TabErrorBoundary>)}
           {renderTab('almoxarifado_fluxo', <TabErrorBoundary tab="Fluxo de Materiais"><AlmoxarifadoFluxo currentUser={currentUser} etiquetaInicial={etiquetaUrl} /></TabErrorBoundary>)}
-          {renderTab('pedidosvale', <PedidosVale />)}
+          {renderTab('pedidosvale', <TabErrorBoundary tab="Cerâmicas"><CeramicasVale currentUser={currentUser} abaInicial="vale" /></TabErrorBoundary>)}
           {renderTab('aberturacotacao', <TabErrorBoundary tab="Abertura de Cotação"><AberturaCotacao currentUser={currentUser} /></TabErrorBoundary>)}
           {renderTab('criar_br', <TabErrorBoundary tab="Criar BR"><CriarBR currentUser={currentUser} /></TabErrorBoundary>)}
           {renderTab('ranking', <TabErrorBoundary tab="Ranking"><RankingPontuacao /></TabErrorBoundary>)}
@@ -1009,7 +1009,7 @@ function Sidebar({ view, setView, pendCount, papel, telasPermitidas }) {
     { id: 'produtividade',label: 'Produtividade',          icon: Gauge },
     { id: 'comercial',    label: 'Painel Comercial',       icon: TrendingUp },
     { id: 'faturamento',  label: 'Faturamento (Sankhya)',  icon: DollarSign },
-    { id: 'placas_kalocer', label: 'Placas Kalocer',       icon: Layers },
+    { id: 'placas_kalocer', label: 'Cerâmicas · Placas e Vale', icon: Layers },
     { id: 'analitico_mp', label: 'Analítico',              icon: BarChart2 },
     { id: 'carteira_estoque', label: 'Carteira x Estoque',  icon: Package },
     { id: 'preco_compra',  label: 'Preço de Compra',        icon: DollarSign },
@@ -1031,7 +1031,6 @@ function Sidebar({ view, setView, pendCount, papel, telasPermitidas }) {
     { id: 'analise_comercial', label: 'Follow Up Comercial', icon: TrendingUp },
     { id: 'prospeccao_clientes', label: 'Prospecção de Clientes', icon: UserPlus },
     { id: 'almoxarifado_fluxo', label: 'Fluxo de Materiais', icon: Package },
-    { id: 'pedidosvale',  label: 'Pedidos Vale',           icon: FileWarning },
     { id: 'aberturacotacao', label: 'Abertura de Cotação',  icon: FileStack },
     { id: 'criar_br', label: 'Criar BR',            icon: FilePlus },
     { id: 'ranking',      label: 'Ranking de Pontuação',    icon: TrendingUp },
@@ -1043,6 +1042,8 @@ function Sidebar({ view, setView, pendCount, papel, telasPermitidas }) {
   // Custeio por OP (modelo de teste) acompanha a permissão do Custeio
   let permitidos = permitidos0 && permitidos0.includes('custeio') && !permitidos0.includes('custeio_op')
     ? [...permitidos0, 'custeio_op'] : permitidos0;
+  // "Pedidos Vale" agora é uma aba da tela "Cerâmicas · Placas e Vale" (menu placas_kalocer)
+  if (permitidos && permitidos.includes('pedidosvale') && !permitidos.includes('placas_kalocer')) permitidos = [...permitidos, 'placas_kalocer'];
   const items = permitidos ? todosItems.filter(i => permitidos.includes(i.id)) : todosItems;
   return (
     // O menu tem 20+ itens e crescia junto com a pagina: quem estava no fim da
@@ -1128,7 +1129,7 @@ const VIEW_TITLES = {
   consumo_mp: 'Consumo de Matéria-Prima — SGQ',
   almoxarifado: 'Estoque & Movimentação',
   equipamentos: 'Equipamentos de Terceiros',
-  pedidosvale: 'Pedidos Vale', integracao: 'Integrações', admin: 'Administração',
+  pedidosvale: 'Cerâmicas · Placas e Vale', placas_kalocer: 'Cerâmicas · Placas e Vale', integracao: 'Integrações', admin: 'Administração',
 };
 
 function Topbar({ view, mesFiltro, setMesFiltro, currentUser, userEmail, userMenuOpen, setUserMenuOpen, onNova, onTrocarSenha }) {
@@ -33198,6 +33199,238 @@ function KalocerDetalhe({ item, ini, fim, onFechar }) {
   , document.body);
 }
 
+// ============================================================================
+// CERÂMICAS · PLACAS E VALE (21/10/2026): junta "Placas Kalocer" e "Pedidos Vale" numa tela com abas e um
+// dashboard pronto. Vale = cliente que COMEÇA com "VALE" (Mineração Vale Verde fica fora).
+// Previsto = regra de cerâmica por código Vale (regras_ceramica_vale) × peças; real = apontamento de produção
+// (producao_mp_apontamentos) das OPs de clientes Vale, só os códigos da lista de placas Kalocer.
+// ============================================================================
+const klcDim = (desc) => { const m = /COMPRIMENTO\s*(\d+)\s*MM.*?LARGURA\s*(\d+)\s*MM.*?ESPESSURA\s*(\d+)\s*MM/i.exec(String(desc || ''));
+  return m ? `${m[1]}×${m[2]}×${m[3]}` : String(desc || '').slice(0, 28); };
+function CeramicasDashboard() {
+  const C = CRMC;
+  const hoje = new Date();
+  const [periodo, setPeriodo] = useState(String(hoje.getFullYear()));
+  const [dados, setDados] = useState(null);
+  const [foco, setFoco] = useState({ mes: null, unidade: null, esp: null, placa: null });
+  const focar = (k, v) => setFoco(f => ({ ...f, [k]: f[k] === v ? null : v }));
+  const ini = periodo === '12m' ? new Date(hoje.getFullYear() - 1, hoje.getMonth() + 1, 1).toISOString().slice(0, 10) : `${periodo}-01-01`;
+  const fim = periodo === '12m' ? hoje.toISOString().slice(0, 10) : `${periodo}-12-31`;
+  useEffect(() => {
+    let vivo = true; setDados(null);
+    (async () => {
+      const ler = async (q) => { const out = []; for (let de = 0; de < 100000; de += 1000) { const { data, error } = await q().range(de, de + 999); if (error) break; out.push(...(data || [])); if (!data || data.length < 1000) break; } return out; };
+      const [lista, vale, aps] = await Promise.all([
+        supabase.from('mp_placas_kalocer').select('codigo_mp,descricao,unidade').then(r => r.data || []),
+        ler(() => supabase.from('v_pedidos_vale').select('nunota,data_neg,client,cod_vale,descricao_produto,qtd_pecas,layout_placa_mm,espessura_ceramica_mm,ceramica_1_codigo,ceramica_1_descricao,qtd_total_ceramica_1,ceramica_2_codigo,ceramica_2_descricao,qtd_total_ceramica_2,ceramica_3_codigo,ceramica_3_descricao,qtd_total_ceramica_3,ceramica_4_codigo,ceramica_4_descricao,qtd_total_ceramica_4').gte('data_neg', ini).lte('data_neg', fim).order('data_neg')),
+        ler(() => supabase.from('producao_mp_apontamentos').select('cod_materia_prima,qtd_mp,data_ref,cliente_nome,nro_ordem_producao,br').gte('data_ref', ini).lte('data_ref', fim).order('data_ref')),
+      ]);
+      if (!vivo) return;
+      const cods = new Set(lista.map(l => String(l.codigo_mp)));
+      setDados({ lista, vale, aps: aps.filter(a => cods.has(String(a.cod_materia_prima))) });
+    })();
+    return () => { vivo = false; };
+  }, [ini, fim]);
+  if (!dados) return <div style={{ padding: 40, textAlign: 'center', color: C.ink3 }}>Montando o dashboard…</div>;
+
+  const descPlaca = Object.fromEntries(dados.lista.map(l => [String(l.codigo_mp), l.descricao]));
+  const ehVale = (cli) => String(cli || '').trim().toUpperCase().startsWith('VALE');
+  const mesDe = (d) => String(d || '').slice(0, 7);
+  // recortes por clique
+  const V = dados.vale.filter(r => (!foco.mes || mesDe(r.data_neg) === foco.mes) && (!foco.unidade || r.client === foco.unidade) && (!foco.esp || String(r.espessura_ceramica_mm ?? 'sem regra') === foco.esp));
+  const A = dados.aps.filter(a => (!foco.mes || mesDe(a.data_ref) === foco.mes) && (!foco.placa || String(a.cod_materia_prima) === foco.placa));
+  const AV = A.filter(a => ehVale(a.cliente_nome) && (!foco.unidade || a.cliente_nome === foco.unidade));
+  // cerâmica prevista (regra × peças), por código de placa
+  const prev = {};
+  V.forEach(r => [1, 2, 3, 4].forEach(k => { const c = r[`ceramica_${k}_codigo`]; const q = Number(r[`qtd_total_ceramica_${k}`]) || 0; if (!c || !q) return;
+    const o = prev[c] || (prev[c] = { cod: String(c), desc: r[`ceramica_${k}_descricao`], qtd: 0 }); o.qtd += q; }));
+  const real = {}; AV.forEach(a => { const c = String(a.cod_materia_prima); real[c] = (real[c] || 0) + (Number(a.qtd_mp) || 0); });
+  const pecas = V.reduce((t, r) => t + (Number(r.qtd_pecas) || 0), 0);
+  const prevTot = Object.values(prev).reduce((t, o) => t + o.qtd, 0);
+  const realTot = Object.values(real).reduce((t, v) => t + v, 0);
+  const consumoTot = A.reduce((t, a) => t + (Number(a.qtd_mp) || 0), 0);
+  const semRegra = V.filter(r => !r.ceramica_1_codigo).length;
+  const fmt = (v) => Math.round(v || 0).toLocaleString('pt-BR');
+  const MES = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
+  const CORES = ['#2F7BEA', '#16A34A', '#EA7A33', '#7C3AED', '#0D9488', '#DB2777', '#D9A21B', '#64748B'];
+  // séries por mês
+  const mesesP = []; { const c = new Date(`${ini}T12:00:00`); c.setDate(1); const b = new Date(`${fim}T12:00:00`); while (c <= b) { mesesP.push(`${c.getFullYear()}-${String(c.getMonth() + 1).padStart(2, '0')}`); c.setMonth(c.getMonth() + 1); } }
+  const valeBase = dados.vale.filter(r => (!foco.unidade || r.client === foco.unidade) && (!foco.esp || String(r.espessura_ceramica_mm ?? 'sem regra') === foco.esp));
+  const pecasMes = mesesP.map(m => { const l = valeBase.filter(r => mesDe(r.data_neg) === m); return { k: m, rot: fmt(l.reduce((t, r) => t + (Number(r.qtd_pecas) || 0), 0)), v: l.reduce((t, r) => t + (Number(r.qtd_pecas) || 0), 0), sub: `${new Set(l.map(r => r.nunota)).size} pedido(s)` }; });
+  const apsBase = dados.aps.filter(a => (!foco.placa || String(a.cod_materia_prima) === foco.placa));
+  const consMes = mesesP.map(m => { const l = apsBase.filter(a => mesDe(a.data_ref) === m); const v = l.filter(a => ehVale(a.cliente_nome) && (!foco.unidade || a.cliente_nome === foco.unidade)).reduce((t, a) => t + (Number(a.qtd_mp) || 0), 0);
+    return { m, vale: v, outros: l.reduce((t, a) => t + (Number(a.qtd_mp) || 0), 0) - v }; });
+  const maxCons = Math.max(1, ...consMes.map(x => x.vale + x.outros));
+  const unidades = Object.values(V.reduce((acc, r) => { const o = acc[r.client] || (acc[r.client] = { k: r.client, v: 0, n: new Set() }); o.v += Number(r.qtd_pecas) || 0; o.n.add(r.nunota); return acc; }, {}))
+    .sort((a, b) => b.v - a.v).map((o, i) => ({ k: o.k, v: o.v, rot: `${fmt(o.v)} pç`, extra: `${o.n.size} ped.`, cor: CORES[i % 8] }));
+  const esps = Object.values(V.reduce((acc, r) => { const k = String(r.espessura_ceramica_mm ?? 'sem regra'); const o = acc[k] || (acc[k] = { k, v: 0 }); o.v += Number(r.qtd_pecas) || 0; return acc; }, {}))
+    .sort((a, b) => b.v - a.v).map((o, i) => ({ k: o.k, v: o.v, n: null, cor: o.k === 'sem regra' ? '#9AA5B1' : CORES[i % 8] }));
+  const codsVale = Object.values(V.reduce((acc, r) => { const k = r.cod_vale || '—'; const o = acc[k] || (acc[k] = { cod: k, desc: r.descricao_produto, layout: r.layout_placa_mm, esp: r.espessura_ceramica_mm, cer: [1, 2, 3, 4].map(i => r[`ceramica_${i}_descricao`]).filter(Boolean), pecas: 0, ped: new Set(), unid: new Set() });
+    o.pecas += Number(r.qtd_pecas) || 0; o.ped.add(r.nunota); o.unid.add(r.client); return acc; }, {})).sort((a, b) => b.pecas - a.pecas);
+  const comp = [...new Set([...Object.keys(prev), ...Object.keys(real)])].map(c => ({ cod: c, desc: descPlaca[c] || prev[c]?.desc || c, prev: prev[c]?.qtd || 0, real: real[c] || 0 }))
+    .sort((a, b) => (b.prev + b.real) - (a.prev + a.real));
+
+  const caixa = { background: C.surface, border: `1px solid ${C.line}`, borderRadius: 12, padding: '16px 18px', minWidth: 0, boxShadow: '0 1px 2px rgba(16,24,40,.04)' };
+  const titulo = (t, sub) => (<><h3 style={{ margin: 0, fontSize: 14.5, fontWeight: 600 }}>{t}</h3>{sub && <div style={{ fontSize: 12, color: C.ink3, margin: '3px 0 14px' }}>{sub}</div>}</>);
+  const kpi = (r, v, sub, cor) => (
+    <div style={{ ...caixa, padding: '13px 15px' }}>
+      <div style={{ fontSize: 12, color: C.ink2, fontWeight: 500 }}>{r}</div>
+      <div style={{ fontSize: 23, fontWeight: 700, color: cor || C.ink, letterSpacing: -0.4, marginTop: 3, fontVariantNumeric: 'tabular-nums' }}>{v}</div>
+      <div style={{ fontSize: 11.5, color: C.ink3 }}>{sub}</div>
+    </div>
+  );
+  const nomeFoco = { mes: foco.mes ? `${MES[Number(foco.mes.slice(5)) - 1]}/${foco.mes.slice(0, 4)}` : null, unidade: foco.unidade, esp: foco.esp ? (foco.esp === 'sem regra' ? 'sem regra' : `${foco.esp} mm`) : null, placa: foco.placa ? klcDim(descPlaca[foco.placa]) : null };
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16, fontFamily: FONT_BODY, color: C.ink }}>
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+        <div role="tablist" style={{ display: 'inline-flex', background: '#E7EBF1', borderRadius: 9, padding: 3, gap: 2 }}>
+          {[[String(hoje.getFullYear()), String(hoje.getFullYear())], [String(hoje.getFullYear() - 1), String(hoje.getFullYear() - 1)], ['12m', 'Últimos 12 meses']].map(([k, r]) => (
+            <button key={k} role="tab" aria-selected={periodo === k} onClick={() => { setPeriodo(k); setFoco({ mes: null, unidade: null, esp: null, placa: null }); }}
+              style={{ fontFamily: 'inherit', fontSize: 12.5, fontWeight: periodo === k ? 600 : 500, padding: '6px 12px', borderRadius: 7, border: 'none', cursor: 'pointer', background: periodo === k ? C.surface : 'transparent', color: periodo === k ? C.ink : C.ink2 }}>{r}</button>
+          ))}
+        </div>
+        {Object.entries(nomeFoco).filter(([, v]) => v).map(([k, v]) => (
+          <span key={k} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 600, background: C.primarySoft, color: C.primary, borderRadius: 20, padding: '4px 6px 4px 11px' }}>
+            {{ mes: 'Mês', unidade: 'Unidade', esp: 'Espessura', placa: 'Placa' }[k]}: {v}
+            <button onClick={() => focar(k, foco[k])} aria-label="tirar" style={{ border: 'none', background: C.surface, color: C.primary, borderRadius: 10, width: 18, height: 18, cursor: 'pointer', fontSize: 11 }}>✕</button>
+          </span>
+        ))}
+        {Object.values(foco).some(Boolean) && <button onClick={() => setFoco({ mes: null, unidade: null, esp: null, placa: null })} style={{ fontFamily: 'inherit', fontSize: 12.5, border: 'none', background: 'none', color: C.primary, cursor: 'pointer' }}>limpar</button>}
+        <span style={{ flex: 1 }} />
+        <span style={{ fontSize: 12, color: C.ink3 }}>clique em mês, unidade, espessura ou placa para filtrar o painel inteiro</span>
+      </div>
+
+      <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(175px, 1fr))' }}>
+        {kpi('Peças Vale', fmt(pecas), `${new Set(V.map(r => r.nunota)).size} pedidos · ${new Set(V.map(r => r.cod_vale)).size} códigos Vale`, C.primary)}
+        {kpi('Unidades Vale atendidas', String(new Set(V.map(r => r.client)).size), 'clientes que começam com "VALE"')}
+        {kpi('Cerâmica prevista (regra)', fmt(prevTot), `peças × regra de cerâmica${semRegra ? ` · ${semRegra} item(ns) sem regra` : ''}`, '#7C3AED')}
+        {kpi('Placas consumidas na Vale', fmt(realTot), 'apontamento de produção nas OPs Vale', KLC_CATS.consumo.cor)}
+        {kpi('Participação da Vale', consumoTot ? `${Math.round(100 * realTot / consumoTot)}%` : '—', `de ${fmt(consumoTot)} placas consumidas no período`, '#0D9488')}
+      </div>
+
+      <div style={{ display: 'grid', gap: 16, gridTemplateColumns: 'repeat(auto-fit, minmax(460px, 1fr))' }}>
+        <section style={caixa}>
+          {titulo('Peças Vale por mês', 'pedidos de venda · clique no mês para filtrar')}
+          <CRMColunas altura={160} itens={pecasMes.map(x => ({ ...x, k: MES[Number(x.k.slice(5)) - 1], m: x.k, cor: foco.mes && foco.mes !== x.k ? '#C9D3E0' : C.primary }))} aoClicar={it => focar('mes', it.m)} />
+        </section>
+        <section style={caixa}>
+          {titulo('Placas consumidas por mês', 'apontamento de produção · Vale em vermelho, demais clientes em cinza')}
+          <div style={{ display: 'flex', alignItems: 'flex-end', gap: 10, height: 200, borderBottom: `1px solid ${C.line}` }}>
+            {consMes.map(x => (
+              <div key={x.m} onClick={() => focar('mes', x.m)} title={`${MES[Number(x.m.slice(5)) - 1]}: Vale ${fmt(x.vale)} · outros ${fmt(x.outros)}`}
+                style={{ flex: 1, minWidth: 0, height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', alignItems: 'center', cursor: 'pointer', opacity: foco.mes && foco.mes !== x.m ? 0.35 : 1 }}>
+                <div style={{ fontSize: 11, fontWeight: 600, color: KLC_CATS.consumo.cor, marginBottom: 3 }}>{x.vale + x.outros ? `${Math.round(100 * x.vale / (x.vale + x.outros))}%` : ''}</div>
+                <div style={{ width: '100%', maxWidth: 46, height: `${150 * (x.vale + x.outros) / maxCons}px`, display: 'flex', flexDirection: 'column-reverse', borderRadius: '5px 5px 0 0', overflow: 'hidden' }}>
+                  <div style={{ height: `${x.vale + x.outros ? 100 * x.vale / (x.vale + x.outros) : 0}%`, background: KLC_CATS.consumo.cor }} />
+                  <div style={{ flex: 1, background: '#CBD5E1' }} />
+                </div>
+                <div style={{ fontSize: 11.5, color: C.ink2, marginTop: 5 }}>{MES[Number(x.m.slice(5)) - 1]}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{ fontSize: 11.5, color: C.ink3, marginTop: 6 }}>% em cima = parte da Vale no consumo do mês</div>
+        </section>
+      </div>
+
+      <div style={{ display: 'grid', gap: 16, gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))' }}>
+        <section style={caixa}>
+          {titulo('Placas realmente usadas na Vale', 'apontamento nas OPs Vale · clique para filtrar')}
+          {Object.keys(real).length ? <CRMBarrasH itens={Object.entries(real).sort((a, b) => b[1] - a[1]).slice(0, 10).map(([c, v], i) => ({ k: `${klcDim(descPlaca[c])} · ${c}`, cod: c, v, rot: fmt(v), extra: realTot ? `${Math.round(100 * v / realTot)}%` : '', cor: CORES[i % 8] }))}
+            aoClicar={it => focar('placa', it.cod)} /> : <div style={{ fontSize: 12.5, color: C.ink3 }}>Sem apontamentos de placas em OPs Vale no período.</div>}
+        </section>
+        <section style={caixa}>
+          {titulo('Cerâmica prevista por tipo', 'regra de cerâmica × peças vendidas')}
+          {Object.keys(prev).length ? <CRMBarrasH itens={Object.values(prev).sort((a, b) => b.qtd - a.qtd).slice(0, 10).map((o, i) => ({ k: `${o.desc || klcDim(descPlaca[o.cod])} · ${o.cod}`, v: o.qtd, rot: fmt(o.qtd), extra: prevTot ? `${Math.round(100 * o.qtd / prevTot)}%` : '', cor: CORES[i % 8] }))} />
+            : <div style={{ fontSize: 12.5, color: C.ink3 }}>Sem regra de cerâmica para os itens do período.</div>}
+        </section>
+        <section style={caixa}>
+          {titulo('Peças por espessura de cerâmica', 'clique para filtrar')}
+          {esps.length ? <CRMRosca itens={esps.map(x => ({ ...x, k: x.k === 'sem regra' ? 'sem regra' : `${x.k} mm` , kk: x.k }))} centro={fmt(pecas)} sub="peças" fmt={fmt} aoClicar={it => focar('esp', it.kk)} /> : null}
+        </section>
+      </div>
+
+      <section style={caixa}>
+        {titulo('Previsto × real por placa na Vale', 'previsto = regra de cerâmica × peças vendidas no período · real = apontado nas OPs Vale no período (a produção pode cair em outro mês que a venda)')}
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+            <thead><tr style={{ background: C.surface2 }}>{['Placa', 'Código', 'Previsto (regra)', 'Real (apontado)', 'Diferença', ''].map((h, k) => (
+              <th key={k} style={{ padding: '9px 12px', fontSize: 11.5, fontWeight: 600, color: C.ink3, textAlign: k >= 2 && k <= 4 ? 'right' : 'left', borderBottom: `1px solid ${C.line}`, whiteSpace: 'nowrap' }}>{h}</th>))}</tr></thead>
+            <tbody>{comp.slice(0, 20).map((o, k) => { const dif = o.real - o.prev; const mx = Math.max(1, ...comp.map(x => Math.max(x.prev, x.real)));
+              return (
+                <tr key={o.cod} onClick={() => focar('placa', o.cod)} style={{ background: k % 2 ? C.surface2 : C.surface, cursor: 'pointer' }}>
+                  <td style={{ padding: '8px 12px', fontWeight: 600, whiteSpace: 'nowrap' }} title={o.desc}>{klcDim(o.desc)}</td>
+                  <td style={{ padding: '8px 12px', color: C.ink2 }}>{o.cod}</td>
+                  <td style={{ padding: '8px 12px', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{o.prev ? fmt(o.prev) : '—'}</td>
+                  <td style={{ padding: '8px 12px', textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontWeight: 600 }}>{o.real ? fmt(o.real) : '—'}</td>
+                  <td style={{ padding: '8px 12px', textAlign: 'right', whiteSpace: 'nowrap', fontWeight: 600, color: !o.prev || !o.real ? C.ink3 : dif > 0 ? C.loss : C.win }}>{o.prev && o.real ? `${dif > 0 ? '+' : ''}${fmt(dif)} (${dif > 0 ? '+' : ''}${Math.round(100 * dif / o.prev)}%)` : '—'}</td>
+                  <td style={{ padding: '8px 12px', minWidth: 160 }}>
+                    <div style={{ height: 5, background: C.lineSoft, borderRadius: 3, overflow: 'hidden' }}><div style={{ width: `${100 * o.prev / mx}%`, height: '100%', background: '#7C3AED' }} /></div>
+                    <div style={{ height: 5, background: C.lineSoft, borderRadius: 3, overflow: 'hidden', marginTop: 3 }}><div style={{ width: `${100 * o.real / mx}%`, height: '100%', background: KLC_CATS.consumo.cor }} /></div>
+                  </td>
+                </tr>
+              ); })}</tbody>
+          </table>
+        </div>
+        <div style={{ display: 'flex', gap: 16, fontSize: 11.5, color: C.ink3, marginTop: 8 }}>
+          <span><span style={{ display: 'inline-block', width: 10, height: 5, background: '#7C3AED', marginRight: 5 }} />previsto</span>
+          <span><span style={{ display: 'inline-block', width: 10, height: 5, background: KLC_CATS.consumo.cor, marginRight: 5 }} />real</span>
+          <span>· diferença vermelha = consumiu mais que a regra</span>
+        </div>
+      </section>
+
+      <div style={{ display: 'grid', gap: 16, gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))' }}>
+        <section style={caixa}>
+          {titulo('Unidades Vale', 'peças vendidas · clique para filtrar')}
+          {unidades.length ? <CRMBarrasH itens={unidades.slice(0, 15)} aoClicar={it => focar('unidade', it.k)} /> : <div style={{ fontSize: 12.5, color: C.ink3 }}>Sem pedidos Vale no período.</div>}
+        </section>
+        <section style={caixa}>
+          {titulo(`Códigos Vale mais vendidos (${codsVale.length})`, 'layout, espessura e cerâmicas da regra')}
+          <div style={{ maxHeight: 420, overflow: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+              <thead><tr>{['Código Vale', 'Layout', 'Esp.', 'Cerâmicas', 'Peças', 'Ped.'].map((h, k) => (
+                <th key={h} style={{ padding: '8px 10px', fontSize: 11, fontWeight: 600, color: C.ink3, textAlign: k >= 4 ? 'right' : 'left', position: 'sticky', top: 0, background: C.surface, borderBottom: `1px solid ${C.line}` }}>{h}</th>))}</tr></thead>
+              <tbody>{codsVale.slice(0, 60).map((o, k) => (
+                <tr key={o.cod} style={{ background: k % 2 ? C.surface2 : C.surface }} title={`${o.desc}\nUnidades: ${[...o.unid].join(', ')}`}>
+                  <td style={{ padding: '7px 10px', fontWeight: 600 }}>{o.cod}</td>
+                  <td style={{ padding: '7px 10px', color: C.ink2, whiteSpace: 'nowrap' }}>{o.layout || '—'}</td>
+                  <td style={{ padding: '7px 10px', color: C.ink2 }}>{o.esp ? `${o.esp}` : '—'}</td>
+                  <td style={{ padding: '7px 10px', color: C.ink2, maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{o.cer.length ? o.cer.join(' + ') : <span style={{ color: C.warn }}>sem regra</span>}</td>
+                  <td style={{ padding: '7px 10px', textAlign: 'right', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{fmt(o.pecas)}</td>
+                  <td style={{ padding: '7px 10px', textAlign: 'right', color: C.ink2 }}>{o.ped.size}</td>
+                </tr>))}</tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+    </div>
+  );
+}
+
+// Tela unificada: abas Dashboard · Placas Kalocer · Pedidos Vale (cada aba respeita a permissão antiga)
+function CeramicasVale({ currentUser, abaInicial = 'dash' }) {
+  const telas = Array.isArray(currentUser?.telasPermitidas) ? currentUser.telasPermitidas : null;
+  const podePlacas = !telas || telas.includes('placas_kalocer');
+  const podeVale = !telas || telas.includes('pedidosvale');
+  const [aba, setAba] = useState(abaInicial === 'vale' && podeVale ? 'vale' : abaInicial === 'placas' && podePlacas ? 'placas' : 'dash');
+  const abas = [['dash', 'Dashboard', BarChart2], ...(podePlacas ? [['placas', 'Placas Kalocer', Layers]] : []), ...(podeVale ? [['vale', 'Pedidos Vale', FileWarning]] : [])];
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <div role="tablist" style={{ display: 'flex', gap: 4, borderBottom: `1px solid ${T.line}` }}>
+        {abas.map(([k, r, Ic]) => (
+          <button key={k} role="tab" aria-selected={aba === k} onClick={() => setAba(k)}
+            style={{ fontFamily: 'inherit', fontSize: 13.5, fontWeight: aba === k ? 700 : 500, padding: '10px 16px', border: 'none', background: 'transparent', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7,
+              color: aba === k ? T.terracotta : T.inkFaint, borderBottom: `2px solid ${aba === k ? T.terracotta : 'transparent'}`, marginBottom: -1 }}>
+            <Ic size={15} aria-hidden="true" />{r}
+          </button>
+        ))}
+      </div>
+      {aba === 'dash' && <CeramicasDashboard />}
+      {aba === 'placas' && podePlacas && <TabErrorBoundary tab="Placas Kalocer"><ConsumoPlacasKalocer /></TabErrorBoundary>}
+      {aba === 'vale' && podeVale && <PedidosVale />}
+    </div>
+  );
+}
+
 function ConsumoPlacasKalocer() {
   const anoAtual = new Date().getFullYear();
   const [filtros, setFiltros] = useState({ anoIni: 2026, anoFim: anoAtual, mesIni: 1, mesFim: 12 });
@@ -35625,7 +35858,7 @@ const TELAS_CATALOGO = [
   { id: 'comercial',    label: 'Painel Comercial' },
   { id: 'crm',          label: 'CRM (só o CRM — vendedor entra direto nele)' },
   { id: 'faturamento',  label: 'Faturamento (Sankhya)' },
-  { id: 'placas_kalocer', label: 'Placas Kalocer' },
+  { id: 'placas_kalocer', label: 'Cerâmicas — aba Placas Kalocer' },
   { id: 'analitico_mp', label: 'Analítico' },
   { id: 'carteira_estoque', label: 'Carteira x Estoque' },
   { id: 'preco_compra', label: 'Preço de Compra' },
@@ -35647,7 +35880,7 @@ const TELAS_CATALOGO = [
   { id: 'analise_comercial', label: 'Follow Up Comercial' },
   { id: 'prospeccao_clientes', label: 'Prospecção de Clientes' },
   { id: 'almoxarifado_fluxo', label: 'Fluxo de Materiais' },
-  { id: 'pedidosvale',  label: 'Pedidos Vale' },
+  { id: 'pedidosvale',  label: 'Cerâmicas — aba Pedidos Vale' },
   { id: 'aberturacotacao', label: 'Abertura de Cotação' },
   { id: 'criar_br', label: 'Criar BR' },
   { id: 'ranking',      label: 'Ranking de Pontuação' },
