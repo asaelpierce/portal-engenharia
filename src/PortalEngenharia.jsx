@@ -33157,7 +33157,9 @@ function KalocerDetalhe({ item, ini, fim, onFechar }) {
 
   const abas = [['resumo', 'Resumo mensal', null], ...(mesSel ? [['mes', `Mês: ${MES[Number(mesSel.slice(5)) - 1]}/${mesSel.slice(2, 4)}`, null]] : []),
     ['movs', 'Movimentos (kardex)', d ? d.movimentos.length : null], ['ops', 'Consumo por OP', item.itens?.length || null]];
-  return (
+  // abre direto no <body> (portal): a área de conteúdo do portal tem animação (transform), que fazia a janela
+  // "fixa" ficar presa na rolagem da página e aparecer lá embaixo
+  return ReactDOM.createPortal(
     <div onClick={onFechar} style={{ position: 'fixed', inset: 0, zIndex: 80, background: 'rgba(15,35,64,.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: cheia ? 0 : '2vh 2vw' }}>
       <div ref={caixaRef} role="dialog" aria-label={`Movimentação do item ${item.codigo_mp}`} onClick={e => e.stopPropagation()} className="scale-in"
         style={{ width: '100%', maxWidth: cheia ? 'none' : 1500, height: cheia ? '100vh' : '96vh', background: C.bg, borderRadius: cheia ? 0 : 16, overflow: 'hidden', display: 'flex', flexDirection: 'column', boxShadow: '0 30px 80px rgba(0,0,0,.30)', fontFamily: FONT_BODY, color: C.ink, WebkitFontSmoothing: 'antialiased' }}>
@@ -33193,7 +33195,7 @@ function KalocerDetalhe({ item, ini, fim, onFechar }) {
         <div ref={rolagemRef} style={{ flex: 1, overflow: 'auto' }}>{corpo()}</div>
       </div>
     </div>
-  );
+  , document.body);
 }
 
 function ConsumoPlacasKalocer() {
