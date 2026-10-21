@@ -32778,98 +32778,189 @@ function KalocerDetalhe({ item, ini, fim, onFechar }) {
   const [erro, setErro] = useState(null);
   const [aba, setAba] = useState('resumo');
   const [f, setF] = useState({ mes: '', cat: '', local: '', busca: '' });
+  const [hover, setHover] = useState(null);
   useEffect(() => {
     supabase.rpc('fn_kalocer_kardex', { p_cod: Number(item.codigo_mp), p_ini: ini, p_fim: fim }).then(({ data, error }) => {
       if (error || !data?.ok) setErro(error?.message || data?.erro || 'Não foi possível consultar o Sankhya.'); else setD(data);
     });
   }, [item.codigo_mp, ini, fim]);
+  useEffect(() => {
+    const t = (e) => { if (e.key === 'Escape') onFechar(); };
+    window.addEventListener('keydown', t);
+    const antes = document.body.style.overflow; document.body.style.overflow = 'hidden';
+    return () => { window.removeEventListener('keydown', t); document.body.style.overflow = antes; };
+  }, [onFechar]);
+  const C = CRMC;
   const un = item.unidade || d?.unidade || '';
   const q = (v) => fmtQtd(v);
   const MES = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
-  const conteudo = () => {
-    if (erro) return <div style={{ padding: 30, color: T.rustText }}>{erro}</div>;
-    if (!d) return <div style={{ padding: 30, color: T.inkFaint, textAlign: 'center' }}>Consultando os movimentos no Sankhya…</div>;
+  const hojeM = new Date().toISOString().slice(0, 7);
+
+  // ---- dados derivados ----
+  let movs = [], resumo = [], tot = () => 0, mesesMov = 0, consumoMed = 0, cobertura = null, checagem = 0;
+  if (d) {
     let saldo = Number(d.saldo_inicial) || 0;
-    const movs = d.movimentos.map(m => { saldo += Number(m.qtd) || 0; return { ...m, cat: klcCategoria(m), saldo, mes: m.data.slice(0, 7) }; });
-    // meses do período
+    movs = d.movimentos.map(m => { saldo += Number(m.qtd) || 0; return { ...m, cat: klcCategoria(m), saldo, mes: m.data.slice(0, 7) }; });
     const meses = []; { const a = new Date(`${ini}T12:00:00`), b = new Date(`${fim}T12:00:00`); const c = new Date(a.getFullYear(), a.getMonth(), 1);
       while (c <= b) { meses.push(`${c.getFullYear()}-${String(c.getMonth() + 1).padStart(2, '0')}`); c.setMonth(c.getMonth() + 1); } }
     let s2 = Number(d.saldo_inicial) || 0;
-    const resumo = meses.map(m => { const l = movs.filter(x => x.mes === m); const soma = (c) => l.filter(x => x.cat === c).reduce((t, x) => t + Number(x.qtd), 0);
-      const r = { m, entrada: soma('entrada'), consumo: -soma('consumo'), remessa: -soma('remessa'), retorno: soma('retorno'), outra: -soma('outra'), liq: l.reduce((t, x) => t + Number(x.qtd), 0), n: l.length };
+    resumo = meses.map(m => { const l = movs.filter(x => x.mes === m); const soma = (c2) => l.filter(x => x.cat === c2).reduce((t, x) => t + Number(x.qtd), 0);
+      const r = { m, entrada: soma('entrada'), consumo: -soma('consumo'), remessa: -soma('remessa'), retorno: soma('retorno'), outra: -soma('outra'), liq: l.reduce((t, x) => t + Number(x.qtd), 0), n: l.length, futuro: m > hojeM };
       s2 += r.liq; r.saldo = s2; return r; });
-    const tot = (k) => resumo.reduce((t, r) => t + r[k], 0);
-    const mesesMov = resumo.filter(r => r.n > 0).length;
-    const consumoMed = mesesMov ? tot('consumo') / mesesMov : 0;
-    const cobertura = consumoMed ? (Number(d.saldo_atual) || 0) / consumoMed : null;
-    const checagem = Math.round(((Number(d.saldo_inicial) || 0) + tot('liq') - (resumo.length ? resumo[resumo.length - 1].saldo : 0)) * 1000) / 1000;
-    const verMovs = (mes, cat) => { setF({ mes: mes || '', cat: cat || '', local: '', busca: '' }); setAba('movs'); };
-    const card = (r, v, sub, cor) => (
-      <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '11px 14px', minWidth: 0 }}>
-        <div style={{ fontSize: 11, color: T.inkFaint, fontWeight: 600 }}>{r}</div>
-        <div style={{ fontSize: 19, fontWeight: 700, fontFamily: FONT_DISPLAY, color: cor || T.ink, marginTop: 2 }}>{v}</div>
-        {sub && <div style={{ fontSize: 10.5, color: T.inkFaint }}>{sub}</div>}
+    tot = (k) => resumo.reduce((t, r) => t + r[k], 0);
+    mesesMov = resumo.filter(r => r.n > 0).length;
+    consumoMed = mesesMov ? tot('consumo') / mesesMov : 0;
+    cobertura = consumoMed ? (Number(d.saldo_atual) || 0) / consumoMed : null;
+    checagem = Math.round(((Number(d.saldo_inicial) || 0) + tot('liq') - (resumo.length ? resumo[resumo.length - 1].saldo : 0)) * 1000) / 1000;
+  }
+  const verMovs = (mes, cat) => { setF({ mes: mes || '', cat: cat || '', local: '', busca: '' }); setAba('movs'); };
+
+  const exportar = async () => {
+    if (!d) return;
+    const { default: ExcelJS } = await import('exceljs');
+    const wb = new ExcelJS.Workbook();
+    const w1 = wb.addWorksheet('Movimentos', { views: [{ state: 'frozen', ySplit: 1 }] });
+    w1.columns = [{ header: 'Saldo', key: 'saldo', width: 11 }, { header: 'Qtd. Neg.', key: 'qtd', width: 11 }, { header: 'Nro. Único Nota', key: 'nunota', width: 13 }, { header: 'Nro. Nota', key: 'numnota', width: 10 },
+      { header: 'Dt. Neg.', key: 'data', width: 11 }, { header: 'Descrição da TOP', key: 'top_descr', width: 44 }, { header: 'Parceiro', key: 'codparc', width: 9 }, { header: 'Tipo', key: 'cat', width: 24 },
+      { header: 'Nome do parceiro', key: 'parceiro', width: 34 }, { header: 'Vlr. Total', key: 'valor', width: 12 }, { header: 'TOP', key: 'top', width: 7 }, { header: 'Local', key: 'local', width: 7 },
+      { header: 'Descrição do Local', key: 'local_descr', width: 20 }, { header: 'Controle', key: 'controle', width: 10 }, { header: 'Mês', key: 'mesn', width: 6 }];
+    movs.forEach(m => w1.addRow({ ...m, data: new Date(`${m.data}T12:00:00`), cat: KLC_CATS[m.cat].r, codparc: Number(m.codparc) || m.codparc, numnota: Number(m.numnota) || m.numnota, mesn: Number(m.mes.slice(5)) }));
+    w1.getRow(1).font = { bold: true }; w1.getColumn('data').numFmt = 'dd/mm/yyyy';
+    const w2 = wb.addWorksheet('Consumo Anual');
+    w2.addRow([`Consumo do Item – ${item.codigo_mp} ${d.descricao || item.descricao || ''}`]).font = { bold: true, size: 13 };
+    w2.addRow([`Período ${new Date(`${ini}T12:00:00`).toLocaleDateString('pt-BR')} a ${new Date(`${fim}T12:00:00`).toLocaleDateString('pt-BR')}`]); w2.addRow([]);
+    w2.addRow(['Mês', 'Entradas', 'Consumo Produção', 'Remessa Industrialização', 'Retorno Industrialização', 'Outras Saídas', 'Mov. Líquida', 'Saldo Final']).font = { bold: true };
+    resumo.forEach(r => w2.addRow([`${MES[Number(r.m.slice(5)) - 1]}/${r.m.slice(2, 4)}`, r.entrada, r.consumo, r.remessa, r.retorno, r.outra, r.liq, r.saldo]));
+    w2.addRow(['Total', tot('entrada'), tot('consumo'), tot('remessa'), tot('retorno'), tot('outra'), tot('liq')]).font = { bold: true };
+    w2.addRow([]); w2.addRow(['Indicadores']).font = { bold: true };
+    [['Saldo inicial do período', Number(d.saldo_inicial)], ['Consumo total de produção', tot('consumo')], ['Meses com movimentação', mesesMov], ['Consumo médio mensal', Math.round(consumoMed)],
+      ['Saldo atual', Number(d.saldo_atual)], ['Cobertura do estoque (meses)', cobertura == null ? '' : Math.round(cobertura * 10) / 10], ['Checagem saldo (deve ser 0)', checagem]].forEach(x => w2.addRow(x));
+    w2.columns.forEach((c2, k) => { c2.width = k ? 16 : 30; });
+    const buf = await wb.xlsx.writeBuffer();
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+    a.download = `movimentacao_${item.codigo_mp}_${ini}_a_${fim}.xlsx`; a.click();
+  };
+
+  // ---- peças visuais ----
+  const kpi = (Icone, r, v, sub, cor) => (
+    <div style={{ background: C.surface, border: `1px solid ${C.line}`, borderRadius: 12, padding: '14px 16px', minWidth: 0, boxShadow: '0 1px 2px rgba(16,24,40,.04)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span aria-hidden="true" style={{ width: 28, height: 28, borderRadius: 8, background: `${cor || C.primary}14`, color: cor || C.primary, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flex: 'none' }}><Icone size={15} /></span>
+        <span style={{ fontSize: 12, color: C.ink2, fontWeight: 500 }}>{r}</span>
       </div>
+      <div style={{ fontSize: 23, fontWeight: 700, color: cor || C.ink, marginTop: 8, letterSpacing: -0.4, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>{v}</div>
+      {sub && <div style={{ fontSize: 11.5, color: C.ink3, marginTop: 2 }}>{sub}</div>}
+    </div>
+  );
+  const grafico = () => {
+    const W = 1100, H = 260, ml = 56, mr = 56, mt = 18, mb = 30;
+    const maxB = Math.max(1, ...resumo.map(r => Math.max(r.entrada, r.consumo)));
+    const maxS = Math.max(1, ...resumo.map(r => r.saldo), Number(d.saldo_inicial) || 0);
+    const passo = (W - ml - mr) / Math.max(1, resumo.length);
+    const yB = (v) => mt + (H - mt - mb) * (1 - v / maxB);
+    const yS = (v) => mt + (H - mt - mb) * (1 - v / (maxS * 1.08));
+    const linha = resumo.map((r, k) => `${k ? 'L' : 'M'}${ml + passo * (k + 0.5)},${yS(r.saldo)}`).join(' ');
+    return (
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 'auto', display: 'block' }} onMouseLeave={() => setHover(null)}>
+        {[0, 0.25, 0.5, 0.75, 1].map(t => (
+          <g key={t}>
+            <line x1={ml} x2={W - mr} y1={yB(maxB * t)} y2={yB(maxB * t)} stroke={C.lineSoft} />
+            <text x={ml - 8} y={yB(maxB * t) + 4} textAnchor="end" fontSize="11" fill={C.ink3}>{q(Math.round(maxB * t))}</text>
+            <text x={W - mr + 8} y={yS(maxS * 1.08 * t) + 4} fontSize="11" fill="#2F7BEA">{q(Math.round(maxS * 1.08 * t))}</text>
+          </g>
+        ))}
+        {resumo.map((r, k) => {
+          const x0 = ml + passo * k; const bw = Math.min(26, passo * 0.28);
+          const on = hover === k;
+          return (
+            <g key={r.m} style={{ cursor: 'pointer' }} onClick={() => verMovs(r.m)} onMouseEnter={() => setHover(k)} opacity={r.futuro ? 0.35 : 1}>
+              <rect x={x0} y={mt} width={passo} height={H - mt - mb} fill={on ? C.surface2 : 'transparent'} />
+              <rect x={x0 + passo / 2 - bw - 2} y={yB(r.entrada)} width={bw} height={Math.max(0, H - mb - yB(r.entrada))} rx="3" fill={KLC_CATS.entrada.cor} />
+              <rect x={x0 + passo / 2 + 2} y={yB(r.consumo)} width={bw} height={Math.max(0, H - mb - yB(r.consumo))} rx="3" fill={KLC_CATS.consumo.cor} />
+              <text x={x0 + passo / 2} y={H - 10} textAnchor="middle" fontSize="12" fontWeight={on ? 700 : 500} fill={C.ink2}>{MES[Number(r.m.slice(5)) - 1]}</text>
+            </g>
+          );
+        })}
+        <path d={linha} fill="none" stroke="#2F7BEA" strokeWidth="2.5" strokeLinejoin="round" />
+        {resumo.map((r, k) => <circle key={r.m} cx={ml + passo * (k + 0.5)} cy={yS(r.saldo)} r={hover === k ? 5 : 3.5} fill="#fff" stroke="#2F7BEA" strokeWidth="2" pointerEvents="none" />)}
+        {hover != null && resumo[hover] && (() => { const r = resumo[hover]; const x = Math.min(W - mr - 190, Math.max(ml, ml + passo * (hover + 0.5) - 95));
+          return (
+            <g pointerEvents="none">
+              <rect x={x} y={mt} width="190" height="82" rx="8" fill={C.ink} opacity="0.94" />
+              <text x={x + 12} y={mt + 20} fontSize="12.5" fontWeight="700" fill="#fff">{MES[Number(r.m.slice(5)) - 1]}/{r.m.slice(0, 4)}</text>
+              <text x={x + 12} y={mt + 38} fontSize="11.5" fill="#B7F0CB">Entradas: {q(r.entrada)}</text>
+              <text x={x + 12} y={mt + 54} fontSize="11.5" fill="#F9C2BD">Consumo: {q(r.consumo)}</text>
+              <text x={x + 12} y={mt + 70} fontSize="11.5" fill="#B9D4FB">Saldo no fim: {q(r.saldo)}</text>
+            </g>
+          ); })()}
+      </svg>
     );
+  };
+
+  const corpo = () => {
+    if (erro) return <div style={{ padding: 40, color: C.loss, textAlign: 'center' }}>{erro}</div>;
+    if (!d) return <div style={{ padding: 60, color: C.ink3, textAlign: 'center' }}>Consultando os movimentos no Sankhya…</div>;
     if (aba === 'resumo') {
-      const maxV = Math.max(1, ...resumo.map(r => Math.max(r.entrada, r.consumo)));
       const cel = (r, k, cat, cor) => (
         <td onClick={r[k] ? () => verMovs(r.m, cat) : undefined} title={r[k] ? 'clique para ver os movimentos' : undefined}
-          style={{ padding: '7px 10px', textAlign: 'right', color: r[k] ? (cor || T.ink) : T.inkFaint, cursor: r[k] ? 'pointer' : 'default', fontVariantNumeric: 'tabular-nums' }}>{r[k] ? q(r[k]) : '0'}</td>
+          style={{ padding: '10px 14px', textAlign: 'right', color: r[k] ? (cor || C.ink) : C.ink3, cursor: r[k] ? 'pointer' : 'default', fontVariantNumeric: 'tabular-nums', fontWeight: r[k] ? 500 : 400 }}>{r[k] ? q(r[k]) : '—'}</td>
       );
       return (
-        <div style={{ padding: '14px 18px', display: 'flex', flexDirection: 'column', gap: 14 }}>
-          <div style={{ display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))' }}>
-            {card('Saldo inicial do período', `${q(d.saldo_inicial)} ${un}`, `em ${new Date(`${ini}T12:00:00`).toLocaleDateString('pt-BR')}`)}
-            {card('Consumo de produção', `${q(tot('consumo'))} ${un}`, 'apontamentos no período', T.rustText)}
-            {card('Consumo médio mensal', `${q(Math.round(consumoMed))} ${un}`, `${mesesMov} mês(es) com movimento`)}
-            {card('Saldo atual (Sankhya)', `${q(d.saldo_atual)} ${un}`, d.reservado ? `${q(d.reservado)} reservado` : 'estoque em todos os locais', T.blueText)}
-            {card('Cobertura do estoque', cobertura == null ? '—' : `${cobertura.toLocaleString('pt-BR', { maximumFractionDigits: 1 })} meses`, 'saldo atual ÷ consumo médio', cobertura != null && cobertura < 2 ? T.rustText : T.oliveText)}
-            {card('Checagem do saldo', checagem === 0 ? 'OK' : q(checagem), checagem === 0 ? 'saldo inicial + movimentos = saldo final' : 'diferença — conferir', checagem === 0 ? T.oliveText : T.rustText)}
+        <div style={{ padding: '20px 24px 28px', display: 'flex', flexDirection: 'column', gap: 18 }}>
+          <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))' }}>
+            {kpi(Package, 'Saldo inicial do período', `${q(d.saldo_inicial)} ${un}`, `em ${new Date(`${ini}T12:00:00`).toLocaleDateString('pt-BR')}`, C.ink2)}
+            {kpi(TrendingUp, 'Consumo de produção', `${q(tot('consumo'))} ${un}`, 'apontamentos no período', KLC_CATS.consumo.cor)}
+            {kpi(BarChart2, 'Consumo médio mensal', `${q(Math.round(consumoMed))} ${un}`, `${mesesMov} mês(es) com movimento`, '#7C3AED')}
+            {kpi(Layers, 'Saldo atual (Sankhya)', `${q(d.saldo_atual)} ${un}`, d.reservado ? `${q(d.reservado)} reservado` : 'estoque em todos os locais', C.primary)}
+            {kpi(Clock3, 'Cobertura do estoque', cobertura == null ? '—' : `${cobertura.toLocaleString('pt-BR', { maximumFractionDigits: 1 })} meses`, 'saldo atual ÷ consumo médio', cobertura != null && cobertura < 2 ? C.loss : C.win)}
+            {kpi(CheckCircle2, 'Checagem do saldo', checagem === 0 ? 'Confere' : q(checagem), checagem === 0 ? 'inicial + movimentos = final' : 'diferença — conferir', checagem === 0 ? C.win : C.loss)}
           </div>
-          <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '12px 14px' }}>
-            <div style={{ display: 'flex', gap: 14, fontSize: 11.5, color: T.inkDim, marginBottom: 8 }}>
-              <span><span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 3, background: KLC_CATS.entrada.cor, marginRight: 5 }} />Entradas</span>
-              <span><span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 3, background: KLC_CATS.consumo.cor, marginRight: 5 }} />Consumo produção</span>
-              <span style={{ color: T.inkFaint }}>· número em cima = saldo no fim do mês · clique no mês para ver os movimentos</span>
+
+          <section style={{ background: C.surface, border: `1px solid ${C.line}`, borderRadius: 12, padding: '16px 18px', boxShadow: '0 1px 2px rgba(16,24,40,.04)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 10, flexWrap: 'wrap', marginBottom: 8 }}>
+              <h3 style={{ margin: 0, fontSize: 15, fontWeight: 600 }}>Entradas × consumo e saldo no fim do mês</h3>
+              <div style={{ display: 'flex', gap: 16, fontSize: 12, color: C.ink2 }}>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><span style={{ width: 10, height: 10, borderRadius: 3, background: KLC_CATS.entrada.cor }} />Entradas</span>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><span style={{ width: 10, height: 10, borderRadius: 3, background: KLC_CATS.consumo.cor }} />Consumo produção</span>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><span style={{ width: 16, height: 3, borderRadius: 2, background: '#2F7BEA' }} />Saldo (eixo da direita)</span>
+              </div>
             </div>
-            <div style={{ display: 'flex', alignItems: 'flex-end', gap: 10, height: 170 }}>
-              {resumo.map(r => (
-                <div key={r.m} onClick={() => verMovs(r.m)} title={`${MES[Number(r.m.slice(5)) - 1]}: entradas ${q(r.entrada)} · consumo ${q(r.consumo)} · saldo ${q(r.saldo)}`}
-                  style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-end', height: '100%', cursor: 'pointer' }}>
-                  <div style={{ fontSize: 10, color: T.inkFaint, marginBottom: 3, whiteSpace: 'nowrap' }}>{q(Math.round(r.saldo))}</div>
-                  <div style={{ display: 'flex', gap: 2, alignItems: 'flex-end', width: '100%', justifyContent: 'center', height: 130 }}>
-                    <div style={{ width: '42%', maxWidth: 22, height: `${100 * r.entrada / maxV}%`, minHeight: r.entrada ? 2 : 0, background: KLC_CATS.entrada.cor, borderRadius: '3px 3px 0 0' }} />
-                    <div style={{ width: '42%', maxWidth: 22, height: `${100 * r.consumo / maxV}%`, minHeight: r.consumo ? 2 : 0, background: KLC_CATS.consumo.cor, borderRadius: '3px 3px 0 0' }} />
-                  </div>
-                  <div style={{ fontSize: 11, color: T.inkDim, marginTop: 4 }}>{MES[Number(r.m.slice(5)) - 1]}</div>
-                </div>
-              ))}
+            {grafico()}
+            <div style={{ fontSize: 11.5, color: C.ink3, marginTop: 4 }}>Passe o mouse para ver os números do mês · clique para abrir os movimentos</div>
+          </section>
+
+          <section style={{ background: C.surface, border: `1px solid ${C.line}`, borderRadius: 12, overflow: 'hidden', boxShadow: '0 1px 2px rgba(16,24,40,.04)' }}>
+            <div style={{ padding: '14px 18px', borderBottom: `1px solid ${C.line}` }}>
+              <h3 style={{ margin: 0, fontSize: 15, fontWeight: 600 }}>Resumo mês a mês</h3>
+              <div style={{ fontSize: 12, color: C.ink3, marginTop: 2 }}>clique no mês ou num valor para ver os movimentos que formam o número</div>
             </div>
-          </div>
-          <div style={{ border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
-              <thead><tr style={{ background: T.panelAlt }}>
-                {['Mês', 'Entradas', 'Consumo produção', 'Remessa industrializ.', 'Retorno industrializ.', 'Outras saídas', 'Mov. líquida', 'Saldo final'].map((h, k) => (
-                  <th key={h} style={{ padding: '8px 10px', fontSize: 11, fontWeight: 700, color: T.inkFaint, textAlign: k ? 'right' : 'left', whiteSpace: 'nowrap' }}>{h}</th>))}
-              </tr></thead>
-              <tbody>
-                {resumo.map(r => (
-                  <tr key={r.m} style={{ borderTop: `1px solid ${T.lineSoft}` }}>
-                    <td onClick={() => verMovs(r.m)} style={{ padding: '7px 10px', fontWeight: 700, color: T.blueText, cursor: 'pointer' }}>{MES[Number(r.m.slice(5)) - 1]}/{r.m.slice(2, 4)}</td>
-                    {cel(r, 'entrada', 'entrada', KLC_CATS.entrada.cor)}{cel(r, 'consumo', 'consumo', KLC_CATS.consumo.cor)}{cel(r, 'remessa', 'remessa')}{cel(r, 'retorno', 'retorno')}{cel(r, 'outra', 'outra')}
-                    <td style={{ padding: '7px 10px', textAlign: 'right', fontWeight: 600, color: r.liq < 0 ? T.rustText : r.liq > 0 ? T.oliveText : T.inkFaint }}>{r.liq > 0 ? '+' : ''}{q(r.liq)}</td>
-                    <td style={{ padding: '7px 10px', textAlign: 'right', fontWeight: 700, fontFamily: FONT_DISPLAY }}>{q(r.saldo)}</td>
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                <thead><tr style={{ background: C.surface2 }}>
+                  {['Mês', 'Entradas', 'Consumo produção', 'Remessa industrializ.', 'Retorno industrializ.', 'Outras saídas', 'Mov. líquida', 'Saldo final'].map((h, k) => (
+                    <th key={h} style={{ padding: '10px 14px', fontSize: 11.5, fontWeight: 600, color: C.ink3, textAlign: k ? 'right' : 'left', whiteSpace: 'nowrap', borderBottom: `1px solid ${C.line}` }}>{h}</th>))}
+                </tr></thead>
+                <tbody>
+                  {resumo.map((r, k) => (
+                    <tr key={r.m} style={{ background: k % 2 ? C.surface2 : C.surface, opacity: r.futuro ? 0.45 : 1 }}>
+                      <td onClick={() => verMovs(r.m)} style={{ padding: '10px 14px', fontWeight: 600, color: C.primary, cursor: 'pointer', whiteSpace: 'nowrap' }}>{MES[Number(r.m.slice(5)) - 1]}/{r.m.slice(2, 4)}</td>
+                      {cel(r, 'entrada', 'entrada', KLC_CATS.entrada.cor)}{cel(r, 'consumo', 'consumo', KLC_CATS.consumo.cor)}{cel(r, 'remessa', 'remessa')}{cel(r, 'retorno', 'retorno')}{cel(r, 'outra', 'outra')}
+                      <td style={{ padding: '10px 14px', textAlign: 'right' }}>
+                        {r.liq ? <span style={{ fontSize: 12, fontWeight: 700, padding: '2px 8px', borderRadius: 10, fontVariantNumeric: 'tabular-nums', color: r.liq < 0 ? C.loss : C.win, background: r.liq < 0 ? C.lossSoft : C.winSoft }}>{r.liq > 0 ? '+' : ''}{q(r.liq)}</span> : <span style={{ color: C.ink3 }}>—</span>}
+                      </td>
+                      <td style={{ padding: '10px 14px', textAlign: 'right', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{q(r.saldo)}</td>
+                    </tr>
+                  ))}
+                  <tr style={{ borderTop: `2px solid ${C.line}`, background: C.surface }}>
+                    <td style={{ padding: '12px 14px', fontWeight: 700 }}>Total</td>
+                    {['entrada', 'consumo', 'remessa', 'retorno', 'outra'].map(k => <td key={k} style={{ padding: '12px 14px', textAlign: 'right', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{q(tot(k))}</td>)}
+                    <td style={{ padding: '12px 14px', textAlign: 'right', fontWeight: 700, color: tot('liq') < 0 ? C.loss : C.win }}>{tot('liq') > 0 ? '+' : ''}{q(tot('liq'))}</td>
+                    <td style={{ padding: '12px 14px', textAlign: 'right', fontWeight: 700 }}>{q(resumo.length ? resumo[resumo.length - 1].saldo : d.saldo_inicial)}</td>
                   </tr>
-                ))}
-                <tr style={{ borderTop: `2px solid ${T.line}`, background: T.panelAlt, fontWeight: 700 }}>
-                  <td style={{ padding: '8px 10px' }}>Total</td>
-                  {['entrada', 'consumo', 'remessa', 'retorno', 'outra'].map(k => <td key={k} style={{ padding: '8px 10px', textAlign: 'right' }}>{q(tot(k))}</td>)}
-                  <td style={{ padding: '8px 10px', textAlign: 'right' }}>{tot('liq') > 0 ? '+' : ''}{q(tot('liq'))}</td><td />
-                </tr>
-              </tbody>
-            </table>
-          </div>
+                </tbody>
+              </table>
+            </div>
+          </section>
         </div>
       );
     }
@@ -32878,71 +32969,53 @@ function KalocerDetalhe({ item, ini, fim, onFechar }) {
       const b = f.busca.trim().toLowerCase();
       const vis = movs.filter(m => (!f.mes || m.mes === f.mes) && (!f.cat || m.cat === f.cat) && (!f.local || String(m.local) === f.local)
         && (!b || [m.numnota, m.nunota, m.top, m.top_descr, m.parceiro].some(x => String(x ?? '').toLowerCase().includes(b))));
-      const exportar = async () => {
-        const { default: ExcelJS } = await import('exceljs');
-        const wb = new ExcelJS.Workbook();
-        const w1 = wb.addWorksheet('Movimentos', { views: [{ state: 'frozen', ySplit: 1 }] });
-        w1.columns = [{ header: 'Saldo', key: 'saldo', width: 11 }, { header: 'Qtd. Neg.', key: 'qtd', width: 11 }, { header: 'Nro. Único Nota', key: 'nunota', width: 13 }, { header: 'Nro. Nota', key: 'numnota', width: 10 },
-          { header: 'Dt. Neg.', key: 'data', width: 11 }, { header: 'Descrição da TOP', key: 'top_descr', width: 44 }, { header: 'Parceiro', key: 'codparc', width: 9 }, { header: 'Tipo', key: 'cat', width: 24 },
-          { header: 'Nome do parceiro', key: 'parceiro', width: 34 }, { header: 'Vlr. Total', key: 'valor', width: 12 }, { header: 'TOP', key: 'top', width: 7 }, { header: 'Local', key: 'local', width: 7 },
-          { header: 'Descrição do Local', key: 'local_descr', width: 20 }, { header: 'Controle', key: 'controle', width: 10 }, { header: 'Mês', key: 'mesn', width: 6 }];
-        movs.forEach(m => w1.addRow({ ...m, data: new Date(`${m.data}T12:00:00`), cat: KLC_CATS[m.cat].r, codparc: Number(m.codparc) || m.codparc, numnota: Number(m.numnota) || m.numnota, mesn: Number(m.mes.slice(5)) }));
-        w1.getRow(1).font = { bold: true }; w1.getColumn('data').numFmt = 'dd/mm/yyyy';
-        const w2 = wb.addWorksheet('Consumo Anual');
-        w2.addRow([`Consumo do Item – ${item.codigo_mp} ${d.descricao || item.descricao || ''}`]).font = { bold: true, size: 13 };
-        w2.addRow([`Período ${new Date(`${ini}T12:00:00`).toLocaleDateString('pt-BR')} a ${new Date(`${fim}T12:00:00`).toLocaleDateString('pt-BR')}`]); w2.addRow([]);
-        w2.addRow(['Mês', 'Entradas', 'Consumo Produção', 'Remessa Industrialização', 'Retorno Industrialização', 'Outras Saídas', 'Mov. Líquida', 'Saldo Final']).font = { bold: true };
-        resumo.forEach(r => w2.addRow([`${MES[Number(r.m.slice(5)) - 1]}/${r.m.slice(2, 4)}`, r.entrada, r.consumo, r.remessa, r.retorno, r.outra, r.liq, r.saldo]));
-        w2.addRow(['Total', tot('entrada'), tot('consumo'), tot('remessa'), tot('retorno'), tot('outra'), tot('liq')]).font = { bold: true };
-        w2.addRow([]); w2.addRow(['Indicadores']).font = { bold: true };
-        [['Saldo inicial do período', Number(d.saldo_inicial)], ['Consumo total de produção', tot('consumo')], ['Meses com movimentação', mesesMov], ['Consumo médio mensal', Math.round(consumoMed)],
-          ['Saldo atual', Number(d.saldo_atual)], ['Cobertura do estoque (meses)', cobertura == null ? '' : Math.round(cobertura * 10) / 10], ['Checagem saldo (deve ser 0)', checagem]].forEach(x => w2.addRow(x));
-        w2.columns.forEach((c, k) => { c.width = k ? 16 : 30; });
-        const buf = await wb.xlsx.writeBuffer();
-        const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
-        a.download = `movimentacao_${item.codigo_mp}_${ini}_a_${fim}.xlsx`; a.click();
-      };
+      const campo = { fontFamily: 'inherit', fontSize: 12.5, padding: '7px 10px', borderRadius: 8, border: `1px solid ${C.line}`, background: C.surface, color: C.ink };
       const chip = (on, r, cor, onClick) => (
-        <button onClick={onClick} style={{ fontFamily: 'inherit', fontSize: 11.5, fontWeight: on ? 700 : 500, padding: '4px 10px', borderRadius: 14, cursor: 'pointer',
-          border: `1px solid ${on ? cor : T.line}`, background: on ? `${cor}18` : T.panel, color: on ? cor : T.inkDim }}>{r}</button>
+        <button onClick={onClick} style={{ fontFamily: 'inherit', fontSize: 12.5, fontWeight: on ? 600 : 500, padding: '6px 12px', borderRadius: 20, cursor: 'pointer',
+          border: `1px solid ${on ? cor : C.line}`, background: on ? `${cor}14` : C.surface, color: on ? cor : C.ink2 }}>{r}</button>
       );
       return (
         <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-          <div style={{ padding: '10px 18px', display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', borderBottom: `1px solid ${T.lineSoft}` }}>
-            <select value={f.mes} onChange={e => setF(x => ({ ...x, mes: e.target.value }))} style={{ ...inputStyle(), width: 'auto', padding: '5px 8px', fontSize: 12 }}>
-              <option value="">todos os meses</option>
+          <div style={{ padding: '14px 24px', display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', borderBottom: `1px solid ${C.line}`, background: C.surface }}>
+            <select value={f.mes} onChange={e => setF(x => ({ ...x, mes: e.target.value }))} style={campo} aria-label="Mês">
+              <option value="">Todos os meses</option>
               {[...new Set(movs.map(m => m.mes))].map(m => <option key={m} value={m}>{MES[Number(m.slice(5)) - 1]}/{m.slice(0, 4)}</option>)}
             </select>
-            {chip(!f.cat, 'Todos os tipos', T.ink, () => setF(x => ({ ...x, cat: '' })))}
-            {Object.entries(KLC_CATS).map(([k, c]) => movs.some(m => m.cat === k) ? <React.Fragment key={k}>{chip(f.cat === k, c.r, c.cor, () => setF(x => ({ ...x, cat: x.cat === k ? '' : k })))}</React.Fragment> : null)}
-            <select value={f.local} onChange={e => setF(x => ({ ...x, local: e.target.value }))} style={{ ...inputStyle(), width: 'auto', padding: '5px 8px', fontSize: 12 }}>
-              <option value="">todos os locais</option>
-              {locais.map(l => { const [c, n] = l.split('|'); return <option key={c} value={c}>{c} · {n}</option>; })}
+            <select value={f.local} onChange={e => setF(x => ({ ...x, local: e.target.value }))} style={campo} aria-label="Local">
+              <option value="">Todos os locais</option>
+              {locais.map(l => { const [c2, n] = l.split('|'); return <option key={c2} value={c2}>{n || c2}</option>; })}
             </select>
-            <input value={f.busca} onChange={e => setF(x => ({ ...x, busca: e.target.value }))} placeholder="nota, TOP ou parceiro" style={{ ...inputStyle(), width: 170, padding: '5px 8px', fontSize: 12 }} />
+            <div style={{ position: 'relative' }}>
+              <Search size={14} aria-hidden="true" style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: C.ink3 }} />
+              <input value={f.busca} onChange={e => setF(x => ({ ...x, busca: e.target.value }))} placeholder="Nota, TOP ou parceiro" style={{ ...campo, paddingLeft: 30, width: 210 }} />
+            </div>
             <span style={{ flex: 1 }} />
-            <span style={{ fontSize: 11.5, color: T.inkFaint }}>{vis.length} de {movs.length} · líquido {q(vis.reduce((t, m) => t + Number(m.qtd), 0))} {un}</span>
-            <button onClick={exportar} style={{ fontSize: 11.5, fontWeight: 600, padding: '5px 11px', borderRadius: 6, border: `1px solid ${T.line}`, background: T.panel, cursor: 'pointer', color: T.ink }}>Exportar Excel</button>
+            <span style={{ fontSize: 12.5, color: C.ink2 }}><strong>{vis.length}</strong> de {movs.length} movimentos · líquido <strong style={{ color: vis.reduce((t, m) => t + Number(m.qtd), 0) < 0 ? C.loss : C.win }}>{q(vis.reduce((t, m) => t + Number(m.qtd), 0))} {un}</strong></span>
           </div>
-          <div style={{ overflow: 'auto', flex: 1 }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-              <thead><tr>{['Data', 'Nota', 'Nro. único', 'TOP', 'Tipo', 'Parceiro', 'Local', 'Qtd.', 'Saldo após'].map((h, k) => (
-                <th key={h} style={{ padding: '7px 9px', fontSize: 10.5, fontWeight: 700, color: T.inkFaint, textAlign: k >= 7 ? 'right' : 'left', position: 'sticky', top: 0, background: T.panelAlt, borderBottom: `1px solid ${T.line}`, whiteSpace: 'nowrap' }}>{h}</th>))}</tr></thead>
+          <div style={{ padding: '10px 24px', display: 'flex', gap: 6, flexWrap: 'wrap', borderBottom: `1px solid ${C.lineSoft}`, background: C.surface }}>
+            {chip(!f.cat, 'Todos os tipos', C.ink, () => setF(x => ({ ...x, cat: '' })))}
+            {Object.entries(KLC_CATS).map(([k, c2]) => movs.some(m => m.cat === k) ? <React.Fragment key={k}>{chip(f.cat === k, `${c2.r} · ${movs.filter(m => m.cat === k).length}`, c2.cor, () => setF(x => ({ ...x, cat: x.cat === k ? '' : k })))}</React.Fragment> : null)}
+          </div>
+          <div style={{ overflow: 'auto', flex: 1, background: C.surface }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+              <thead><tr>{['Data', 'Nota', 'Nº único', 'Operação (TOP)', 'Tipo', 'Parceiro', 'Local', 'Quantidade', 'Saldo após'].map((h, k) => (
+                <th key={h} style={{ padding: '10px 12px', fontSize: 11.5, fontWeight: 600, color: C.ink3, textAlign: k >= 7 ? 'right' : 'left', position: 'sticky', top: 0, background: C.surface2, borderBottom: `1px solid ${C.line}`, whiteSpace: 'nowrap', zIndex: 1 }}>{h}</th>))}</tr></thead>
               <tbody>
                 {vis.map((m, k) => (
-                  <tr key={k} style={{ borderTop: `1px solid ${T.lineSoft}` }}>
-                    <td style={{ padding: '6px 9px', whiteSpace: 'nowrap' }}>{new Date(`${m.data}T12:00:00`).toLocaleDateString('pt-BR')}</td>
-                    <td style={{ padding: '6px 9px', fontWeight: 600 }}>{m.numnota}</td>
-                    <td style={{ padding: '6px 9px', color: T.inkFaint }}>{m.nunota}</td>
-                    <td style={{ padding: '6px 9px', maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={m.top_descr}><strong>{m.top}</strong> · {m.top_descr}</td>
-                    <td style={{ padding: '6px 9px', whiteSpace: 'nowrap' }}><span style={{ fontSize: 10.5, fontWeight: 700, color: KLC_CATS[m.cat].cor, background: `${KLC_CATS[m.cat].cor}14`, padding: '2px 7px', borderRadius: 8 }}>{KLC_CATS[m.cat].r}</span></td>
-                    <td style={{ padding: '6px 9px', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: T.inkDim }} title={m.parceiro}>{m.parceiro || '—'}</td>
-                    <td style={{ padding: '6px 9px', whiteSpace: 'nowrap', color: T.inkDim }}>{m.local_descr || m.local}</td>
-                    <td style={{ padding: '6px 9px', textAlign: 'right', fontWeight: 700, color: m.qtd > 0 ? T.oliveText : T.rustText, fontVariantNumeric: 'tabular-nums' }}>{m.qtd > 0 ? '+' : ''}{q(m.qtd)}</td>
-                    <td style={{ padding: '6px 9px', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{q(m.saldo)}</td>
+                  <tr key={k} style={{ background: k % 2 ? C.surface2 : C.surface }}>
+                    <td style={{ padding: '9px 12px', whiteSpace: 'nowrap', color: C.ink2 }}>{new Date(`${m.data}T12:00:00`).toLocaleDateString('pt-BR')}</td>
+                    <td style={{ padding: '9px 12px', fontWeight: 600 }}>{m.numnota}</td>
+                    <td style={{ padding: '9px 12px', color: C.ink3, fontVariantNumeric: 'tabular-nums' }}>{m.nunota}</td>
+                    <td style={{ padding: '9px 12px', maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={m.top_descr}>
+                      <span style={{ fontSize: 11.5, fontWeight: 700, color: C.ink2, background: C.lineSoft, padding: '1px 6px', borderRadius: 5, marginRight: 6 }}>{m.top}</span>{m.top_descr}</td>
+                    <td style={{ padding: '9px 12px', whiteSpace: 'nowrap' }}><span style={{ fontSize: 11.5, fontWeight: 600, color: KLC_CATS[m.cat].cor, background: `${KLC_CATS[m.cat].cor}14`, padding: '2px 8px', borderRadius: 10 }}>{KLC_CATS[m.cat].r}</span></td>
+                    <td style={{ padding: '9px 12px', maxWidth: 230, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: C.ink2 }} title={m.parceiro}>{m.parceiro || '—'}</td>
+                    <td style={{ padding: '9px 12px', whiteSpace: 'nowrap', color: C.ink2 }}>{m.local_descr || m.local}</td>
+                    <td style={{ padding: '9px 12px', textAlign: 'right', fontWeight: 700, color: m.qtd > 0 ? C.win : C.loss, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>{m.qtd > 0 ? '+' : ''}{q(m.qtd)}</td>
+                    <td style={{ padding: '9px 12px', textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontWeight: 600 }}>{q(m.saldo)}</td>
                   </tr>
                 ))}
-                {!vis.length && <tr><td colSpan={9} style={{ padding: 24, textAlign: 'center', color: T.inkFaint }}>Nenhum movimento neste filtro.</td></tr>}
+                {!vis.length && <tr><td colSpan={9} style={{ padding: 30, textAlign: 'center', color: C.ink3 }}>Nenhum movimento neste filtro.</td></tr>}
               </tbody>
             </table>
           </div>
@@ -32950,45 +33023,59 @@ function KalocerDetalhe({ item, ini, fim, onFechar }) {
       );
     }
     return (
-      <div style={{ overflow: 'auto', height: '100%' }}>
-        {!item.itens?.length && <div style={{ padding: 30, color: T.inkFaint, textAlign: 'center' }}>Nenhum apontamento de produção no período.</div>}
+      <div style={{ overflow: 'auto', height: '100%', background: C.surface }}>
+        {!item.itens?.length && <div style={{ padding: 40, color: C.ink3, textAlign: 'center' }}>Nenhum apontamento de produção no período.</div>}
         {!!item.itens?.length && (
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
-            <thead><tr>{['Produto acabado / OP', 'Qtd lote (PA)', 'Consumo MP'].map((h, k) => (
-              <th key={h} style={{ padding: '8px 12px', fontSize: 10.5, fontWeight: 700, color: T.inkFaint, textAlign: k ? 'right' : 'left', position: 'sticky', top: 0, background: T.panelAlt, borderBottom: `1px solid ${T.line}` }}>{h}</th>))}</tr></thead>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+            <thead><tr>{['Produto acabado', 'OP · data · projeto', 'Qtd lote (PA)', 'Consumo da placa'].map((h, k) => (
+              <th key={h} style={{ padding: '10px 14px', fontSize: 11.5, fontWeight: 600, color: C.ink3, textAlign: k >= 2 ? 'right' : 'left', position: 'sticky', top: 0, background: C.surface2, borderBottom: `1px solid ${C.line}` }}>{h}</th>))}</tr></thead>
             <tbody>{item.itens.map((it, k) => (
-              <tr key={k} style={{ borderTop: `1px solid ${T.lineSoft}` }}>
-                <td style={{ padding: '9px 12px' }}><div style={{ fontWeight: 600 }}>{it.produto} — {it.descricao_produto}</div>
-                  <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 2 }}>OP {it.nro_ordem_producao ?? it.nuapo} · {fmtDataCurta(it.data_ref)}{it.br ? ` · ${it.br}` : ''}{it.cliente_nome ? ` · ${it.cliente_nome}` : ''}</div></td>
-                <td style={{ padding: '9px 12px', textAlign: 'right', color: T.inkDim }}>{q(it.qtd_lote_pa)}</td>
-                <td style={{ padding: '9px 12px', textAlign: 'right', fontWeight: 700, fontFamily: FONT_DISPLAY }}>{q(it.qtd_mp)} {it.unidade_mp}</td>
+              <tr key={k} style={{ background: k % 2 ? C.surface2 : C.surface }}>
+                <td style={{ padding: '10px 14px' }}><span style={{ fontWeight: 600 }}>{it.produto}</span> <span style={{ color: C.ink2 }}>{it.descricao_produto}</span></td>
+                <td style={{ padding: '10px 14px', color: C.ink2, whiteSpace: 'nowrap' }}>OP {it.nro_ordem_producao ?? it.nuapo} · {fmtDataCurta(it.data_ref)}{it.br ? ` · ${it.br}` : ''}{it.cliente_nome ? ` · ${it.cliente_nome}` : ''}</td>
+                <td style={{ padding: '10px 14px', textAlign: 'right', color: C.ink2, fontVariantNumeric: 'tabular-nums' }}>{q(it.qtd_lote_pa)}</td>
+                <td style={{ padding: '10px 14px', textAlign: 'right', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{q(it.qtd_mp)} {it.unidade_mp}</td>
               </tr>))}</tbody>
           </table>
         )}
       </div>
     );
   };
+
+  const abas = [['resumo', 'Resumo mensal', null], ['movs', 'Movimentos (kardex)', d ? d.movimentos.length : null], ['ops', 'Consumo por OP', item.itens?.length || null]];
   return (
-    <Overlay onClose={onFechar}>
-      <div className="scale-in" style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, width: '100%', maxWidth: 1180, height: '88vh', display: 'flex', flexDirection: 'column', overflow: 'hidden', boxShadow: '0 24px 60px rgba(0,0,0,.18)' }}>
-        <div style={{ padding: '16px 20px', borderBottom: `1px solid ${T.line}`, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
-          <div style={{ minWidth: 0 }}>
-            <div style={{ fontFamily: FONT_DISPLAY, fontSize: 17, fontWeight: 700, color: T.ink }}>{item.codigo_mp} — {d?.descricao || item.descricao}</div>
-            <div style={{ fontSize: 11.5, color: T.inkFaint, marginTop: 3 }}>
-              Movimentação de estoque de {new Date(`${ini}T12:00:00`).toLocaleDateString('pt-BR')} a {new Date(`${fim}T12:00:00`).toLocaleDateString('pt-BR')} · direto do Sankhya · requisições não entram (reservam, mas não movimentam)
+    <div onClick={onFechar} style={{ position: 'fixed', inset: 0, zIndex: 80, background: 'rgba(15,35,64,.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '2vh 2vw' }}>
+      <div role="dialog" aria-label={`Movimentação do item ${item.codigo_mp}`} onClick={e => e.stopPropagation()} className="scale-in"
+        style={{ width: '100%', maxWidth: 1500, height: '96vh', background: C.bg, borderRadius: 16, overflow: 'hidden', display: 'flex', flexDirection: 'column', boxShadow: '0 30px 80px rgba(0,0,0,.30)', fontFamily: FONT_BODY, color: C.ink, WebkitFontSmoothing: 'antialiased' }}>
+        <div style={{ background: '#0F2340', color: '#fff', padding: '16px 24px', display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 13, fontWeight: 700, background: 'rgba(255,255,255,.12)', padding: '6px 10px', borderRadius: 8, letterSpacing: 0.3 }}>{item.codigo_mp}</span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 16, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={d?.descricao || item.descricao}>{d?.descricao || item.descricao}</div>
+            <div style={{ fontSize: 12, color: 'rgba(255,255,255,.7)', marginTop: 2 }}>
+              Movimentação de {new Date(`${ini}T12:00:00`).toLocaleDateString('pt-BR')} a {new Date(`${fim}T12:00:00`).toLocaleDateString('pt-BR')} · direto do Sankhya · requisições não entram (reservam, mas não movimentam)
             </div>
           </div>
-          <button onClick={onFechar} aria-label="Fechar" style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: T.inkFaint, flexShrink: 0 }}><X size={20} /></button>
+          <button onClick={exportar} disabled={!d} style={{ fontFamily: 'inherit', fontSize: 12.5, fontWeight: 600, padding: '8px 13px', borderRadius: 8, border: '1px solid rgba(255,255,255,.25)', background: 'transparent', color: '#fff', cursor: d ? 'pointer' : 'default', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            <Download size={14} aria-hidden="true" />Exportar Excel
+          </button>
+          <button onClick={onFechar} title="Fechar (Esc)" style={{ fontFamily: 'inherit', fontSize: 12.5, fontWeight: 600, padding: '8px 13px', borderRadius: 8, border: 'none', background: '#fff', color: '#0F2340', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            <X size={14} aria-hidden="true" />Fechar <span style={{ fontSize: 10.5, color: C.ink3, fontWeight: 500 }}>Esc</span>
+          </button>
         </div>
-        <div style={{ display: 'flex', gap: 4, padding: '8px 18px 0', borderBottom: `1px solid ${T.line}` }}>
-          {[['resumo', 'Resumo mensal'], ['movs', `Movimentos (kardex)${d ? ` · ${d.movimentos.length}` : ''}`], ['ops', `Consumo por OP${item.itens?.length ? ` · ${item.itens.length}` : ''}`]].map(([k, r]) => (
-            <button key={k} onClick={() => setAba(k)} style={{ fontFamily: 'inherit', fontSize: 12.5, fontWeight: aba === k ? 700 : 500, padding: '8px 14px', border: 'none', background: 'transparent', cursor: 'pointer',
-              color: aba === k ? T.terracotta : T.inkFaint, borderBottom: `2px solid ${aba === k ? T.terracotta : 'transparent'}`, marginBottom: -1 }}>{r}</button>
-          ))}
+        <div style={{ padding: '12px 24px', background: C.surface, borderBottom: `1px solid ${C.line}` }}>
+          <div role="tablist" style={{ display: 'inline-flex', background: '#E7EBF1', borderRadius: 10, padding: 3, gap: 2 }}>
+            {abas.map(([k, r, n]) => (
+              <button key={k} role="tab" aria-selected={aba === k} onClick={() => setAba(k)}
+                style={{ fontFamily: 'inherit', fontSize: 13, fontWeight: aba === k ? 600 : 500, padding: '7px 16px', borderRadius: 8, border: 'none', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7,
+                  background: aba === k ? C.surface : 'transparent', color: aba === k ? C.ink : C.ink2, boxShadow: aba === k ? '0 1px 2px rgba(16,24,40,.12)' : 'none' }}>
+                {r}{n != null && <span style={{ fontSize: 11, fontWeight: 700, padding: '0 7px', borderRadius: 9, background: aba === k ? C.primarySoft : 'rgba(0,0,0,.06)', color: aba === k ? C.primary : C.ink2 }}>{n}</span>}
+              </button>
+            ))}
+          </div>
         </div>
-        <div style={{ flex: 1, overflow: 'auto', background: aba === 'resumo' ? T.panelAlt : T.panel }}>{conteudo()}</div>
+        <div style={{ flex: 1, overflow: 'auto' }}>{corpo()}</div>
       </div>
-    </Overlay>
+    </div>
   );
 }
 
