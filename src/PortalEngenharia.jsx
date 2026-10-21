@@ -33207,12 +33207,169 @@ function KalocerDetalhe({ item, ini, fim, onFechar }) {
 // ============================================================================
 const klcDim = (desc) => { const m = /COMPRIMENTO\s*(\d+)\s*MM.*?LARGURA\s*(\d+)\s*MM.*?ESPESSURA\s*(\d+)\s*MM/i.exec(String(desc || ''));
   return m ? `${m[1]}×${m[2]}×${m[3]}` : String(desc || '').slice(0, 28); };
+// regra de cerâmica de um item: "4× 44x44x50 (10988) + 2× 50x60x50 (10989)"
+const cerRegraTxt = (r) => [1, 2, 3, 4].filter(k => Number(r[`qtd_ceramica_${k}`]) > 0 && r[`ceramica_${k}_codigo`])
+  .map(k => `${r[`qtd_ceramica_${k}`]}× ${r[`ceramica_${k}_descricao`] || r[`ceramica_${k}_codigo`]} (${r[`ceramica_${k}_codigo`]})`).join(' + ');
+const cerPrevItem = (r, cod) => [1, 2, 3, 4].reduce((t, k) => t + ((!cod || String(r[`ceramica_${k}_codigo`]) === String(cod)) ? (Number(r[`qtd_total_ceramica_${k}`]) || 0) : 0), 0);
+const cerSituacao = (r) => {
+  const q = Number(r.qtd_pedido ?? r.qtd_pecas) || 0, e = Number(r.qtd_entregue) || 0;
+  if (q > 0 && e >= q) return { k: 'faturado', r: 'Faturado', cor: '#1E8E4F', bg: '#E6F4EC', d: r.data_faturamento };
+  if (e > 0) return { k: 'parcial', r: `Parcial · ${Math.round(e).toLocaleString('pt-BR')} de ${Math.round(q).toLocaleString('pt-BR')}`, cor: '#B7791F', bg: '#FDF3E1', d: r.data_prevista_entrega };
+  return { k: 'pendente', r: 'Em carteira', cor: '#1D5FBF', bg: '#E8F0FB', d: r.data_prevista_entrega || r.data_faturamento };
+};
+
+// Painel de detalhe do dashboard de cerâmicas: pedidos, OPs/apontamentos, regras usadas e como o número é calculado.
+function CeramicaDetalhe({ det, regras, descPlaca, onFechar, onFiltrar }) {
+  const C = CRMC;
+  const [aba, setAba] = useState(det.aba || (det.pedidos?.length ? 'pedidos' : 'ops'));
+  const [ordem, setOrdem] = useState({ c: 'data', desc: true });
+  useEffect(() => { const t = e => { if (e.key === 'Escape') onFechar(); }; window.addEventListener('keydown', t); return () => window.removeEventListener('keydown', t); }, [onFechar]);
+  const fmt = (v) => Math.round(Number(v) || 0).toLocaleString('pt-BR');
+  const dt = (d) => (d ? new Date(`${String(d).slice(0, 10)}T12:00:00`).toLocaleDateString('pt-BR') : '—');
+  const peds = (det.pedidos || []).map(r => ({ ...r, prev: cerPrevItem(r, det.placa), sit: cerSituacao(r), regra: cerRegraTxt(r) }));
+  const sortKey = { data: r => r.data_neg, pedido: r => r.pedido_cliente, br: r => r.br, unidade: r => r.client, cod: r => r.cod_vale, pecas: r => Number(r.qtd_pecas) || 0, prev: r => r.prev, sit: r => r.sit.k };
+  peds.sort((a, b) => { const x = sortKey[ordem.c](a), y = sortKey[ordem.c](b); return (x > y ? 1 : x < y ? -1 : 0) * (ordem.desc ? -1 : 1); });
+  const aps = [...(det.aponts || [])].sort((a, b) => String(b.data_ref).localeCompare(String(a.data_ref)));
+  const totPecas = peds.reduce((t, r) => t + (Number(r.qtd_pecas) || 0), 0), totPrev = peds.reduce((t, r) => t + r.prev, 0), totAps = aps.reduce((t, a) => t + (Number(a.qtd_mp) || 0), 0);
+  const cont = (k) => peds.filter(r => r.sit.k === k).length;
+  const codsVale = [...new Set(peds.map(r => r.cod_vale))];
+  const regrasUsadas = codsVale.map(c => ({ cod: c, regra: regras.find(x => x.codigo_vale === c), pecas: peds.filter(r => r.cod_vale === c).reduce((t, r) => t + (Number(r.qtd_pecas) || 0), 0), prev: peds.filter(r => r.cod_vale === c).reduce((t, r) => t + r.prev, 0) }))
+    .sort((a, b) => b.pecas - a.pecas);
+  const exportar = () => {
+    const linhas = aba === 'ops'
+      ? ['Data;OP;BR;Cliente;Produto acabado;Placa;Código placa;Quantidade', ...aps.map(a => [dt(a.data_ref), a.nro_ordem_producao, a.br || '', `"${a.cliente_nome || ''}"`, `"${a.desc_prod_acabado || ''}"`, klcDim(descPlaca[a.cod_materia_prima]), a.cod_materia_prima, String(a.qtd_mp).replace('.', ',')].join(';'))]
+      : ['Data;Pedido Vale;Nº único;BR;Unidade;Código Vale;Produto;Peças;Regra;Cerâmica prevista;Situação;Data fat./prevista', ...peds.map(r => [dt(r.data_neg), r.pedido_cliente || '', r.nunota, r.br || '', `"${r.client}"`, r.cod_vale || '', `"${r.descricao_produto || ''}"`, fmt(r.qtd_pecas), `"${r.regra || 'sem regra'}"`, fmt(r.prev), r.sit.r, dt(r.sit.d)].join(';'))];
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob(['\ufeff' + linhas.join('\n')], { type: 'text/csv;charset=utf-8' })); a.download = `ceramicas_${det.titulo.replace(/\W+/g, '_').toLowerCase()}.csv`; a.click();
+  };
+  const th = (r, c, al = 'left') => (
+    <th onClick={c ? () => setOrdem(o => ({ c, desc: o.c === c ? !o.desc : true })) : undefined}
+      style={{ padding: '9px 10px', fontSize: 11.5, fontWeight: 600, color: C.ink3, textAlign: al, whiteSpace: 'nowrap', position: 'sticky', top: 0, background: C.surface2, borderBottom: `1px solid ${C.line}`, cursor: c ? 'pointer' : 'default', zIndex: 1 }}>
+      {r}{c && ordem.c === c ? (ordem.desc ? ' ▼' : ' ▲') : ''}</th>
+  );
+  const abas = [['pedidos', `Pedidos · ${peds.length}`], ['ops', `OPs / apontamentos · ${aps.length}`], ['regras', `Regras usadas · ${regrasUsadas.length}`], ['conta', 'Como este número é calculado']];
+  return ReactDOM.createPortal(
+    <div onClick={onFechar} style={{ position: 'fixed', inset: 0, zIndex: 85, background: 'rgba(15,35,64,.35)', display: 'flex', justifyContent: 'flex-end' }}>
+      <aside role="dialog" aria-label={det.titulo} onClick={e => e.stopPropagation()}
+        style={{ width: 'min(1180px, 100%)', height: '100%', background: C.bg, display: 'flex', flexDirection: 'column', fontFamily: FONT_BODY, color: C.ink, boxShadow: '-10px 0 40px rgba(16,24,40,.25)' }}>
+        <div style={{ background: '#0F2340', color: '#fff', padding: '16px 22px', display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 17, fontWeight: 700 }}>{det.titulo}</div>
+            <div style={{ fontSize: 12.5, color: 'rgba(255,255,255,.75)', marginTop: 3 }}>{det.explica}</div>
+          </div>
+          {onFiltrar && det.filtro && <button onClick={() => { onFiltrar(det.filtro); onFechar(); }} style={{ fontFamily: 'inherit', fontSize: 12.5, fontWeight: 600, padding: '8px 12px', borderRadius: 8, border: '1px solid rgba(255,255,255,.25)', background: 'transparent', color: '#fff', cursor: 'pointer', whiteSpace: 'nowrap' }}>Filtrar o painel por isto</button>}
+          <button onClick={exportar} style={{ fontFamily: 'inherit', fontSize: 12.5, fontWeight: 600, padding: '8px 12px', borderRadius: 8, border: '1px solid rgba(255,255,255,.25)', background: 'transparent', color: '#fff', cursor: 'pointer' }}>Exportar CSV</button>
+          <button onClick={onFechar} style={{ fontFamily: 'inherit', fontSize: 12.5, fontWeight: 600, padding: '8px 12px', borderRadius: 8, border: 'none', background: '#fff', color: '#0F2340', cursor: 'pointer' }}>Fechar <span style={{ fontSize: 10.5, color: C.ink3 }}>Esc</span></button>
+        </div>
+        <div style={{ display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', padding: '14px 22px', background: C.surface, borderBottom: `1px solid ${C.line}` }}>
+          {[['Itens de pedido', String(peds.length)], ['Peças', fmt(totPecas)], ['Cerâmica prevista', fmt(totPrev)], ['Apontado nas OPs', fmt(totAps)],
+            ['Faturados', String(cont('faturado'))], ['Parciais', String(cont('parcial'))], ['Em carteira', String(cont('pendente'))]].map(([r, v]) => (
+            <div key={r}><div style={{ fontSize: 11.5, color: C.ink3 }}>{r}</div><div style={{ fontSize: 18, fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{v}</div></div>
+          ))}
+        </div>
+        <div style={{ padding: '10px 22px', background: C.surface, borderBottom: `1px solid ${C.line}` }}>
+          <div role="tablist" style={{ display: 'inline-flex', background: '#E7EBF1', borderRadius: 10, padding: 3, gap: 2, flexWrap: 'wrap' }}>
+            {abas.map(([k, r]) => (
+              <button key={k} role="tab" aria-selected={aba === k} onClick={() => setAba(k)} style={{ fontFamily: 'inherit', fontSize: 12.5, fontWeight: aba === k ? 600 : 500, padding: '7px 13px', borderRadius: 8, border: 'none', cursor: 'pointer',
+                background: aba === k ? C.surface : 'transparent', color: aba === k ? C.ink : C.ink2, boxShadow: aba === k ? '0 1px 2px rgba(16,24,40,.12)' : 'none' }}>{r}</button>
+            ))}
+          </div>
+        </div>
+        <div style={{ flex: 1, overflow: 'auto', background: C.surface }}>
+          {aba === 'pedidos' && (
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+              <thead><tr>{th('Data', 'data')}{th('Pedido Vale', 'pedido')}{th('BR', 'br')}{th('Unidade', 'unidade')}{th('Código Vale', 'cod')}{th('Peças', 'pecas', 'right')}{th('Regra (placas por peça)')}{th(det.placa ? `Previsto ${klcDim(descPlaca[det.placa])}` : 'Cerâmica prevista', 'prev', 'right')}{th('Faturamento', 'sit')}</tr></thead>
+              <tbody>
+                {peds.map((r, k) => (
+                  <tr key={r.pedido_item_id || k} style={{ background: k % 2 ? C.surface2 : C.surface }} title={r.descricao_produto}>
+                    <td style={{ padding: '8px 10px', whiteSpace: 'nowrap', color: C.ink2 }}>{dt(r.data_neg)}</td>
+                    <td style={{ padding: '8px 10px', whiteSpace: 'nowrap' }}><strong>{r.pedido_cliente || '—'}</strong><div style={{ fontSize: 11, color: C.ink3 }}>nº único {r.nunota}</div></td>
+                    <td style={{ padding: '8px 10px', whiteSpace: 'nowrap', fontWeight: 600, color: C.primary }}>{r.br || '—'}</td>
+                    <td style={{ padding: '8px 10px', whiteSpace: 'nowrap' }}>{r.client}</td>
+                    <td style={{ padding: '8px 10px', whiteSpace: 'nowrap' }}><strong>{r.cod_vale || '—'}</strong><div style={{ fontSize: 11, color: C.ink3 }}>{r.layout_placa_mm || ''}{r.espessura_ceramica_mm ? ` · ${r.espessura_ceramica_mm} mm` : ''}</div></td>
+                    <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{fmt(r.qtd_pecas)}</td>
+                    <td style={{ padding: '8px 10px', color: r.regra ? C.ink2 : C.warn, fontSize: 12, minWidth: 220 }}>{r.regra || 'sem regra cadastrada — não entra no previsto'}</td>
+                    <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{r.prev ? fmt(r.prev) : '—'}</td>
+                    <td style={{ padding: '8px 10px', whiteSpace: 'nowrap' }}>
+                      <span style={{ fontSize: 11.5, fontWeight: 600, color: r.sit.cor, background: r.sit.bg, padding: '2px 8px', borderRadius: 10 }}>{r.sit.r}</span>
+                      <div style={{ fontSize: 11, color: C.ink3, marginTop: 2 }}>{r.sit.k === 'faturado' ? `em ${dt(r.sit.d)}` : r.sit.d ? `previsto ${dt(r.sit.d)}` : ''}</div>
+                    </td>
+                  </tr>
+                ))}
+                {!peds.length && <tr><td colSpan={9} style={{ padding: 30, textAlign: 'center', color: C.ink3 }}>Nenhum item de pedido neste recorte.</td></tr>}
+                {!!peds.length && <tr style={{ borderTop: `2px solid ${C.line}`, fontWeight: 700 }}><td colSpan={5} style={{ padding: '10px' }}>Total</td><td style={{ padding: '10px', textAlign: 'right' }}>{fmt(totPecas)}</td><td /><td style={{ padding: '10px', textAlign: 'right' }}>{fmt(totPrev)}</td><td /></tr>}
+              </tbody>
+            </table>
+          )}
+          {aba === 'ops' && (
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+              <thead><tr>{th('Data')}{th('OP')}{th('BR')}{th('Cliente')}{th('Produto acabado')}{th('Placa')}{th('Quantidade', null, 'right')}</tr></thead>
+              <tbody>
+                {aps.map((a, k) => (
+                  <tr key={k} style={{ background: k % 2 ? C.surface2 : C.surface }}>
+                    <td style={{ padding: '8px 10px', whiteSpace: 'nowrap', color: C.ink2 }}>{dt(a.data_ref)}</td>
+                    <td style={{ padding: '8px 10px', fontWeight: 700 }}>{a.nro_ordem_producao}</td>
+                    <td style={{ padding: '8px 10px', whiteSpace: 'nowrap', color: C.primary, fontWeight: 600 }}>{a.br || '—'}</td>
+                    <td style={{ padding: '8px 10px', whiteSpace: 'nowrap' }}>{a.cliente_nome || '—'}</td>
+                    <td style={{ padding: '8px 10px', maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: C.ink2 }} title={a.desc_prod_acabado}>{a.desc_prod_acabado || '—'}</td>
+                    <td style={{ padding: '8px 10px', whiteSpace: 'nowrap' }}>{klcDim(descPlaca[a.cod_materia_prima])} <span style={{ color: C.ink3 }}>({a.cod_materia_prima})</span></td>
+                    <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{fmt(a.qtd_mp)}</td>
+                  </tr>
+                ))}
+                {!aps.length && <tr><td colSpan={7} style={{ padding: 30, textAlign: 'center', color: C.ink3 }}>Nenhum apontamento de placa neste recorte.</td></tr>}
+                {!!aps.length && <tr style={{ borderTop: `2px solid ${C.line}`, fontWeight: 700 }}><td colSpan={6} style={{ padding: '10px' }}>Total · {new Set(aps.map(a => a.nro_ordem_producao)).size} OP(s)</td><td style={{ padding: '10px', textAlign: 'right' }}>{fmt(totAps)}</td></tr>}
+              </tbody>
+            </table>
+          )}
+          {aba === 'regras' && (
+            <div style={{ padding: '16px 22px', display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fill, minmax(330px, 1fr))' }}>
+              {regrasUsadas.map(x => (
+                <div key={x.cod} style={{ border: `1px solid ${x.regra ? C.line : C.warn + '66'}`, borderRadius: 12, padding: '12px 14px', background: x.regra ? C.surface : C.warnSoft }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                    <strong style={{ fontSize: 14 }}>Código Vale {x.cod}</strong>
+                    <span style={{ fontSize: 12, color: C.ink2 }}>{fmt(x.pecas)} peças</span>
+                  </div>
+                  {x.regra ? (
+                    <>
+                      <div style={{ fontSize: 12, color: C.ink3, marginTop: 2 }}>layout {x.regra.layout_placa_mm || '—'} · cerâmica {x.regra.espessura_ceramica_mm || '—'} mm · área {x.regra.area_placa_m2 ? `${x.regra.area_placa_m2} m²` : '—'}{x.regra.autoimpacto ? ' · autoimpacto' : ''}{x.regra.mgt ? ' · MGT' : ''}</div>
+                      <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                        {[1, 2, 3, 4].filter(k => Number(x.regra[`qtd_ceramica_${k}`]) > 0).map(k => (
+                          <div key={k} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 12.5, background: C.surface2, borderRadius: 7, padding: '5px 8px' }}>
+                            <span><strong>{x.regra[`qtd_ceramica_${k}`]}×</strong> {x.regra[`ceramica_${k}_descricao`]} <span style={{ color: C.ink3 }}>({x.regra[`ceramica_${k}_codigo`]})</span></span>
+                            <span style={{ color: C.ink2, whiteSpace: 'nowrap' }}>{fmt(x.pecas)} × {x.regra[`qtd_ceramica_${k}`]} = <strong>{fmt(x.pecas * x.regra[`qtd_ceramica_${k}`])}</strong></span>
+                          </div>
+                        ))}
+                      </div>
+                      <div style={{ fontSize: 11.5, color: C.ink3, marginTop: 6 }}>regra cadastrada em {dt(x.regra.created_at)}</div>
+                    </>
+                  ) : <div style={{ fontSize: 12.5, color: C.warn, marginTop: 6 }}>Sem regra cadastrada: estas peças não entram no "previsto". Cadastre a composição de cerâmica deste código para ele ser contado.</div>}
+                </div>
+              ))}
+            </div>
+          )}
+          {aba === 'conta' && (
+            <div style={{ padding: '18px 22px', maxWidth: 860, fontSize: 13.5, lineHeight: 1.6, color: C.ink2 }}>
+              <h3 style={{ margin: '0 0 6px', color: C.ink, fontSize: 15 }}>De onde vem cada número</h3>
+              <p style={{ margin: '0 0 10px' }}><strong style={{ color: C.ink }}>Pedidos e peças:</strong> itens de pedido de venda do Sankhya de clientes cujo nome <strong>começa com "VALE"</strong> (a Mineração Vale Verde não entra). O código Vale é o número de 7 ou 8 dígitos no fim da descrição do produto.</p>
+              <p style={{ margin: '0 0 10px' }}><strong style={{ color: C.ink }}>Regra de cerâmica:</strong> para cada código Vale existe uma composição cadastrada (tabela de regras): quantas placas de cada cerâmica vão em <strong>uma</strong> peça, além do layout e da espessura. Ex.: código 15515316 = 16 placas 44×44×50 + 12 placas 50×60×50 por peça.</p>
+              <p style={{ margin: '0 0 10px' }}><strong style={{ color: C.ink }}>Cerâmica prevista</strong> = peças do pedido × placas por peça da regra, somado por cerâmica. Itens sem regra cadastrada <strong>não entram</strong> (aparecem em amarelo na aba Regras).</p>
+              <p style={{ margin: '0 0 10px' }}><strong style={{ color: C.ink }}>Apontado nas OPs (real):</strong> consumo de placas lançado no apontamento de produção do Sankhya, nas OPs de clientes Vale, só para os códigos da lista de placas Kalocer.</p>
+              <p style={{ margin: '0 0 10px' }}><strong style={{ color: C.ink }}>Faturamento:</strong> pela quantidade entregue do item no Sankhya — Faturado (entregue tudo), Parcial (parte entregue) ou Em carteira (nada entregue, com a data prevista).</p>
+              <p style={{ margin: 0 }}><strong style={{ color: C.ink }}>Por que previsto e real podem não bater:</strong> o previsto conta as peças <strong>vendidas</strong> no período e o real o que foi <strong>produzido</strong> no período (a produção pode cair em outro mês); itens sem regra não têm previsto; e perdas/retrabalho aparecem só no real.</p>
+              {det.conta && <div style={{ marginTop: 14, padding: '12px 14px', background: C.primarySoft, borderRadius: 10, color: C.ink }}><strong>Neste recorte:</strong> {det.conta}</div>}
+            </div>
+          )}
+        </div>
+      </aside>
+    </div>, document.body);
+}
+
 function CeramicasDashboard() {
   const C = CRMC;
   const hoje = new Date();
   const [periodo, setPeriodo] = useState(String(hoje.getFullYear()));
   const [dados, setDados] = useState(null);
   const [foco, setFoco] = useState({ mes: null, unidade: null, esp: null, placa: null });
+  const [det, setDet] = useState(null);
   const focar = (k, v) => setFoco(f => ({ ...f, [k]: f[k] === v ? null : v }));
   const ini = periodo === '12m' ? new Date(hoje.getFullYear() - 1, hoje.getMonth() + 1, 1).toISOString().slice(0, 10) : `${periodo}-01-01`;
   const fim = periodo === '12m' ? hoje.toISOString().slice(0, 10) : `${periodo}-12-31`;
@@ -33220,14 +33377,15 @@ function CeramicasDashboard() {
     let vivo = true; setDados(null);
     (async () => {
       const ler = async (q) => { const out = []; for (let de = 0; de < 100000; de += 1000) { const { data, error } = await q().range(de, de + 999); if (error) break; out.push(...(data || [])); if (!data || data.length < 1000) break; } return out; };
-      const [lista, vale, aps] = await Promise.all([
+      const [lista, regras, vale, aps] = await Promise.all([
         supabase.from('mp_placas_kalocer').select('codigo_mp,descricao,unidade').then(r => r.data || []),
-        ler(() => supabase.from('v_pedidos_vale').select('nunota,data_neg,client,cod_vale,descricao_produto,qtd_pecas,layout_placa_mm,espessura_ceramica_mm,ceramica_1_codigo,ceramica_1_descricao,qtd_total_ceramica_1,ceramica_2_codigo,ceramica_2_descricao,qtd_total_ceramica_2,ceramica_3_codigo,ceramica_3_descricao,qtd_total_ceramica_3,ceramica_4_codigo,ceramica_4_descricao,qtd_total_ceramica_4').gte('data_neg', ini).lte('data_neg', fim).order('data_neg')),
-        ler(() => supabase.from('producao_mp_apontamentos').select('cod_materia_prima,qtd_mp,data_ref,cliente_nome,nro_ordem_producao,br').gte('data_ref', ini).lte('data_ref', fim).order('data_ref')),
+        supabase.from('regras_ceramica_vale').select('*').then(r => r.data || []),
+        ler(() => supabase.from('v_pedidos_vale').select('*').gte('data_neg', ini).lte('data_neg', fim).order('data_neg')),
+        ler(() => supabase.from('producao_mp_apontamentos').select('cod_materia_prima,qtd_mp,data_ref,cliente_nome,nro_ordem_producao,br,desc_prod_acabado').gte('data_ref', ini).lte('data_ref', fim).order('data_ref')),
       ]);
       if (!vivo) return;
       const cods = new Set(lista.map(l => String(l.codigo_mp)));
-      setDados({ lista, vale, aps: aps.filter(a => cods.has(String(a.cod_materia_prima))) });
+      setDados({ lista, regras, vale, aps: aps.filter(a => cods.has(String(a.cod_materia_prima))) });
     })();
     return () => { vivo = false; };
   }, [ini, fim]);
@@ -33236,11 +33394,10 @@ function CeramicasDashboard() {
   const descPlaca = Object.fromEntries(dados.lista.map(l => [String(l.codigo_mp), l.descricao]));
   const ehVale = (cli) => String(cli || '').trim().toUpperCase().startsWith('VALE');
   const mesDe = (d) => String(d || '').slice(0, 7);
-  // recortes por clique
-  const V = dados.vale.filter(r => (!foco.mes || mesDe(r.data_neg) === foco.mes) && (!foco.unidade || r.client === foco.unidade) && (!foco.esp || String(r.espessura_ceramica_mm ?? 'sem regra') === foco.esp));
+  const usaPlaca = (r, cod) => [1, 2, 3, 4].some(k => String(r[`ceramica_${k}_codigo`]) === String(cod) && Number(r[`qtd_ceramica_${k}`]) > 0);
+  const V = dados.vale.filter(r => (!foco.mes || mesDe(r.data_neg) === foco.mes) && (!foco.unidade || r.client === foco.unidade) && (!foco.esp || String(r.espessura_ceramica_mm ?? 'sem regra') === foco.esp) && (!foco.placa || usaPlaca(r, foco.placa)));
   const A = dados.aps.filter(a => (!foco.mes || mesDe(a.data_ref) === foco.mes) && (!foco.placa || String(a.cod_materia_prima) === foco.placa));
   const AV = A.filter(a => ehVale(a.cliente_nome) && (!foco.unidade || a.cliente_nome === foco.unidade));
-  // cerâmica prevista (regra × peças), por código de placa
   const prev = {};
   V.forEach(r => [1, 2, 3, 4].forEach(k => { const c = r[`ceramica_${k}_codigo`]; const q = Number(r[`qtd_total_ceramica_${k}`]) || 0; if (!c || !q) return;
     const o = prev[c] || (prev[c] = { cod: String(c), desc: r[`ceramica_${k}_descricao`], qtd: 0 }); o.qtd += q; }));
@@ -33249,37 +33406,43 @@ function CeramicasDashboard() {
   const prevTot = Object.values(prev).reduce((t, o) => t + o.qtd, 0);
   const realTot = Object.values(real).reduce((t, v) => t + v, 0);
   const consumoTot = A.reduce((t, a) => t + (Number(a.qtd_mp) || 0), 0);
-  const semRegra = V.filter(r => !r.ceramica_1_codigo).length;
+  const semRegra = V.filter(r => !r.ceramica_1_codigo);
   const fmt = (v) => Math.round(v || 0).toLocaleString('pt-BR');
   const MES = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
   const CORES = ['#2F7BEA', '#16A34A', '#EA7A33', '#7C3AED', '#0D9488', '#DB2777', '#D9A21B', '#64748B'];
-  // séries por mês
   const mesesP = []; { const c = new Date(`${ini}T12:00:00`); c.setDate(1); const b = new Date(`${fim}T12:00:00`); while (c <= b) { mesesP.push(`${c.getFullYear()}-${String(c.getMonth() + 1).padStart(2, '0')}`); c.setMonth(c.getMonth() + 1); } }
-  const valeBase = dados.vale.filter(r => (!foco.unidade || r.client === foco.unidade) && (!foco.esp || String(r.espessura_ceramica_mm ?? 'sem regra') === foco.esp));
-  const pecasMes = mesesP.map(m => { const l = valeBase.filter(r => mesDe(r.data_neg) === m); return { k: m, rot: fmt(l.reduce((t, r) => t + (Number(r.qtd_pecas) || 0), 0)), v: l.reduce((t, r) => t + (Number(r.qtd_pecas) || 0), 0), sub: `${new Set(l.map(r => r.nunota)).size} pedido(s)` }; });
+  const nomeMes = (m) => `${MES[Number(m.slice(5)) - 1]}/${m.slice(0, 4)}`;
+  const valeBase = dados.vale.filter(r => (!foco.unidade || r.client === foco.unidade) && (!foco.esp || String(r.espessura_ceramica_mm ?? 'sem regra') === foco.esp) && (!foco.placa || usaPlaca(r, foco.placa)));
+  const pecasMes = mesesP.map(m => { const l = valeBase.filter(r => mesDe(r.data_neg) === m); return { k: MES[Number(m.slice(5)) - 1], m, rot: fmt(l.reduce((t, r) => t + (Number(r.qtd_pecas) || 0), 0)), v: l.reduce((t, r) => t + (Number(r.qtd_pecas) || 0), 0), sub: `${new Set(l.map(r => r.nunota)).size} pedido(s)` }; });
   const apsBase = dados.aps.filter(a => (!foco.placa || String(a.cod_materia_prima) === foco.placa));
-  const consMes = mesesP.map(m => { const l = apsBase.filter(a => mesDe(a.data_ref) === m); const v = l.filter(a => ehVale(a.cliente_nome) && (!foco.unidade || a.cliente_nome === foco.unidade)).reduce((t, a) => t + (Number(a.qtd_mp) || 0), 0);
-    return { m, vale: v, outros: l.reduce((t, a) => t + (Number(a.qtd_mp) || 0), 0) - v }; });
+  const consMes = mesesP.map(m => { const l = apsBase.filter(a => mesDe(a.data_ref) === m); const lv = l.filter(a => ehVale(a.cliente_nome) && (!foco.unidade || a.cliente_nome === foco.unidade));
+    const v = lv.reduce((t, a) => t + (Number(a.qtd_mp) || 0), 0); return { m, vale: v, outros: l.reduce((t, a) => t + (Number(a.qtd_mp) || 0), 0) - v, lv, l }; });
   const maxCons = Math.max(1, ...consMes.map(x => x.vale + x.outros));
   const unidades = Object.values(V.reduce((acc, r) => { const o = acc[r.client] || (acc[r.client] = { k: r.client, v: 0, n: new Set() }); o.v += Number(r.qtd_pecas) || 0; o.n.add(r.nunota); return acc; }, {}))
     .sort((a, b) => b.v - a.v).map((o, i) => ({ k: o.k, v: o.v, rot: `${fmt(o.v)} pç`, extra: `${o.n.size} ped.`, cor: CORES[i % 8] }));
   const esps = Object.values(V.reduce((acc, r) => { const k = String(r.espessura_ceramica_mm ?? 'sem regra'); const o = acc[k] || (acc[k] = { k, v: 0 }); o.v += Number(r.qtd_pecas) || 0; return acc; }, {}))
-    .sort((a, b) => b.v - a.v).map((o, i) => ({ k: o.k, v: o.v, n: null, cor: o.k === 'sem regra' ? '#9AA5B1' : CORES[i % 8] }));
-  const codsVale = Object.values(V.reduce((acc, r) => { const k = r.cod_vale || '—'; const o = acc[k] || (acc[k] = { cod: k, desc: r.descricao_produto, layout: r.layout_placa_mm, esp: r.espessura_ceramica_mm, cer: [1, 2, 3, 4].map(i => r[`ceramica_${i}_descricao`]).filter(Boolean), pecas: 0, ped: new Set(), unid: new Set() });
+    .sort((a, b) => b.v - a.v).map((o, i) => ({ k: o.k === 'sem regra' ? 'sem regra' : `${o.k} mm`, kk: o.k, v: o.v, cor: o.k === 'sem regra' ? '#9AA5B1' : CORES[i % 8] }));
+  const codsVale = Object.values(V.reduce((acc, r) => { const k = r.cod_vale || '—'; const o = acc[k] || (acc[k] = { cod: k, desc: r.descricao_produto, layout: r.layout_placa_mm, esp: r.espessura_ceramica_mm, regra: cerRegraTxt(r), pecas: 0, ped: new Set(), unid: new Set() });
     o.pecas += Number(r.qtd_pecas) || 0; o.ped.add(r.nunota); o.unid.add(r.client); return acc; }, {})).sort((a, b) => b.pecas - a.pecas);
   const comp = [...new Set([...Object.keys(prev), ...Object.keys(real)])].map(c => ({ cod: c, desc: descPlaca[c] || prev[c]?.desc || c, prev: prev[c]?.qtd || 0, real: real[c] || 0 }))
     .sort((a, b) => (b.prev + b.real) - (a.prev + a.real));
+  // OPs dos pedidos (pelo BR) para cruzar com os itens
+  const apsDosBrs = (rows) => { const brs = new Set(rows.map(r => r.br).filter(Boolean)); return AV.filter(a => a.br && brs.has(a.br)); };
+  const abrir = (titulo, explica, pedidos, aponts, extra = {}) => setDet({ titulo, explica, pedidos, aponts, ...extra });
+  const recorte = Object.entries({ mes: foco.mes && nomeMes(foco.mes), unidade: foco.unidade, esp: foco.esp && (foco.esp === 'sem regra' ? 'sem regra' : `${foco.esp} mm`), placa: foco.placa && klcDim(descPlaca[foco.placa]) }).filter(([, v]) => v).map(([, v]) => v).join(' · ');
+  const sufixo = recorte ? ` · recorte: ${recorte}` : '';
 
   const caixa = { background: C.surface, border: `1px solid ${C.line}`, borderRadius: 12, padding: '16px 18px', minWidth: 0, boxShadow: '0 1px 2px rgba(16,24,40,.04)' };
   const titulo = (t, sub) => (<><h3 style={{ margin: 0, fontSize: 14.5, fontWeight: 600 }}>{t}</h3>{sub && <div style={{ fontSize: 12, color: C.ink3, margin: '3px 0 14px' }}>{sub}</div>}</>);
-  const kpi = (r, v, sub, cor) => (
-    <div style={{ ...caixa, padding: '13px 15px' }}>
+  const kpi = (r, v, sub, cor, onClick) => (
+    <div onClick={onClick} role="button" tabIndex={0} onKeyDown={e => { if (e.key === 'Enter') onClick(); }} title="clique para ver o detalhe"
+      style={{ ...caixa, padding: '13px 15px', cursor: 'pointer' }} onMouseEnter={e => { e.currentTarget.style.borderColor = '#B9C6D8'; }} onMouseLeave={e => { e.currentTarget.style.borderColor = C.line; }}>
       <div style={{ fontSize: 12, color: C.ink2, fontWeight: 500 }}>{r}</div>
       <div style={{ fontSize: 23, fontWeight: 700, color: cor || C.ink, letterSpacing: -0.4, marginTop: 3, fontVariantNumeric: 'tabular-nums' }}>{v}</div>
       <div style={{ fontSize: 11.5, color: C.ink3 }}>{sub}</div>
+      <div style={{ fontSize: 11, color: C.primary, marginTop: 4, fontWeight: 600 }}>ver detalhe →</div>
     </div>
   );
-  const nomeFoco = { mes: foco.mes ? `${MES[Number(foco.mes.slice(5)) - 1]}/${foco.mes.slice(0, 4)}` : null, unidade: foco.unidade, esp: foco.esp ? (foco.esp === 'sem regra' ? 'sem regra' : `${foco.esp} mm`) : null, placa: foco.placa ? klcDim(descPlaca[foco.placa]) : null };
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16, fontFamily: FONT_BODY, color: C.ink }}>
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -33289,35 +33452,42 @@ function CeramicasDashboard() {
               style={{ fontFamily: 'inherit', fontSize: 12.5, fontWeight: periodo === k ? 600 : 500, padding: '6px 12px', borderRadius: 7, border: 'none', cursor: 'pointer', background: periodo === k ? C.surface : 'transparent', color: periodo === k ? C.ink : C.ink2 }}>{r}</button>
           ))}
         </div>
-        {Object.entries(nomeFoco).filter(([, v]) => v).map(([k, v]) => (
+        {[['mes', 'Mês', foco.mes && nomeMes(foco.mes)], ['unidade', 'Unidade', foco.unidade], ['esp', 'Espessura', foco.esp && (foco.esp === 'sem regra' ? 'sem regra' : `${foco.esp} mm`)], ['placa', 'Placa', foco.placa && klcDim(descPlaca[foco.placa])]].filter(x => x[2]).map(([k, r, v]) => (
           <span key={k} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 600, background: C.primarySoft, color: C.primary, borderRadius: 20, padding: '4px 6px 4px 11px' }}>
-            {{ mes: 'Mês', unidade: 'Unidade', esp: 'Espessura', placa: 'Placa' }[k]}: {v}
-            <button onClick={() => focar(k, foco[k])} aria-label="tirar" style={{ border: 'none', background: C.surface, color: C.primary, borderRadius: 10, width: 18, height: 18, cursor: 'pointer', fontSize: 11 }}>✕</button>
+            {r}: {v}<button onClick={() => focar(k, foco[k])} aria-label="tirar" style={{ border: 'none', background: C.surface, color: C.primary, borderRadius: 10, width: 18, height: 18, cursor: 'pointer', fontSize: 11 }}>✕</button>
           </span>
         ))}
         {Object.values(foco).some(Boolean) && <button onClick={() => setFoco({ mes: null, unidade: null, esp: null, placa: null })} style={{ fontFamily: 'inherit', fontSize: 12.5, border: 'none', background: 'none', color: C.primary, cursor: 'pointer' }}>limpar</button>}
         <span style={{ flex: 1 }} />
-        <span style={{ fontSize: 12, color: C.ink3 }}>clique em mês, unidade, espessura ou placa para filtrar o painel inteiro</span>
+        <span style={{ fontSize: 12, color: C.ink3 }}>clique em qualquer número, barra ou linha para ver os pedidos, OPs e a regra por trás</span>
       </div>
 
       <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(175px, 1fr))' }}>
-        {kpi('Peças Vale', fmt(pecas), `${new Set(V.map(r => r.nunota)).size} pedidos · ${new Set(V.map(r => r.cod_vale)).size} códigos Vale`, C.primary)}
-        {kpi('Unidades Vale atendidas', String(new Set(V.map(r => r.client)).size), 'clientes que começam com "VALE"')}
-        {kpi('Cerâmica prevista (regra)', fmt(prevTot), `peças × regra de cerâmica${semRegra ? ` · ${semRegra} item(ns) sem regra` : ''}`, '#7C3AED')}
-        {kpi('Placas consumidas na Vale', fmt(realTot), 'apontamento de produção nas OPs Vale', KLC_CATS.consumo.cor)}
-        {kpi('Participação da Vale', consumoTot ? `${Math.round(100 * realTot / consumoTot)}%` : '—', `de ${fmt(consumoTot)} placas consumidas no período`, '#0D9488')}
+        {kpi('Peças Vale', fmt(pecas), `${new Set(V.map(r => r.nunota)).size} pedidos · ${new Set(V.map(r => r.cod_vale)).size} códigos Vale`, C.primary,
+          () => abrir(`Peças Vale${sufixo}`, 'Itens de pedido de venda de clientes Vale no período, com a situação do faturamento de cada um.', V, apsDosBrs(V), { conta: `${fmt(pecas)} peças em ${V.length} itens de pedido.` }))}
+        {kpi('Unidades Vale atendidas', String(new Set(V.map(r => r.client)).size), 'clientes que começam com "VALE"', null,
+          () => abrir(`Unidades Vale${sufixo}`, `Pedidos de ${new Set(V.map(r => r.client)).size} unidades: ${[...new Set(V.map(r => r.client))].join(', ')}.`, V, apsDosBrs(V)))}
+        {kpi('Cerâmica prevista (regra)', fmt(prevTot), `peças × placas por peça${semRegra.length ? ` · ${semRegra.length} item(ns) sem regra` : ''}`, '#7C3AED',
+          () => abrir(`Cerâmica prevista pela regra${sufixo}`, 'Cada item: peças × quantidade de placas por peça da regra do código Vale. Veja a aba "Regras usadas" e "Como este número é calculado".', V, apsDosBrs(V),
+            { aba: 'regras', conta: `${fmt(prevTot)} placas previstas para ${fmt(pecas - semRegra.reduce((t, r) => t + (Number(r.qtd_pecas) || 0), 0))} peças com regra; ${semRegra.length} item(ns) (${fmt(semRegra.reduce((t, r) => t + (Number(r.qtd_pecas) || 0), 0))} peças) sem regra ficam fora.` }))}
+        {kpi('Placas consumidas na Vale', fmt(realTot), 'apontamento de produção nas OPs Vale', KLC_CATS.consumo.cor,
+          () => abrir(`Placas apontadas nas OPs Vale${sufixo}`, 'Consumo real lançado no apontamento de produção das OPs de clientes Vale.', [], AV, { aba: 'ops', conta: `${fmt(realTot)} placas em ${new Set(AV.map(a => a.nro_ordem_producao)).size} OP(s).` }))}
+        {kpi('Participação da Vale', consumoTot ? `${Math.round(100 * realTot / consumoTot)}%` : '—', `de ${fmt(consumoTot)} placas consumidas no período`, '#0D9488',
+          () => abrir(`Consumo de placas — todos os clientes${sufixo}`, 'Todos os apontamentos de placas no período; os de clientes Vale somam a parte da Vale.', [], A, { aba: 'ops', conta: `Vale ${fmt(realTot)} de ${fmt(consumoTot)} = ${consumoTot ? Math.round(100 * realTot / consumoTot) : 0}%.` }))}
       </div>
 
       <div style={{ display: 'grid', gap: 16, gridTemplateColumns: 'repeat(auto-fit, minmax(460px, 1fr))' }}>
         <section style={caixa}>
-          {titulo('Peças Vale por mês', 'pedidos de venda · clique no mês para filtrar')}
-          <CRMColunas altura={160} itens={pecasMes.map(x => ({ ...x, k: MES[Number(x.k.slice(5)) - 1], m: x.k, cor: foco.mes && foco.mes !== x.k ? '#C9D3E0' : C.primary }))} aoClicar={it => focar('mes', it.m)} />
+          {titulo('Peças Vale por mês', 'pedidos de venda · clique no mês para ver os pedidos')}
+          <CRMColunas altura={160} itens={pecasMes.map(x => ({ ...x, cor: foco.mes && foco.mes !== x.m ? '#C9D3E0' : C.primary }))}
+            aoClicar={it => { const l = valeBase.filter(r => mesDe(r.data_neg) === it.m); abrir(`Pedidos Vale de ${nomeMes(it.m)}${sufixo}`, 'Itens de pedido de venda do mês, com regra e situação do faturamento.', l, apsDosBrs(l), { filtro: ['mes', it.m] }); }} />
         </section>
         <section style={caixa}>
-          {titulo('Placas consumidas por mês', 'apontamento de produção · Vale em vermelho, demais clientes em cinza')}
+          {titulo('Placas consumidas por mês', 'apontamento de produção · Vale em vermelho, demais clientes em cinza · clique no mês')}
           <div style={{ display: 'flex', alignItems: 'flex-end', gap: 10, height: 200, borderBottom: `1px solid ${C.line}` }}>
             {consMes.map(x => (
-              <div key={x.m} onClick={() => focar('mes', x.m)} title={`${MES[Number(x.m.slice(5)) - 1]}: Vale ${fmt(x.vale)} · outros ${fmt(x.outros)}`}
+              <div key={x.m} onClick={() => abrir(`Placas apontadas em ${nomeMes(x.m)}${sufixo}`, `Vale ${fmt(x.vale)} · demais clientes ${fmt(x.outros)}. A lista mostra todos; a coluna Cliente separa.`, [], x.l, { aba: 'ops', filtro: ['mes', x.m] })}
+                title={`${nomeMes(x.m)}: Vale ${fmt(x.vale)} · outros ${fmt(x.outros)} · clique para ver as OPs`}
                 style={{ flex: 1, minWidth: 0, height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', alignItems: 'center', cursor: 'pointer', opacity: foco.mes && foco.mes !== x.m ? 0.35 : 1 }}>
                 <div style={{ fontSize: 11, fontWeight: 600, color: KLC_CATS.consumo.cor, marginBottom: 3 }}>{x.vale + x.outros ? `${Math.round(100 * x.vale / (x.vale + x.outros))}%` : ''}</div>
                 <div style={{ width: '100%', maxWidth: 46, height: `${150 * (x.vale + x.outros) / maxCons}px`, display: 'flex', flexDirection: 'column-reverse', borderRadius: '5px 5px 0 0', overflow: 'hidden' }}>
@@ -33334,31 +33504,37 @@ function CeramicasDashboard() {
 
       <div style={{ display: 'grid', gap: 16, gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))' }}>
         <section style={caixa}>
-          {titulo('Placas realmente usadas na Vale', 'apontamento nas OPs Vale · clique para filtrar')}
+          {titulo('Placas realmente usadas na Vale', 'apontamento nas OPs Vale · clique na placa')}
           {Object.keys(real).length ? <CRMBarrasH itens={Object.entries(real).sort((a, b) => b[1] - a[1]).slice(0, 10).map(([c, v], i) => ({ k: `${klcDim(descPlaca[c])} · ${c}`, cod: c, v, rot: fmt(v), extra: realTot ? `${Math.round(100 * v / realTot)}%` : '', cor: CORES[i % 8] }))}
-            aoClicar={it => focar('placa', it.cod)} /> : <div style={{ fontSize: 12.5, color: C.ink3 }}>Sem apontamentos de placas em OPs Vale no período.</div>}
+            aoClicar={it => { const l = V.filter(r => usaPlaca(r, it.cod)); abrir(`Placa ${klcDim(descPlaca[it.cod])} (${it.cod}) na Vale${sufixo}`, 'OPs Vale que consumiram esta placa e os pedidos cuja regra usa esta placa.', l, AV.filter(a => String(a.cod_materia_prima) === it.cod), { aba: 'ops', placa: it.cod, filtro: ['placa', it.cod],
+              conta: `apontado ${fmt(real[it.cod])} · previsto pela regra ${fmt(prev[it.cod]?.qtd || 0)}.` }); }} /> : <div style={{ fontSize: 12.5, color: C.ink3 }}>Sem apontamentos de placas em OPs Vale no período.</div>}
         </section>
         <section style={caixa}>
-          {titulo('Cerâmica prevista por tipo', 'regra de cerâmica × peças vendidas')}
-          {Object.keys(prev).length ? <CRMBarrasH itens={Object.values(prev).sort((a, b) => b.qtd - a.qtd).slice(0, 10).map((o, i) => ({ k: `${o.desc || klcDim(descPlaca[o.cod])} · ${o.cod}`, v: o.qtd, rot: fmt(o.qtd), extra: prevTot ? `${Math.round(100 * o.qtd / prevTot)}%` : '', cor: CORES[i % 8] }))} />
+          {titulo('Cerâmica prevista por tipo', 'regra de cerâmica × peças vendidas · clique para conferir')}
+          {Object.keys(prev).length ? <CRMBarrasH itens={Object.values(prev).sort((a, b) => b.qtd - a.qtd).slice(0, 10).map((o, i) => ({ k: `${o.desc || klcDim(descPlaca[o.cod])} · ${o.cod}`, cod: o.cod, v: o.qtd, rot: fmt(o.qtd), extra: prevTot ? `${Math.round(100 * o.qtd / prevTot)}%` : '', cor: CORES[i % 8] }))}
+            aoClicar={it => { const l = V.filter(r => usaPlaca(r, it.cod)); abrir(`Previsto da cerâmica ${it.cod}${sufixo}`, 'Pedidos cuja regra leva esta cerâmica: a coluna "Previsto" mostra só esta placa (peças × placas por peça).', l, AV.filter(a => String(a.cod_materia_prima) === it.cod), { placa: it.cod, filtro: ['placa', it.cod],
+              conta: `${fmt(prev[it.cod]?.qtd)} placas previstas em ${l.length} itens de pedido.` }); }} />
             : <div style={{ fontSize: 12.5, color: C.ink3 }}>Sem regra de cerâmica para os itens do período.</div>}
         </section>
         <section style={caixa}>
-          {titulo('Peças por espessura de cerâmica', 'clique para filtrar')}
-          {esps.length ? <CRMRosca itens={esps.map(x => ({ ...x, k: x.k === 'sem regra' ? 'sem regra' : `${x.k} mm` , kk: x.k }))} centro={fmt(pecas)} sub="peças" fmt={fmt} aoClicar={it => focar('esp', it.kk)} /> : null}
+          {titulo('Peças por espessura de cerâmica', 'clique na fatia ou na legenda')}
+          {esps.length ? <CRMRosca itens={esps} centro={fmt(pecas)} sub="peças" fmt={fmt}
+            aoClicar={it => { const l = V.filter(r => String(r.espessura_ceramica_mm ?? 'sem regra') === it.kk); abrir(`Peças com cerâmica ${it.k}${sufixo}`, it.kk === 'sem regra' ? 'Itens cujo código Vale não tem regra de cerâmica cadastrada.' : 'Itens cuja regra usa cerâmica desta espessura.', l, apsDosBrs(l), { filtro: ['esp', it.kk] }); }} /> : null}
         </section>
       </div>
 
       <section style={caixa}>
-        {titulo('Previsto × real por placa na Vale', 'previsto = regra de cerâmica × peças vendidas no período · real = apontado nas OPs Vale no período (a produção pode cair em outro mês que a venda)')}
+        {titulo('Previsto × real por placa na Vale', 'clique na linha para ver os pedidos (previsto) e as OPs (real) dessa placa · previsto conta peças vendidas, real conta produção no período')}
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
             <thead><tr style={{ background: C.surface2 }}>{['Placa', 'Código', 'Previsto (regra)', 'Real (apontado)', 'Diferença', ''].map((h, k) => (
               <th key={k} style={{ padding: '9px 12px', fontSize: 11.5, fontWeight: 600, color: C.ink3, textAlign: k >= 2 && k <= 4 ? 'right' : 'left', borderBottom: `1px solid ${C.line}`, whiteSpace: 'nowrap' }}>{h}</th>))}</tr></thead>
             <tbody>{comp.slice(0, 20).map((o, k) => { const dif = o.real - o.prev; const mx = Math.max(1, ...comp.map(x => Math.max(x.prev, x.real)));
               return (
-                <tr key={o.cod} onClick={() => focar('placa', o.cod)} style={{ background: k % 2 ? C.surface2 : C.surface, cursor: 'pointer' }}>
-                  <td style={{ padding: '8px 12px', fontWeight: 600, whiteSpace: 'nowrap' }} title={o.desc}>{klcDim(o.desc)}</td>
+                <tr key={o.cod} onClick={() => { const l = V.filter(r => usaPlaca(r, o.cod)); abrir(`Previsto × real · ${klcDim(o.desc)} (${o.cod})${sufixo}`, 'Pedidos (previsto pela regra) e OPs (apontado) desta placa.', l, AV.filter(a => String(a.cod_materia_prima) === o.cod),
+                    { placa: o.cod, filtro: ['placa', o.cod], conta: `previsto ${fmt(o.prev)} · real ${fmt(o.real)} · diferença ${dif > 0 ? '+' : ''}${fmt(dif)}.` }); }}
+                  style={{ background: k % 2 ? C.surface2 : C.surface, cursor: 'pointer' }}>
+                  <td style={{ padding: '8px 12px', fontWeight: 600, whiteSpace: 'nowrap', color: C.primary }} title={o.desc}>{klcDim(o.desc)}</td>
                   <td style={{ padding: '8px 12px', color: C.ink2 }}>{o.cod}</td>
                   <td style={{ padding: '8px 12px', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{o.prev ? fmt(o.prev) : '—'}</td>
                   <td style={{ padding: '8px 12px', textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontWeight: 600 }}>{o.real ? fmt(o.real) : '—'}</td>
@@ -33380,21 +33556,23 @@ function CeramicasDashboard() {
 
       <div style={{ display: 'grid', gap: 16, gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))' }}>
         <section style={caixa}>
-          {titulo('Unidades Vale', 'peças vendidas · clique para filtrar')}
-          {unidades.length ? <CRMBarrasH itens={unidades.slice(0, 15)} aoClicar={it => focar('unidade', it.k)} /> : <div style={{ fontSize: 12.5, color: C.ink3 }}>Sem pedidos Vale no período.</div>}
+          {titulo('Unidades Vale', 'peças vendidas · clique na unidade')}
+          {unidades.length ? <CRMBarrasH itens={unidades.slice(0, 15)} aoClicar={it => { const l = V.filter(r => r.client === it.k); abrir(`${it.k}${sufixo}`, 'Pedidos desta unidade e OPs dos BRs dela.', l, AV.filter(a => a.cliente_nome === it.k), { filtro: ['unidade', it.k] }); }} />
+            : <div style={{ fontSize: 12.5, color: C.ink3 }}>Sem pedidos Vale no período.</div>}
         </section>
         <section style={caixa}>
-          {titulo(`Códigos Vale mais vendidos (${codsVale.length})`, 'layout, espessura e cerâmicas da regra')}
+          {titulo(`Códigos Vale mais vendidos (${codsVale.length})`, 'clique no código para ver os pedidos, a regra e as OPs')}
           <div style={{ maxHeight: 420, overflow: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
-              <thead><tr>{['Código Vale', 'Layout', 'Esp.', 'Cerâmicas', 'Peças', 'Ped.'].map((h, k) => (
+              <thead><tr>{['Código Vale', 'Layout', 'Esp.', 'Regra (placas por peça)', 'Peças', 'Ped.'].map((h, k) => (
                 <th key={h} style={{ padding: '8px 10px', fontSize: 11, fontWeight: 600, color: C.ink3, textAlign: k >= 4 ? 'right' : 'left', position: 'sticky', top: 0, background: C.surface, borderBottom: `1px solid ${C.line}` }}>{h}</th>))}</tr></thead>
-              <tbody>{codsVale.slice(0, 60).map((o, k) => (
-                <tr key={o.cod} style={{ background: k % 2 ? C.surface2 : C.surface }} title={`${o.desc}\nUnidades: ${[...o.unid].join(', ')}`}>
-                  <td style={{ padding: '7px 10px', fontWeight: 600 }}>{o.cod}</td>
+              <tbody>{codsVale.slice(0, 80).map((o, k) => (
+                <tr key={o.cod} onClick={() => { const l = V.filter(r => r.cod_vale === o.cod); abrir(`Código Vale ${o.cod}${sufixo}`, o.desc, l, apsDosBrs(l), { aba: 'pedidos' }); }}
+                  style={{ background: k % 2 ? C.surface2 : C.surface, cursor: 'pointer' }} title={`${o.desc}\nUnidades: ${[...o.unid].join(', ')}`}>
+                  <td style={{ padding: '7px 10px', fontWeight: 600, color: C.primary }}>{o.cod}</td>
                   <td style={{ padding: '7px 10px', color: C.ink2, whiteSpace: 'nowrap' }}>{o.layout || '—'}</td>
                   <td style={{ padding: '7px 10px', color: C.ink2 }}>{o.esp ? `${o.esp}` : '—'}</td>
-                  <td style={{ padding: '7px 10px', color: C.ink2, maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{o.cer.length ? o.cer.join(' + ') : <span style={{ color: C.warn }}>sem regra</span>}</td>
+                  <td style={{ padding: '7px 10px', color: o.regra ? C.ink2 : C.warn, maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{o.regra || 'sem regra'}</td>
                   <td style={{ padding: '7px 10px', textAlign: 'right', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{fmt(o.pecas)}</td>
                   <td style={{ padding: '7px 10px', textAlign: 'right', color: C.ink2 }}>{o.ped.size}</td>
                 </tr>))}</tbody>
@@ -33402,6 +33580,35 @@ function CeramicasDashboard() {
           </div>
         </section>
       </div>
+
+      <section style={caixa}>
+        {titulo(`Regras de cerâmica cadastradas (${dados.regras.length})`, `composição de placas por peça de cada código Vale · ${new Set(semRegra.map(r => r.cod_vale)).size} código(s) vendido(s) no recorte sem regra (${fmt(semRegra.reduce((t, r) => t + (Number(r.qtd_pecas) || 0), 0))} peças) · clique para conferir`)}
+        <div style={{ overflowX: 'auto', maxHeight: 420 }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+            <thead><tr>{['Código Vale', 'Layout', 'Espessura', 'Placas por peça', 'Peças no recorte', 'Previsto no recorte', 'Cadastro'].map((h, k) => (
+              <th key={h} style={{ padding: '8px 10px', fontSize: 11, fontWeight: 600, color: C.ink3, textAlign: k >= 4 && k <= 5 ? 'right' : 'left', position: 'sticky', top: 0, background: C.surface, borderBottom: `1px solid ${C.line}`, whiteSpace: 'nowrap' }}>{h}</th>))}</tr></thead>
+            <tbody>
+              {[...dados.regras.map(rg => ({ rg, cod: rg.codigo_vale })), ...[...new Set(semRegra.map(r => r.cod_vale))].map(c => ({ rg: null, cod: c }))]
+                .map(x => { const l = V.filter(r => r.cod_vale === x.cod); return { ...x, l, pecas: l.reduce((t, r) => t + (Number(r.qtd_pecas) || 0), 0), prev: l.reduce((t, r) => t + cerPrevItem(r), 0) }; })
+                .sort((a, b) => (a.rg ? 1 : 0) - (b.rg ? 1 : 0) || b.pecas - a.pecas)
+                .map((x, k) => (
+                  <tr key={x.cod} onClick={() => abrir(`Regra do código Vale ${x.cod}${sufixo}`, x.rg ? cerRegraTxt(x.rg) : 'Código vendido sem regra de cerâmica cadastrada.', x.l, apsDosBrs(x.l), { aba: 'regras' })}
+                    style={{ background: !x.rg ? C.warnSoft : k % 2 ? C.surface2 : C.surface, cursor: 'pointer' }}>
+                    <td style={{ padding: '7px 10px', fontWeight: 600, color: C.primary }}>{x.cod}</td>
+                    <td style={{ padding: '7px 10px', color: C.ink2 }}>{x.rg?.layout_placa_mm || '—'}</td>
+                    <td style={{ padding: '7px 10px', color: C.ink2 }}>{x.rg?.espessura_ceramica_mm ? `${x.rg.espessura_ceramica_mm} mm` : '—'}</td>
+                    <td style={{ padding: '7px 10px', color: x.rg ? C.ink : C.warn }}>{x.rg ? cerRegraTxt(x.rg) : 'SEM REGRA — não entra no previsto'}</td>
+                    <td style={{ padding: '7px 10px', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{x.pecas ? fmt(x.pecas) : '—'}</td>
+                    <td style={{ padding: '7px 10px', textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontWeight: 600 }}>{x.prev ? fmt(x.prev) : '—'}</td>
+                    <td style={{ padding: '7px 10px', color: C.ink3, whiteSpace: 'nowrap' }}>{x.rg?.created_at ? new Date(x.rg.created_at).toLocaleDateString('pt-BR') : '—'}</td>
+                  </tr>
+                ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      {det && <CeramicaDetalhe det={det} regras={dados.regras} descPlaca={descPlaca} onFechar={() => setDet(null)} onFiltrar={([k, v]) => setFoco(f => ({ ...f, [k]: v }))} />}
     </div>
   );
 }
