@@ -33218,8 +33218,26 @@ const cerSituacao = (r) => {
   return { k: 'pendente', r: 'Em carteira', cor: '#1D5FBF', bg: '#E8F0FB', d: r.data_prevista_entrega || r.data_faturamento };
 };
 
+// medida da placa (C×L×E) a partir da descrição — compara regra cadastrada x observada mesmo quando a placa
+// foi trocada por outra de mesma medida (ex.: 150x100x25 92% -> 95%)
+const cerDim = (desc) => { const t = String(desc || '');
+  let m = /COMPRIMENTO\s*(\d+)\s*MM.*?LARGURA\s*(\d+)\s*MM.*?ESPESSURA\s*(\d+)\s*MM/i.exec(t); if (m) return `${m[1]}×${m[2]}×${m[3]}`;
+  m = /(\d+)\s*[xX×]\s*(\d+)\s*[xX×]\s*(\d+)/.exec(t); return m ? `${m[1]}×${m[2]}×${m[3]}` : null; };
+// compara regra cadastrada x observada por medida: 'confere' (todas as medidas dentro de 20%), 'diverge' ou null
+const cerConfere = (rg, obs, descPlaca) => {
+  if (!rg || !obs?.length) return null;
+  const cad = {}; [1, 2, 3, 4].forEach(k => { const q = Number(rg[`qtd_ceramica_${k}`]); if (q > 0) { const d = cerDim(rg[`ceramica_${k}_descricao`]) || cerDim(descPlaca[rg[`ceramica_${k}_codigo`]]) || rg[`ceramica_${k}_codigo`]; cad[d] = (cad[d] || 0) + q; } });
+  const ob = {}; obs.forEach(o => { const d = cerDim(o.placa_descricao) || o.placa_codigo; ob[d] = (ob[d] || 0) + Number(o.placas_por_peca || 0); });
+  const dims = new Set([...Object.keys(cad), ...Object.keys(ob)]);
+  const difs = [...dims].map(d => ({ d, cad: cad[d] || 0, obs: Math.round((ob[d] || 0) * 100) / 100 })).filter(x => x.cad > 0 || x.obs >= 0.5);
+  const ok = difs.every(x => x.cad > 0 ? Math.abs(x.obs - x.cad) <= 0.2 * x.cad : x.obs < 0.5);
+  return { ok, difs };
+};
+const cerObsTxt = (obs) => (obs || []).filter(o => Number(o.placas_por_peca) >= 0.05).sort((a, b) => b.placas_por_peca - a.placas_por_peca)
+  .map(o => `${Number(o.placas_por_peca).toLocaleString('pt-BR', { maximumFractionDigits: 1 })}× ${cerDim(o.placa_descricao) || o.placa_codigo} (${o.placa_codigo})`).join(' + ');
+
 // Painel de detalhe do dashboard de cerâmicas: pedidos, OPs/apontamentos, regras usadas e como o número é calculado.
-function CeramicaDetalhe({ det, regras, descPlaca, onFechar, onFiltrar }) {
+function CeramicaDetalhe({ det, regras, obsPorCod = {}, descPlaca, onFechar, onFiltrar }) {
   const C = CRMC;
   const [aba, setAba] = useState(det.aba || (det.pedidos?.length ? 'pedidos' : 'ops'));
   const [ordem, setOrdem] = useState({ c: 'data', desc: true });
@@ -33328,6 +33346,23 @@ function CeramicaDetalhe({ det, regras, descPlaca, onFechar, onFiltrar }) {
                     <strong style={{ fontSize: 14 }}>Código Vale {x.cod}</strong>
                     <span style={{ fontSize: 12, color: C.ink2 }}>{fmt(x.pecas)} peças</span>
                   </div>
+                  {obsPorCod[x.cod] && (() => { const ob = [...obsPorCod[x.cod]].sort((a, b) => b.placas_por_peca - a.placas_por_peca); const cf = cerConfere(x.regra, ob, descPlaca);
+                    return (
+                      <div style={{ marginTop: 8, padding: '8px 10px', borderRadius: 8, background: '#F6F2FE', border: '1px solid #E4D8FC' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 12, fontWeight: 700, color: '#7C3AED' }}>
+                          <span>Observado nas OPs</span>
+                          {x.regra && cf && <span style={{ color: cf.ok ? C.win : C.loss }}>{cf.ok ? 'confere com a cadastrada' : 'diverge da cadastrada'}</span>}
+                        </div>
+                        {ob.filter(o => Number(o.placas_por_peca) >= 0.05).map(o => (
+                          <div key={o.placa_codigo} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 12, marginTop: 4 }}>
+                            <span><strong>{Number(o.placas_por_peca).toLocaleString('pt-BR', { maximumFractionDigits: 2 })}×</strong> {cerDim(o.placa_descricao) || o.placa_codigo} <span style={{ color: C.ink3 }}>({o.placa_codigo})</span></span>
+                            <span style={{ color: C.ink3, whiteSpace: 'nowrap' }} title={`${fmt(o.placas_apontadas)} placas ÷ ${fmt(o.pecas_produzidas)} peças · por OP de ${o.min_por_op} a ${o.max_por_op}`}>{o.ops_com_placa}/{o.ops_total} OPs · {o.min_por_op}–{o.max_por_op} · {o.confianca}</span>
+                          </div>
+                        ))}
+                        <div style={{ fontSize: 11, color: C.ink3, marginTop: 5 }}>{fmt(ob[0].placas_apontadas && ob.reduce((t, o) => t + Number(o.placas_apontadas), 0))} placas apontadas ÷ {fmt(ob[0].pecas_produzidas)} peças produzidas · OPs de {dt(ob[0].primeira_op)} a {dt(ob[0].ultima_op)}</div>
+                        {x.regra && cf && !cf.ok && <div style={{ fontSize: 11.5, color: C.loss, marginTop: 4 }}>{cf.difs.filter(d => d.cad ? Math.abs(d.obs - d.cad) > 0.2 * d.cad : true).map(d => `${d.d}: cadastrado ${d.cad} · observado ${String(d.obs).replace('.', ',')}`).join(' · ')}</div>}
+                      </div>
+                    ); })()}
                   {x.regra ? (
                     <>
                       <div style={{ fontSize: 12, color: C.ink3, marginTop: 2 }}>layout {x.regra.layout_placa_mm || '—'} · cerâmica {x.regra.espessura_ceramica_mm || '—'} mm · área {x.regra.area_placa_m2 ? `${x.regra.area_placa_m2} m²` : '—'}{x.regra.autoimpacto ? ' · autoimpacto' : ''}{x.regra.mgt ? ' · MGT' : ''}</div>
@@ -33341,7 +33376,7 @@ function CeramicaDetalhe({ det, regras, descPlaca, onFechar, onFiltrar }) {
                       </div>
                       <div style={{ fontSize: 11.5, color: C.ink3, marginTop: 6 }}>regra cadastrada em {dt(x.regra.created_at)}</div>
                     </>
-                  ) : <div style={{ fontSize: 12.5, color: C.warn, marginTop: 6 }}>Sem regra cadastrada: estas peças não entram no "previsto". Cadastre a composição de cerâmica deste código para ele ser contado.</div>}
+                  ) : <div style={{ fontSize: 12.5, color: C.warn, marginTop: 6 }}>{obsPorCod[x.cod] ? 'Sem regra cadastrada: com a chave "regra observada" ligada, o previsto destas peças usa o observado nas OPs (acima).' : 'Sem regra cadastrada e sem OP apontada com placa: estas peças não entram no "previsto".'}</div>}
                 </div>
               ))}
             </div>
@@ -33352,6 +33387,7 @@ function CeramicaDetalhe({ det, regras, descPlaca, onFechar, onFiltrar }) {
               <p style={{ margin: '0 0 10px' }}><strong style={{ color: C.ink }}>Pedidos e peças:</strong> itens de pedido de venda do Sankhya de clientes cujo nome <strong>começa com "VALE"</strong> (a Mineração Vale Verde não entra). O código Vale é o número de 7 ou 8 dígitos no fim da descrição do produto.</p>
               <p style={{ margin: '0 0 10px' }}><strong style={{ color: C.ink }}>Regra de cerâmica:</strong> para cada código Vale existe uma composição cadastrada (tabela de regras): quantas placas de cada cerâmica vão em <strong>uma</strong> peça, além do layout e da espessura. Ex.: código 15515316 = 16 placas 44×44×50 + 12 placas 50×60×50 por peça.</p>
               <p style={{ margin: '0 0 10px' }}><strong style={{ color: C.ink }}>Cerâmica prevista</strong> = peças do pedido × placas por peça da regra, somado por cerâmica. Itens sem regra cadastrada <strong>não entram</strong> (aparecem em amarelo na aba Regras).</p>
+              <p style={{ margin: '0 0 10px' }}><strong style={{ color: C.ink }}>Regra observada nas OPs:</strong> para cada peça Vale, placas apontadas ÷ peças produzidas, somando todas as OPs dela (desde 2025). Mostra também o mínimo e o máximo por OP e a confiança (alta = 3+ OPs e variação até 20%). Serve para os códigos <strong>sem regra</strong> (chave no topo do dashboard) e para <strong>conferir</strong> as cadastradas — a conferência compara pela medida da placa, então trocar a placa de 92% pela de 95% de mesma medida não é erro.</p>
               <p style={{ margin: '0 0 10px' }}><strong style={{ color: C.ink }}>Apontado nas OPs (real):</strong> consumo de placas lançado no apontamento de produção do Sankhya, nas OPs de clientes Vale, só para os códigos da lista de placas Kalocer.</p>
               <p style={{ margin: '0 0 10px' }}><strong style={{ color: C.ink }}>Faturamento:</strong> pela quantidade entregue do item no Sankhya — Faturado (entregue tudo), Parcial (parte entregue) ou Em carteira (nada entregue, com a data prevista).</p>
               <p style={{ margin: 0 }}><strong style={{ color: C.ink }}>Por que previsto e real podem não bater:</strong> o previsto conta as peças <strong>vendidas</strong> no período e o real o que foi <strong>produzido</strong> no período (a produção pode cair em outro mês); itens sem regra não têm previsto; e perdas/retrabalho aparecem só no real.</p>
@@ -33370,6 +33406,7 @@ function CeramicasDashboard() {
   const [dados, setDados] = useState(null);
   const [foco, setFoco] = useState({ mes: null, unidade: null, esp: null, placa: null });
   const [det, setDet] = useState(null);
+  const [usarObs, setUsarObs] = useState(true);   // códigos sem regra usam a regra observada nas OPs
   const focar = (k, v) => setFoco(f => ({ ...f, [k]: f[k] === v ? null : v }));
   const ini = periodo === '12m' ? new Date(hoje.getFullYear() - 1, hoje.getMonth() + 1, 1).toISOString().slice(0, 10) : `${periodo}-01-01`;
   const fim = periodo === '12m' ? hoje.toISOString().slice(0, 10) : `${periodo}-12-31`;
@@ -33377,15 +33414,16 @@ function CeramicasDashboard() {
     let vivo = true; setDados(null);
     (async () => {
       const ler = async (q) => { const out = []; for (let de = 0; de < 100000; de += 1000) { const { data, error } = await q().range(de, de + 999); if (error) break; out.push(...(data || [])); if (!data || data.length < 1000) break; } return out; };
-      const [lista, regras, vale, aps] = await Promise.all([
+      const [lista, regras, obs, vale, aps] = await Promise.all([
         supabase.from('mp_placas_kalocer').select('codigo_mp,descricao,unidade').then(r => r.data || []),
         supabase.from('regras_ceramica_vale').select('*').then(r => r.data || []),
+        supabase.from('v_ceramica_regra_observada').select('*').limit(1000).then(r => r.data || []),
         ler(() => supabase.from('v_pedidos_vale').select('*').gte('data_neg', ini).lte('data_neg', fim).order('data_neg')),
         ler(() => supabase.from('producao_mp_apontamentos').select('cod_materia_prima,qtd_mp,data_ref,cliente_nome,nro_ordem_producao,br,desc_prod_acabado').gte('data_ref', ini).lte('data_ref', fim).order('data_ref')),
       ]);
       if (!vivo) return;
       const cods = new Set(lista.map(l => String(l.codigo_mp)));
-      setDados({ lista, regras, vale, aps: aps.filter(a => cods.has(String(a.cod_materia_prima))) });
+      setDados({ lista, regras, obs, vale, aps: aps.filter(a => cods.has(String(a.cod_materia_prima))) });
     })();
     return () => { vivo = false; };
   }, [ini, fim]);
@@ -33395,7 +33433,17 @@ function CeramicasDashboard() {
   const ehVale = (cli) => String(cli || '').trim().toUpperCase().startsWith('VALE');
   const mesDe = (d) => String(d || '').slice(0, 7);
   const usaPlaca = (r, cod) => [1, 2, 3, 4].some(k => String(r[`ceramica_${k}_codigo`]) === String(cod) && Number(r[`qtd_ceramica_${k}`]) > 0);
-  const V = dados.vale.filter(r => (!foco.mes || mesDe(r.data_neg) === foco.mes) && (!foco.unidade || r.client === foco.unidade) && (!foco.esp || String(r.espessura_ceramica_mm ?? 'sem regra') === foco.esp) && (!foco.placa || usaPlaca(r, foco.placa)));
+  const obsPorCod = dados.obs.reduce((acc, o) => { (acc[o.cod_vale] = acc[o.cod_vale] || []).push(o); return acc; }, {});
+  const valeAj = dados.vale.map(r => {
+    if (r.ceramica_1_codigo || !usarObs || !obsPorCod[r.cod_vale]) return r;
+    const ob = [...obsPorCod[r.cod_vale]].filter(o => Number(o.placas_por_peca) >= 0.05).sort((a, b) => b.placas_por_peca - a.placas_por_peca).slice(0, 4);
+    const x = { ...r, regra_observada: true };
+    ob.forEach((o, k) => { const n = k + 1; x[`ceramica_${n}_codigo`] = o.placa_codigo; x[`ceramica_${n}_descricao`] = `${cerDim(o.placa_descricao) || o.placa_codigo} (observada)`;
+      x[`qtd_ceramica_${n}`] = Math.round(Number(o.placas_por_peca) * 100) / 100; x[`qtd_total_ceramica_${n}`] = (Number(r.qtd_pecas) || 0) * Number(o.placas_por_peca); });
+    return x;
+  });
+  dados.valeAj = valeAj;
+  const V = valeAj.filter(r => (!foco.mes || mesDe(r.data_neg) === foco.mes) && (!foco.unidade || r.client === foco.unidade) && (!foco.esp || String(r.espessura_ceramica_mm ?? 'sem regra') === foco.esp) && (!foco.placa || usaPlaca(r, foco.placa)));
   const A = dados.aps.filter(a => (!foco.mes || mesDe(a.data_ref) === foco.mes) && (!foco.placa || String(a.cod_materia_prima) === foco.placa));
   const AV = A.filter(a => ehVale(a.cliente_nome) && (!foco.unidade || a.cliente_nome === foco.unidade));
   const prev = {};
@@ -33407,12 +33455,13 @@ function CeramicasDashboard() {
   const realTot = Object.values(real).reduce((t, v) => t + v, 0);
   const consumoTot = A.reduce((t, a) => t + (Number(a.qtd_mp) || 0), 0);
   const semRegra = V.filter(r => !r.ceramica_1_codigo);
+  const comObs = V.filter(r => r.regra_observada);
   const fmt = (v) => Math.round(v || 0).toLocaleString('pt-BR');
   const MES = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
   const CORES = ['#2F7BEA', '#16A34A', '#EA7A33', '#7C3AED', '#0D9488', '#DB2777', '#D9A21B', '#64748B'];
   const mesesP = []; { const c = new Date(`${ini}T12:00:00`); c.setDate(1); const b = new Date(`${fim}T12:00:00`); while (c <= b) { mesesP.push(`${c.getFullYear()}-${String(c.getMonth() + 1).padStart(2, '0')}`); c.setMonth(c.getMonth() + 1); } }
   const nomeMes = (m) => `${MES[Number(m.slice(5)) - 1]}/${m.slice(0, 4)}`;
-  const valeBase = dados.vale.filter(r => (!foco.unidade || r.client === foco.unidade) && (!foco.esp || String(r.espessura_ceramica_mm ?? 'sem regra') === foco.esp) && (!foco.placa || usaPlaca(r, foco.placa)));
+  const valeBase = valeAj.filter(r => (!foco.unidade || r.client === foco.unidade) && (!foco.esp || String(r.espessura_ceramica_mm ?? 'sem regra') === foco.esp) && (!foco.placa || usaPlaca(r, foco.placa)));
   const pecasMes = mesesP.map(m => { const l = valeBase.filter(r => mesDe(r.data_neg) === m); return { k: MES[Number(m.slice(5)) - 1], m, rot: fmt(l.reduce((t, r) => t + (Number(r.qtd_pecas) || 0), 0)), v: l.reduce((t, r) => t + (Number(r.qtd_pecas) || 0), 0), sub: `${new Set(l.map(r => r.nunota)).size} pedido(s)` }; });
   const apsBase = dados.aps.filter(a => (!foco.placa || String(a.cod_materia_prima) === foco.placa));
   const consMes = mesesP.map(m => { const l = apsBase.filter(a => mesDe(a.data_ref) === m); const lv = l.filter(a => ehVale(a.cliente_nome) && (!foco.unidade || a.cliente_nome === foco.unidade));
@@ -33459,7 +33508,10 @@ function CeramicasDashboard() {
         ))}
         {Object.values(foco).some(Boolean) && <button onClick={() => setFoco({ mes: null, unidade: null, esp: null, placa: null })} style={{ fontFamily: 'inherit', fontSize: 12.5, border: 'none', background: 'none', color: C.primary, cursor: 'pointer' }}>limpar</button>}
         <span style={{ flex: 1 }} />
-        <span style={{ fontSize: 12, color: C.ink3 }}>clique em qualquer número, barra ou linha para ver os pedidos, OPs e a regra por trás</span>
+        <label title="Para códigos Vale sem regra cadastrada, usa as placas por peça observadas nas OPs (placas apontadas ÷ peças produzidas)"
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 12.5, color: C.ink2, cursor: 'pointer', background: C.surface, border: `1px solid ${usarObs ? '#7C3AED' : C.line}`, borderRadius: 20, padding: '5px 11px' }}>
+          <input type="checkbox" checked={usarObs} onChange={e => setUsarObs(e.target.checked)} /> usar a <strong style={{ color: '#7C3AED' }}>regra observada nas OPs</strong> para códigos sem regra
+        </label>
       </div>
 
       <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(175px, 1fr))' }}>
@@ -33467,7 +33519,7 @@ function CeramicasDashboard() {
           () => abrir(`Peças Vale${sufixo}`, 'Itens de pedido de venda de clientes Vale no período, com a situação do faturamento de cada um.', V, apsDosBrs(V), { conta: `${fmt(pecas)} peças em ${V.length} itens de pedido.` }))}
         {kpi('Unidades Vale atendidas', String(new Set(V.map(r => r.client)).size), 'clientes que começam com "VALE"', null,
           () => abrir(`Unidades Vale${sufixo}`, `Pedidos de ${new Set(V.map(r => r.client)).size} unidades: ${[...new Set(V.map(r => r.client))].join(', ')}.`, V, apsDosBrs(V)))}
-        {kpi('Cerâmica prevista (regra)', fmt(prevTot), `peças × placas por peça${semRegra.length ? ` · ${semRegra.length} item(ns) sem regra` : ''}`, '#7C3AED',
+        {kpi('Cerâmica prevista (regra)', fmt(prevTot), `peças × placas por peça${comObs.length ? ` · ${comObs.length} item(ns) pela regra observada` : ''}${semRegra.length ? ` · ${semRegra.length} sem regra` : ''}`, '#7C3AED',
           () => abrir(`Cerâmica prevista pela regra${sufixo}`, 'Cada item: peças × quantidade de placas por peça da regra do código Vale. Veja a aba "Regras usadas" e "Como este número é calculado".', V, apsDosBrs(V),
             { aba: 'regras', conta: `${fmt(prevTot)} placas previstas para ${fmt(pecas - semRegra.reduce((t, r) => t + (Number(r.qtd_pecas) || 0), 0))} peças com regra; ${semRegra.length} item(ns) (${fmt(semRegra.reduce((t, r) => t + (Number(r.qtd_pecas) || 0), 0))} peças) sem regra ficam fora.` }))}
         {kpi('Placas consumidas na Vale', fmt(realTot), 'apontamento de produção nas OPs Vale', KLC_CATS.consumo.cor,
@@ -33582,33 +33634,40 @@ function CeramicasDashboard() {
       </div>
 
       <section style={caixa}>
-        {titulo(`Regras de cerâmica cadastradas (${dados.regras.length})`, `composição de placas por peça de cada código Vale · ${new Set(semRegra.map(r => r.cod_vale)).size} código(s) vendido(s) no recorte sem regra (${fmt(semRegra.reduce((t, r) => t + (Number(r.qtd_pecas) || 0), 0))} peças) · clique para conferir`)}
+        {titulo(`Regras de cerâmica: cadastrada × observada nas OPs (${dados.regras.length} cadastradas)`, 'observada = placas apontadas ÷ peças produzidas em todas as OPs da peça · Confere = cada medida de placa dentro de 20% (compara pela medida C×L×E, então placa trocada de 92% para 95% não conta como erro) · passe o mouse em "Diverge" para ver as diferenças · clique para o detalhe')}
         <div style={{ overflowX: 'auto', maxHeight: 420 }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
-            <thead><tr>{['Código Vale', 'Layout', 'Espessura', 'Placas por peça', 'Peças no recorte', 'Previsto no recorte', 'Cadastro'].map((h, k) => (
-              <th key={h} style={{ padding: '8px 10px', fontSize: 11, fontWeight: 600, color: C.ink3, textAlign: k >= 4 && k <= 5 ? 'right' : 'left', position: 'sticky', top: 0, background: C.surface, borderBottom: `1px solid ${C.line}`, whiteSpace: 'nowrap' }}>{h}</th>))}</tr></thead>
+            <thead><tr>{['Código Vale', 'Layout', 'Esp.', 'Regra cadastrada (placas por peça)', 'Observado nas OPs (placas por peça)', 'Conferência', 'Peças no recorte', 'Previsto no recorte'].map((h, k) => (
+              <th key={h} style={{ padding: '8px 10px', fontSize: 11, fontWeight: 600, color: C.ink3, textAlign: k >= 6 ? 'right' : 'left', position: 'sticky', top: 0, background: C.surface, borderBottom: `1px solid ${C.line}`, whiteSpace: 'nowrap' }}>{h}</th>))}</tr></thead>
             <tbody>
-              {[...dados.regras.map(rg => ({ rg, cod: rg.codigo_vale })), ...[...new Set(semRegra.map(r => r.cod_vale))].map(c => ({ rg: null, cod: c }))]
+              {[...dados.regras.map(rg => ({ rg, cod: rg.codigo_vale })), ...[...new Set(dados.vale.filter(r => !r.ceramica_1_codigo && V.some(v => v.cod_vale === r.cod_vale)).map(r => r.cod_vale))].map(c => ({ rg: null, cod: c }))]
                 .map(x => { const l = V.filter(r => r.cod_vale === x.cod); return { ...x, l, pecas: l.reduce((t, r) => t + (Number(r.qtd_pecas) || 0), 0), prev: l.reduce((t, r) => t + cerPrevItem(r), 0) }; })
                 .sort((a, b) => (a.rg ? 1 : 0) - (b.rg ? 1 : 0) || b.pecas - a.pecas)
-                .map((x, k) => (
-                  <tr key={x.cod} onClick={() => abrir(`Regra do código Vale ${x.cod}${sufixo}`, x.rg ? cerRegraTxt(x.rg) : 'Código vendido sem regra de cerâmica cadastrada.', x.l, apsDosBrs(x.l), { aba: 'regras' })}
+                .map((x, k) => { const ob = obsPorCod[x.cod]; const cf = cerConfere(x.rg, ob, descPlaca); const opsN = ob?.[0]?.ops_total; const conf = ob ? (ob.some(o => o.confianca === 'baixa') ? 'baixa' : ob.some(o => o.confianca === 'media') ? 'média' : 'alta') : null;
+                  return (
+                  <tr key={x.cod} onClick={() => abrir(`Regra do código Vale ${x.cod}${sufixo}`, x.rg ? `Cadastrada: ${cerRegraTxt(x.rg)}` : 'Sem regra cadastrada — veja a regra observada nas OPs.', x.l, apsDosBrs(x.l), { aba: 'regras' })}
                     style={{ background: !x.rg ? C.warnSoft : k % 2 ? C.surface2 : C.surface, cursor: 'pointer' }}>
                     <td style={{ padding: '7px 10px', fontWeight: 600, color: C.primary }}>{x.cod}</td>
-                    <td style={{ padding: '7px 10px', color: C.ink2 }}>{x.rg?.layout_placa_mm || '—'}</td>
-                    <td style={{ padding: '7px 10px', color: C.ink2 }}>{x.rg?.espessura_ceramica_mm ? `${x.rg.espessura_ceramica_mm} mm` : '—'}</td>
-                    <td style={{ padding: '7px 10px', color: x.rg ? C.ink : C.warn }}>{x.rg ? cerRegraTxt(x.rg) : 'SEM REGRA — não entra no previsto'}</td>
+                    <td style={{ padding: '7px 10px', color: C.ink2, whiteSpace: 'nowrap' }}>{x.rg?.layout_placa_mm || '—'}</td>
+                    <td style={{ padding: '7px 10px', color: C.ink2 }}>{x.rg?.espessura_ceramica_mm ? `${x.rg.espessura_ceramica_mm}` : '—'}</td>
+                    <td style={{ padding: '7px 10px', color: x.rg ? C.ink : C.warn, minWidth: 220 }}>{x.rg ? cerRegraTxt(x.rg) : 'SEM REGRA'}</td>
+                    <td style={{ padding: '7px 10px', color: '#7C3AED', minWidth: 220 }}>{ob ? <>{cerObsTxt(ob)}<div style={{ fontSize: 11, color: C.ink3 }}>{opsN} OP(s) · {fmt(ob[0].pecas_produzidas)} peças produzidas · confiança {conf}</div></> : <span style={{ color: C.ink3 }}>sem OP apontada</span>}</td>
+                    <td style={{ padding: '7px 10px', whiteSpace: 'nowrap' }}>
+                      {!x.rg ? (ob ? <span style={{ fontSize: 11.5, fontWeight: 600, color: '#7C3AED', background: '#F1EBFE', padding: '2px 8px', borderRadius: 10 }}>usando a observada</span> : '—')
+                        : !cf ? <span style={{ color: C.ink3 }}>—</span>
+                        : cf.ok ? <span style={{ fontSize: 11.5, fontWeight: 600, color: C.win, background: C.winSoft, padding: '2px 8px', borderRadius: 10 }}>Confere</span>
+                        : <span title={cf.difs.map(d => `${d.d}: cadastrado ${d.cad} · observado ${d.obs}`).join('\n')} style={{ fontSize: 11.5, fontWeight: 600, color: C.loss, background: C.lossSoft, padding: '2px 8px', borderRadius: 10 }}>Diverge</span>}
+                    </td>
                     <td style={{ padding: '7px 10px', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{x.pecas ? fmt(x.pecas) : '—'}</td>
                     <td style={{ padding: '7px 10px', textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontWeight: 600 }}>{x.prev ? fmt(x.prev) : '—'}</td>
-                    <td style={{ padding: '7px 10px', color: C.ink3, whiteSpace: 'nowrap' }}>{x.rg?.created_at ? new Date(x.rg.created_at).toLocaleDateString('pt-BR') : '—'}</td>
                   </tr>
-                ))}
+                ); })}
             </tbody>
           </table>
         </div>
       </section>
 
-      {det && <CeramicaDetalhe det={det} regras={dados.regras} descPlaca={descPlaca} onFechar={() => setDet(null)} onFiltrar={([k, v]) => setFoco(f => ({ ...f, [k]: v }))} />}
+      {det && <CeramicaDetalhe det={det} regras={dados.regras} obsPorCod={obsPorCod} descPlaca={descPlaca} onFechar={() => setDet(null)} onFiltrar={([k, v]) => setFoco(f => ({ ...f, [k]: v }))} />}
     </div>
   );
 }
