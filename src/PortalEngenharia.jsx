@@ -32759,6 +32759,9 @@ const klcCategoria = (m) => {
   return m.qtd > 0 ? 'entrada' : 'outra';
 };
 function KalocerDetalhe({ item, ini, fim, onFechar }) {
+  // formatações locais (as de mesmo nome nas outras telas ficam dentro delas)
+  const fmtQtd = (v) => (v == null ? '—' : new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 3 }).format(v));
+  const fmtDataCurta = (iso) => (!iso ? '—' : new Date(`${String(iso).slice(0, 10)}T00:00:00`).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: '2-digit' }));
   const [d, setD] = useState(null);
   const [erro, setErro] = useState(null);
   const [aba, setAba] = useState('resumo');
