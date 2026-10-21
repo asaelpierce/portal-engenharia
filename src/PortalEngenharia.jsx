@@ -11177,7 +11177,18 @@ function AlmoxMovimentar({ currentUser, codigoInicial }) {
     const orig = m.nova ? 'nova_necessidade' : 'lista';
     const k = (m.nova ? 'N|' : '') + kBase;
     const doItem = vols.filter(v => almoxChaveItem(v.op, v.cod_materia_prima, v.material) === kBase && (v.origem_item || 'lista') === orig);
-    const vol = doItem.find(v => v.status === 'ativo') || doItem[doItem.length - 1] || null;
+    let vol = doItem.find(v => v.status === 'ativo') || doItem[doItem.length - 1] || null;
+    // nova necessidade com requisição depois da última etiqueta: mostra só o SALDO a etiquetar e libera
+    // dar entrada de novo (a etiqueta anterior já foi entregue; a função cria outra em vez de sobrescrever)
+    if (m.nova) {
+      const jaEtiq = doItem.filter(v => v.status === 'ativo' || v.status === 'finalizado').reduce((t, v) => t + (Number(v.quantidade) || 0), 0);
+      const saldoNovo = Math.round((Number(m.quantidade_mp) - jaEtiq) * 1000) / 1000;
+      const aindaNoEstoque = doItem.some(v => v.status === 'ativo' && (v.setor_atual || 'Ponto de Estoque') === 'Ponto de Estoque');
+      if (jaEtiq > 0 && saldoNovo > 0 && !aindaNoEstoque) {
+        m = { ...m, quantidade_mp: saldoNovo, jaEtiquetado: jaEtiq, totalNovo: Number(m.quantidade_mp) };
+        vol = null;
+      }
+    }
     const peds = solicOp.filter(s => almoxChaveItem(s.op, s.cod_materia_prima, s.material) === kBase && (!s.volume_id || doItem.some(v => v.id === s.volume_id) || !m.nova));
     const h = hist.filter(e => doItem.some(v => v.id === e.volume_id) || (!m.nova && almoxChaveItem(e.op, null, e.material) === almoxChaveItem(m.op, null, m.materia_prima_descricao)));
     return { m, k, vol, peds, h };
@@ -11477,6 +11488,7 @@ function AlmoxMovimentar({ currentUser, codigoInicial }) {
                               <div style={{ fontSize: 11, fontWeight: 700, color: T.terracotta, marginTop: 2 }}>
                                 🆕 NOVA NECESSIDADE · {l.m.motivo === 'fora da lista' ? 'fora da lista da OP' : `acima do previsto (previsto ${almoxFmtQtd(l.m.qtd_prevista)}, requisitado ${almoxFmtQtd(l.m.qtd_requisitada)})`}
                                 <div style={{ fontWeight: 500, color: T.inkDim }}>requisição {l.m.requisicoes}</div>
+                                {l.m.jaEtiquetado ? <div style={{ fontWeight: 700, color: T.rustText }}>já etiquetado {almoxFmtQtd(l.m.jaEtiquetado)} de {almoxFmtQtd(l.m.totalNovo)} {l.m.unidade || ''} · falta {almoxFmtQtd(l.m.quantidade_mp)} (requisição nova)</div> : null}
                               </div>
                             )}
                             {l.peds.map(p => (
