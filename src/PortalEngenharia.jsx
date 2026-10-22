@@ -16198,10 +16198,9 @@ function MonitoramentoOP({ currentUser }) {
   const [processandoCard, setProcessandoCard] = useState(null);
   const carregarConhecPronto = useCallback(async () => {
     setLoadingConhecPronto(true);
-    const { data } = await supabase.from('v_monitoramento_op_cards_planner').select('*')
-      .eq('bucket_atual', 'Engenharia - Conhecimento Pronto').eq('planner_excluido', false)
-      .is('data_finalizado', null)
-      .order('br');
+    // passou por Conhecimento Pronto e ainda não foi finalizado (em CP, Avaliação Preliminar, Projetos em
+    // Andamento ou Dúvidas) — a coluna agora vem da fotografia completa do Planner
+    const { data } = await supabase.from('v_monitoramento_fluxo_conhecimento').select('*').order('br');
     setCardsConhecPronto(await enriquecerComCliente(data || []));
     setLoadingConhecPronto(false);
 
