@@ -5304,6 +5304,61 @@ function FiltroMulti({ valor, opcoes, onChange, todosRotulo = 'todos', largura =
   );
 }
 
+// Lembrete do Follow Up: para quem não respondeu o último envio, um e-mail curto pedindo para responder o e-mail
+// anterior com a planilha (não reenvia a planilha). Fica registrado (comercial_followup_lembrete).
+function FollowupLembreteControle() {
+  const [lista, setLista] = useState(null);
+  const [msg, setMsg] = useState(null);
+  const [enviando, setEnviando] = useState(null);
+  const carregar = useCallback(async () => { const { data } = await supabase.from('v_comercial_followup_ultimo').select('*').order('vendedor'); setLista(data || []); }, []);
+  useEffect(() => { carregar(); }, [carregar]);
+  if (!lista || !lista.length) return null;
+  const pend = lista.filter(x => !x.respondido_em);
+  const dt = (d) => (d ? new Date(d).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }) : '—');
+  const lembrar = async (v) => {
+    const quem = v ? v : `${pend.length} vendedor(es) que não responderam`;
+    if (!window.confirm(`Enviar o lembrete para ${quem}?\n\nVai só um e-mail curto pedindo para responder o Follow Up anterior com a planilha (não reenvia a planilha).`)) return;
+    setEnviando(v || 'todos');
+    const { data, error } = await supabase.rpc('fn_followup_lembrete', { p_vendedor: v || null });
+    setEnviando(null);
+    setMsg(error || !data?.ok ? { erro: true, t: error?.message || data?.erro } : { t: `${data.lembretes} lembrete(s) enviado(s)${data.teste ? ' (modo teste: foram para o e-mail de teste)' : ''}.` });
+    carregar();
+  };
+  return (
+    <div style={{ marginTop: 12, borderTop: `1px solid ${T.line}`, paddingTop: 10 }}>
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+        <strong style={{ fontSize: 12.5 }}>Respostas do último Follow Up</strong>
+        <span style={{ fontSize: 11, color: T.inkFaint }}>{lista.length - pend.length} de {lista.length} responderam</span>
+        {pend.length > 0 && (
+          <button onClick={() => lembrar(null)} disabled={!!enviando}
+            style={{ fontFamily: 'inherit', fontSize: 11.5, fontWeight: 700, padding: '5px 12px', borderRadius: 6, cursor: 'pointer', border: 'none', background: T.amberText, color: '#fff' }}>
+            {enviando === 'todos' ? 'enviando…' : `🔔 Lembrar quem não respondeu (${pend.length})`}
+          </button>
+        )}
+      </div>
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
+        {lista.map(x => { const ok = !!x.respondido_em;
+          return (
+            <span key={x.vendedor} title={`Enviado em ${dt(x.enviado_em)}${x.arquivo_nome ? ` · ${x.arquivo_nome}` : ''}${x.lembretes ? ` · ${x.lembretes} lembrete(s), o último em ${dt(x.ultimo_lembrete)}` : ''}`}
+              style={{ display: 'inline-flex', alignItems: 'center', border: `1px solid ${ok ? T.oliveText + '55' : T.line}`, borderRadius: 6, overflow: 'hidden', fontSize: 11 }}>
+              <span style={{ padding: '4px 8px', background: ok ? T.oliveSoft : T.panel, color: ok ? T.oliveText : T.ink }}>
+                {ok ? '✓' : '⏳'} {x.vendedor}
+                <span style={{ color: T.inkFaint }}> · {ok ? `respondeu ${dt(x.respondido_em)}` : `enviado ${dt(x.enviado_em)}${x.lembretes ? ` · ${x.lembretes} lembrete(s)` : ''}`}</span>
+              </span>
+              {!ok && (
+                <button onClick={() => lembrar(x.vendedor)} disabled={!!enviando} title={`Lembrar ${x.vendedor}`}
+                  style={{ fontFamily: 'inherit', fontSize: 11, padding: '4px 8px', border: 'none', borderLeft: `1px solid ${T.line}`, background: T.amberSoft, color: T.amberText, cursor: 'pointer', fontWeight: 700 }}>
+                  {enviando === x.vendedor ? '…' : '🔔 lembrar'}
+                </button>
+              )}
+            </span>
+          ); })}
+      </div>
+      {msg && <div style={{ marginTop: 6, fontSize: 11.5, fontWeight: 600, color: msg.erro ? T.rustText : T.oliveText }}>{msg.t}</div>}
+    </div>
+  );
+}
+
 // Resumo do vendedor (2ª automação do Follow Up): e-mail com barras + link do painel "Minha carteira".
 function ResumoVendedorControle() {
   const [info, setInfo] = useState(null);
@@ -8744,6 +8799,7 @@ function FollowUpComercial({ currentUser }) {
               ))}
             </div>
 
+            <FollowupLembreteControle />
             <ResumoVendedorControle />
 
             {verHistorico && (
