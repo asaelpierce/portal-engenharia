@@ -5799,6 +5799,9 @@ function PainelDiretoria() {
   // ITENS POR BR: busca sob demanda no clique da linha e guarda em cache —
   // carregar item de 750 BRs de uma vez não se justifica para uma consulta
   // que abre um de cada vez.
+  // filtros por coluna na lista do detalhe (Pedido em carteira e os outros cartões)
+  const FDET0 = { br: '', cli: [], vend: [], est: [], vmin: '' };
+  const [fDet, setFDet] = useState(FDET0);
   const [brAberto, setBrAberto] = useState(null);
   const [itensCache, setItensCache] = useState({});
   const verItens = async (br) => {
@@ -6554,6 +6557,7 @@ IMPORTANTE: Responda SOMENTE com base nos dados acima. Se a pergunta pede algo q
     // Meio segundo de anel girando antes de mostrar. Nao e espera de verdade
     // -- o dado ja esta na memoria -- e o tempo de o olho entender que algo
     // novo apareceu. Sem ele, a tabela surge do nada e a pessoa se perde.
+    setFDet({ br: '', cli: [], vend: [], est: [], vmin: '' });
     setDetalhe({ chave, titulo, regra, total, carregando: true, linhas: [], ...extras });
     setTimeout(() => setDetalhe(d => (d && d.chave === chave
       ? { ...d, carregando: false,
@@ -6784,7 +6788,14 @@ IMPORTANTE: Responda SOMENTE com base nos dados acima. Se a pergunta pede algo q
         'Baixo': G.rosa, 'Sem classificação': G.cinza, 'Pedido em carteira': G.verde,
         'Perdido': G.vermelho };
       const ORDEM_EST = ['Avançado','Alto','Médio','Baixo','Sem classificação','Pedido em carteira','Perdido'];
-      const grupos = [...new Set(detalhe.linhas.map(l => l.estagio || l.estagio_rotulo || '—'))]
+      const estDe = (l) => l.estagio || l.estagio_rotulo || '—';
+      const vminF = Number(String(fDet.vmin || '').replace(/\./g, '').replace(',', '.')) || 0;
+      const linhasF = detalhe.linhas.filter(l => (!fDet.br || String(l.br || '').toLowerCase().includes(fDet.br.trim().toLowerCase()))
+        && (!fDet.cli.length || fDet.cli.includes(l.cliente || '—')) && (!fDet.vend.length || fDet.vend.includes(l.vendedor || '—'))
+        && (!fDet.est.length || fDet.est.includes(estDe(l))) && (!vminF || (Number(l.valor) || 0) >= vminF));
+      const opc = (f) => [...new Set(detalhe.linhas.map(f))].sort().map(x => ({ v: x, r: x }));
+      const filtrando = fDet.br || fDet.cli.length || fDet.vend.length || fDet.est.length || fDet.vmin;
+      const grupos = [...new Set(linhasF.map(l => l.estagio || l.estagio_rotulo || '—'))]
         .sort((a, b) => {
           const ia = ORDEM_EST.indexOf(a), ib = ORDEM_EST.indexOf(b);
           return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
@@ -6799,10 +6810,26 @@ IMPORTANTE: Responda SOMENTE com base nos dados acima. Se a pergunta pede algo q
               <th key={h} style={{ padding: '7px 10px', fontSize: 10.5, fontWeight: 600, color: T.inkFaint,
                 textAlign: i === 4 ? 'right' : 'left', whiteSpace: 'nowrap' }}>{h}</th>
             ))}
-          </tr></thead>
+          </tr>
+          <tr style={{ background: T.panel }}>
+            <th style={{ padding: '4px 8px' }}><input value={fDet.br} onChange={e => setFDet(f => ({ ...f, br: e.target.value }))} placeholder="buscar BR"
+              style={{ fontFamily: 'inherit', fontSize: 11, padding: '3px 6px', width: '100%', boxSizing: 'border-box', borderRadius: 4, border: `1px solid ${fDet.br ? T.terracotta : T.line}` }} /></th>
+            <th style={{ padding: '4px 8px', fontWeight: 400 }}><FiltroMulti valor={fDet.cli} onChange={v => setFDet(f => ({ ...f, cli: v }))} opcoes={opc(l => l.cliente || '—')} /></th>
+            <th style={{ padding: '4px 8px', fontWeight: 400 }}><FiltroMulti valor={fDet.vend} onChange={v => setFDet(f => ({ ...f, vend: v }))} opcoes={opc(l => l.vendedor || '—')} /></th>
+            <th style={{ padding: '4px 8px', fontWeight: 400 }}><FiltroMulti valor={fDet.est} onChange={v => setFDet(f => ({ ...f, est: v }))} opcoes={opc(estDe)} /></th>
+            <th style={{ padding: '4px 8px' }}><input value={fDet.vmin} onChange={e => setFDet(f => ({ ...f, vmin: e.target.value }))} placeholder="valor mín." inputMode="decimal"
+              style={{ fontFamily: 'inherit', fontSize: 11, padding: '3px 6px', width: '100%', boxSizing: 'border-box', borderRadius: 4, border: `1px solid ${fDet.vmin ? T.terracotta : T.line}`, textAlign: 'right' }} /></th>
+          </tr>
+          {filtrando ? (
+            <tr><th colSpan={5} style={{ padding: '4px 10px', fontSize: 11, fontWeight: 600, color: T.terracotta, textAlign: 'left', background: T.panel }}>
+              {linhasF.length} de {detalhe.linhas.length} · {val(soma(linhasF))}
+              <button onClick={() => setFDet(FDET0)} style={{ marginLeft: 8, fontFamily: 'inherit', fontSize: 11, border: 'none', background: 'none', color: T.blueText, cursor: 'pointer' }}>limpar filtros</button>
+            </th></tr>
+          ) : null}
+          </thead>
           <tbody>
             {grupos.map(g => {
-              const gLinhas = detalhe.linhas
+              const gLinhas = linhasF
                 .filter(l => (l.estagio || l.estagio_rotulo || '—') === g)
                 .sort((a, b) => (Number(b.valor)||0) - (Number(a.valor)||0));
               const gValor = soma(gLinhas);
