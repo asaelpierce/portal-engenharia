@@ -957,8 +957,6 @@ function PortalConteudo({ currentUser, session }) {
           {renderTab('produtividade', <Produtividade propostas={propostas} mesFiltro={mesFiltro} currentUser={currentUser} />)}
           {renderTab('faturamento', <Faturamento />)}
           {renderTab('placas_kalocer', <TabErrorBoundary tab="Cerâmicas"><CeramicasVale currentUser={currentUser} /></TabErrorBoundary>)}
-          {renderTab('analitico_mp', <TabErrorBoundary tab="Analítico"><AnaliticoMP /></TabErrorBoundary>)}
-          {renderTab('carteira_estoque', <TabErrorBoundary tab="Carteira x Estoque"><CarteiraEstoque /></TabErrorBoundary>)}
           {renderTab('preco_compra', <TabErrorBoundary tab="Preço de Compra"><PrecoCompra /></TabErrorBoundary>)}
           {renderTab('custeio', <TabErrorBoundary tab="Custeio"><Custeio /></TabErrorBoundary>)}
           {renderTab('custeio_op', <TabErrorBoundary tab="Custeio por OP"><CusteioPorOP /></TabErrorBoundary>)}
@@ -1022,8 +1020,6 @@ function Sidebar({ view, setView, pendCount, papel, telasPermitidas }) {
     { id: 'comercial',    label: 'Painel Comercial',       icon: TrendingUp },
     { id: 'faturamento',  label: 'Faturamento (Sankhya)',  icon: DollarSign },
     { id: 'placas_kalocer', label: 'Cerâmicas · Placas e Vale', icon: Layers },
-    { id: 'analitico_mp', label: 'Analítico',              icon: BarChart2 },
-    { id: 'carteira_estoque', label: 'Carteira x Estoque',  icon: Package },
     { id: 'preco_compra',  label: 'Preço de Compra',        icon: DollarSign },
     { id: 'custeio',       label: 'Custeio',                icon: DollarSign },
     { id: 'custeio_op',    label: 'Custeio por OP (teste)', icon: DollarSign },
@@ -36615,8 +36611,6 @@ const TELAS_CATALOGO = [
   { id: 'crm',          label: 'CRM (só o CRM — vendedor entra direto nele)' },
   { id: 'faturamento',  label: 'Faturamento (Sankhya)' },
   { id: 'placas_kalocer', label: 'Cerâmicas — aba Placas Kalocer' },
-  { id: 'analitico_mp', label: 'Analítico' },
-  { id: 'carteira_estoque', label: 'Carteira x Estoque' },
   { id: 'preco_compra', label: 'Preço de Compra' },
   { id: 'custeio', label: 'Custeio' },
   { id: 'custeio_op', label: 'Custeio por OP (teste)' },
