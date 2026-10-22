@@ -32456,363 +32456,331 @@ function DetalheCusteio({ itens, comps, comICMS }) {
   );
 }
 
+// ============================================================================
+// PREÇO DE COMPRA (v2, 22/10/2026): carrega todo o histórico de notas de entrada (banco Supply) e filtra na hora
+// por período, grupo do produto (sankhya_produto_grupo), fornecedor e busca. Abas: Visão geral, Alertas de alta
+// (última compra x anterior, por impacto em R$) e Comparar fornecedores (economia potencial). Ficha do item com
+// gráfico por fornecedor. Preço unitário = valor (bruto ou líquido) ÷ quantidade, como a tela anterior.
+// ============================================================================
+const PC_CORES = ['#2F7BEA', '#EA7A33', '#16A34A', '#7C3AED', '#DB2777', '#0D9488', '#D9A21B', '#64748B'];
+function PrecoCompraFicha({ cod, linhas, base, contatos, onFechar }) {
+  const C = CRMC;
+  useEffect(() => { const t = e => { if (e.key === 'Escape') onFechar(); }; window.addEventListener('keydown', t); return () => window.removeEventListener('keydown', t); }, [onFechar]);
+  const ls = linhas.filter(r => r.cod === cod).sort((a, b) => a.data.localeCompare(b.data));
+  const u = (r) => (base === 'liq' ? r.unitL : r.unitB);
+  const forns = [...new Set(ls.map(r => r.forn))];
+  const corF = Object.fromEntries(forns.map((f, i) => [f, PC_CORES[i % PC_CORES.length]]));
+  const precos = ls.map(u).filter(v => v != null);
+  const ult = ls[ls.length - 1], pri = ls[0];
+  const varPct = pri && ult && u(pri) ? (u(ult) / u(pri) - 1) * 100 : null;
+  const porForn = forns.map(f => { const l = ls.filter(r => r.forn === f); const uu = l.map(u).filter(v => v != null);
+    return { f, n: l.length, ult: u(l[l.length - 1]), dtUlt: l[l.length - 1].data, med: uu.reduce((x, y) => x + y, 0) / (uu.length || 1), min: Math.min(...uu), qtd: l.reduce((x, r) => x + (r.qtd || 0), 0), cod: l[0].codForn }; })
+    .sort((a, b) => a.ult - b.ult);
+  const W = 900, H = 230, ml = 70, mr = 20, mt = 16, mb = 30;
+  const minP = Math.min(...precos) * 0.95, maxP = Math.max(...precos) * 1.05 || 1;
+  const t0 = new Date(pri?.data || Date.now()).getTime(), t1 = Math.max(t0 + 86400000, new Date(ult?.data || Date.now()).getTime());
+  const x = (d) => ml + (W - ml - mr) * ((new Date(d).getTime() - t0) / (t1 - t0));
+  const y = (v) => mt + (H - mt - mb) * (1 - (v - minP) / ((maxP - minP) || 1));
+  const dt = (d) => new Date(`${d}T12:00:00`).toLocaleDateString('pt-BR');
+  return ReactDOM.createPortal(
+    <div onClick={onFechar} style={{ position: 'fixed', inset: 0, zIndex: 85, background: 'rgba(15,35,64,.35)', display: 'flex', justifyContent: 'flex-end' }}>
+      <aside onClick={e => e.stopPropagation()} style={{ width: 'min(1100px, 100%)', height: '100%', background: C.bg, display: 'flex', flexDirection: 'column', fontFamily: FONT_BODY, color: C.ink, boxShadow: '-10px 0 40px rgba(16,24,40,.25)' }}>
+        <div style={{ background: '#0F2340', color: '#fff', padding: '16px 22px', display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 12, color: 'rgba(255,255,255,.7)' }}>{cod} · {ls[0]?.grupo || 'grupo não informado'}</div>
+            <div style={{ fontSize: 16.5, fontWeight: 700 }}>{ls[0]?.desc}</div>
+          </div>
+          <button onClick={onFechar} style={{ fontFamily: 'inherit', fontSize: 12.5, fontWeight: 600, padding: '8px 12px', borderRadius: 8, border: 'none', background: '#fff', color: '#0F2340', cursor: 'pointer' }}>Fechar <span style={{ fontSize: 10.5, color: C.ink3 }}>Esc</span></button>
+        </div>
+        <div style={{ flex: 1, overflow: 'auto', padding: '16px 22px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <div style={{ display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))' }}>
+            {[['Último preço', fmtMoeda(ult && u(ult)), `${ult ? dt(ult.data) : ''} · ${ult?.forn || ''}`], ['Menor preço', fmtMoeda(Math.min(...precos)), 'em todo o histórico'], ['Maior preço', fmtMoeda(Math.max(...precos)), 'em todo o histórico'],
+              ['Variação 1ª → última', varPct == null ? '—' : `${varPct > 0 ? '+' : ''}${varPct.toFixed(1)}%`, `${ls.length} compra(s) · ${forns.length} fornecedor(es)`]].map(([r, v, sub], k) => (
+              <div key={r} style={{ background: C.surface, border: `1px solid ${C.line}`, borderRadius: 10, padding: '11px 14px' }}>
+                <div style={{ fontSize: 12, color: C.ink2 }}>{r}</div>
+                <div style={{ fontSize: 19, fontWeight: 700, color: k === 3 && varPct != null ? (varPct > 0 ? C.loss : C.win) : C.ink }}>{v}</div>
+                <div style={{ fontSize: 11, color: C.ink3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{sub}</div>
+              </div>))}
+          </div>
+          <section style={{ background: C.surface, border: `1px solid ${C.line}`, borderRadius: 12, padding: '14px 16px' }}>
+            <div style={{ fontWeight: 600, marginBottom: 6 }}>Preço unitário {base === 'liq' ? 'líquido' : 'bruto'} ao longo do tempo, por fornecedor</div>
+            <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 'auto' }}>
+              {[0, 0.5, 1].map(t => { const v = minP + (maxP - minP) * t; return (<g key={t}><line x1={ml} x2={W - mr} y1={y(v)} y2={y(v)} stroke={C.lineSoft} /><text x={ml - 6} y={y(v) + 4} textAnchor="end" fontSize="11" fill={C.ink3}>{fmtMoeda(v)}</text></g>); })}
+              {forns.map(f => { const l = ls.filter(r => r.forn === f && u(r) != null);
+                return (<g key={f}>
+                  {l.length > 1 && <polyline points={l.map(r => `${x(r.data)},${y(u(r))}`).join(' ')} fill="none" stroke={corF[f]} strokeWidth="2" opacity="0.6" />}
+                  {l.map((r, k) => <circle key={k} cx={x(r.data)} cy={y(u(r))} r="4.5" fill={corF[f]}><title>{`${dt(r.data)} · ${f} · ${fmtMoeda(u(r))} · NF ${r.nf}`}</title></circle>)}
+                </g>); })}
+              <text x={ml} y={H - 8} fontSize="11" fill={C.ink3}>{pri ? dt(pri.data) : ''}</text>
+              <text x={W - mr} y={H - 8} fontSize="11" fill={C.ink3} textAnchor="end">{ult ? dt(ult.data) : ''}</text>
+            </svg>
+            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', fontSize: 12, color: C.ink2 }}>{forns.map(f => <span key={f}><span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 5, background: corF[f], marginRight: 5 }} />{f}</span>)}</div>
+          </section>
+          <section style={{ background: C.surface, border: `1px solid ${C.line}`, borderRadius: 12, overflow: 'hidden' }}>
+            <div style={{ padding: '12px 16px', fontWeight: 600, borderBottom: `1px solid ${C.line}` }}>Comparação entre fornecedores</div>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+              <thead><tr style={{ background: C.surface2 }}>{['Fornecedor', 'Contato', 'Compras', 'Qtd total', 'Último preço', 'Média', 'Menor', 'vs melhor'].map((h, k) => <th key={h} style={{ padding: '9px 12px', fontSize: 11.5, fontWeight: 600, color: C.ink3, textAlign: k >= 2 ? 'right' : 'left' }}>{h}</th>)}</tr></thead>
+              <tbody>{porForn.map((p, k) => { const ct = contatos[p.cod]; const dif = porForn[0].ult ? (p.ult / porForn[0].ult - 1) * 100 : 0;
+                return (
+                  <tr key={p.f} style={{ background: k === 0 && porForn.length > 1 ? C.winSoft : k % 2 ? C.surface2 : C.surface }}>
+                    <td style={{ padding: '9px 12px', fontWeight: 600 }}><span style={{ display: 'inline-block', width: 9, height: 9, borderRadius: 5, background: corF[p.f], marginRight: 6 }} />{p.f}{k === 0 && porForn.length > 1 && <span style={{ marginLeft: 6, fontSize: 11, color: C.win }}>melhor preço</span>}</td>
+                    <td style={{ padding: '9px 12px', color: C.ink2, fontSize: 12 }}>{ct ? [ct.contato, ct.email, ct.telefone].filter(Boolean).join(' · ') : '—'}</td>
+                    <td style={{ padding: '9px 12px', textAlign: 'right' }}>{p.n}</td>
+                    <td style={{ padding: '9px 12px', textAlign: 'right' }}>{p.qtd.toLocaleString('pt-BR')}</td>
+                    <td style={{ padding: '9px 12px', textAlign: 'right', fontWeight: 700 }}>{fmtMoeda(p.ult)}<div style={{ fontSize: 11, color: C.ink3, fontWeight: 400 }}>{dt(p.dtUlt)}</div></td>
+                    <td style={{ padding: '9px 12px', textAlign: 'right' }}>{fmtMoeda(p.med)}</td>
+                    <td style={{ padding: '9px 12px', textAlign: 'right' }}>{fmtMoeda(p.min)}</td>
+                    <td style={{ padding: '9px 12px', textAlign: 'right', fontWeight: 600, color: k === 0 ? C.win : dif > 10 ? C.loss : C.warn }}>{k === 0 ? '—' : `+${dif.toFixed(1)}%`}</td>
+                  </tr>); })}</tbody>
+            </table>
+          </section>
+          <section style={{ background: C.surface, border: `1px solid ${C.line}`, borderRadius: 12, overflow: 'hidden' }}>
+            <div style={{ padding: '12px 16px', fontWeight: 600, borderBottom: `1px solid ${C.line}` }}>Todas as compras ({ls.length})</div>
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+                <thead><tr style={{ background: C.surface2 }}>{['Data', 'Fornecedor', 'NF', 'Projeto', 'Qtd', 'Unit. bruto', 'Unit. líquido', ''].map((h, k) => <th key={k} style={{ padding: '8px 10px', fontSize: 11.5, fontWeight: 600, color: C.ink3, textAlign: k >= 4 && k <= 6 ? 'right' : 'left' }}>{h}</th>)}</tr></thead>
+                <tbody>{[...ls].reverse().map((r, k) => (
+                  <tr key={k} style={{ background: k % 2 ? C.surface2 : C.surface }}>
+                    <td style={{ padding: '7px 10px', whiteSpace: 'nowrap' }}>{dt(r.data)}</td>
+                    <td style={{ padding: '7px 10px' }}><span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 4, background: corF[r.forn], marginRight: 6 }} />{r.forn}</td>
+                    <td style={{ padding: '7px 10px' }}>{r.nf}</td>
+                    <td style={{ padding: '7px 10px', color: C.ink2 }}>{r.projeto || '—'}</td>
+                    <td style={{ padding: '7px 10px', textAlign: 'right' }}>{(r.qtd || 0).toLocaleString('pt-BR')}</td>
+                    <td style={{ padding: '7px 10px', textAlign: 'right' }}>{fmtMoeda(r.unitB)}</td>
+                    <td style={{ padding: '7px 10px', textAlign: 'right', fontWeight: 600 }}>{fmtMoeda(r.unitL)}</td>
+                    <td style={{ padding: '7px 10px', whiteSpace: 'nowrap' }}>
+                      <BotaoAbrirSankhya nunota={r.nunota} tipmov={r.tipmov} codtipoper={r.top} label="Ver nota" />
+                      {r.oc && <BotaoAbrirSankhya nunota={r.nunotaOc} tipmov="C" codtipoper={r.top} label={`Pedido ${r.oc}`} />}
+                    </td>
+                  </tr>))}</tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+      </aside>
+    </div>, document.body);
+}
+
 function PrecoCompra() {
-  const [busca, setBusca] = useState('');
-  const [buscando, setBuscando] = useState(false);
-  const [resultados, setResultados] = useState([]); // lista de produtos que bateram na busca
-  const [itemSelecionado, setItemSelecionado] = useState(null); // { codigo, descricao }
-  const [historico, setHistorico] = useState([]); // compras do item selecionado
-  const [loadingHistorico, setLoadingHistorico] = useState(false);
+  const C = CRMC;
+  const [linhas, setLinhas] = useState(null);
+  const [contatos, setContatos] = useState({});
   const [erro, setErro] = useState(null);
-  const [qtdCompras, setQtdCompras] = useState(3); // 3, 5, 10 ou 'todas' — escolhido pelo usuário
-  const [contatosFornecedor, setContatosFornecedor] = useState({}); // cod_fornecedor -> {email, telefone, razao_social}
-
-  // Análise geral: maiores gastos, mais recorrentes, maiores variações de preço.
-  const [analise, setAnalise] = useState([]);
-  const [loadingAnalise, setLoadingAnalise] = useState(true);
-
-  // Busca inteligente por similaridade de texto (pg_trgm) — funciona mesmo com
-  // descrições parciais/genéricas, sem precisar do código exato do item.
+  const [periodo, setPeriodo] = useState('12m');
+  const [fGrupo, setFGrupo] = useState([]);
+  const [fForn, setFForn] = useState([]);
+  const [busca, setBusca] = useState('');
+  const [base, setBase] = useState('liq');
+  const [aba, setAba] = useState('geral');
+  const [limiar, setLimiar] = useState(10);
+  const [itemSel, setItemSel] = useState(null);
+  const [abertoComp, setAbertoComp] = useState(null);
   useEffect(() => {
-    if (!busca || busca.trim().length < 3) { setResultados([]); return; }
-    const t = setTimeout(async () => {
-      setBuscando(true);
-      setErro(null);
-      const termo = busca.trim();
-      const { data, error } = await supabaseSupply.rpc('buscar_itens_compra', { termo_busca: termo });
-      if (error) {
-        // fallback: busca simples por ILIKE caso a function ainda não exista
-        const { data: dataFallback, error: errorFallback } = await supabaseSupply
-          .from('nfs_entrada')
-          .select('codigo_produto,descricao_produto')
-          .ilike('descricao_produto', `%${termo}%`)
-          .limit(30);
-        if (errorFallback) { setErro(errorFallback.message); setBuscando(false); return; }
-        const vistos = new Set();
-        const unicos = (dataFallback || []).filter(r => {
-          if (vistos.has(r.codigo_produto)) return false;
-          vistos.add(r.codigo_produto);
-          return true;
-        });
-        setResultados(unicos);
-        setBuscando(false);
-        return;
-      }
-      setResultados(data || []);
-      setBuscando(false);
-    }, 350);
-    return () => clearTimeout(t);
-  }, [busca]);
-
-  // Análise geral: carrega o agregado de TODOS os itens já comprados, uma vez —
-  // usado pros rankings de maior gasto, mais recorrentes e maior variação de preço.
-  useEffect(() => {
-    const carregarAnalise = async () => {
-      setLoadingAnalise(true);
-      const { data, error } = await supabaseSupply
-        .from('v_analise_compras')
-        .select('codigo_produto,descricao_produto,total_compras,valor_total_gasto,quantidade_total,data_ultima_compra,preco_recente,fornecedor_recente,preco_anterior,variacao_pct,valor_total_gasto_liquido,preco_recente_liquido,preco_anterior_liquido,variacao_pct_liquido');
-      if (!error) setAnalise(data || []);
-      setLoadingAnalise(false);
-    };
-    carregarAnalise();
+    (async () => {
+      try {
+        const brutas = [];
+        for (let de = 0; de < 60000; de += 1000) {
+          const { data, error } = await supabaseSupply.from('nfs_entrada')
+            .select('numero_nf,data_recebimento,cod_fornecedor,fornecedor,codigo_produto,descricao_produto,quantidade_recebida,valor_item,valor_liquido_item,projeto,numero_pedido_oc,nunota,tipmov,codtipoper_nota,nunota_pedido_oc')
+            .not('codigo_produto', 'is', null).not('valor_item', 'is', null).order('data_recebimento').range(de, de + 999);
+          if (error) throw error;
+          brutas.push(...(data || [])); if (!data || data.length < 1000) break;
+        }
+        const cods = [...new Set(brutas.map(r => r.codigo_produto))];
+        const grupos = {};
+        for (let i = 0; i < cods.length; i += 300) {
+          const { data } = await supabase.from('sankhya_produto_grupo').select('codprod,descrgrupoprod').in('codprod', cods.slice(i, i + 300));
+          (data || []).forEach(g => { grupos[g.codprod] = g.descrgrupoprod; });
+        }
+        const { data: ct } = await supabaseSupply.from('fornecedores_email').select('cod_fornecedor,contato,email,telefone');
+        setContatos(Object.fromEntries((ct || []).map(c => [c.cod_fornecedor, c])));
+        setLinhas(brutas.map(r => { const q = Number(r.quantidade_recebida) || 0; const vb = Number(r.valor_item) || 0; const vl = Number(r.valor_liquido_item ?? r.valor_item) || 0;
+          return { cod: r.codigo_produto, desc: (r.descricao_produto || '').trim(), forn: (r.fornecedor || '—').trim(), codForn: r.cod_fornecedor, data: String(r.data_recebimento || '').slice(0, 10),
+            nf: r.numero_nf, qtd: q, bruto: vb, liq: vl, unitB: q ? vb / q : null, unitL: q ? vl / q : null, nunota: r.nunota, tipmov: r.tipmov, top: r.codtipoper_nota, oc: r.numero_pedido_oc, nunotaOc: r.nunota_pedido_oc,
+            projeto: r.projeto, grupo: grupos[r.codigo_produto] || 'Sem grupo' }; }).filter(r => r.data));
+      } catch (e) { setErro(e.message || String(e)); }
+    })();
   }, []);
+  if (erro) return <div style={{ padding: 30, color: C.loss }}>Erro ao carregar as compras: {erro}</div>;
+  if (!linhas) return <div style={{ padding: 40, textAlign: 'center', color: C.ink3 }}>Carregando o histórico de compras…</div>;
 
-  const rankings = useMemo(() => {
-    const validos = analise.filter(a => a.valor_total_gasto_liquido != null);
-    const comVariacao = analise.filter(a => a.variacao_pct_liquido != null);
-    return {
-      maisGastos: [...validos].sort((a, b) => b.valor_total_gasto_liquido - a.valor_total_gasto_liquido).slice(0, 10),
-      maisRecorrentes: [...validos].sort((a, b) => b.total_compras - a.total_compras).slice(0, 10),
-      maioresAltas: [...comVariacao].filter(a => a.variacao_pct_liquido > 0).sort((a, b) => b.variacao_pct_liquido - a.variacao_pct_liquido).slice(0, 8),
-      maioresQuedas: [...comVariacao].filter(a => a.variacao_pct_liquido < 0).sort((a, b) => a.variacao_pct_liquido - b.variacao_pct_liquido).slice(0, 8),
-    };
-  }, [analise]);
+  const hoje = new Date(); const ano = hoje.getFullYear();
+  const iniP = { '3m': new Date(hoje.getFullYear(), hoje.getMonth() - 2, 1), '6m': new Date(hoje.getFullYear(), hoje.getMonth() - 5, 1), '12m': new Date(hoje.getFullYear(), hoje.getMonth() - 11, 1),
+    ano: new Date(ano, 0, 1), ano_ant: new Date(ano - 1, 0, 1), tudo: new Date(2000, 0, 1) }[periodo].toISOString().slice(0, 10);
+  const fimP = periodo === 'ano_ant' ? `${ano - 1}-12-31` : '2999-12-31';
+  const palavras = busca.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const casa = (r) => (!fGrupo.length || fGrupo.includes(r.grupo)) && (!fForn.length || fForn.includes(r.forn))
+    && (!palavras.length || palavras.every(w => `${r.cod} ${r.desc}`.toLowerCase().includes(w)));
+  const F = linhas.filter(r => r.data >= iniP && r.data <= fimP && casa(r));
+  const u = (r) => (base === 'liq' ? r.unitL : r.unitB);
+  const val = (r) => (base === 'liq' ? r.liq : r.bruto);
+  const gasto = F.reduce((t, r) => t + val(r), 0);
+  const MES = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
+  const meses = {}; F.forEach(r => { const m = r.data.slice(0, 7); meses[m] = (meses[m] || 0) + val(r); });
+  const agrupa = (k) => Object.entries(F.reduce((acc, r) => { acc[r[k]] = (acc[r[k]] || 0) + val(r); return acc; }, {})).sort((a, b) => b[1] - a[1]);
+  const porItem = {}; F.forEach(r => { const o = porItem[r.cod] || (porItem[r.cod] = { cod: r.cod, desc: r.desc, grupo: r.grupo, ls: [] }); o.ls.push(r); });
+  const itens = Object.values(porItem);
 
-  const selecionarItem = async (codigo, descricao, qtd) => {
-    const limite = qtd ?? qtdCompras;
-    setItemSelecionado({ codigo, descricao });
-    setLoadingHistorico(true);
-    setErro(null);
+  // alertas: última compra x anterior (dentro dos filtros)
+  const alertas = itens.filter(o => o.ls.length >= 2).map(o => { const ls = [...o.ls].sort((a, b) => a.data.localeCompare(b.data)); const ult = ls[ls.length - 1], ant = ls[ls.length - 2];
+      const pct = u(ant) ? (u(ult) / u(ant) - 1) * 100 : null; return { ...o, ult, ant, pct, impacto: (u(ult) - u(ant)) * (ult.qtd || 0), trocou: ult.forn !== ant.forn }; })
+    .filter(a => a.pct != null && a.pct >= limiar).sort((a, b) => b.impacto - a.impacto);
+  // comparar fornecedores
+  const comps = itens.map(o => { const fs = {}; o.ls.forEach(r => { const f = fs[r.forn] || (fs[r.forn] = { f: r.forn, ls: [] }); f.ls.push(r); });
+      const arr = Object.values(fs).map(f => { const l = [...f.ls].sort((a, b) => a.data.localeCompare(b.data)); const uu = l.map(u).filter(v => v != null);
+        return { f: f.f, n: l.length, ult: u(l[l.length - 1]), dt: l[l.length - 1].data, med: uu.reduce((x, y) => x + y, 0) / (uu.length || 1), qtd: l.reduce((x, r) => x + r.qtd, 0) }; }).sort((a, b) => a.ult - b.ult);
+      if (arr.length < 2) return null;
+      const melhor = arr[0].ult, pior = arr[arr.length - 1];
+      const economia = arr.slice(1).reduce((t, f) => t + Math.max(0, (f.med - melhor) * f.qtd), 0);
+      return { ...o, arr, melhor: arr[0], pior, dif: melhor ? (pior.ult / melhor - 1) * 100 : 0, economia }; }).filter(Boolean).sort((a, b) => b.economia - a.economia);
 
-    let query = supabaseSupply
-      .from('v_ultimas_compras')
-      .select('descricao_produto,fornecedor,cod_fornecedor,data_recebimento,numero_nf,quantidade_recebida,valor_total_linha,preco_unitario,ordem_recencia,valor_liquido_item,preco_unitario_liquido,valor_icms,valor_ipi,valor_icms_st,nunota,tipmov,codtipoper_nota,numero_pedido_oc,nunota_pedido_oc')
-      .eq('codigo_produto', codigo)
-      .order('ordem_recencia', { ascending: true });
-    if (limite !== 'todas') query = query.lte('ordem_recencia', limite);
-
-    const { data, error } = await query;
-    if (error) { setErro(error.message); setLoadingHistorico(false); return; }
-    setHistorico(data || []);
-
-    // Busca o contato (email/telefone) dos fornecedores que aparecem nesse histórico.
-    const codigosFornecedor = [...new Set((data || []).map(h => h.cod_fornecedor).filter(Boolean))];
-    if (codigosFornecedor.length > 0) {
-      const { data: contatos } = await supabaseSupply
-        .from('fornecedores_email')
-        .select('cod_fornecedor,fornecedor,razao_social,email,telefone,contato')
-        .in('cod_fornecedor', codigosFornecedor);
-      const mapa = {};
-      (contatos || []).forEach(c => { mapa[c.cod_fornecedor] = c; });
-      setContatosFornecedor(mapa);
-    } else {
-      setContatosFornecedor({});
-    }
-
-    setLoadingHistorico(false);
-  };
-
-  // Se o usuário mudar a quantidade de compras a mostrar com um item já selecionado, refaz a busca.
-  useEffect(() => {
-    if (itemSelecionado) selecionarItem(itemSelecionado.codigo, itemSelecionado.descricao, qtdCompras);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [qtdCompras]);
-
-  const fmtMoeda = (v) => v == null ? '—' : new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(v);
-  const fmtQtd = (v) => v == null ? '—' : new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 2 }).format(v);
-  const fmtData = (iso) => !iso ? '—' : new Date(iso).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: '2-digit' });
-
-  const variacaoPreco = useMemo(() => {
-    if (historico.length < 2) return null;
-    const maisRecente = historico[0]?.preco_unitario_liquido;
-    const maisAntiga = historico[historico.length - 1]?.preco_unitario_liquido;
-    if (maisRecente == null || maisAntiga == null || maisAntiga === 0) return null;
-    return ((maisRecente - maisAntiga) / maisAntiga) * 100;
-  }, [historico]);
-
+  const caixa = { background: C.surface, border: `1px solid ${C.line}`, borderRadius: 12, padding: '16px 18px', minWidth: 0, boxShadow: '0 1px 2px rgba(16,24,40,.04)' };
+  const kpi = (r, v, sub, cor, onClick) => (
+    <div onClick={onClick} style={{ ...caixa, padding: '13px 15px', cursor: onClick ? 'pointer' : 'default' }}>
+      <div style={{ fontSize: 12, color: C.ink2, fontWeight: 500 }}>{r}</div>
+      <div style={{ fontSize: 22, fontWeight: 700, color: cor || C.ink, marginTop: 3 }}>{v}</div>
+      <div style={{ fontSize: 11.5, color: C.ink3 }}>{sub}</div>
+    </div>
+  );
+  const seg = (ops, v, set) => (
+    <div style={{ display: 'inline-flex', background: '#E7EBF1', borderRadius: 9, padding: 3, gap: 2 }}>
+      {ops.map(([k, r]) => <button key={k} onClick={() => set(k)} style={{ fontFamily: 'inherit', fontSize: 12.5, fontWeight: v === k ? 600 : 500, padding: '6px 11px', borderRadius: 7, border: 'none', cursor: 'pointer', background: v === k ? C.surface : 'transparent', color: v === k ? C.ink : C.ink2 }}>{r}</button>)}
+    </div>
+  );
+  const opcGr = [...new Set(linhas.map(r => r.grupo))].sort().map(g => ({ v: g, r: g }));
+  const opcFo = [...new Set(linhas.map(r => r.forn))].sort().map(g => ({ v: g, r: g }));
+  const filtrando = fGrupo.length || fForn.length || palavras.length;
   return (
-    <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-
-      <div style={{ fontSize: 12.5, color: T.inkFaint, background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 8, padding: '10px 14px' }}>
-        Busca pelo histórico real de compras (Notas Fiscais de entrada) — fonte: Supply Chain. Digite qualquer termo da descrição
-        (não precisa ser exato) e veja as últimas 3 compras de cada item, com fornecedor, quantidade e preço. Os valores
-        <strong> líquidos</strong> já têm ICMS, IPI e ICMS-ST subtraídos (o bruto, que vem da nota, tem o imposto embutido).
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14, fontFamily: FONT_BODY, color: C.ink }}>
+      <div style={{ ...caixa, display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', padding: '12px 16px' }}>
+        {seg([['3m', '3 meses'], ['6m', '6 meses'], ['12m', '12 meses'], ['ano', String(ano)], ['ano_ant', String(ano - 1)], ['tudo', 'Tudo']], periodo, setPeriodo)}
+        <div style={{ width: 200 }}><FiltroMulti valor={fGrupo} onChange={setFGrupo} opcoes={opcGr} todosRotulo="todos os grupos" fonte={12.5} /></div>
+        <div style={{ width: 220 }}><FiltroMulti valor={fForn} onChange={setFForn} opcoes={opcFo} todosRotulo="todos os fornecedores" fonte={12.5} /></div>
+        <div style={{ position: 'relative' }}>
+          <Search size={14} aria-hidden="true" style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: C.ink3 }} />
+          <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Código ou descrição (ex.: chapa aço)" style={{ fontFamily: 'inherit', fontSize: 12.5, padding: '7px 10px 7px 30px', borderRadius: 8, border: `1px solid ${busca ? C.primary : C.line}`, width: 240 }} />
+        </div>
+        {filtrando ? <button onClick={() => { setFGrupo([]); setFForn([]); setBusca(''); }} style={{ fontFamily: 'inherit', fontSize: 12.5, border: 'none', background: 'none', color: C.primary, cursor: 'pointer' }}>limpar</button> : null}
+        <span style={{ flex: 1 }} />
+        {seg([['liq', 'Preço líquido'], ['bruto', 'Preço bruto']], base, setBase)}
       </div>
 
-      <Panel title="Buscar item" subtitle="Digite uma descrição genérica (ex: 'ventilador', 'chapa aço', 'rolamento') — a busca acha por similaridade">
-        <div style={{ position: 'relative', maxWidth: 520 }}>
-          <div style={{ position: 'relative' }}>
-            <Search size={14} style={{ position: 'absolute', left: 10, top: 11, color: T.inkFaint }} />
-            <input
-              value={busca}
-              onChange={e => { setBusca(e.target.value); setItemSelecionado(null); setHistorico([]); }}
-              placeholder="Ex: ventilador, chapa de aço, rolamento…"
-              style={{ ...selectStyleFat(520), paddingLeft: 32, fontSize: 13.5 }}
-            />
-            {buscando && <span style={{ position: 'absolute', right: 10, top: 10, fontSize: 11, color: T.inkFaint }}>buscando…</span>}
-          </div>
-          {resultados.length > 0 && !itemSelecionado && (
-            <div style={{ position: 'relative' }}>
-              <div style={{ position: 'absolute', top: 4, left: 0, right: 0, background: T.panel, border: `1px solid ${T.line}`, borderRadius: 8, boxShadow: SHADOW_LG, zIndex: 20, overflow: 'hidden', maxHeight: 320, overflowY: 'auto' }}>
-                {resultados.map(r => (
-                  <button key={r.codigo_produto} onClick={() => { setBusca(`${r.codigo_produto} — ${r.descricao_produto}`); selecionarItem(r.codigo_produto, r.descricao_produto); }}
-                    style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 14px', background: 'none', border: 'none', cursor: 'pointer', borderBottom: `1px solid ${T.lineSoft}`, fontSize: 12.5 }}
-                    onMouseEnter={e => e.currentTarget.style.background = T.panelAlt}
-                    onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
-                    <span style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText }}>{r.codigo_produto}</span>
-                    <span style={{ color: T.inkDim, marginLeft: 8 }}>{r.descricao_produto}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-          {busca.trim().length >= 3 && !buscando && resultados.length === 0 && !itemSelecionado && (
-            <div style={{ fontSize: 12, color: T.inkFaint, marginTop: 8 }}>Nenhum item encontrado com esse termo.</div>
-          )}
+      <div style={{ display: 'flex', gap: 4, borderBottom: `1px solid ${C.line}` }}>
+        {[['geral', 'Visão geral'], ['alertas', `Alertas de alta · ${alertas.length}`], ['fornecedores', `Comparar fornecedores · ${comps.length}`]].map(([k, r]) => (
+          <button key={k} onClick={() => setAba(k)} style={{ fontFamily: 'inherit', fontSize: 13.5, fontWeight: aba === k ? 700 : 500, padding: '10px 16px', border: 'none', background: 'transparent', cursor: 'pointer',
+            color: aba === k ? C.primary : C.ink2, borderBottom: `2px solid ${aba === k ? C.primary : 'transparent'}`, marginBottom: -1 }}>{r}</button>))}
+      </div>
+
+      {aba === 'geral' && (<>
+        <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))' }}>
+          {kpi(`Gasto ${base === 'liq' ? 'líquido' : 'bruto'}`, fmtMoedaCompacta(gasto), `${new Set(F.map(r => r.nunota)).size} notas de entrada`, C.primary)}
+          {kpi('Itens comprados', String(itens.length), `${F.length} linhas de compra`)}
+          {kpi('Fornecedores', String(new Set(F.map(r => r.forn)).size), 'no período e filtros')}
+          {kpi(`Altas acima de ${limiar}%`, String(alertas.length), 'última compra x anterior · ver alertas', alertas.length ? C.loss : C.win, () => setAba('alertas'))}
+          {kpi('Economia potencial', fmtMoedaCompacta(comps.reduce((t, c) => t + c.economia, 0)), `${comps.length} itens com 2+ fornecedores · comparar`, '#0D9488', () => setAba('fornecedores'))}
         </div>
-      </Panel>
-
-      {erro && (
-        <div style={{ background: T.rustSoft, color: T.rustText, borderRadius: 8, padding: '10px 14px', fontSize: 12.5, display: 'flex', alignItems: 'center', gap: 8 }}>
-          <AlertTriangle size={14} /> {erro}
+        <section style={caixa}>
+          <div style={{ fontWeight: 600, marginBottom: 10 }}>Gasto por mês</div>
+          <CRMColunas altura={150} itens={Object.keys(meses).sort().map(m => ({ k: `${MES[Number(m.slice(5)) - 1]}/${m.slice(2, 4)}`, v: meses[m], rot: fmtMoedaCompacta(meses[m]), cor: C.primary }))} />
+        </section>
+        <div style={{ display: 'grid', gap: 14, gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))' }}>
+          <section style={caixa}>
+            <div style={{ fontWeight: 600 }}>Gasto por grupo</div><div style={{ fontSize: 12, color: C.ink3, margin: '2px 0 12px' }}>clique para filtrar</div>
+            <CRMBarrasH itens={agrupa('grupo').slice(0, 12).map(([g, v], i) => ({ k: g, v, rot: fmtMoedaCompacta(v), extra: gasto ? `${Math.round(100 * v / gasto)}%` : '', cor: PC_CORES[i % 8] }))} aoClicar={it => setFGrupo([it.k])} />
+          </section>
+          <section style={caixa}>
+            <div style={{ fontWeight: 600 }}>Gasto por fornecedor</div><div style={{ fontSize: 12, color: C.ink3, margin: '2px 0 12px' }}>clique para filtrar</div>
+            <CRMBarrasH itens={agrupa('forn').slice(0, 12).map(([g, v], i) => ({ k: g, v, rot: fmtMoedaCompacta(v), extra: gasto ? `${Math.round(100 * v / gasto)}%` : '', cor: PC_CORES[i % 8] }))} aoClicar={it => setFForn([it.k])} />
+          </section>
         </div>
-      )}
-
-      {loadingHistorico && <div style={{ textAlign: 'center', padding: 30, color: T.inkFaint, fontSize: 13 }}>Carregando histórico…</div>}
-
-      {itemSelecionado && !loadingHistorico && (
-        <>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
-            <div style={{ fontFamily: FONT_DISPLAY, fontSize: 18, fontWeight: 700, color: T.ink }}>
-              {itemSelecionado.codigo} — {itemSelecionado.descricao}
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={{ fontSize: 12, color: T.inkFaint }}>Mostrar:</span>
-              {[3, 5, 10, 'todas'].map(opt => (
-                <button key={opt} onClick={() => setQtdCompras(opt)}
-                  style={{
-                    fontSize: 12, fontWeight: 600, border: `1px solid ${T.line}`, borderRadius: 6, padding: '6px 12px', cursor: 'pointer',
-                    background: qtdCompras === opt ? T.terracotta : T.panel, color: qtdCompras === opt ? '#fff' : T.inkDim,
-                  }}>
-                  {opt === 'todas' ? 'Todas' : `${opt} últimas`}
-                </button>
-              ))}
-            </div>
+        <section style={{ ...caixa, padding: 0, overflow: 'hidden' }}>
+          <div style={{ padding: '12px 16px', fontWeight: 600, borderBottom: `1px solid ${C.line}` }}>Itens com maior gasto · clique para abrir a ficha</div>
+          <div style={{ overflowX: 'auto', maxHeight: 460 }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+              <thead><tr style={{ background: C.surface2 }}>{['Item', 'Grupo', 'Compras', 'Fornecedores', 'Último preço', 'Gasto'].map((h, k) => <th key={h} style={{ padding: '9px 12px', fontSize: 11.5, fontWeight: 600, color: C.ink3, textAlign: k >= 2 ? 'right' : 'left', position: 'sticky', top: 0, background: C.surface2 }}>{h}</th>)}</tr></thead>
+              <tbody>{itens.map(o => ({ ...o, g: o.ls.reduce((t, r) => t + val(r), 0), ult: [...o.ls].sort((a, b) => b.data.localeCompare(a.data))[0] })).sort((a, b) => b.g - a.g).slice(0, 100).map((o, k) => (
+                <tr key={o.cod} onClick={() => setItemSel(o.cod)} style={{ background: k % 2 ? C.surface2 : C.surface, cursor: 'pointer' }}>
+                  <td style={{ padding: '8px 12px' }}><strong>{o.cod}</strong> <span style={{ color: C.ink2 }}>{o.desc}</span></td>
+                  <td style={{ padding: '8px 12px', color: C.ink2, whiteSpace: 'nowrap' }}>{o.grupo}</td>
+                  <td style={{ padding: '8px 12px', textAlign: 'right' }}>{o.ls.length}</td>
+                  <td style={{ padding: '8px 12px', textAlign: 'right' }}>{new Set(o.ls.map(r => r.forn)).size}</td>
+                  <td style={{ padding: '8px 12px', textAlign: 'right' }}>{fmtMoeda(u(o.ult))}</td>
+                  <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 700 }}>{fmtMoeda(o.g)}</td>
+                </tr>))}</tbody>
+            </table>
           </div>
+        </section>
+      </>)}
 
-          {historico.length === 0 ? (
-            <div style={{ textAlign: 'center', padding: 30, color: T.inkFaint, fontSize: 13 }}>Nenhuma compra registrada pra esse item.</div>
-          ) : (
-            <>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(170px,1fr))', gap: 12 }}>
-                <Kpi label="Preço líquido mais recente" value={fmtMoeda(historico[0]?.preco_unitario_liquido)} icon={DollarSign} tone="rust"
-                  sub={`bruto: ${fmtMoeda(historico[0]?.preco_unitario)} · ${fmtData(historico[0]?.data_recebimento)} · ${historico[0]?.fornecedor || '—'}`} />
-                <Kpi label="Compras mostradas" value={historico.length} icon={Package} tone="blue"
-                  sub={qtdCompras === 'todas' ? 'histórico completo' : `das últimas ${qtdCompras}`} />
-                {variacaoPreco != null && (
-                  <Kpi label="Variação (mais antiga → mais recente)" value={`${variacaoPreco > 0 ? '+' : ''}${variacaoPreco.toFixed(1)}%`}
-                    icon={variacaoPreco > 0 ? ArrowUpRight : variacaoPreco < 0 ? ArrowDownRight : Minus}
-                    tone={variacaoPreco > 0 ? 'rust' : variacaoPreco < 0 ? 'olive' : undefined}
-                    sub="dentro do período mostrado acima" />
-                )}
-              </div>
-
-              {historico.length >= 2 && (
-                <Panel title="Variação de preço ao longo do tempo" subtitle="Preço unitário em cada compra, da mais antiga pra mais recente">
-                  <GraficoPrecoHistorico pontos={[...historico].reverse()} fmtMoeda={fmtMoeda} fmtData={fmtData} />
-                </Panel>
-              )}
-
-              <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
-                <div style={{ overflowX: 'auto' }}>
-                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
-                    <thead>
-                      <tr style={{ background: T.panelAlt, borderBottom: `1px solid ${T.line}` }}>
-                        <th style={thFat(60)}>#</th>
-                        <th style={thFat()}>Data</th>
-                        <th style={thFat(0)}>Fornecedor</th>
-                        <th style={thFat(180)}>Contato</th>
-                        <th style={thFat(100)}>NF</th>
-                        <th style={{ ...thFat(90), textAlign: 'right' }}>Qtd</th>
-                        <th style={{ ...thFat(110), textAlign: 'right' }}>Vlr. bruto NF</th>
-                        <th style={{ ...thFat(110), textAlign: 'right' }}>Preço unit. bruto</th>
-                        <th style={{ ...thFat(120), textAlign: 'right' }}>Preço unit. líquido</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {historico.map((h, i) => {
-                        const contato = contatosFornecedor[h.cod_fornecedor];
-                        return (
-                          <tr key={i} style={{ borderBottom: `1px solid ${T.lineSoft}`, background: i === 0 ? T.oliveSoft : 'transparent' }}>
-                            <td style={{ padding: '10px 12px', color: T.inkFaint, fontSize: 11 }}>{i === 0 ? '★ mais recente' : `${i + 1}ª mais recente`}</td>
-                            <td style={{ padding: '10px 12px', fontFamily: FONT_DISPLAY, color: T.inkDim, whiteSpace: 'nowrap' }}>{fmtData(h.data_recebimento)}</td>
-                            <td style={{ padding: '10px 12px', fontWeight: 600, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={h.fornecedor}>{h.fornecedor || '—'}</td>
-                            <td style={{ padding: '10px 12px', fontSize: 11 }}>
-                              {contato?.email ? <div style={{ color: T.blueText }}>{contato.email}</div> : null}
-                              {contato?.telefone ? <div style={{ color: T.inkFaint }}>{contato.telefone}</div> : null}
-                              {!contato?.email && !contato?.telefone && <span style={{ color: T.inkFaint }}>—</span>}
-                            </td>
-                            <td style={{ padding: '10px 12px', color: T.inkFaint }}>
-                              <div>{h.numero_nf || '—'}</div>
-                              <div style={{ display: 'flex', flexDirection: 'column', gap: 2, marginTop: 3 }}>
-                                <BotaoAbrirSankhya nunota={h.nunota} tipmov={h.tipmov} codtipoper={h.codtipoper_nota} label="Ver nota" />
-                                {h.numero_pedido_oc && <BotaoAbrirSankhya nunota={h.nunota_pedido_oc} tipmov="C" codtipoper={h.codtipoper_nota} label={`Ver pedido ${h.numero_pedido_oc}`} />}
-                              </div>
-                            </td>
-                            <td style={{ padding: '10px 12px', textAlign: 'right' }}>{fmtQtd(h.quantidade_recebida)}</td>
-                            <td style={{ padding: '10px 12px', textAlign: 'right', color: T.inkFaint }}>{fmtMoeda(h.valor_total_linha)}</td>
-                            <td style={{ padding: '10px 12px', textAlign: 'right', color: T.inkFaint }}>{fmtMoeda(h.preco_unitario)}</td>
-                            <td style={{ padding: '10px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.rustText }}>{fmtMoeda(h.preco_unitario_liquido)}</td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-                <div style={{ padding: '10px 16px', borderTop: `1px solid ${T.line}`, fontSize: 11, color: T.inkFaint, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span>Preço líquido = (valor da linha − ICMS − IPI − ICMS-ST) ÷ quantidade recebida · fonte: Supply Chain (nfs_entrada + cadastro de fornecedores)</span>
-                  <BotaoExportar small onClick={() => exportCSV(historico, `historico_${itemSelecionado.codigo}.csv`,
-                    ['data_recebimento','fornecedor','numero_nf','quantidade_recebida','valor_total_linha','preco_unitario','valor_liquido_item','preco_unitario_liquido','valor_icms','valor_ipi','valor_icms_st'])} />
-                </div>
-              </div>
-            </>
-          )}
-        </>
+      {aba === 'alertas' && (
+        <section style={{ ...caixa, padding: 0, overflow: 'hidden' }}>
+          <div style={{ padding: '12px 16px', borderBottom: `1px solid ${C.line}`, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+            <div style={{ fontWeight: 600 }}>Itens cuja última compra subiu mais de</div>
+            {seg([[5, '5%'], [10, '10%'], [20, '20%'], [30, '30%']], limiar, setLimiar)}
+            <span style={{ fontSize: 12, color: C.ink3 }}>em relação à compra anterior · ordenado pelo impacto em R$ (alta × quantidade da última compra)</span>
+          </div>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+              <thead><tr style={{ background: C.surface2 }}>{['Item', 'Compra anterior', 'Última compra', 'Alta', 'Impacto'].map((h, k) => <th key={h} style={{ padding: '9px 12px', fontSize: 11.5, fontWeight: 600, color: C.ink3, textAlign: k >= 3 ? 'right' : 'left' }}>{h}</th>)}</tr></thead>
+              <tbody>
+                {alertas.map((a, k) => (
+                  <tr key={a.cod} onClick={() => setItemSel(a.cod)} style={{ background: k % 2 ? C.surface2 : C.surface, cursor: 'pointer' }}>
+                    <td style={{ padding: '9px 12px' }}><strong>{a.cod}</strong> <span style={{ color: C.ink2 }}>{a.desc}</span><div style={{ fontSize: 11, color: C.ink3 }}>{a.grupo}</div></td>
+                    <td style={{ padding: '9px 12px', whiteSpace: 'nowrap' }}>{fmtMoeda(u(a.ant))}<div style={{ fontSize: 11, color: C.ink3 }}>{new Date(`${a.ant.data}T12:00:00`).toLocaleDateString('pt-BR')} · {a.ant.forn}</div></td>
+                    <td style={{ padding: '9px 12px', whiteSpace: 'nowrap', fontWeight: 600 }}>{fmtMoeda(u(a.ult))}
+                      <div style={{ fontSize: 11, color: C.ink3, fontWeight: 400 }}>{new Date(`${a.ult.data}T12:00:00`).toLocaleDateString('pt-BR')} · {a.ult.forn}</div>
+                      {a.trocou && <div style={{ fontSize: 11, fontWeight: 700, color: C.warn }}>trocou de fornecedor</div>}</td>
+                    <td style={{ padding: '9px 12px', textAlign: 'right', fontWeight: 700, color: C.loss }}>+{a.pct.toFixed(1)}%</td>
+                    <td style={{ padding: '9px 12px', textAlign: 'right', fontWeight: 700 }}>{fmtMoeda(a.impacto)}</td>
+                  </tr>))}
+                {!alertas.length && <tr><td colSpan={5} style={{ padding: 28, textAlign: 'center', color: C.ink3 }}>Nenhum item subiu mais de {limiar}% na última compra, com os filtros atuais.</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </section>
       )}
 
-      {!itemSelecionado && !buscando && busca.trim().length < 3 && (
-        <>
-          {loadingAnalise ? (
-            <div style={{ textAlign: 'center', padding: 40, color: T.inkFaint, fontSize: 13 }}>Carregando análise de compras…</div>
-          ) : (
-            <>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(170px,1fr))', gap: 12 }}>
-                <Kpi label="Itens com histórico" value={analise.length} icon={Package} tone="blue"
-                  sub="códigos distintos já comprados" />
-                <Kpi label="Total gasto líquido (todo o histórico)" value={fmtMoeda(analise.reduce((s, a) => s + (a.valor_total_gasto_liquido || 0), 0))} icon={DollarSign} tone="rust"
-                  sub={`bruto: ${fmtMoeda(analise.reduce((s, a) => s + (a.valor_total_gasto || 0), 0))}`} />
-                <Kpi label="Itens com alta de preço" value={rankings.maioresAltas.length ? analise.filter(a => a.variacao_pct_liquido > 0).length : 0} icon={ArrowUpRight} tone="amber"
-                  sub="entre a última e a penúltima compra (líquido)" />
-                <Kpi label="Itens com queda de preço" value={analise.filter(a => a.variacao_pct_liquido < 0).length} icon={ArrowDownRight} tone="olive"
-                  sub="entre a última e a penúltima compra (líquido)" />
-              </div>
-
-              <div className="grid-2col">
-                <Panel title="Maior gasto acumulado (líquido)" subtitle="Itens em que mais investimos, no histórico todo — clique pra ver o detalhe">
-                  {rankings.maisGastos.length === 0 ? (
-                    <div style={{ textAlign: 'center', padding: 20, color: T.inkFaint, fontSize: 12.5 }}>Sem dados.</div>
-                  ) : rankings.maisGastos.map(a => (
-                    <RankingBarPreco key={a.codigo_produto} label={String(a.codigo_produto)} sub={a.descricao_produto} valor={a.valor_total_gasto_liquido}
-                      max={rankings.maisGastos[0]?.valor_total_gasto_liquido || 1} fmt={fmtMoeda}
-                      onClick={() => { setBusca(`${a.codigo_produto} — ${a.descricao_produto}`); selecionarItem(a.codigo_produto, a.descricao_produto); }} />
-                  ))}
-                </Panel>
-
-                <Panel title="Itens mais recorrentes" subtitle="Comprados com mais frequência — clique pra ver o detalhe">
-                  {rankings.maisRecorrentes.length === 0 ? (
-                    <div style={{ textAlign: 'center', padding: 20, color: T.inkFaint, fontSize: 12.5 }}>Sem dados.</div>
-                  ) : rankings.maisRecorrentes.map(a => (
-                    <RankingBarPreco key={a.codigo_produto} label={String(a.codigo_produto)} sub={a.descricao_produto} valor={a.total_compras}
-                      max={rankings.maisRecorrentes[0]?.total_compras || 1} fmt={v => `${v}x`}
-                      onClick={() => { setBusca(`${a.codigo_produto} — ${a.descricao_produto}`); selecionarItem(a.codigo_produto, a.descricao_produto); }} />
-                  ))}
-                </Panel>
-              </div>
-
-              <div className="grid-2col">
-                <Panel title="Maiores altas de preço (líquido)" subtitle="Itens que mais subiram de preço na última compra vs a anterior">
-                  {rankings.maioresAltas.length === 0 ? (
-                    <div style={{ textAlign: 'center', padding: 20, color: T.inkFaint, fontSize: 12.5 }}>Nenhuma alta registrada.</div>
-                  ) : rankings.maioresAltas.map(a => (
-                    <div key={a.codigo_produto} onClick={() => { setBusca(`${a.codigo_produto} — ${a.descricao_produto}`); selecionarItem(a.codigo_produto, a.descricao_produto); }}
-                      style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: `1px solid ${T.lineSoft}`, cursor: 'pointer' }}
-                      onMouseEnter={e => e.currentTarget.style.background = T.panelAlt}
-                      onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
-                      <div style={{ minWidth: 0, flex: 1 }}>
-                        <div style={{ fontSize: 12, fontWeight: 600, color: T.ink, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={a.descricao_produto}>
-                          <span style={{ color: T.blueText, fontFamily: FONT_DISPLAY }}>{a.codigo_produto}</span> — {a.descricao_produto}
-                        </div>
-                        <div style={{ fontSize: 10.5, color: T.inkFaint }}>{fmtMoeda(a.preco_anterior_liquido)} → {fmtMoeda(a.preco_recente_liquido)}</div>
-                      </div>
-                      <span style={{ fontSize: 13, fontWeight: 700, color: T.rustText, fontFamily: FONT_DISPLAY, flexShrink: 0, marginLeft: 10 }}>+{a.variacao_pct_liquido.toFixed(1)}%</span>
-                    </div>
-                  ))}
-                </Panel>
-
-                <Panel title="Maiores quedas de preço (líquido)" subtitle="Itens que mais baixaram de preço na última compra vs a anterior">
-                  {rankings.maioresQuedas.length === 0 ? (
-                    <div style={{ textAlign: 'center', padding: 20, color: T.inkFaint, fontSize: 12.5 }}>Nenhuma queda registrada.</div>
-                  ) : rankings.maioresQuedas.map(a => (
-                    <div key={a.codigo_produto} onClick={() => { setBusca(`${a.codigo_produto} — ${a.descricao_produto}`); selecionarItem(a.codigo_produto, a.descricao_produto); }}
-                      style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: `1px solid ${T.lineSoft}`, cursor: 'pointer' }}
-                      onMouseEnter={e => e.currentTarget.style.background = T.panelAlt}
-                      onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
-                      <div style={{ minWidth: 0, flex: 1 }}>
-                        <div style={{ fontSize: 12, fontWeight: 600, color: T.ink, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={a.descricao_produto}>
-                          <span style={{ color: T.blueText, fontFamily: FONT_DISPLAY }}>{a.codigo_produto}</span> — {a.descricao_produto}
-                        </div>
-                        <div style={{ fontSize: 10.5, color: T.inkFaint }}>{fmtMoeda(a.preco_anterior_liquido)} → {fmtMoeda(a.preco_recente_liquido)}</div>
-                      </div>
-                      <span style={{ fontSize: 13, fontWeight: 700, color: T.oliveText, fontFamily: FONT_DISPLAY, flexShrink: 0, marginLeft: 10 }}>{a.variacao_pct_liquido.toFixed(1)}%</span>
-                    </div>
-                  ))}
-                </Panel>
-              </div>
-            </>
-          )}
-        </>
+      {aba === 'fornecedores' && (
+        <section style={{ ...caixa, padding: 0, overflow: 'hidden' }}>
+          <div style={{ padding: '12px 16px', borderBottom: `1px solid ${C.line}` }}>
+            <div style={{ fontWeight: 600 }}>Itens comprados de mais de um fornecedor</div>
+            <div style={{ fontSize: 12, color: C.ink3 }}>melhor = menor último preço · economia potencial = (preço médio de cada fornecedor mais caro − melhor preço) × quantidade comprada dele · clique na linha para ver os fornecedores</div>
+          </div>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+              <thead><tr style={{ background: C.surface2 }}>{['Item', 'Fornecedores', 'Melhor preço', 'Mais caro', 'Diferença', 'Economia potencial'].map((h, k) => <th key={h} style={{ padding: '9px 12px', fontSize: 11.5, fontWeight: 600, color: C.ink3, textAlign: k >= 1 ? 'right' : 'left' }}>{h}</th>)}</tr></thead>
+              <tbody>
+                {comps.slice(0, 200).map((c, k) => (<React.Fragment key={c.cod}>
+                  <tr onClick={() => setAbertoComp(x => x === c.cod ? null : c.cod)} style={{ background: abertoComp === c.cod ? C.primarySoft : k % 2 ? C.surface2 : C.surface, cursor: 'pointer' }}>
+                    <td style={{ padding: '9px 12px' }}>{abertoComp === c.cod ? '▾' : '▸'} <strong>{c.cod}</strong> <span style={{ color: C.ink2 }}>{c.desc}</span><div style={{ fontSize: 11, color: C.ink3 }}>{c.grupo}</div></td>
+                    <td style={{ padding: '9px 12px', textAlign: 'right' }}>{c.arr.length}</td>
+                    <td style={{ padding: '9px 12px', textAlign: 'right', color: C.win, fontWeight: 600 }}>{fmtMoeda(c.melhor.ult)}<div style={{ fontSize: 11, color: C.ink3, fontWeight: 400 }}>{c.melhor.f}</div></td>
+                    <td style={{ padding: '9px 12px', textAlign: 'right' }}>{fmtMoeda(c.pior.ult)}<div style={{ fontSize: 11, color: C.ink3 }}>{c.pior.f}</div></td>
+                    <td style={{ padding: '9px 12px', textAlign: 'right', fontWeight: 700, color: c.dif > 20 ? C.loss : C.warn }}>+{c.dif.toFixed(1)}%</td>
+                    <td style={{ padding: '9px 12px', textAlign: 'right', fontWeight: 700, color: '#0D9488' }}>{fmtMoeda(c.economia)}</td>
+                  </tr>
+                  {abertoComp === c.cod && (
+                    <tr><td colSpan={6} style={{ padding: '6px 16px 12px 36px', background: C.surface }}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+                        <thead><tr>{['Fornecedor', 'Compras', 'Qtd', 'Último preço', 'Data', 'Média'].map((h, i) => <th key={h} style={{ padding: '6px 10px', fontSize: 11, color: C.ink3, textAlign: i ? 'right' : 'left' }}>{h}</th>)}</tr></thead>
+                        <tbody>{c.arr.map((f, i) => (
+                          <tr key={f.f} style={{ borderTop: `1px solid ${C.lineSoft}`, background: i === 0 ? C.winSoft : 'transparent' }}>
+                            <td style={{ padding: '6px 10px', fontWeight: 600 }}>{f.f}</td><td style={{ padding: '6px 10px', textAlign: 'right' }}>{f.n}</td>
+                            <td style={{ padding: '6px 10px', textAlign: 'right' }}>{f.qtd.toLocaleString('pt-BR')}</td><td style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 700 }}>{fmtMoeda(f.ult)}</td>
+                            <td style={{ padding: '6px 10px', textAlign: 'right' }}>{new Date(`${f.dt}T12:00:00`).toLocaleDateString('pt-BR')}</td><td style={{ padding: '6px 10px', textAlign: 'right' }}>{fmtMoeda(f.med)}</td>
+                          </tr>))}</tbody>
+                      </table>
+                      <button onClick={() => setItemSel(c.cod)} style={{ marginTop: 8, fontFamily: 'inherit', fontSize: 12.5, border: 'none', background: 'none', color: C.primary, cursor: 'pointer', fontWeight: 600 }}>abrir a ficha completa do item →</button>
+                    </td></tr>
+                  )}
+                </React.Fragment>))}
+                {!comps.length && <tr><td colSpan={6} style={{ padding: 28, textAlign: 'center', color: C.ink3 }}>Nenhum item comprado de mais de um fornecedor com os filtros atuais.</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </section>
       )}
+      {itemSel && <PrecoCompraFicha cod={itemSel} linhas={linhas.filter(r => r.cod === itemSel)} base={base} contatos={contatos} onFechar={() => setItemSel(null)} />}
     </div>
   );
 }
