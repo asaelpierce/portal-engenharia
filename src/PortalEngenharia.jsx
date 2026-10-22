@@ -16014,6 +16014,113 @@ function AprovacaoCard({ item, currentUser, onAtualizado, fmtDataHora, fmtData }
   );
 }
 
+// Cards do Planner (22/10/2026): saúde da sincronização (fotografia completa a cada 10 min), alertas de card que
+// VOLTOU no fluxo ou SUMIU do quadro, busca de qualquer BR em todas as colunas e o histórico de cada card.
+function CardsPlannerSaude() {
+  const [log, setLog] = useState(null);
+  const [alertas, setAlertas] = useState([]);
+  const [busca, setBusca] = useState('');
+  const [achados, setAchados] = useState(null);
+  const [hist, setHist] = useState({});
+  const [porColuna, setPorColuna] = useState([]);
+  const carregar = useCallback(async () => {
+    const desde = new Date(Date.now() - 7 * 86400000).toISOString();
+    const [l, a, c] = await Promise.all([
+      supabase.from('planner_snapshot_log').select('*').order('recebido_em', { ascending: false }).limit(20),
+      supabase.from('monitoramento_op_cards_historico').select('*').or('voltou.eq.true,tipo.eq.sumiu').gte('em', desde).order('em', { ascending: false }).limit(200),
+      supabase.from('monitoramento_op_cards_planner').select('bucket_atual,planner_plano_nome,planner_excluido').eq('planner_excluido', false).limit(5000),
+    ]);
+    setLog(l.data || []); setAlertas(a.data || []);
+    const cont = {}; (c.data || []).forEach(x => { const k = `${x.planner_plano_nome || 'sem plano (aviso antigo)'}|${x.bucket_atual || '—'}`; cont[k] = (cont[k] || 0) + 1; });
+    setPorColuna(Object.entries(cont).map(([k, n]) => ({ plano: k.split('|')[0], coluna: k.split('|')[1], n })).sort((x, y) => x.plano.localeCompare(y.plano) || y.n - x.n));
+  }, []);
+  useEffect(() => { carregar(); const t = setInterval(carregar, 5 * 60 * 1000); return () => clearInterval(t); }, [carregar]);
+  const buscar = async () => {
+    const q = busca.replace(/\D/g, '');
+    if (q.length < 3) return;
+    const { data } = await supabase.from('monitoramento_op_cards_planner').select('*').ilike('br', `%${q}%`).order('bucket_atualizado_em', { ascending: false }).limit(20);
+    setAchados(data || []);
+    const ids = (data || []).map(x => x.planner_task_id);
+    if (ids.length) {
+      const { data: h } = await supabase.from('monitoramento_op_cards_historico').select('*').in('planner_task_id', ids).order('em', { ascending: false });
+      const m = {}; (h || []).forEach(x => { (m[x.planner_task_id] = m[x.planner_task_id] || []).push(x); }); setHist(m);
+    } else setHist({});
+  };
+  const dt = (d) => (d ? new Date(d).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—');
+  const ult = (log || [])[0];
+  const minDesde = ult ? Math.round((Date.now() - new Date(ult.recebido_em).getTime()) / 60000) : null;
+  const ok = ult && minDesde <= 25 && !ult.erro?.includes('parcial');
+  const voltaram = alertas.filter(a => a.voltou), sumiram = alertas.filter(a => a.tipo === 'sumiu');
+  const caixa = { background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '14px 16px' };
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <div style={{ ...caixa, borderColor: ok ? T.oliveText + '66' : T.rustText + '66', background: ok ? T.oliveSoft : T.rustSoft }}>
+        <div style={{ fontWeight: 700, color: ok ? T.oliveText : T.rustText }}>
+          {!ult ? '⚠ A fotografia do Planner ainda não está chegando' : ok ? `✓ Planner sincronizado · última fotografia há ${minDesde} min` : `⚠ Última fotografia do Planner há ${minDesde} min`}
+        </div>
+        <div style={{ fontSize: 12, color: T.inkDim, marginTop: 4 }}>
+          {!ult ? 'Os cards ainda dependem só dos avisos antigos do fluxo (que só mandam o card quando ele entra em "Conhecimento Pronto"). Falta ligar o fluxo "Fotografia do Planner" no Power Automate.'
+            : `${ult.plano}: ${ult.tarefas} tarefas · ${ult.novos} novos · ${ult.mudaram} mudaram de coluna · ${ult.excluidos} sumiram${ult.voltaram ? ` · ${ult.voltaram} VOLTARAM` : ''}${ult.erro ? ` · ${ult.erro}` : ''}`}
+        </div>
+      </div>
+
+      <div style={{ display: 'grid', gap: 14, gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))' }}>
+        <section style={caixa}>
+          <div style={{ fontWeight: 700, color: voltaram.length ? T.rustText : T.ink }}>⚠ Cards que voltaram no fluxo (7 dias) · {voltaram.length}</div>
+          <div style={{ fontSize: 11.5, color: T.inkFaint, marginBottom: 8 }}>ex.: de "OP's Geradas" para "Avaliação Preliminar" — confira quem moveu</div>
+          {!voltaram.length ? <div style={{ fontSize: 12, color: T.inkFaint }}>Nenhum.</div> : voltaram.map(a => (
+            <div key={a.id} style={{ fontSize: 12.5, padding: '6px 0', borderTop: `1px solid ${T.lineSoft}` }}>
+              <strong>{a.br}</strong> · {a.de_bucket} → <strong style={{ color: T.rustText }}>{a.para_bucket}</strong> <span style={{ color: T.inkFaint }}>· {dt(a.em)}</span>
+            </div>))}
+        </section>
+        <section style={caixa}>
+          <div style={{ fontWeight: 700, color: sumiram.length ? T.amberText : T.ink }}>Cards que sumiram do quadro (7 dias) · {sumiram.length}</div>
+          <div style={{ fontSize: 11.5, color: T.inkFaint, marginBottom: 8 }}>excluídos no Planner (ou movidos para outro quadro)</div>
+          {!sumiram.length ? <div style={{ fontSize: 12, color: T.inkFaint }}>Nenhum.</div> : sumiram.map(a => (
+            <div key={a.id} style={{ fontSize: 12.5, padding: '6px 0', borderTop: `1px solid ${T.lineSoft}` }}>
+              <strong>{a.br}</strong> · estava em {a.de_bucket || '—'} <span style={{ color: T.inkFaint }}>· {dt(a.em)}</span>
+            </div>))}
+        </section>
+      </div>
+
+      <section style={caixa}>
+        <div style={{ fontWeight: 700 }}>Procurar um BR em todas as colunas</div>
+        <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+          <input value={busca} onChange={e => setBusca(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') buscar(); }} placeholder="ex.: 14110" style={{ ...inputStyle(), width: 200 }} />
+          <button onClick={buscar} style={{ fontFamily: 'inherit', fontSize: 12.5, fontWeight: 600, padding: '7px 14px', borderRadius: 6, border: 'none', background: T.terracotta, color: '#fff', cursor: 'pointer' }}>Procurar</button>
+        </div>
+        {achados && !achados.length && <div style={{ fontSize: 12.5, color: T.rustText, marginTop: 10 }}>Nenhum card com esse BR chegou ao portal{ult ? ' (nem pela fotografia completa — confira o título do card no Planner)' : ' — a fotografia completa ainda não está ligada'}.</div>}
+        {(achados || []).map(c => (
+          <div key={c.planner_task_id} style={{ marginTop: 10, border: `1px solid ${T.line}`, borderRadius: 8, padding: '10px 12px' }}>
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'baseline' }}>
+              <strong>{c.br}</strong>
+              <span style={{ fontSize: 12, fontWeight: 700, padding: '2px 8px', borderRadius: 6, background: c.planner_excluido ? T.rustSoft : T.blueSoft, color: c.planner_excluido ? T.rustText : T.blueText }}>
+                {c.planner_excluido ? `excluído em ${dt(c.planner_excluido_em)}` : c.bucket_atual || '—'}</span>
+              <span style={{ fontSize: 11.5, color: T.inkFaint }}>{c.planner_plano_nome || 'quadro Gestão Comercial (aviso)'} · nessa coluna desde {dt(c.bucket_atualizado_em)}{c.op ? ` · OP ${c.op}` : ''}</span>
+            </div>
+            <div style={{ fontSize: 12, color: T.inkDim, marginTop: 3 }}>{c.planner_titulo}</div>
+            {(hist[c.planner_task_id] || []).length > 0 && (
+              <div style={{ marginTop: 6, fontSize: 11.5, color: T.inkDim }}>
+                {(hist[c.planner_task_id] || []).map(h => (
+                  <div key={h.id} style={{ color: h.voltou ? T.rustText : h.tipo === 'sumiu' ? T.amberText : T.inkDim, fontWeight: h.voltou ? 700 : 400 }}>
+                    {dt(h.em)} · {h.tipo === 'novo' ? `apareceu em ${h.para_bucket}` : h.tipo === 'sumiu' ? `sumiu (estava em ${h.de_bucket || '—'})` : `${h.de_bucket || '—'} → ${h.para_bucket}`}{h.voltou ? ' ⚠ voltou' : ''} <span style={{ color: T.inkFaint }}>({h.origem})</span>
+                  </div>))}
+              </div>
+            )}
+          </div>
+        ))}
+      </section>
+
+      <section style={caixa}>
+        <div style={{ fontWeight: 700, marginBottom: 6 }}>Cards por coluna (o que o portal enxerga agora)</div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          {porColuna.map(x => <span key={x.plano + x.coluna} style={{ fontSize: 12, padding: '4px 10px', borderRadius: 6, background: T.panelAlt, border: `1px solid ${T.line}` }}><span style={{ color: T.inkFaint }}>{x.plano} ·</span> {x.coluna}: <strong>{x.n}</strong></span>)}
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function MonitoramentoOP({ currentUser }) {
   const STATUS_PLANNER_LABEL = { notStarted: 'Não iniciado', inProgress: 'Em andamento', completed: 'Concluído' };
   // IDs reais dos buckets do quadro "Gestão Comercial" no Planner — o portal
@@ -16967,7 +17074,7 @@ function MonitoramentoOP({ currentUser }) {
     <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
 
       <div style={{ display: 'flex', gap: 4, borderBottom: `1px solid ${T.line}` }}>
-        {[{ id: 'op', label: 'Monitoramento de OP' }, { id: 'cotacao', label: `Cotação — Card no Planner${solicitacoes.filter(s => !s.card_planner_solicitado).length ? ` (${solicitacoes.filter(s => !s.card_planner_solicitado).length})` : ''}` }, { id: 'conhecimento_pronto', label: `Fluxo Conhecimento → OP${(cardsConhecPronto.filter(c => !c.data_finalizado).length + cardsOpsGeradas.filter(c => c.status_verificacao_op !== 'finalizado').length) ? ` (${cardsConhecPronto.filter(c => !c.data_finalizado).length + cardsOpsGeradas.filter(c => c.status_verificacao_op !== 'finalizado').length})` : ''}` }].map(aba => (
+        {[{ id: 'op', label: 'Monitoramento de OP' }, { id: 'cards', label: 'Cards do Planner' }, { id: 'cotacao', label: `Cotação — Card no Planner${solicitacoes.filter(s => !s.card_planner_solicitado).length ? ` (${solicitacoes.filter(s => !s.card_planner_solicitado).length})` : ''}` }, { id: 'conhecimento_pronto', label: `Fluxo Conhecimento → OP${(cardsConhecPronto.filter(c => !c.data_finalizado).length + cardsOpsGeradas.filter(c => c.status_verificacao_op !== 'finalizado').length) ? ` (${cardsConhecPronto.filter(c => !c.data_finalizado).length + cardsOpsGeradas.filter(c => c.status_verificacao_op !== 'finalizado').length})` : ''}` }].map(aba => (
           <button key={aba.id} onClick={() => setAbaMonitoramento(aba.id)}
             style={{
               background: 'none', border: 'none', cursor: 'pointer', padding: '10px 16px', fontSize: 13, fontWeight: 600,
@@ -16979,6 +17086,7 @@ function MonitoramentoOP({ currentUser }) {
         ))}
       </div>
 
+      {abaMonitoramento === 'cards' && <CardsPlannerSaude />}
       {abaMonitoramento === 'cotacao' && (
         <Panel subtitle="Solicitações de compra (Kaio.R e Alexandre.P) que precisam ter um Card criado no Microsoft Planner — clique em 'Marcar' e o Power Automate cria o card automaticamente. A lista atualiza sozinha a cada 15s."
           right={
