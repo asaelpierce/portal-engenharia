@@ -11276,7 +11276,7 @@ function AlmoxMovimentar({ currentUser, codigoInicial }) {
     ]);
     setItens(m.data || []); setVols(v.data || []); setSolicOp(s.data || []); setHist(h.data || []); setFormOp(fg.data || []);
     // nova necessidade POR REQUISIÇÃO: cada requisição do Sankhya é uma linha própria (não soma com as anteriores)
-    const { data: nv } = await supabase.from('v_almox_nova_necessidade_req').select('*').eq('op', o.op).order('descricao').order('dtneg');
+    const { data: nv } = await supabase.from('v_almox_nova_necessidade_req').select('*').eq('op', o.op).eq('coberta_por_lista', false).order('descricao').order('dtneg');
     setNovas(nv || []);
     const vids = (v.data || []).map(x => x.id);
     if (vids.length) { const { data: ss } = await supabase.from('v_almox_saldo_setor').select('volume_id,setor,saldo').in('volume_id', vids); setSaldosOp(ss || []); } else setSaldosOp([]);
@@ -11325,7 +11325,13 @@ function AlmoxMovimentar({ currentUser, codigoInicial }) {
     // dar entrada de novo (a etiqueta anterior já foi entregue; a função cria outra em vez de sobrescrever)
     // o mesmo vale para itens da LISTA entregues em parte (ex.: OP 8167, chapa 318: 62 + 34 da substituta 19422
     // de 300 -> falta 204). Etiquetas de material substituto (substitui_cod) contam no saldo do item substituído.
-    const subs = m.nova ? [] : vols.filter(v => String(v.op) === String(m.op) && v.substitui_cod && String(v.substitui_cod) === String(m.cod_materia_prima));
+    const subs = m.nova ? [] : [
+      ...vols.filter(v => String(v.op) === String(m.op) && v.substitui_cod && String(v.substitui_cod) === String(m.cod_materia_prima)),
+      // etiquetas de requisições novas "dentro do previsto" também saem do previsto do item da lista
+      ...vols.filter(v => String(v.op) === String(m.op) && v.origem_item === 'nova_necessidade' && String(v.cod_materia_prima) === String(m.cod_materia_prima)
+        && novas.some(n => String(n.nunota) === String(v.requisicao_nunota) && n.motivo === 'dentro do previsto')),
+    ];
+    const reqNovasItem = m.nova ? [] : novas.filter(n => String(n.cod_materia_prima) === String(m.cod_materia_prima) && n.motivo === 'dentro do previsto');
     {
       const etiq = [...doItem, ...subs].filter(v => v.status === 'ativo' || v.status === 'finalizado');
       const jaEtiq = etiq.reduce((t, v) => t + (Number(v.quantidade) || 0), 0);
@@ -11343,6 +11349,7 @@ function AlmoxMovimentar({ currentUser, codigoInicial }) {
     const h = hist.filter(e => doItem.some(v => v.id === e.volume_id) || (!m.nova && almoxChaveItem(e.op, null, e.material) === almoxChaveItem(m.op, null, m.materia_prima_descricao)));
     const cat = almoxCategoriaItem(m.materia_prima_descricao);
     const form = cat ? formOp.filter(r => r.setor && r.setor !== 'Projeto Faturado' && almoxCategoriasRegistro(r.material).has(cat)) : [];
+    if (reqNovasItem.length) m = { ...m, avisoReqNova: reqNovasItem.map(n => `nº ${n.numnota}: ${almoxFmtQtd(n.qtd_requisicao)}`).join(' · ') };
     return { m, k, vol, peds, h, cat, form, ultForm: form[form.length - 1] || null };
   }).flatMap(l => {
     if (l.m.nova) return [l];
@@ -11697,11 +11704,12 @@ function AlmoxMovimentar({ currentUser, codigoInicial }) {
                                 🆕 NOVA NECESSIDADE · requisição {l.m.requisicoes}
                                 <div style={{ fontWeight: 500, color: T.inkDim }}>
                                   {l.m.motivo === 'fora da lista' ? `fora da lista da OP · ${almoxFmtQtd(l.m.qtd_requisicao)} ${l.m.unidade || ''}`
-                                    : `acima do previsto · esta requisição: ${almoxFmtQtd(l.m.qtd_requisicao)} ${l.m.unidade || ''} (previsto na OP ${almoxFmtQtd(l.m.qtd_prevista)}, já requisitado ${almoxFmtQtd(l.m.qtd_requisitada)})`}
+                                    : `${l.m.motivo === 'dentro do previsto' ? 'dentro do previsto' : 'acima do previsto'} · esta requisição: ${almoxFmtQtd(l.m.qtd_requisicao)} ${l.m.unidade || ''} (previsto na OP ${almoxFmtQtd(l.m.qtd_prevista)}, já requisitado ${almoxFmtQtd(l.m.qtd_requisitada)})`}
                                 </div>
                                 {l.m.jaEtiquetado ? <div style={{ fontWeight: 700, color: T.rustText }}>já etiquetado {almoxFmtQtd(l.m.jaEtiquetado)} de {almoxFmtQtd(l.m.totalNovo)} {l.m.unidade || ''} · falta {almoxFmtQtd(l.m.quantidade_mp)} (requisição nova)</div> : null}
                               </div>
                             )}
+                            {l.m.avisoReqNova && <div style={{ fontSize: 11, fontWeight: 700, color: T.blueText, marginTop: 3 }}>↓ requisição nova deste item (atenda pela linha 🆕 abaixo): {l.m.avisoReqNova}</div>}
                             {!l.m.nova && l.m.jaEtiquetado ? (
                               <div style={{ fontSize: 11, fontWeight: 700, color: T.rustText, marginTop: 3 }}>
                                 ENTREGUE EM PARTE · já etiquetado {almoxFmtQtd(l.m.jaEtiquetado)} de {almoxFmtQtd(l.m.totalNovo)} · falta {almoxFmtQtd(l.m.quantidade_mp)}
