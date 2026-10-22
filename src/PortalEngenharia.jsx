@@ -26094,6 +26094,7 @@ const CRM_SIT_GANHO = {
   carteira: { r: 'Em carteira', d: 'virou pedido, ainda sem nota', cor: '#1D5FBF', bg: '#E8F0FB' },
   parcial: { r: 'Faturamento parcial', d: 'parte faturada, pedido com saldo', cor: '#B7791F', bg: '#FDF3E1' },
   pausado: { r: 'Pausado / suspenso', d: 'marcado no CRM ou OP suspensa no Sankhya', cor: '#475467', bg: '#EEF2F6' },
+  servico: { r: 'Serviço a faturar', d: 'material todo faturado; falta faturar o serviço (TOP 3103), que sai depois que o material chega ao cliente', cor: '#0D9488', bg: '#E6F6F4' },
   faturado: { r: 'Faturado', d: 'tudo faturado, sem pedido pendente', cor: '#1E8E4F', bg: '#E6F4EC' },
   sem: { r: 'Sem pedido em aberto', d: 'ganho sem pedido pendente nem nota de venda', cor: '#667085', bg: '#F1F3F6' },
 };
@@ -26154,7 +26155,9 @@ function CRMPagina({ currentUser }) {
 
 function CRM({ currentUser, telaCheia = false, onSair = null }) {
   const autor = currentUser?.nome || currentUser?.email || 'portal';
-  const [aba, setAba] = useState('funil');
+  const ehServicos = String(currentUser?.email || '').toLowerCase() === 'priscila.monara@kalenborn.com.br';
+  const [aba, setAba] = useState(ehServicos ? 'servicos' : 'funil');
+  const [servLib, setServLib] = useState(0);   // serviços liberados para faturar (contador da aba)
   const [pipeline, setPipeline] = useState('vendas');
   const [visao, setVisao] = useState('quadro');
   const [etapas, setEtapas] = useState([]);
@@ -26220,11 +26223,12 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
       ]);
       setEtapas(et); setNegocios(ng); setEmpresas(em); setAtividades(at); setAtualizadoEm(new Date());
       const [{ data: cp }, { data: aj }, sb] = await Promise.all([
-        supabase.from('comercial_pedido_pendente').select('nunota,br,dt_faturamento_prevista').not('br', 'is', null).limit(5000),
+        supabase.from('comercial_pedido_pendente').select('nunota,br,dt_faturamento_prevista,codtipoper').not('br', 'is', null).neq('codtipoper', 3103).limit(5000),
         supabase.from('v_crm_faturamento_ajuste').select('br,nunota_pedido,nova_data,motivo').limit(5000),
         lerTudo('v_crm_br_situacao'),   // passa de 1.000 BRs: lê em páginas (antes cortava e caía em "sem pedido")
       ]);
       setSitBr(Object.fromEntries((sb || []).map(x => [x.br, x])));
+      supabase.from('v_crm_servico_pendente').select('nunota,situacao,vendedor').then(({ data }) => setServLib((data || []).filter(x => x.situacao === 'liberado').length));
       try { setPont(await lerTudo('crm_pontualidade')); } catch { setPont([]); }
       const ajPed = Object.fromEntries((aj || []).map(a => [String(a.nunota_pedido), a]));
       const fp = {}; (cp || []).forEach(x => { const a = ajPed[String(x.nunota)]; const dEf = a?.nova_data || x.dt_faturamento_prevista; if (!dEf) return; const o = fp[x.br];
@@ -26299,6 +26303,7 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
       f: n => { const x = infoGanho(n); return x.aberto && (x.atraso >= 60 || (x.pedidoDias ?? 0) >= 180); } },
     { k: 'parcial_parado', r: 'Parcial sem nota há 60+ dias', d: 'já faturou uma parte e não sai nota há 60 dias ou mais', ganho: true,
       f: n => { const x = infoGanho(n); return x.sg === 'parcial' && (x.notaDias ?? 0) >= 60; } },
+    { k: 'servico_liberado', r: 'Serviço liberado para faturar', d: 'material do BR todo faturado; falta faturar o serviço (não é atraso de material)', ganho: true, f: n => sitDe(n) === 'servico' },
     { k: 'pausados', r: 'Pausados / suspensos', d: 'marcados como pausados no CRM ou com OP suspensa no Sankhya', ganho: true, f: n => sitDe(n) === 'pausado' },
     { k: 'grandes_sem_acao', r: 'Acima de R$ 200 mil sem próxima ação', d: 'negociações abertas grandes sem nenhuma tarefa agendada', ganho: false,
       f: n => etapaPorId[n.etapa_id]?.tipo === 'aberta' && valorDe(n) >= 200000 && riscoDe(n).semAcao },
@@ -26391,8 +26396,8 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
           </span>
         </div>
         <nav aria-label="Seções do CRM" style={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
-          {[['dashboard', 'Dashboard', LayoutGrid], ['funil', 'Funil', Workflow], ['tarefas', 'Tarefas', ClipboardList], ['calendario', 'Calendário', CalendarDays], ['empresas', 'Clientes', Building2]].map(([k, r, Ic]) => {
-            const on = aba === k; const nT = k === 'tarefas' ? atividades.filter(a => !resp || a.responsavel === resp).length : 0;
+          {[['dashboard', 'Dashboard', LayoutGrid], ['funil', 'Funil', Workflow], ['tarefas', 'Tarefas', ClipboardList], ['calendario', 'Calendário', CalendarDays], ['servicos', 'Serviços', ClipboardCheck], ['empresas', 'Clientes', Building2]].map(([k, r, Ic]) => {
+            const on = aba === k; const nT = k === 'tarefas' ? atividades.filter(a => !resp || a.responsavel === resp).length : k === 'servicos' ? servLib : 0;
             return (
               <button key={k} onClick={() => setAba(k)} aria-current={on ? 'page' : undefined}
                 style={{ fontFamily: 'inherit', fontSize: 13, fontWeight: on ? 600 : 500, padding: '8px 12px', borderRadius: 8, border: 'none', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7,
@@ -26608,7 +26613,7 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
             return (
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                 <span style={{ fontSize: 12, fontWeight: 600, color: CRMC.ink3, textTransform: 'uppercase', letterSpacing: 0.6 }}>Ganhos</span>
-                {[[null, `Todos · ${ganhosP.length}`], ...['carteira', 'parcial', 'pausado', 'faturado', 'sem'].filter(k => k !== 'sem' || cont('sem')).map(k => [k, `${CRM_SIT_GANHO[k].r} · ${cont(k)}`])].map(([k, r]) => {
+                {[[null, `Todos · ${ganhosP.length}`], ...['carteira', 'parcial', 'servico', 'pausado', 'faturado', 'sem'].filter(k => k !== 'sem' || cont('sem')).map(k => [k, `${CRM_SIT_GANHO[k].r} · ${cont(k)}`])].map(([k, r]) => {
                   const on = filtroGanho === k; const c = k ? CRM_SIT_GANHO[k] : { cor: CRMC.ink, bg: CRMC.surface };
                   return (
                     <button key={String(k)} onClick={() => { setFiltroGanho(k); if (k) setMostrarFechados(true); }} title={k ? CRM_SIT_GANHO[k].d : 'todos os ganhos'}
@@ -26644,6 +26649,7 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
                     ['atrasado', 'Faturamento atrasado', CRMC.loss, n => { const g = sitDe(n); return (g === 'carteira' || g === 'parcial') && atr(n); }],
                     ['carteira', 'Em carteira', CRM_SIT_GANHO.carteira.cor, n => sitDe(n) === 'carteira' && !atr(n)],
                     ['parcial', 'Faturamento parcial', CRM_SIT_GANHO.parcial.cor, n => sitDe(n) === 'parcial' && !atr(n)],
+                    ['servico', 'Serviço a faturar', CRM_SIT_GANHO.servico.cor, n => sitDe(n) === 'servico'],
                     ['pausado', 'Pausado / suspenso', CRM_SIT_GANHO.pausado.cor, n => sitDe(n) === 'pausado'],
                     ['faturado', 'Faturado', CRM_SIT_GANHO.faturado.cor, n => sitDe(n) === 'faturado'],
                     ['sem', 'Ganho sem pedido nem nota', CRM_SIT_GANHO.sem.cor, n => sitDe(n) === 'sem'],
@@ -26890,6 +26896,8 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
           resp={resp} onAbrirEmpresa={setEmpresaAberta} onAbrirNegocio={setAbertoId}
           irParaFunil={(p) => { setPipeline(p); setAba('funil'); }} />
       )}
+
+      {aba === 'servicos' && <CRMServicos resp={resp} negocios={negocios} onAbrirNegocio={setAbertoId} />}
 
       {aba === 'calendario' && (
         <CRMCalendario resp={resp} negocios={negocios} atividades={atividades} onAbrirNegocio={setAbertoId}
@@ -27360,6 +27368,69 @@ function CRMRosca({ itens, centro, sub, fmt, aoClicar }) {
   );
 }
 
+// Aba Serviços do CRM (foco da Priscila): pedidos de serviço (TOP 3103) — o serviço só é faturado depois que o
+// material chega ao cliente. "Liberado" = material do BR todo faturado, falta faturar o serviço.
+function CRMServicos({ resp, negocios, onAbrirNegocio }) {
+  const C = CRMC;
+  const [lista, setLista] = useState(null);
+  const [filtro, setFiltro] = useState('liberado');
+  useEffect(() => { supabase.from('v_crm_servico_pendente').select('*').then(({ data }) => setLista(data || [])); }, []);
+  if (!lista) return <div style={{ padding: 30, textAlign: 'center', color: C.ink3 }}>Carregando os serviços…</div>;
+  const meu = lista.filter(x => !resp || String(x.vendedor || '').toUpperCase() === resp.toUpperCase());
+  const lib = meu.filter(x => x.situacao === 'liberado').sort((a, b) => (b.dias_liberado || 0) - (a.dias_liberado || 0));
+  const agu = meu.filter(x => x.situacao !== 'liberado').sort((a, b) => String(a.material_prevista || '').localeCompare(String(b.material_prevista || '')));
+  const soma = (l) => l.reduce((t, x) => t + (Number(x.valor) || 0), 0);
+  const negPorBr = Object.fromEntries(negocios.filter(n => n.br && n.pipeline_id === 'vendas').map(n => [n.br, n]));
+  const dt = (d) => (d ? new Date(`${String(d).slice(0, 10)}T12:00:00`).toLocaleDateString('pt-BR') : '—');
+  const vis = filtro === 'liberado' ? lib : filtro === 'aguarda' ? agu : [...lib, ...agu];
+  const kpi = (r, v, sub, cor, k) => (
+    <button onClick={() => setFiltro(k)} style={{ textAlign: 'left', fontFamily: 'inherit', background: C.surface, border: `1px solid ${filtro === k ? cor : C.line}`, borderRadius: 12, padding: '14px 16px', cursor: 'pointer', boxShadow: filtro === k ? `0 0 0 3px ${cor}22` : 'none' }}>
+      <div style={{ fontSize: 12, color: C.ink2, fontWeight: 500 }}>{r}</div>
+      <div style={{ fontSize: 24, fontWeight: 700, color: cor, marginTop: 3 }}>{v}</div>
+      <div style={{ fontSize: 11.5, color: C.ink3 }}>{sub}</div>
+    </button>
+  );
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <div style={{ background: '#E6F6F4', border: '1px solid #9ED9D2', borderRadius: 12, padding: '12px 16px', fontSize: 13, color: '#0B5D55' }}>
+        <strong>Como funciona:</strong> o serviço (pedido TOP 3103) só é faturado depois que o material chega ao cliente. Enquanto o material do BR estiver pendente, o serviço fica em <strong>"aguarda material"</strong> e não é atraso. Quando o material é todo faturado, o serviço fica <strong>liberado para faturar</strong>, e quem cobra os serviços recebe um aviso no sininho e por e-mail.
+      </div>
+      <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
+        {kpi('Liberados para faturar', `${lib.length} · ${fmtMoedaCompacta(soma(lib))}`, lib.length ? `material já faturado · o mais antigo há ${lib[0].dias_liberado} dias` : 'nenhum serviço liberado', lib.some(x => x.dias_liberado > 30) ? C.loss : '#0D9488', 'liberado')}
+        {kpi('Aguardando o material', `${agu.length} · ${fmtMoedaCompacta(soma(agu))}`, 'o material do BR ainda não foi todo faturado', C.primary, 'aguarda')}
+        {kpi('Todos os serviços em carteira', `${meu.length} · ${fmtMoedaCompacta(soma(meu))}`, 'pedidos de serviço pendentes', C.ink, 'todos')}
+      </div>
+      <section style={{ background: C.surface, border: `1px solid ${C.line}`, borderRadius: 12, overflow: 'hidden' }}>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+            <thead><tr style={{ background: C.surface2 }}>{['BR', 'Cliente', 'Vendedor', 'Pedido de serviço', 'Valor (líquido)', 'Situação', 'Material', 'Há'].map((h, k) => (
+              <th key={h} style={{ padding: '10px 12px', fontSize: 11.5, fontWeight: 600, color: C.ink3, textAlign: k === 4 || k === 7 ? 'right' : 'left', borderBottom: `1px solid ${C.line}`, whiteSpace: 'nowrap' }}>{h}</th>))}</tr></thead>
+            <tbody>
+              {vis.map((x, k) => { const lb = x.situacao === 'liberado'; const ng = negPorBr[x.br];
+                return (
+                  <tr key={x.nunota} onClick={ng ? () => onAbrirNegocio(ng.id) : undefined} style={{ background: k % 2 ? C.surface2 : C.surface, cursor: ng ? 'pointer' : 'default' }}>
+                    <td style={{ padding: '10px 12px', fontWeight: 700, color: C.primary, whiteSpace: 'nowrap' }}>{x.br}</td>
+                    <td style={{ padding: '10px 12px' }}>{x.cliente}</td>
+                    <td style={{ padding: '10px 12px', color: C.ink2, whiteSpace: 'nowrap' }}>{x.vendedor || '—'}</td>
+                    <td style={{ padding: '10px 12px', color: C.ink2, whiteSpace: 'nowrap' }}>nº {x.numnota} · de {dt(x.pedido_em)}</td>
+                    <td style={{ padding: '10px 12px', textAlign: 'right', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{fmtMoedaCompacta(x.valor)}</td>
+                    <td style={{ padding: '10px 12px', whiteSpace: 'nowrap' }}>
+                      <span style={{ fontSize: 11.5, fontWeight: 700, padding: '3px 9px', borderRadius: 10, color: lb ? '#0D9488' : C.primary, background: lb ? '#E6F6F4' : C.primarySoft }}>{lb ? 'Liberado para faturar' : 'Aguarda material'}</span>
+                    </td>
+                    <td style={{ padding: '10px 12px', color: C.ink2, whiteSpace: 'nowrap' }}>{lb ? `faturado em ${dt(x.material_faturado_em)}` : `${x.material_pendente} pedido(s) pendente(s) · previsto ${dt(x.material_prevista)}`}</td>
+                    <td style={{ padding: '10px 12px', textAlign: 'right', whiteSpace: 'nowrap', fontWeight: 700, color: !lb ? C.ink3 : x.dias_liberado > 30 ? C.loss : x.dias_liberado > 15 ? C.warn : '#0D9488' }}>{lb ? `${x.dias_liberado} dias` : '—'}</td>
+                  </tr>
+                ); })}
+              {!vis.length && <tr><td colSpan={8} style={{ padding: 28, textAlign: 'center', color: C.ink3 }}>Nenhum serviço neste filtro.</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </section>
+      <div style={{ fontSize: 11.5, color: C.ink3 }}>"Há" = dias desde a última nota de material do BR (vermelho acima de 30 dias). Clique na linha para abrir o negócio.</div>
+    </div>
+  );
+}
+
 // Calendário do CRM (20/10/2026): acompanhamento por DATA de faturamento. Ganhos = pedidos em carteira pela data
 // prevista do Sankhya; oportunidades = data prevista de faturamento informada no CRM; notas = data do faturamento;
 // tarefas = vencimento. Mesmo filtro de responsável do CRM. Valor só aparece no detalhe.
@@ -27375,7 +27446,7 @@ function CRMCalendario({ resp, negocios, atividades, abertos, onAbrirNegocio }) 
   useEffect(() => {
     (async () => {
       const [c, f, tops, aj] = await Promise.all([
-        supabase.from('comercial_pedido_pendente').select('nunota,numnota,br,cliente,vendedor,net_offer_value,dt_faturamento_prevista,dt_entrega_prevista').limit(5000),
+        supabase.from('comercial_pedido_pendente').select('nunota,numnota,br,cliente,vendedor,net_offer_value,dt_faturamento_prevista,dt_entrega_prevista').neq('codtipoper', 3103).limit(5000),
         supabase.from('faturamento_resumo').select('nunota,numero_nota,br,cliente_nome,vendedor_nome,net_offer_value,data_faturamento,codtipoper,status_nota').gte('data_faturamento', '2026-01-01').limit(5000),
         supabase.from('sankhya_tops_venda').select('codtipoper'),
         supabase.from('v_crm_faturamento_ajuste').select('nunota_pedido,nova_data,motivo').limit(5000),
@@ -28155,12 +28226,16 @@ function CRMFaturamentoBR({ negocio: n, autor, onMudou }) {
           const parcial = saldo && p.itens.some(i => Number(i.entregue) > 0);
           const aj = ajPorPed[p.nunota];
           const dataEf = aj?.nova_data || p.dtprevent;
-          const atras = saldo && dataEf && dataEf < hoje;
-          const st = !saldo ? ['Atendido', CRMC.win, CRMC.winSoft] : atras ? ['Atrasado', CRMC.loss, CRMC.lossSoft] : parcial ? ['Parcial', CRMC.warn, CRMC.warnSoft] : ['Pendente', CRMC.primary, CRMC.primarySoft];
+          const ehServ = p.top === 3103;
+          const matPend = d.pedidos.some(q => q.top !== 3103 && q.itens.some(i => Number(i.qtd) - Number(i.entregue) > 0.0001));
+          const atras = saldo && dataEf && dataEf < hoje && !ehServ;
+          const st = !saldo ? ['Atendido', CRMC.win, CRMC.winSoft] : ehServ ? (matPend ? ['Aguarda material', CRMC.primary, CRMC.primarySoft] : ['Liberado para faturar', '#0D9488', '#E6F6F4'])
+            : atras ? ['Atrasado', CRMC.loss, CRMC.lossSoft] : parcial ? ['Parcial', CRMC.warn, CRMC.warnSoft] : ['Pendente', CRMC.primary, CRMC.primarySoft];
           return (
             <div key={p.nunota} style={{ ...caixa, borderLeft: `3px solid ${st[1]}` }}>
               <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                 <strong style={{ fontSize: 13 }}>Pedido {p.numnota || p.nunota}</strong>
+                {p.top === 3103 && <span title="o serviço só é faturado depois que o material chega ao cliente" style={{ fontSize: 11, fontWeight: 700, color: '#0D9488', background: '#E6F6F4', padding: '1px 8px', borderRadius: 10 }}>SERVIÇO</span>}
                 <span style={{ fontSize: 11, fontWeight: 700, color: st[1], background: st[2], padding: '1px 8px', borderRadius: 10 }}>{st[0]}</span>
                 <span style={{ fontSize: 11.5, color: CRMC.ink3 }}>de {fmtD(p.dtneg)}{p.top_descr ? ` · ${p.top_descr}` : ''}</span>
                 {p.liquido != null && <span title={`Valor da nota do pedido ${moeda(p.vlrnota)} · itens (com ICMS) ${moeda(p.bruto_itens)} · líquido = sem todos os impostos`}
