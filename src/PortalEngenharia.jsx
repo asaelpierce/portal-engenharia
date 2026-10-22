@@ -5539,14 +5539,16 @@ function ReuniaoDesconto({ candidatos, atalho, val }) {
       vendedor: v, email: cfg?.vendedores?.[v] || '',
       corpo: `<div style="font-family:Arial,sans-serif;color:#1e2a36">
         <p>Olá, ${rdEsc(v)}.</p>
-        <p>Na reunião comercial de <b>${dataR}</b> foram aprovados novos preços para as propostas abaixo. Pode repassar ao comprador.</p>
+        <p>Na reunião comercial de <b>${dataR}</b>, ${ls.length === 1 ? `o projeto <b>${rdEsc(ls[0].p.br)}</b> foi <b>liberado para desconto</b>` : `os <b>${ls.length} projetos</b> abaixo foram <b>liberados para desconto</b>`}. Pode repassar o novo valor ao comprador.</p>
         <table style="border-collapse:collapse;width:100%;font-size:12.5px"><thead><tr style="background:#14324f;color:#fff">
-        ${['BR', 'Cliente', 'Produto / equipamento', 'Preço anterior', 'Novo preço'].map(h => `<th style="padding:7px 8px;text-align:left">${h}</th>`).join('')}</tr></thead><tbody>
+        ${['BR', 'Cliente', 'Produto / equipamento', 'Valor da proposta (antes)', 'Desconto', 'Valor com desconto'].map((h, k) => `<th style="padding:7px 8px;text-align:${k >= 3 ? 'right' : 'left'}">${h}</th>`).join('')}</tr></thead><tbody>
         ${ls.map(l => `<tr><td style="padding:7px 8px;border-bottom:1px solid #e5e8ec;font-weight:700">${rdEsc(l.p.br)}</td>
           <td style="padding:7px 8px;border-bottom:1px solid #e5e8ec">${rdEsc(l.p.cliente)}</td>
           <td style="padding:7px 8px;border-bottom:1px solid #e5e8ec;font-size:11.5px">${rdEsc(l.linhasBR.join(' + '))}${l.its.length ? '<br>' + l.its.slice(0, 5).map(i => `• ${rdEsc(i.quantidade ?? '')} ${rdEsc(i.unidade || '')} ${rdEsc(i.descricao)}`).join('<br>') + (l.its.length > 5 ? `<br>… +${l.its.length - 5} item(ns)` : '') : ''}${obs[l.p.br] ? `<br><b>Obs.:</b> ${rdEsc(obs[l.p.br])}` : ''}</td>
           <td style="padding:7px 8px;border-bottom:1px solid #e5e8ec;text-align:right;color:#7a8592;text-decoration:line-through">${rdBRL(l.v)}</td>
+          <td style="padding:7px 8px;border-bottom:1px solid #e5e8ec;text-align:right;font-weight:700;color:#b42318">− ${rdBRL(l.v - l.novo)}</td>
           <td style="padding:7px 8px;border-bottom:1px solid #e5e8ec;text-align:right;font-weight:800;color:#14324f">${rdBRL(l.novo)}</td></tr>`).join('')}
+          ${ls.length > 1 ? `<tr style="font-weight:800"><td colspan="3" style="padding:8px">Total</td><td style="padding:8px;text-align:right;color:#7a8592">${rdBRL(ls.reduce((t, l) => t + l.v, 0))}</td><td style="padding:8px;text-align:right;color:#b42318">− ${rdBRL(ls.reduce((t, l) => t + (l.v - l.novo), 0))}</td><td style="padding:8px;text-align:right;color:#14324f">${rdBRL(ls.reduce((t, l) => t + l.novo, 0))}</td></tr>` : ''}
         </tbody></table>
         <p style="font-size:11px;color:#7a8592;margin-top:14px">Mensagem automática do Portal de Engenharia — Kalenborn do Brasil.</p></div>`,
     }));
@@ -5565,7 +5567,8 @@ function ReuniaoDesconto({ candidatos, atalho, val }) {
     for (const l of sel) await salvarItem(l, l.d);
     const rel = montar(reuniao, sel);
     const emails = [{ para: cfg?.emails_diretoria || '', assunto: `Reunião de desconto — ${rel.dataR} — decisões`, corpo: rel.diretoria },
-      ...rel.vendedores.map(v => ({ para: v.email, assunto: `Novos preços aprovados — reunião de ${rel.dataR}`, corpo: v.corpo }))];
+      ...rel.vendedores.map(v => { const ls2 = sel.filter(l => (l.p.vendedor || '—') === v.vendedor);
+        return { para: v.email, assunto: ls2.length === 1 ? `Projeto ${ls2[0].p.br} liberado para desconto — reunião de ${rel.dataR}` : `${ls2.length} projetos liberados para desconto — reunião de ${rel.dataR}`, corpo: v.corpo }; })];
     const { data, error } = await supabase.rpc('fn_reuniao_fechar', { p_reuniao: reuniao.id, p_relatorio_html: rel.diretoria, p_emails: emails });
     setOcupado(false);
     if (error || !data?.ok) { setAviso({ erro: true, t: error?.message || data?.erro }); return; }
@@ -5619,14 +5622,13 @@ function ReuniaoDesconto({ candidatos, atalho, val }) {
             {pode && <button disabled={ocupado} onClick={iniciar} style={btn(true, T.olive)}>Iniciar reunião</button>}
           </>
         )}
-        {sel.length > 0 && <button onClick={aplicarAtalho} style={btn(false)}>Aplicar {atalho}% nos marcados</button>}
       </div>
       {aviso && <div style={{ fontSize: 12, fontWeight: 600, padding: '7px 10px', borderRadius: 7, background: aviso.erro ? T.rustSoft : T.oliveSoft, color: aviso.erro ? T.rustText : T.oliveText }}>{aviso.t}</div>}
 
       {/* totais dos marcados */}
       <div style={{ display: 'grid', gap: 8, gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))' }}>
         {[['Projetos com desconto', String(sel.length), T.ink], ['Valor hoje', val(totAntes), T.inkDim], ['Novo valor', val(totNovo), T.amberText],
-          ['Abre mão de', val(totAntes - totNovo), T.rustText], ['Lucro depois', `${val(totLucro)}${totNovo ? ` · ${(totLucro / totNovo * 100).toFixed(1)}%` : ''}`, T.oliveText]].map(([r, v, c]) => (
+          ['Abre mão de', val(totAntes - totNovo), T.rustText], ['Margem depois', `${val(totLucro)}${totNovo ? ` · ${(totLucro / totNovo * 100).toFixed(1)}%` : ''}`, T.oliveText]].map(([r, v, c]) => (
           <div key={r} style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '9px 12px' }}>
             <div style={{ fontSize: 10.5, color: T.inkFaint }}>{r}</div><div style={{ fontSize: 16, fontWeight: 800, color: c }}>{v}</div>
           </div>
@@ -7692,10 +7694,6 @@ IMPORTANTE: Responda SOMENTE com base nos dados acima. Se a pergunta pede algo q
             <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
               <span style={{ fontSize: 11, color: T.inkFaint }}>{t.dscMargemMin}</span>
               {botoes([[30, '30%'], [40, '40%'], [50, '50%'], [60, '60%']], dscMargem, setDscMargem)}
-            </span>
-            <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
-              <span style={{ fontSize: 11, color: T.inkFaint }}>{t.dscDesconto}</span>
-              {botoes([[5, '5%'], [10, '10%'], [15, '15%'], [20, '20%']], dscPct, setDscPct)}
             </span>
             <span style={{ display: 'inline-flex', gap: 5, alignItems: 'center', flexWrap: 'wrap' }}>
               <span style={{ fontSize: 11, color: T.inkFaint }}>{t.dscEstagios}</span>
