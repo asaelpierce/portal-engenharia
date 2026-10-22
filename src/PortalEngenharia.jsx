@@ -32482,7 +32482,7 @@ function PrecoCompraFicha({ cod, linhas, base, contatos, onFechar }) {
   const y = (v) => mt + (H - mt - mb) * (1 - (v - minP) / ((maxP - minP) || 1));
   const dt = (d) => new Date(`${d}T12:00:00`).toLocaleDateString('pt-BR');
   return ReactDOM.createPortal(
-    <div onClick={onFechar} style={{ position: 'fixed', inset: 0, zIndex: 85, background: 'rgba(15,35,64,.35)', display: 'flex', justifyContent: 'flex-end' }}>
+    <div onClick={onFechar} style={{ position: 'fixed', inset: 0, zIndex: 86, background: 'rgba(15,35,64,.35)', display: 'flex', justifyContent: 'flex-end' }}>
       <aside onClick={e => e.stopPropagation()} style={{ width: 'min(1100px, 100%)', height: '100%', background: C.bg, display: 'flex', flexDirection: 'column', fontFamily: FONT_BODY, color: C.ink, boxShadow: '-10px 0 40px rgba(16,24,40,.25)' }}>
         <div style={{ background: '#0F2340', color: '#fff', padding: '16px 22px', display: 'flex', gap: 12, alignItems: 'flex-start' }}>
           <div style={{ flex: 1, minWidth: 0 }}>
@@ -32560,6 +32560,117 @@ function PrecoCompraFicha({ cod, linhas, base, contatos, onFechar }) {
     </div>, document.body);
 }
 
+// Painel de detalhe do Preço de Compra: as compras por trás de qualquer número clicado, em 4 visões.
+function PrecoCompraDetalhe({ det, base, contatos, onFechar, onItem, onForn, onFiltrar, fichaAberta = false }) {
+  const C = CRMC;
+  const [aba, setAba] = useState(det.aba || 'compras');
+  const [ord, setOrd] = useState({ c: 'v', desc: true });
+  useEffect(() => { const t = e => { if (e.key === 'Escape' && !fichaAberta) onFechar(); }; window.addEventListener('keydown', t); return () => window.removeEventListener('keydown', t); }, [onFechar, fichaAberta]);
+  const ls = det.linhas;
+  const u = (r) => (base === 'liq' ? r.unitL : r.unitB);
+  const val = (r) => (base === 'liq' ? r.liq : r.bruto);
+  const dt = (d) => new Date(`${d}T12:00:00`).toLocaleDateString('pt-BR');
+  const total = ls.reduce((t, r) => t + val(r), 0);
+  const agr = (chave, mk) => Object.values(ls.reduce((acc, r) => { const k = chave(r); (acc[k] = acc[k] || mk(r)).ls.push(r); return acc; }, {}));
+  const notas = agr(r => r.nunota, r => ({ k: r.nunota, nf: r.nf, data: r.data, forn: r.forn, top: r.top, tipmov: r.tipmov, ls: [] })).map(o => ({ ...o, v: o.ls.reduce((t, r) => t + val(r), 0), n: o.ls.length }));
+  const itens = agr(r => r.cod, r => ({ k: r.cod, desc: r.desc, grupo: r.grupo, ls: [] })).map(o => { const s = [...o.ls].sort((a, b) => b.data.localeCompare(a.data));
+    return { ...o, v: o.ls.reduce((t, r) => t + val(r), 0), n: o.ls.length, qtd: o.ls.reduce((t, r) => t + r.qtd, 0), ult: u(s[0]), forns: new Set(o.ls.map(r => r.forn)).size }; });
+  const forns = agr(r => r.forn, r => ({ k: r.forn, cod: r.codForn, ls: [] })).map(o => ({ ...o, v: o.ls.reduce((t, r) => t + val(r), 0), n: o.ls.length, itens: new Set(o.ls.map(r => r.cod)).size, notas: new Set(o.ls.map(r => r.nunota)).size }));
+  const ordenar = (arr) => [...arr].sort((a, b) => { const x = a[ord.c] ?? '', y = b[ord.c] ?? ''; return (x > y ? 1 : x < y ? -1 : 0) * (ord.desc ? -1 : 1); });
+  const th = (r, c, al = 'left') => (
+    <th onClick={c ? () => setOrd(o => ({ c, desc: o.c === c ? !o.desc : true })) : undefined}
+      style={{ padding: '9px 10px', fontSize: 11.5, fontWeight: 600, color: C.ink3, textAlign: al, whiteSpace: 'nowrap', position: 'sticky', top: 0, background: C.surface2, borderBottom: `1px solid ${C.line}`, cursor: c ? 'pointer' : 'default' }}>
+      {r}{c && ord.c === c ? (ord.desc ? ' ▼' : ' ▲') : ''}</th>
+  );
+  const exportar = () => {
+    const linhas = ['Data;NF;Fornecedor;Código;Item;Grupo;Projeto;Qtd;Unit. bruto;Unit. líquido;Valor bruto;Valor líquido',
+      ...[...ls].sort((a, b) => b.data.localeCompare(a.data)).map(r => [dt(r.data), r.nf, `"${r.forn}"`, r.cod, `"${r.desc}"`, `"${r.grupo}"`, `"${r.projeto || ''}"`,
+        String(r.qtd).replace('.', ','), (r.unitB ?? '').toString().replace('.', ','), (r.unitL ?? '').toString().replace('.', ','), String(r.bruto).replace('.', ','), String(r.liq).replace('.', ',')].join(';'))];
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob(['\ufeff' + linhas.join('\n')], { type: 'text/csv;charset=utf-8' })); a.download = `compras_${det.titulo.replace(/\W+/g, '_').toLowerCase()}.csv`; a.click();
+  };
+  const ct = det.contato;
+  const td = { padding: '8px 10px' };
+  return ReactDOM.createPortal(
+    <div onClick={onFechar} style={{ position: 'fixed', inset: 0, zIndex: 84, background: 'rgba(15,35,64,.35)', display: 'flex', justifyContent: 'flex-end' }}>
+      <aside onClick={e => e.stopPropagation()} style={{ width: 'min(1150px, 100%)', height: '100%', background: C.bg, display: 'flex', flexDirection: 'column', fontFamily: FONT_BODY, color: C.ink, boxShadow: '-10px 0 40px rgba(16,24,40,.25)' }}>
+        <div style={{ background: '#0F2340', color: '#fff', padding: '16px 22px', display: 'flex', gap: 10, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 17, fontWeight: 700 }}>{det.titulo}</div>
+            <div style={{ fontSize: 12.5, color: 'rgba(255,255,255,.75)', marginTop: 3 }}>{det.sub}</div>
+            {ct && <div style={{ fontSize: 12.5, color: '#B9D4FB', marginTop: 4 }}>Contato: {[ct.contato, ct.email, ct.telefone].filter(Boolean).join(' · ') || '—'}</div>}
+          </div>
+          {det.filtro && <button onClick={() => { onFiltrar(det.filtro); onFechar(); }} style={{ fontFamily: 'inherit', fontSize: 12.5, fontWeight: 600, padding: '8px 12px', borderRadius: 8, border: '1px solid rgba(255,255,255,.25)', background: 'transparent', color: '#fff', cursor: 'pointer' }}>Filtrar a tela por isto</button>}
+          <button onClick={exportar} style={{ fontFamily: 'inherit', fontSize: 12.5, fontWeight: 600, padding: '8px 12px', borderRadius: 8, border: '1px solid rgba(255,255,255,.25)', background: 'transparent', color: '#fff', cursor: 'pointer' }}>Exportar CSV</button>
+          <button onClick={onFechar} style={{ fontFamily: 'inherit', fontSize: 12.5, fontWeight: 600, padding: '8px 12px', borderRadius: 8, border: 'none', background: '#fff', color: '#0F2340', cursor: 'pointer' }}>Fechar <span style={{ fontSize: 10.5, color: C.ink3 }}>Esc</span></button>
+        </div>
+        <div style={{ display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', padding: '14px 22px', background: C.surface, borderBottom: `1px solid ${C.line}` }}>
+          {[[`Gasto ${base === 'liq' ? 'líquido' : 'bruto'}`, fmtMoeda(total)], ['Linhas de compra', String(ls.length)], ['Notas', String(notas.length)], ['Itens', String(itens.length)], ['Fornecedores', String(forns.length)]].map(([r, v]) => (
+            <div key={r}><div style={{ fontSize: 11.5, color: C.ink3 }}>{r}</div><div style={{ fontSize: 18, fontWeight: 700 }}>{v}</div></div>))}
+        </div>
+        <div style={{ padding: '10px 22px', background: C.surface, borderBottom: `1px solid ${C.line}` }}>
+          <div style={{ display: 'inline-flex', background: '#E7EBF1', borderRadius: 10, padding: 3, gap: 2 }}>
+            {[['compras', `Compras · ${ls.length}`], ['notas', `Notas · ${notas.length}`], ['itens', `Itens · ${itens.length}`], ['fornecedores', `Fornecedores · ${forns.length}`]].map(([k, r]) => (
+              <button key={k} onClick={() => { setAba(k); setOrd({ c: k === 'compras' ? 'data' : 'v', desc: true }); }} style={{ fontFamily: 'inherit', fontSize: 12.5, fontWeight: aba === k ? 600 : 500, padding: '7px 13px', borderRadius: 8, border: 'none', cursor: 'pointer',
+                background: aba === k ? C.surface : 'transparent', color: aba === k ? C.ink : C.ink2, boxShadow: aba === k ? '0 1px 2px rgba(16,24,40,.12)' : 'none' }}>{r}</button>))}
+          </div>
+        </div>
+        <div style={{ flex: 1, overflow: 'auto', background: C.surface }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+            {aba === 'compras' && (<>
+              <thead><tr>{th('Data', 'data')}{th('NF', 'nf')}{th('Fornecedor', 'forn')}{th('Item', 'desc')}{th('Qtd', 'qtd', 'right')}{th('Unit.', null, 'right')}{th('Valor', 'v', 'right')}{th('')}</tr></thead>
+              <tbody>{ordenar(ls.map(r => ({ ...r, v: val(r) }))).slice(0, 1500).map((r, k) => (
+                <tr key={k} style={{ background: k % 2 ? C.surface2 : C.surface }}>
+                  <td style={{ ...td, whiteSpace: 'nowrap', color: C.ink2 }}>{dt(r.data)}</td>
+                  <td style={td}>{r.nf}</td>
+                  <td style={{ ...td, color: C.primary, cursor: 'pointer' }} onClick={() => onForn(r.forn)}>{r.forn}</td>
+                  <td style={{ ...td, cursor: 'pointer' }} onClick={() => onItem(r.cod)}><strong>{r.cod}</strong> <span style={{ color: C.ink2 }}>{r.desc}</span>{r.projeto ? <div style={{ fontSize: 11, color: C.ink3 }}>{r.projeto}</div> : null}</td>
+                  <td style={{ ...td, textAlign: 'right' }}>{(r.qtd || 0).toLocaleString('pt-BR')}</td>
+                  <td style={{ ...td, textAlign: 'right' }}>{fmtMoeda(u(r))}</td>
+                  <td style={{ ...td, textAlign: 'right', fontWeight: 700 }}>{fmtMoeda(r.v)}</td>
+                  <td style={{ ...td, whiteSpace: 'nowrap' }}><BotaoAbrirSankhya nunota={r.nunota} tipmov={r.tipmov} codtipoper={r.top} label="Ver nota" /></td>
+                </tr>))}</tbody>
+            </>)}
+            {aba === 'notas' && (<>
+              <thead><tr>{th('Data', 'data')}{th('NF', 'nf')}{th('Fornecedor', 'forn')}{th('Itens', 'n', 'right')}{th('Valor', 'v', 'right')}{th('')}</tr></thead>
+              <tbody>{ordenar(notas).map((o, k) => (
+                <tr key={o.k} style={{ background: k % 2 ? C.surface2 : C.surface }}>
+                  <td style={{ ...td, color: C.ink2 }}>{dt(o.data)}</td><td style={{ ...td, fontWeight: 600 }}>{o.nf}</td>
+                  <td style={{ ...td, color: C.primary, cursor: 'pointer' }} onClick={() => onForn(o.forn)}>{o.forn}</td>
+                  <td style={{ ...td, textAlign: 'right' }} title={o.ls.map(r => `${r.cod} ${r.desc}`).join('\n')}>{o.n}</td>
+                  <td style={{ ...td, textAlign: 'right', fontWeight: 700 }}>{fmtMoeda(o.v)}</td>
+                  <td style={{ ...td, whiteSpace: 'nowrap' }}><BotaoAbrirSankhya nunota={o.k} tipmov={o.tipmov} codtipoper={o.top} label="Ver nota" /></td>
+                </tr>))}</tbody>
+            </>)}
+            {aba === 'itens' && (<>
+              <thead><tr>{th('Item', 'desc')}{th('Grupo', 'grupo')}{th('Compras', 'n', 'right')}{th('Fornec.', 'forns', 'right')}{th('Qtd', 'qtd', 'right')}{th('Último preço', 'ult', 'right')}{th('Gasto', 'v', 'right')}</tr></thead>
+              <tbody>{ordenar(itens).map((o, k) => (
+                <tr key={o.k} onClick={() => onItem(o.k)} style={{ background: k % 2 ? C.surface2 : C.surface, cursor: 'pointer' }}>
+                  <td style={td}><strong>{o.k}</strong> <span style={{ color: C.ink2 }}>{o.desc}</span></td>
+                  <td style={{ ...td, color: C.ink2, whiteSpace: 'nowrap' }}>{o.grupo}</td>
+                  <td style={{ ...td, textAlign: 'right' }}>{o.n}</td><td style={{ ...td, textAlign: 'right' }}>{o.forns}</td>
+                  <td style={{ ...td, textAlign: 'right' }}>{o.qtd.toLocaleString('pt-BR')}</td>
+                  <td style={{ ...td, textAlign: 'right' }}>{fmtMoeda(o.ult)}</td>
+                  <td style={{ ...td, textAlign: 'right', fontWeight: 700 }}>{fmtMoeda(o.v)}</td>
+                </tr>))}</tbody>
+            </>)}
+            {aba === 'fornecedores' && (<>
+              <thead><tr>{th('Fornecedor', 'k')}{th('Contato')}{th('Notas', 'notas', 'right')}{th('Itens', 'itens', 'right')}{th('Gasto', 'v', 'right')}{th('% do total', 'v', 'right')}</tr></thead>
+              <tbody>{ordenar(forns).map((o, k) => { const c2 = contatos[o.cod];
+                return (
+                  <tr key={o.k} onClick={() => onForn(o.k)} style={{ background: k % 2 ? C.surface2 : C.surface, cursor: 'pointer' }}>
+                    <td style={{ ...td, fontWeight: 600, color: C.primary }}>{o.k}</td>
+                    <td style={{ ...td, color: C.ink2, fontSize: 12 }}>{c2 ? [c2.contato, c2.email, c2.telefone].filter(Boolean).join(' · ') : '—'}</td>
+                    <td style={{ ...td, textAlign: 'right' }}>{o.notas}</td><td style={{ ...td, textAlign: 'right' }}>{o.itens}</td>
+                    <td style={{ ...td, textAlign: 'right', fontWeight: 700 }}>{fmtMoeda(o.v)}</td>
+                    <td style={{ ...td, textAlign: 'right', color: C.ink2 }}>{total ? `${Math.round(100 * o.v / total)}%` : '—'}</td>
+                  </tr>); })}</tbody>
+            </>)}
+          </table>
+        </div>
+      </aside>
+    </div>, document.body);
+}
+
 function PrecoCompra() {
   const C = CRMC;
   const [linhas, setLinhas] = useState(null);
@@ -32574,6 +32685,7 @@ function PrecoCompra() {
   const [limiar, setLimiar] = useState(10);
   const [itemSel, setItemSel] = useState(null);
   const [abertoComp, setAbertoComp] = useState(null);
+  const [det, setDet] = useState(null);   // painel de detalhe do que foi clicado
   useEffect(() => {
     (async () => {
       try {
@@ -32615,6 +32727,9 @@ function PrecoCompra() {
   const val = (r) => (base === 'liq' ? r.liq : r.bruto);
   const gasto = F.reduce((t, r) => t + val(r), 0);
   const MES = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
+  const nomeP = { '3m': 'últimos 3 meses', '6m': 'últimos 6 meses', '12m': 'últimos 12 meses', ano: String(ano), ano_ant: String(ano - 1), tudo: 'todo o histórico' }[periodo];
+  const abrir = (titulo, sub, linhasDet, extra = {}) => setDet({ titulo, sub, linhas: linhasDet, ...extra });
+  const abrirForn = (f) => { const l = F.filter(r => r.forn === f); abrir(f, `fornecedor · ${nomeP}`, l, { contato: contatos[l[0]?.codForn], filtro: ['forn', f], aba: 'itens' }); };
   const meses = {}; F.forEach(r => { const m = r.data.slice(0, 7); meses[m] = (meses[m] || 0) + val(r); });
   const agrupa = (k) => Object.entries(F.reduce((acc, r) => { acc[r[k]] = (acc[r[k]] || 0) + val(r); return acc; }, {})).sort((a, b) => b[1] - a[1]);
   const porItem = {}; F.forEach(r => { const o = porItem[r.cod] || (porItem[r.cod] = { cod: r.cod, desc: r.desc, grupo: r.grupo, ls: [] }); o.ls.push(r); });
@@ -32672,24 +32787,27 @@ function PrecoCompra() {
 
       {aba === 'geral' && (<>
         <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))' }}>
-          {kpi(`Gasto ${base === 'liq' ? 'líquido' : 'bruto'}`, fmtMoedaCompacta(gasto), `${new Set(F.map(r => r.nunota)).size} notas de entrada`, C.primary)}
-          {kpi('Itens comprados', String(itens.length), `${F.length} linhas de compra`)}
-          {kpi('Fornecedores', String(new Set(F.map(r => r.forn)).size), 'no período e filtros')}
+          {kpi(`Gasto ${base === 'liq' ? 'líquido' : 'bruto'}`, fmtMoedaCompacta(gasto), `${new Set(F.map(r => r.nunota)).size} notas de entrada · ver detalhe`, C.primary, () => abrir('Gasto do período', nomeP, F, { aba: 'notas' }))}
+          {kpi('Itens comprados', String(itens.length), `${F.length} linhas de compra · ver detalhe`, null, () => abrir('Itens comprados', nomeP, F, { aba: 'itens' }))}
+          {kpi('Fornecedores', String(new Set(F.map(r => r.forn)).size), 'no período e filtros · ver detalhe', null, () => abrir('Fornecedores', nomeP, F, { aba: 'fornecedores' }))}
           {kpi(`Altas acima de ${limiar}%`, String(alertas.length), 'última compra x anterior · ver alertas', alertas.length ? C.loss : C.win, () => setAba('alertas'))}
           {kpi('Economia potencial', fmtMoedaCompacta(comps.reduce((t, c) => t + c.economia, 0)), `${comps.length} itens com 2+ fornecedores · comparar`, '#0D9488', () => setAba('fornecedores'))}
         </div>
         <section style={caixa}>
           <div style={{ fontWeight: 600, marginBottom: 10 }}>Gasto por mês</div>
-          <CRMColunas altura={150} itens={Object.keys(meses).sort().map(m => ({ k: `${MES[Number(m.slice(5)) - 1]}/${m.slice(2, 4)}`, v: meses[m], rot: fmtMoedaCompacta(meses[m]), cor: C.primary }))} />
+          <CRMColunas altura={150} itens={Object.keys(meses).sort().map(m => ({ k: `${MES[Number(m.slice(5)) - 1]}/${m.slice(2, 4)}`, m, v: meses[m], rot: fmtMoedaCompacta(meses[m]), cor: C.primary }))}
+            aoClicar={it => abrir(`Compras de ${it.k}`, `${F.filter(r => r.data.startsWith(it.m)).length} linhas de compra`, F.filter(r => r.data.startsWith(it.m)), { aba: 'notas' })} />
+          <div style={{ fontSize: 11.5, color: C.ink3, marginTop: 4 }}>clique no mês para ver as notas, itens e fornecedores</div>
         </section>
         <div style={{ display: 'grid', gap: 14, gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))' }}>
           <section style={caixa}>
-            <div style={{ fontWeight: 600 }}>Gasto por grupo</div><div style={{ fontSize: 12, color: C.ink3, margin: '2px 0 12px' }}>clique para filtrar</div>
-            <CRMBarrasH itens={agrupa('grupo').slice(0, 12).map(([g, v], i) => ({ k: g, v, rot: fmtMoedaCompacta(v), extra: gasto ? `${Math.round(100 * v / gasto)}%` : '', cor: PC_CORES[i % 8] }))} aoClicar={it => setFGrupo([it.k])} />
+            <div style={{ fontWeight: 600 }}>Gasto por grupo</div><div style={{ fontSize: 12, color: C.ink3, margin: '2px 0 12px' }}>clique para ver o detalhe (e filtrar, se quiser)</div>
+            <CRMBarrasH itens={agrupa('grupo').slice(0, 12).map(([g, v], i) => ({ k: g, v, rot: fmtMoedaCompacta(v), extra: gasto ? `${Math.round(100 * v / gasto)}%` : '', cor: PC_CORES[i % 8] }))}
+              aoClicar={it => abrir(`Grupo ${it.k}`, nomeP, F.filter(r => r.grupo === it.k), { filtro: ['grupo', it.k], aba: 'itens' })} />
           </section>
           <section style={caixa}>
-            <div style={{ fontWeight: 600 }}>Gasto por fornecedor</div><div style={{ fontSize: 12, color: C.ink3, margin: '2px 0 12px' }}>clique para filtrar</div>
-            <CRMBarrasH itens={agrupa('forn').slice(0, 12).map(([g, v], i) => ({ k: g, v, rot: fmtMoedaCompacta(v), extra: gasto ? `${Math.round(100 * v / gasto)}%` : '', cor: PC_CORES[i % 8] }))} aoClicar={it => setFForn([it.k])} />
+            <div style={{ fontWeight: 600 }}>Gasto por fornecedor</div><div style={{ fontSize: 12, color: C.ink3, margin: '2px 0 12px' }}>clique para ver o detalhe (e filtrar, se quiser)</div>
+            <CRMBarrasH itens={agrupa('forn').slice(0, 12).map(([g, v], i) => ({ k: g, v, rot: fmtMoedaCompacta(v), extra: gasto ? `${Math.round(100 * v / gasto)}%` : '', cor: PC_CORES[i % 8] }))} aoClicar={it => abrirForn(it.k)} />
           </section>
         </div>
         <section style={{ ...caixa, padding: 0, overflow: 'hidden' }}>
@@ -32779,6 +32897,8 @@ function PrecoCompra() {
           </div>
         </section>
       )}
+      {det && <PrecoCompraDetalhe det={det} base={base} contatos={contatos} fichaAberta={!!itemSel} onFechar={() => setDet(null)} onItem={c => setItemSel(c)} onForn={f => abrirForn(f)}
+        onFiltrar={([k, v]) => { if (k === 'grupo') setFGrupo([v]); if (k === 'forn') setFForn([v]); }} />}
       {itemSel && <PrecoCompraFicha cod={itemSel} linhas={linhas.filter(r => r.cod === itemSel)} base={base} contatos={contatos} onFechar={() => setItemSel(null)} />}
     </div>
   );
