@@ -26407,9 +26407,25 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
   };
   const filtroCustomAtivo = JSON.stringify(fc) !== JSON.stringify(FILTRO_VAZIO);
   const anAtiva = analise === 'custom' ? { f: filtroCustomFn } : ANALISES.find(a => a.k === analise) || (analise?.startsWith('salva:') ? { f: filtroCustomFn } : null);
-  const doPipe = (!filtroRisco ? doPipeBase : doPipeBase.filter(n => { const r = riscoDe(n); return filtroRisco === 'atencao' ? (r.atrasada || r.prevV) : r.semAcao; }))
+  const doPipe = (!['atencao', 'semacao'].includes(filtroRisco) ? doPipeBase : doPipeBase.filter(n => { const r = riscoDe(n); return filtroRisco === 'atencao' ? (r.atrasada || r.prevV) : r.semAcao; }))
     .filter(n => !filtroGanho || etapaPorId[n.etapa_id]?.tipo !== 'ganho' || sitDe(n) === filtroGanho)
     .filter(n => !anAtiva || anAtiva.f(n));
+  // PÓS-VENDA começa no PEDIDO: gerou pedido de venda = negócio fechado com o cliente, mesmo sem nota.
+  // Coluna "Pedido fechado · a faturar" com a barra do prazo: emissão do pedido -> data de faturamento
+  // (prevista no Sankhya ou reprogramada no CRM). Alerta ao passar de 50% do prazo; vermelho quando vence.
+  const hojeMs = new Date(new Date().toISOString().slice(0, 10) + 'T00:00:00').getTime();
+  const progPed = (n) => {
+    const ini = n.br && sitBr[n.br]?.pedido_desde; const fim = n.br && fatPrev[n.br]?.data;
+    if (!ini || !fim) return null;
+    const a = new Date(`${ini}T00:00:00`).getTime(), z = new Date(`${fim}T00:00:00`).getTime();
+    const total = Math.max(1, Math.round((z - a) / 86400000)), passados = Math.round((hojeMs - a) / 86400000);
+    const pct = Math.max(0, Math.round(100 * passados / total));
+    return { ini, fim, pct, total, passados, faltam: Math.round((z - hojeMs) / 86400000), reprog: !!fatPrev[n.br]?.reprog, n50: pct >= 50 && pct < 100, atrasado: pct >= 100 };
+  };
+  const pedFechadosBase = pipeline !== 'posvendas' ? [] : negocios.filter(n => n.pipeline_id === 'vendas' && etapaPorId[n.etapa_id]?.tipo === 'ganho'
+      && ['carteira', 'parcial'].includes(sitDe(n)) && (!resp || n.responsavel === resp) && casaBusca(n));
+  const pedFechados = pedFechadosBase.filter(n => { if (filtroRisco !== 'p50' && filtroRisco !== 'patr') return true; const pg = progPed(n); return pg && (filtroRisco === 'p50' ? pg.n50 : pg.atrasado); })
+    .sort((a, b) => (progPed(b)?.pct ?? -1) - (progPed(a)?.pct ?? -1));
   const probDe = (n) => n.probabilidade ?? etapaPorId[n.etapa_id]?.probabilidade ?? null;
   const valorDe = (n) => Number(n.pipeline_id === 'leads' ? n.potencial : n.valor) || 0;
   const botao = (ativo) => ({ fontFamily: 'inherit', fontSize: 12.5, fontWeight: ativo ? 600 : 500, padding: '7px 13px', borderRadius: 8, cursor: 'pointer',
@@ -26631,6 +26647,13 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
             return (
               <div style={{ display: 'grid', gap: 0, gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', borderRadius: '0 0 14px 14px', overflow: 'hidden' }}>
                 {kpi(pipeline === 'leads' ? 'Potencial em aberto' : 'Pipeline aberto', moeda(tot), `${abertosP.length} ${pipeline === 'leads' ? 'leads' : 'oportunidades'}`, null, null, DollarSign)}
+                {pipeline === 'posvendas' && (() => { const pgs = pedFechadosBase.map(n => ({ n, pg: progPed(n) }));
+                  const p50 = pgs.filter(x => x.pg?.n50), atr = pgs.filter(x => x.pg?.atrasado);
+                  return (<>
+                    {kpi('Pedidos fechados a faturar', moeda(pedFechadosBase.reduce((x, n) => x + valorDe(n), 0)), `${pedFechadosBase.length} pedido(s) · já fechados com o cliente`, CRMC.primary, null, ClipboardCheck)}
+                    {kpi('Passaram de 50% do prazo', String(p50.length), `emissão → faturamento · ${moeda(p50.reduce((x, y) => x + valorDe(y.n), 0))}`, p50.length ? CRMC.warn : CRMC.win, 'p50', Clock3)}
+                    {kpi('Faturamento atrasado', String(atr.length), `passaram da data · ${moeda(atr.reduce((x, y) => x + valorDe(y.n), 0))}`, atr.length ? CRMC.loss : CRMC.win, 'patr', AlertTriangle)}
+                  </>); })()}
                 {pipeline !== 'posvendas' && kpi('Pipeline ponderado', moeda(pond), 'valor × chance da etapa', null, null, TrendingUp)}
                 {pipeline === 'vendas' && kpi('Devem fechar', moeda(fechamTot.v), `${fechamTot.k} pedidos · regra da Diretoria`, CRMC.win, null, CheckCircle2)}
                 {kpi('Precisam de atenção', String(atencao.length), `tarefa atrasada ou previsão vencida · ${moeda(atencao.reduce((x, n) => x + valorDe(n), 0))}`, atencao.length ? CRMC.loss : CRMC.win, 'atencao', AlertTriangle)}
@@ -26710,7 +26733,7 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
           })()}
           {filtroRisco && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, color: CRMC.ink2 }}>
-              Mostrando só <strong>{filtroRisco === 'atencao' ? 'as que precisam de atenção' : 'as sem próxima ação'}</strong>
+              Mostrando só <strong>{{ atencao: 'as que precisam de atenção', semacao: 'as sem próxima ação', p50: 'os pedidos que passaram de 50% do prazo', patr: 'os pedidos com faturamento atrasado' }[filtroRisco]}</strong>
               <button onClick={() => setFiltroRisco(null)} style={{ ...botao(false), padding: '4px 10px', fontSize: 12 }}>mostrar todas</button>
             </div>
           )}
@@ -26724,7 +26747,8 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
               onMouseLeave={() => { pan.current = null; if (quadroRef.current) quadroRef.current.style.cursor = 'grab'; }}
               style={{ overflowX: 'auto', paddingBottom: 10, scrollbarGutter: 'stable', cursor: 'grab', userSelect: pan.current ? 'none' : 'auto' }}>
               <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', width: 'max-content' }}>
-                {etapasPipe.flatMap(e0 => {
+                {(pipeline === 'posvendas' ? [{ id: '__pedido', codigo: '__pedido', nome: 'Pedido fechado · a faturar', tipo: 'aberta', virtual: true, cor: '#2F7BEA' }, ...etapasPipe] : etapasPipe).flatMap(e0 => {
+                  if (e0.virtual) return [{ ...e0, chave: '__pedido', corCol: '#2F7BEA' }];
                   // Vendas: o "Ganho — pedido" vira uma coluna por situação (atrasado, carteira, parcial, pausado, faturado)
                   if (pipeline !== 'vendas' || e0.tipo !== 'ganho') return [{ ...e0, chave: e0.id }];
                   const atr = (n) => infoGanho(n).atraso > 0;
@@ -26740,7 +26764,7 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
                   return subs.filter(([k, , , f]) => k !== 'sem' || doPipe.some(n => n.etapa_id === e0.id && f(n)))
                     .map(([k, nome, cor, f]) => ({ ...e0, chave: `${e0.id}:${k}`, nome, corCol: cor, filtroCol: f }));
                 }).map(et => {
-                  const cards = doPipe.filter(n => n.etapa_id === et.id && (!et.filtroCol || et.filtroCol(n))).sort((a, b) => valorDe(b) - valorDe(a));
+                  const cards = et.virtual ? pedFechados : doPipe.filter(n => n.etapa_id === et.id && (!et.filtroCol || et.filtroCol(n))).sort((a, b) => valorDe(b) - valorDe(a));
                   // Faturado: soma o que saiu nas notas (líquido), não o valor do BR
                   const subK = et.filtroCol ? et.chave.split(':')[1] : null;
                   const totEt = subK === 'faturado' ? cards.reduce((x, n) => x + (Number(n.br && sitBr[n.br]?.faturado) || 0), 0) : cards.reduce((x, n) => x + valorDe(n), 0);
@@ -26751,7 +26775,7 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
                     <section key={et.chave} aria-label={et.nome} className="crm-col"
                       onDragOver={e => { e.preventDefault(); if (dragSobre !== et.chave) setDragSobre(et.chave); }}
                       onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget)) setDragSobre(null); }}
-                      onDrop={e => { e.preventDefault(); setDragSobre(null); if (arrastando && arrastando.etapa_id !== et.id) mover(arrastando, et.codigo); setArrastando(null); }}
+                      onDrop={e => { e.preventDefault(); setDragSobre(null); if (!et.virtual && arrastando && arrastando.pipeline_id === pipeline && arrastando.etapa_id !== et.id) mover(arrastando, et.codigo); setArrastando(null); }}
                       style={{ width: 296, flex: '0 0 296px', background: sobre ? CRMC.primarySoft : '#EBEFF5', borderRadius: 12, overflow: 'hidden',
                         border: `1px ${sobre ? 'dashed' : 'solid'} ${sobre ? CRMC.primary : CRMC.line}`, display: 'flex', flexDirection: 'column', maxHeight: telaCheia ? 'calc(100vh - 290px)' : '70vh', minHeight: telaCheia ? 320 : undefined, transition: 'background .15s' }}>
                       <header style={{ padding: '12px 14px 11px', background: CRMC.surface, borderTop: `3px solid ${corEt}`, borderBottom: `1px solid ${CRMC.line}` }}>
@@ -26783,13 +26807,13 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
                         {cards.slice(0, 150).map(n => {
                           const r = riscoDe(n);
                           const prox = r.pend[0];
-                          const aberta = et.tipo === 'aberta';
+                          const aberta = et.tipo === 'aberta' && !et.virtual;
                           const empresa = empPorId[n.empresa_id]?.nome || (n.br ? n.titulo.replace(`${n.br} · `, '') : '—');
                           const prob = n.pipeline_id === 'leads' ? null : probDe(n);
                           const selo = !aberta ? null : r.atrasada ? ['Tarefa atrasada', CRMC.loss, CRMC.lossSoft] : r.prevV ? ['Previsão vencida', CRMC.loss, CRMC.lossSoft] : null;
                           const corP = crmCorPessoa(n.responsavel);
                           return (
-                            <article key={n.id} draggable tabIndex={0} aria-label={`${n.br || n.titulo} — ${empresa}`}
+                            <article key={n.id} draggable={!et.virtual} tabIndex={0} aria-label={`${n.br || n.titulo} — ${empresa}`}
                               onDragStart={() => setArrastando(n)} onDragEnd={() => { setArrastando(null); setDragSobre(null); }}
                               onClick={() => setAbertoId(n.id)} onKeyDown={e => { if (e.key === 'Enter') setAbertoId(n.id); }}
                               onMouseEnter={e => { e.currentTarget.style.borderColor = '#C9D3E0'; e.currentTarget.style.boxShadow = '0 2px 8px rgba(16,24,40,.07)'; }}
@@ -26848,6 +26872,23 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
                                   </div>
                                 );
                               })()}
+                              {et.virtual && (() => { const pg = progPed(n);
+                                if (!pg) return <div style={{ marginTop: 9, fontSize: 11.5, color: CRMC.ink3 }}>sem data de emissão ou de faturamento para medir o prazo</div>;
+                                const cor = pg.atrasado ? CRMC.loss : pg.n50 ? CRMC.warn : CRMC.win;
+                                const dtc = (d) => new Date(`${d}T12:00:00`).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit' });
+                                return (
+                                  <div style={{ marginTop: 9, paddingTop: 8, borderTop: `1px solid ${CRMC.lineSoft}` }} title={`Pedido emitido em ${dtc(pg.ini)} · faturamento ${pg.reprog ? 'reprogramado para' : 'previsto para'} ${dtc(pg.fim)} · ${pg.passados} de ${pg.total} dias`}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: CRMC.ink3 }}><span>emitido {dtc(pg.ini)}</span><span>{pg.reprog ? '↻ ' : ''}fatura {dtc(pg.fim)}</span></div>
+                                    <div style={{ position: 'relative', height: 8, borderRadius: 4, background: CRMC.lineSoft, marginTop: 4, overflow: 'hidden' }}>
+                                      <div style={{ width: `${Math.min(100, pg.pct)}%`, height: '100%', background: cor, borderRadius: 4 }} />
+                                      <div style={{ position: 'absolute', left: '50%', top: 0, bottom: 0, width: 1.5, background: '#fff' }} />
+                                    </div>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 4, fontSize: 11.5, fontWeight: 600, color: cor }}>
+                                      <span>{pg.atrasado ? `⚠ atrasado ${-pg.faltam} dia(s)` : pg.n50 ? '⚠ passou de 50% do prazo' : 'no prazo'}</span>
+                                      <span>{pg.atrasado ? `${pg.pct}%` : `${pg.pct}% · faltam ${pg.faltam} dia(s)`}</span>
+                                    </div>
+                                  </div>
+                                ); })()}
                               {aberta && prox && (
                                 <div style={{ marginTop: 9, paddingTop: 8, borderTop: `1px solid ${CRMC.lineSoft}`, fontSize: 12, display: 'flex', gap: 6, alignItems: 'flex-start',
                                   color: r.atrasada ? CRMC.loss : CRMC.ink2 }}>
