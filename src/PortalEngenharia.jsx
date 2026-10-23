@@ -32617,6 +32617,33 @@ const pcBigramas = (t) => { const r = new Map(); for (let i = 0; i < t.length - 
 const pcParecido = (a, b) => { if (!a || !b) return 0; const A = pcBigramas(a), B = pcBigramas(b); let inter = 0; A.forEach((n, k) => { inter += Math.min(n, B.get(k) || 0); });
   return (2 * inter) / Math.max(1, (a.length - 1) + (b.length - 1)); };
 
+// Facetas da busca guiada: medidas (189×389, 44×44×25), espessura e palavras características de uma descrição.
+const PC_PARADAS = new Set(['PARA', 'COM', 'SEM', 'DE', 'DA', 'DO', 'DOS', 'DAS', 'EM', 'MM', 'CM', 'MT', 'UN', 'PC', 'PCS', 'TIPO', 'CONFORME', 'CONF', 'DESENHO', 'DES', 'REF', 'COD', 'MOD', 'MODELO', 'NBR', 'DIN', 'ISO',
+  'ESP', 'ESPESSURA', 'COMPRIMENTO', 'COMP', 'LARGURA', 'ALTURA', 'DIAMETRO', 'EXT', 'INT', 'EXTERNO', 'INTERNO', 'PM', 'PI', 'SM', 'KG', 'LT', 'M2', 'M3', 'REV', 'REMESSA', 'ITEM', 'ITENS', 'CROQUI', 'POSICAO',
+  'DIR', 'ESQ', 'PECAS', 'PECA', 'DIMENSOES', 'SIMILAR', 'AO', 'NA', 'NO', 'OU', 'ST', 'FL', 'ABA', 'ABAS', 'PRISIONEIRO', 'PRISIONEIROS', 'PRIS', 'LATERAIS', 'LATERIAS', 'SAE']);
+const pcFacetas = (desc) => {
+  const d = String(desc || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase();
+  const out = [];
+  const num = (x) => x.replace('.', ',');
+  const k = /COMPRIMENTO\s*([\d,]+)\s*MM.*?LARGURA\s*([\d,]+)\s*MM(?:.*?ESPESSURA\s*([\d,]+)\s*MM)?/.exec(d);
+  if (k) out.push({ tipo: 'Medidas', label: `${k[1]}×${k[2]}${k[3] ? `×${k[3]}` : ''}`, token: `${k[1]}MM LARGURA${k[2]}` });
+  (d.match(/(?<![A-Z\d.,])\d+(?:[.,]\d+)?\s*[X×*]\s*\d+(?:[.,]\d+)?(?:\s*[X×*]\s*\d+(?:[.,]\d+)?)?/g) || []).forEach(m => {
+    const lbl = m.replace(/\s+/g, '').replace(/[X*]/g, '×').replace(/\./g, ','); out.push({ tipo: 'Medidas', label: lbl, token: lbl.replace(/×/g, 'x') }); });
+  const e = /ESP(?:ESSURA)?\.?\s*(?:DE\s*)?(\d+(?:[.,]\d+)?)(?!\s*[X×*\d])/.exec(d) || /(\d+(?:[.,]\d+)?)\s*MM\s*(?:DE\s*)?ESP/.exec(d);
+  if (e) out.push({ tipo: 'Espessura', label: `esp. ${num(e[1])} mm`, token: `esp ${num(e[1])}` });
+  const pol = /(\d+\/\d+)"/.exec(d); if (pol) out.push({ tipo: 'Espessura', label: `${pol[1]}"`, token: pol[1] });
+  if (/COM\s+(?:\d+\s+)?ABAS?\b|C\/\s*(?:\d+\s+)?ABAS?\b/.test(d)) out.push({ tipo: 'Características', label: 'com aba', token: 'aba' });
+  if (/SEM\s+ABAS?\b/.test(d)) out.push({ tipo: 'Características', label: 'sem aba', token: 'sem aba' });
+  const aba = /ABAS?\s*(?:LATERAIS|LATERIAS)?\s*(?:DE\s*)?(?:ALTURA\s*)?(\d+)\s*MM/.exec(d) || /ABAS?\s+DE\s+(\d+)\s*MM\s+DE\s+ALTURA/.exec(d);
+  if (aba) out.push({ tipo: 'Medidas', label: `aba ${aba[1]} mm`, token: `aba ${aba[1]}` });
+  if (/PRISIONEIRO|PRIS\b/.test(d) && !/SEM\s+PRISIONEIRO|S\/\s*PRISIONEIRO/.test(d)) out.push({ tipo: 'Características', label: 'com prisioneiro', token: 'prisioneiro' });
+  const sae = /SAE\s*(\d{4})/.exec(d); if (sae) out.push({ tipo: 'Características', label: `SAE ${sae[1]}`, token: `SAE ${sae[1]}` });
+  const m16 = /\bM(\d{1,2})\b/.exec(d); if (m16) out.push({ tipo: 'Medidas', label: `M${m16[1]}`, token: `M${m16[1]}` });
+  d.split(/[^A-Z]+/).filter(w => w.length >= 3 && !PC_PARADAS.has(w) && /[AEIOU]/.test(w) && !/^[A-Z]*[BCDFGHJKLMNPQRSTVWXYZ]{4,}/.test(w))
+    .forEach(w => out.push({ tipo: 'Características', label: w.charAt(0) + w.slice(1).toLowerCase(), token: w.toLowerCase() }));
+  const vistos = new Set(); return out.filter(f => { const kk = `${f.tipo}|${f.label}`; if (vistos.has(kk)) return false; vistos.add(kk); return true; });
+};
+
 // Painel de detalhe do Preço de Compra: as compras por trás de qualquer número clicado, em 4 visões.
 function PrecoCompraDetalhe({ det, base, contatos, onFechar, onItem, onForn, onFiltrar, fichaAberta = false }) {
   const C = CRMC;
@@ -32742,6 +32769,7 @@ function PrecoCompra() {
   const [base, setBase] = useState('liq');
   const [aba, setAba] = useState('orcar');
   const [listaTxt, setListaTxt] = useState('');
+  const [facSel, setFacSel] = useState([]);   // busca guiada: filtros escolhidos ('tipo|rótulo')
   const [listaRes, setListaRes] = useState(null);
   const [copiado, setCopiado] = useState(null);
   const [limiar, setLimiar] = useState(10);
@@ -32926,7 +32954,7 @@ function PrecoCompra() {
           {seg([['desc', 'Descrição'], ['cod', 'Código']], modoBusca, (k) => { setModoBusca(k); setBusca(''); })}
           <div style={{ position: 'relative' }} onBlur={() => setTimeout(() => setSugAberta(false), 180)}>
             <Search size={14} aria-hidden="true" style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: C.ink3 }} />
-            <input value={busca} onChange={e => { setBusca(modoBusca === 'cod' ? e.target.value.replace(/[^\d,;\s]/g, '') : e.target.value); setSugAberta(true); }} onFocus={() => setSugAberta(true)}
+            <input value={busca} onChange={e => { setBusca(modoBusca === 'cod' ? e.target.value.replace(/[^\d,;\s]/g, '') : e.target.value); if (!e.target.value.trim()) setFacSel([]); setSugAberta(true); }} onFocus={() => setSugAberta(true)}
               inputMode={modoBusca === 'cod' ? 'numeric' : 'text'}
               placeholder={modoBusca === 'cod' ? 'código exato (ou vários: 390, 1076)' : 'ex.: chapa 389x389, gabarito anel'}
               style={{ fontFamily: 'inherit', fontSize: 12.5, padding: '7px 10px 7px 30px', borderRadius: 8, border: `1px solid ${busca ? C.primary : C.line}`, width: 270 }} />
@@ -32963,8 +32991,26 @@ function PrecoCompra() {
       </div>
 
       {aba === 'orcar' && (() => {
-        const achados = palavras.length ? [...new Set(linhas.filter(r => casaBusca(r) && (!fGrupo.length || fGrupo.includes(r.grupo)) && (!fForn.length || fForn.includes(r.forn))).map(r => r.cod))]
-          .map(precoRef).filter(Boolean).sort((a, b) => b.n - a.n).slice(0, 40) : [];
+        const todosAchados = palavras.length ? [...new Set(linhas.filter(r => casaBusca(r) && (!fGrupo.length || fGrupo.includes(r.grupo)) && (!fForn.length || fForn.includes(r.forn))).map(r => r.cod))]
+          .map(precoRef).filter(Boolean).sort((a, b) => b.n - a.n) : [];
+        const fKey = (f) => `${f.tipo}|${f.label}`;
+        const passaFac = (p) => facSel.every(k => pcFacetas(p.desc).some(f => fKey(f) === k));
+        const filtrados = todosAchados.filter(passaFac);
+        const achados = filtrados.slice(0, 40);
+        // busca guiada: facetas presentes nos itens encontrados (que ainda afinam a busca)
+        const tksAtuais = new Set(pcTokens(busca));
+        const facetas = (() => {
+          if (modoBusca !== 'desc') return [];
+          const base0 = palavras.length ? filtrados : Object.values(porCodTodos).map(ls => ({ desc: ls[0].desc }));
+          const cont = {};
+          base0.forEach(p => pcFacetas(p.desc).forEach(f => { const kk = fKey(f); (cont[kk] = cont[kk] || { ...f, n: 0 }).n++; }));
+          const total = base0.length;
+          return Object.values(cont).filter(f => f.n < total && !facSel.includes(fKey(f)) && !pcTokens(f.token).every(t => tksAtuais.has(t)) && (palavras.length || f.tipo === 'Características'))
+            .sort((a2, b2) => b2.n - a2.n);
+        })();
+        const porTipo = (t, max) => facetas.filter(f => f.tipo === t).slice(0, max);
+        const escolher = (f) => { if (!palavras.length) { setModoBusca('desc'); setBusca(f.token); setFacSel([]); } else setFacSel(x => [...x, fKey(f)]); };
+        const tirar = (idx) => { const partes = busca.trim().split(/\s+/); partes.splice(idx, 1); setBusca(partes.join(' ')); if (!partes.length) setFacSel([]); };
         const chip = (a, k) => <span key={k} title={a.d} style={{ fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 10, color: corAt[a.cor][0], background: corAt[a.cor][1], whiteSpace: 'nowrap' }}>{a.t}</span>;
         const chipCusto = (p) => { const d = difCusto(p); if (!d) return null;
           if (d.pct >= 10) return <span title={`O custo cadastrado no Sankhya (${fmtMoeda(d.v)}/${p.un}, atualizado em ${new Date(`${d.data}T12:00:00`).toLocaleDateString('pt-BR')}) está ${Math.round(d.pct)}% abaixo do preço para orçar: orçar pelo custo do sistema subestima o material`}
@@ -32990,9 +33036,37 @@ function PrecoCompra() {
           <div style={{ ...caixa, background: C.primarySoft, borderColor: '#BFD3F2', fontSize: 12.5, color: C.ink2 }}>
             <strong style={{ color: C.ink }}>Preço para orçar</strong> = o <strong>maior</strong> entre o último preço e a média ponderada dos últimos 6 meses, em preço {base === 'liq' ? 'líquido (sem ICMS, PIS e COFINS; IPI fora)' : 'bruto'} por unidade. Use a busca no topo (código ou descrição) ou cole uma lista de materiais abaixo. Os pontos de atenção são só informativos.
           </div>
+          {modoBusca === 'desc' && (
+            <section style={{ ...caixa, padding: '12px 16px' }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <strong style={{ fontSize: 13 }}>{palavras.length ? 'Sua busca:' : 'Não sabe o código? Comece por um tipo de material:'}</strong>
+                {busca.trim().split(/\s+/).filter(Boolean).map((w, k) => (
+                  <span key={k} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12.5, fontWeight: 600, background: C.primary, color: '#fff', borderRadius: 14, padding: '3px 4px 3px 10px' }}>
+                    {w}<button onClick={() => tirar(k)} aria-label={`tirar ${w}`} style={{ border: 'none', background: 'rgba(255,255,255,.25)', color: '#fff', borderRadius: 10, width: 18, height: 18, cursor: 'pointer', fontSize: 11 }}>✕</button>
+                  </span>))}
+                {facSel.map(k => (
+                  <span key={k} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12.5, fontWeight: 600, background: '#0D9488', color: '#fff', borderRadius: 14, padding: '3px 4px 3px 10px' }}>
+                    {k.split('|')[1]}<button onClick={() => setFacSel(x => x.filter(y => y !== k))} aria-label="tirar" style={{ border: 'none', background: 'rgba(255,255,255,.25)', color: '#fff', borderRadius: 10, width: 18, height: 18, cursor: 'pointer', fontSize: 11 }}>✕</button>
+                  </span>))}
+                {palavras.length > 0 && <span style={{ fontSize: 12.5, color: C.ink2 }}>→ <strong>{filtrados.length}</strong> item(ns)</span>}
+                {palavras.length > 0 && <button onClick={() => { setBusca(''); setFacSel([]); }} style={{ fontFamily: 'inherit', fontSize: 12, border: 'none', background: 'none', color: C.primary, cursor: 'pointer' }}>recomeçar</button>}
+              </div>
+              {(palavras.length ? ['Medidas', 'Espessura', 'Características'] : ['Características']).map(t => { const fs = porTipo(t, palavras.length ? (t === 'Características' ? 14 : 12) : 18);
+                return fs.length ? (
+                  <div key={t} style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', marginTop: 8 }}>
+                    <span style={{ fontSize: 11.5, fontWeight: 700, color: C.ink3, minWidth: 96 }}>{palavras.length ? `refinar · ${t.toLowerCase()}` : 'mais comprados'}</span>
+                    {fs.map(f => (
+                      <button key={f.label} onClick={() => escolher(f)} title={palavras.length ? `filtrar por "${f.label}"` : `começar por "${f.label}"`}
+                        style={{ fontFamily: 'inherit', fontSize: 12, padding: '4px 10px', borderRadius: 14, border: `1px solid ${C.line}`, background: C.surface, cursor: 'pointer', color: C.ink }}>
+                        {f.label} <span style={{ color: C.ink3 }}>{f.n}</span>
+                      </button>))}
+                  </div>) : null; })}
+              {palavras.length > 0 && !facetas.length && filtrados.length > 1 && <div style={{ fontSize: 12, color: C.ink3, marginTop: 6 }}>Não há mais como afinar automaticamente: escolha um item na lista abaixo.</div>}
+            </section>
+          )}
           {palavras.length > 0 && (
             <section style={{ ...caixa, padding: 0, overflow: 'hidden' }}>
-              <div style={{ padding: '12px 16px', borderBottom: `1px solid ${C.line}`, fontWeight: 600 }}>{achados.length ? `${achados.length} item(ns) encontrado(s)` : 'Nenhum item com essa busca no histórico de compras'}</div>
+              <div style={{ padding: '12px 16px', borderBottom: `1px solid ${C.line}`, fontWeight: 600 }}>{filtrados.length ? `${filtrados.length} item(ns) encontrado(s)${filtrados.length > 40 ? ' · mostrando os 40 mais comprados — refine acima' : ''}` : 'Nenhum item com essa busca no histórico de compras'}</div>
               {achados.map((p, k) => (
                 <div key={p.cod} style={{ display: 'grid', gridTemplateColumns: 'minmax(260px, 2fr) minmax(170px, 1fr) minmax(220px, 1.4fr)', gap: 14, padding: '12px 16px', borderTop: k ? `1px solid ${C.lineSoft}` : 'none', alignItems: 'center' }}>
                   <div style={{ minWidth: 0 }}>
