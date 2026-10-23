@@ -32534,6 +32534,7 @@ function PrecoCompraFicha({ cod, linhas, base, contatos, onFechar }) {
                   <div><strong style={{ fontSize: 14 }}>{fmtMoeda(u(r))}</strong> /un {base === 'liq' ? 'líquido' : 'bruto'}</div>
                   <div style={{ color: 'rgba(255,255,255,.75)' }}>{base === 'liq' ? `bruto ${fmtMoeda(r.unitB)}/un` : `líquido ${fmtMoeda(r.unitL)}/un`}</div>
                   <div>{(r.qtd || 0).toLocaleString('pt-BR')} un · total {fmtMoeda(base === 'liq' ? r.liq : r.bruto)}</div>
+                  <div style={{ fontSize: 11, color: 'rgba(255,255,255,.7)', marginTop: 2 }}>mercadoria {fmtMoeda(r.bruto)} − ICMS {fmtMoeda(r.icms)} − PIS {fmtMoeda(r.pis)} − COFINS {fmtMoeda(r.cofins)} = {fmtMoeda(r.liq)}{r.ipi ? ` · IPI ${fmtMoeda(r.ipi)} por fora` : ''}</div>
                   {r.projeto && r.projeto !== '<SEM PROJETO>' && <div style={{ color: 'rgba(255,255,255,.75)' }}>projeto {r.projeto}</div>}
                   {vr != null && <div style={{ marginTop: 4, fontWeight: 700, color: vr > 0.05 ? '#F9A8A0' : vr < -0.05 ? '#9BE3B4' : '#fff' }}>
                     {vr > 0 ? '▲ +' : vr < 0 ? '▼ ' : ''}{vr.toFixed(1)}% vs compra anterior ({fmtMoeda(u(ant))}/un em {dt(ant.data)})</div>}
@@ -32577,7 +32578,8 @@ function PrecoCompraFicha({ cod, linhas, base, contatos, onFechar }) {
                     <td style={{ padding: '7px 10px', textAlign: 'right' }}>{(r.qtd || 0).toLocaleString('pt-BR')}</td>
                     <td style={{ padding: '7px 10px', textAlign: 'right' }}>{fmtMoeda(r.unitB)}</td>
                     <td style={{ padding: '7px 10px', textAlign: 'right', fontWeight: 600 }}>{fmtMoeda(r.unitL)}</td>
-                    <td style={{ padding: '7px 10px', textAlign: 'right', fontWeight: 700 }}>{fmtMoeda(r.liq)}</td>
+                    <td style={{ padding: '7px 10px', textAlign: 'right', fontWeight: 700, cursor: 'help' }}
+                      title={`mercadoria ${fmtMoeda(r.bruto)}\n− ICMS ${fmtMoeda(r.icms)}\n− PIS 1,65% ${fmtMoeda(r.pis)}\n− COFINS 7,6% ${fmtMoeda(r.cofins)}\n= líquido ${fmtMoeda(r.liq)}${r.ipi ? `\n(IPI ${fmtMoeda(r.ipi)} por fora, não entra)` : ''}`}>{fmtMoeda(r.liq)}</td>
                     <td style={{ padding: '7px 10px', whiteSpace: 'nowrap' }}>
                       <BotaoAbrirSankhya nunota={r.nunota} tipmov={r.tipmov} codtipoper={r.top} label="Ver nota" />
                       {r.oc && <BotaoAbrirSankhya nunota={r.nunotaOc} tipmov="C" codtipoper={r.top} label={`Pedido ${r.oc}`} />}
@@ -32734,7 +32736,7 @@ function PrecoCompra() {
         const brutas = [];
         for (let de = 0; de < 60000; de += 1000) {
           const { data, error } = await supabaseSupply.from('nfs_entrada')
-            .select('numero_nf,data_recebimento,cod_fornecedor,fornecedor,codigo_produto,descricao_produto,quantidade_recebida,valor_item,valor_liquido_item,projeto,numero_pedido_oc,nunota,tipmov,codtipoper_nota,nunota_pedido_oc')
+            .select('numero_nf,data_recebimento,cod_fornecedor,fornecedor,codigo_produto,descricao_produto,quantidade_recebida,valor_item,valor_liquido_item,valor_icms,valor_pis,valor_cofins,valor_ipi,projeto,numero_pedido_oc,nunota,tipmov,codtipoper_nota,nunota_pedido_oc')
             .not('codigo_produto', 'is', null).not('valor_item', 'is', null).order('data_recebimento').range(de, de + 999);
           if (error) throw error;
           brutas.push(...(data || [])); if (!data || data.length < 1000) break;
@@ -32750,7 +32752,8 @@ function PrecoCompra() {
         setLinhas(brutas.map(r => { const q = Number(r.quantidade_recebida) || 0; const vb = Number(r.valor_item) || 0; const vl = Number(r.valor_liquido_item ?? r.valor_item) || 0;
           return { cod: r.codigo_produto, desc: (r.descricao_produto || '').trim(), forn: (r.fornecedor || '—').trim(), codForn: r.cod_fornecedor, data: String(r.data_recebimento || '').slice(0, 10),
             nf: r.numero_nf, qtd: q, bruto: vb, liq: vl, unitB: q ? vb / q : null, unitL: q ? vl / q : null, nunota: r.nunota, tipmov: r.tipmov, top: r.codtipoper_nota, oc: r.numero_pedido_oc, nunotaOc: r.nunota_pedido_oc,
-            projeto: r.projeto, grupo: grupos[r.codigo_produto] || 'Sem grupo' }; }).filter(r => r.data));
+            projeto: r.projeto, grupo: grupos[r.codigo_produto] || 'Sem grupo',
+            icms: Number(r.valor_icms) || 0, pis: Number(r.valor_pis) || 0, cofins: Number(r.valor_cofins) || 0, ipi: Number(r.valor_ipi) || 0 }; }).filter(r => r.data));
       } catch (e) { setErro(e.message || String(e)); }
     })();
   }, []);
@@ -32859,7 +32862,7 @@ function PrecoCompra() {
         </div>
         {filtrando ? <button onClick={() => { setFGrupo([]); setFForn([]); setBusca(''); }} style={{ fontFamily: 'inherit', fontSize: 12.5, border: 'none', background: 'none', color: C.primary, cursor: 'pointer' }}>limpar</button> : null}
         <span style={{ flex: 1 }} />
-        <span title="Líquido = valor do item − ICMS da nota (IPI e ICMS-ST são cobrados por fora e não entram). Unitário = total ÷ quantidade.">{seg([['liq', 'Preço líquido'], ['bruto', 'Preço bruto']], base, setBase)}</span>
+        <span title="Líquido (regra da planilha de compras) = mercadoria sem IPI − ICMS da nota − PIS 1,65% − COFINS 7,6%, com PIS e COFINS sobre (mercadoria − ICMS). IPI e ICMS-ST são por fora e não entram. Unitário = total ÷ quantidade.">{seg([['liq', 'Preço líquido'], ['bruto', 'Preço bruto']], base, setBase)}</span>
       </div>
 
       <div style={{ display: 'flex', gap: 4, borderBottom: `1px solid ${C.line}` }}>
