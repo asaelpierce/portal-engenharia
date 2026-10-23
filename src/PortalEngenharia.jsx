@@ -32561,6 +32561,15 @@ function PrecoCompraFicha({ cod, linhas, base, contatos, onFechar }) {
     </div>, document.body);
 }
 
+// Busca inteligente por descrição: compara sem espaços, acentos e pontuação ("389x389" = "389 X 389" =
+// "389×389MM"), palavras em qualquer ordem; sem resultado, sugere os mais parecidos (bigramas, Dice).
+const pcCompacto = (t) => String(t || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().replace(/[×*]/g, 'X').replace(/[^A-Z0-9]/g, '');
+const pcTokens = (q) => String(q || '').replace(/(\d)\s*[xX×*]\s*(\d)/g, '$1X$2').split(/\s+/).map(pcCompacto).filter(Boolean);
+const pcPalavras = (t) => String(t || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().replace(/(\d)\s*[X×*]\s*(\d)/g, '$1X$2').split(/[^A-Z0-9]+/).filter(Boolean);
+const pcBigramas = (t) => { const r = new Map(); for (let i = 0; i < t.length - 1; i++) { const b = t.slice(i, i + 2); r.set(b, (r.get(b) || 0) + 1); } return r; };
+const pcParecido = (a, b) => { if (!a || !b) return 0; const A = pcBigramas(a), B = pcBigramas(b); let inter = 0; A.forEach((n, k) => { inter += Math.min(n, B.get(k) || 0); });
+  return (2 * inter) / Math.max(1, (a.length - 1) + (b.length - 1)); };
+
 // Painel de detalhe do Preço de Compra: as compras por trás de qualquer número clicado, em 4 visões.
 function PrecoCompraDetalhe({ det, base, contatos, onFechar, onItem, onForn, onFiltrar, fichaAberta = false }) {
   const C = CRMC;
@@ -32681,6 +32690,8 @@ function PrecoCompra() {
   const [fGrupo, setFGrupo] = useState([]);
   const [fForn, setFForn] = useState([]);
   const [busca, setBusca] = useState('');
+  const [modoBusca, setModoBusca] = useState('desc');   // 'desc' (inteligente) | 'cod' (código exato)
+  const [sugAberta, setSugAberta] = useState(false);
   const [base, setBase] = useState('liq');
   const [aba, setAba] = useState('geral');
   const [limiar, setLimiar] = useState(10);
@@ -32720,9 +32731,25 @@ function PrecoCompra() {
   const iniP = { '3m': new Date(hoje.getFullYear(), hoje.getMonth() - 2, 1), '6m': new Date(hoje.getFullYear(), hoje.getMonth() - 5, 1), '12m': new Date(hoje.getFullYear(), hoje.getMonth() - 11, 1),
     ano: new Date(ano, 0, 1), ano_ant: new Date(ano - 1, 0, 1), tudo: new Date(2000, 0, 1) }[periodo].toISOString().slice(0, 10);
   const fimP = periodo === 'ano_ant' ? `${ano - 1}-12-31` : '2999-12-31';
-  const palavras = busca.trim().toLowerCase().split(/\s+/).filter(Boolean);
-  const casa = (r) => (!fGrupo.length || fGrupo.includes(r.grupo)) && (!fForn.length || fForn.includes(r.forn))
-    && (!palavras.length || palavras.every(w => `${r.cod} ${r.desc}`.toLowerCase().includes(w)));
+  const codigosBusca = modoBusca === 'cod' ? busca.split(/[\s,;]+/).map(x => x.replace(/\D/g, '')).filter(Boolean) : [];
+  const tokensBusca = modoBusca === 'desc' ? pcTokens(busca) : [];
+  const compactoDe = (r) => r._c || (r._c = pcCompacto(r.desc));
+  const casaBusca = (r) => modoBusca === 'cod' ? (!codigosBusca.length || codigosBusca.includes(String(r.cod)))
+    : (!tokensBusca.length || tokensBusca.every(t => compactoDe(r).includes(t)));
+  const palavras = modoBusca === 'cod' ? codigosBusca : tokensBusca;
+  const casa = (r) => (!fGrupo.length || fGrupo.includes(r.grupo)) && (!fForn.length || fForn.includes(r.forn)) && casaBusca(r);
+  // sugestões (descrição): itens que batem; se nenhum, os mais parecidos
+  const sugestoes = (() => {
+    if (modoBusca !== 'desc' || busca.trim().length < 2) return null;
+    const porCod = {}; linhas.forEach(r => { const o = porCod[r.cod] || (porCod[r.cod] = { cod: r.cod, desc: r.desc, grupo: r.grupo, n: 0, ult: r }); o.n++; if (r.data > o.ult.data) o.ult = r; });
+    const todos = Object.values(porCod);
+    const batem = todos.filter(o => tokensBusca.every(t => pcCompacto(o.desc).includes(t))).sort((a, b) => b.n - a.n);
+    if (batem.length) return { tipo: 'batem', total: batem.length, lista: batem.slice(0, 8) };
+    const q = pcCompacto(busca);
+    const parecidos = todos.map(o => ({ ...o, sc: Math.max(pcParecido(q, pcCompacto(o.desc)), tokensBusca.length ? tokensBusca.reduce((t, tk) => t + Math.max(0, ...pcPalavras(o.desc).map(w => pcParecido(tk, w))), 0) / tokensBusca.length : 0) }))
+      .filter(o => o.sc >= 0.5).sort((a, b) => b.sc - a.sc).slice(0, 6);
+    return { tipo: 'parecidos', total: parecidos.length, lista: parecidos };
+  })();
   const F = linhas.filter(r => r.data >= iniP && r.data <= fimP && casa(r));
   const u = (r) => (base === 'liq' ? r.unitL : r.unitB);
   const val = (r) => (base === 'liq' ? r.liq : r.bruto);
@@ -32771,9 +32798,34 @@ function PrecoCompra() {
         {seg([['3m', '3 meses'], ['6m', '6 meses'], ['12m', '12 meses'], ['ano', String(ano)], ['ano_ant', String(ano - 1)], ['tudo', 'Tudo']], periodo, setPeriodo)}
         <div style={{ width: 200 }}><FiltroMulti valor={fGrupo} onChange={setFGrupo} opcoes={opcGr} todosRotulo="todos os grupos" fonte={12.5} /></div>
         <div style={{ width: 220 }}><FiltroMulti valor={fForn} onChange={setFForn} opcoes={opcFo} todosRotulo="todos os fornecedores" fonte={12.5} /></div>
-        <div style={{ position: 'relative' }}>
-          <Search size={14} aria-hidden="true" style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: C.ink3 }} />
-          <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Código ou descrição (ex.: chapa aço)" style={{ fontFamily: 'inherit', fontSize: 12.5, padding: '7px 10px 7px 30px', borderRadius: 8, border: `1px solid ${busca ? C.primary : C.line}`, width: 240 }} />
+        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          {seg([['desc', 'Descrição'], ['cod', 'Código']], modoBusca, (k) => { setModoBusca(k); setBusca(''); })}
+          <div style={{ position: 'relative' }} onBlur={() => setTimeout(() => setSugAberta(false), 180)}>
+            <Search size={14} aria-hidden="true" style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: C.ink3 }} />
+            <input value={busca} onChange={e => { setBusca(modoBusca === 'cod' ? e.target.value.replace(/[^\d,;\s]/g, '') : e.target.value); setSugAberta(true); }} onFocus={() => setSugAberta(true)}
+              inputMode={modoBusca === 'cod' ? 'numeric' : 'text'}
+              placeholder={modoBusca === 'cod' ? 'código exato (ou vários: 390, 1076)' : 'ex.: chapa 389x389, gabarito anel'}
+              style={{ fontFamily: 'inherit', fontSize: 12.5, padding: '7px 10px 7px 30px', borderRadius: 8, border: `1px solid ${busca ? C.primary : C.line}`, width: 270 }} />
+            {sugAberta && sugestoes && (
+              <div style={{ position: 'absolute', top: '100%', left: 0, marginTop: 4, width: 520, maxWidth: '90vw', zIndex: 40, background: C.surface, border: `1px solid ${C.line}`, borderRadius: 10, boxShadow: '0 12px 32px rgba(16,24,40,.16)', padding: 6 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: C.ink3, textTransform: 'uppercase', letterSpacing: 0.6, padding: '6px 8px' }}>
+                  {sugestoes.tipo === 'batem' ? `${sugestoes.total} item(ns) encontrado(s)${sugestoes.total > 8 ? ' · mostrando os 8 mais comprados' : ''}` : sugestoes.total ? 'Nada exato — você quis dizer:' : 'Nenhum item parecido no histórico de compras'}
+                </div>
+                {sugestoes.lista.map(o => (
+                  <button key={o.cod} onMouseDown={e => e.preventDefault()} onClick={() => { setItemSel(o.cod); setSugAberta(false); }}
+                    style={{ display: 'flex', width: '100%', gap: 10, alignItems: 'center', textAlign: 'left', fontFamily: 'inherit', padding: '7px 8px', border: 'none', borderRadius: 7, background: 'transparent', cursor: 'pointer' }}
+                    onMouseEnter={e => { e.currentTarget.style.background = C.surface2; }} onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}>
+                    <span style={{ fontSize: 12, fontWeight: 700, color: C.primary, minWidth: 48 }}>{o.cod}</span>
+                    <span style={{ flex: 1, minWidth: 0 }}>
+                      <span style={{ display: 'block', fontSize: 12.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{o.desc}</span>
+                      <span style={{ display: 'block', fontSize: 11, color: C.ink3 }}>{o.grupo} · {o.n} compra(s) · último {fmtMoeda(base === 'liq' ? o.ult.unitL : o.ult.unitB)}/un em {new Date(`${o.ult.data}T12:00:00`).toLocaleDateString('pt-BR')}</span>
+                    </span>
+                    <span style={{ fontSize: 11, color: C.primary }}>abrir ficha →</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
         {filtrando ? <button onClick={() => { setFGrupo([]); setFForn([]); setBusca(''); }} style={{ fontFamily: 'inherit', fontSize: 12.5, border: 'none', background: 'none', color: C.primary, cursor: 'pointer' }}>limpar</button> : null}
         <span style={{ flex: 1 }} />
