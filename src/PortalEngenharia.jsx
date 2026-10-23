@@ -32493,7 +32493,7 @@ function PrecoCompraFicha({ cod, linhas, base, contatos, onFechar }) {
         </div>
         <div style={{ flex: 1, overflow: 'auto', padding: '16px 22px', display: 'flex', flexDirection: 'column', gap: 14 }}>
           <div style={{ display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))' }}>
-            {[['Último preço', fmtMoeda(ult && u(ult)), `${ult ? dt(ult.data) : ''} · ${ult?.forn || ''}`], ['Menor preço', fmtMoeda(Math.min(...precos)), 'em todo o histórico'], ['Maior preço', fmtMoeda(Math.max(...precos)), 'em todo o histórico'],
+            {[['Último preço unit.', fmtMoeda(ult && u(ult)), `${ult ? `${(ult.qtd || 0).toLocaleString('pt-BR')} un · total ${fmtMoeda(base === 'liq' ? ult.liq : ult.bruto)} · ${dt(ult.data)}` : ''}`], ['Menor preço unit.', fmtMoeda(Math.min(...precos)), 'em todo o histórico'], ['Maior preço unit.', fmtMoeda(Math.max(...precos)), 'em todo o histórico'],
               ['Variação 1ª → última', varPct == null ? '—' : `${varPct > 0 ? '+' : ''}${varPct.toFixed(1)}%`, `${ls.length} compra(s) · ${forns.length} fornecedor(es)`]].map(([r, v, sub], k) => (
               <div key={r} style={{ background: C.surface, border: `1px solid ${C.line}`, borderRadius: 10, padding: '11px 14px' }}>
                 <div style={{ fontSize: 12, color: C.ink2 }}>{r}</div>
@@ -32518,7 +32518,7 @@ function PrecoCompraFicha({ cod, linhas, base, contatos, onFechar }) {
           <section style={{ background: C.surface, border: `1px solid ${C.line}`, borderRadius: 12, overflow: 'hidden' }}>
             <div style={{ padding: '12px 16px', fontWeight: 600, borderBottom: `1px solid ${C.line}` }}>Comparação entre fornecedores</div>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-              <thead><tr style={{ background: C.surface2 }}>{['Fornecedor', 'Contato', 'Compras', 'Qtd total', 'Último preço', 'Média', 'Menor', 'vs melhor'].map((h, k) => <th key={h} style={{ padding: '9px 12px', fontSize: 11.5, fontWeight: 600, color: C.ink3, textAlign: k >= 2 ? 'right' : 'left' }}>{h}</th>)}</tr></thead>
+              <thead><tr style={{ background: C.surface2 }}>{['Fornecedor', 'Contato', 'Compras', 'Qtd total', 'Último unit.', 'Média unit.', 'Menor unit.', 'vs melhor'].map((h, k) => <th key={h} style={{ padding: '9px 12px', fontSize: 11.5, fontWeight: 600, color: C.ink3, textAlign: k >= 2 ? 'right' : 'left' }}>{h}</th>)}</tr></thead>
               <tbody>{porForn.map((p, k) => { const ct = contatos[p.cod]; const dif = porForn[0].ult ? (p.ult / porForn[0].ult - 1) * 100 : 0;
                 return (
                   <tr key={p.f} style={{ background: k === 0 && porForn.length > 1 ? C.winSoft : k % 2 ? C.surface2 : C.surface }}>
@@ -32537,7 +32537,7 @@ function PrecoCompraFicha({ cod, linhas, base, contatos, onFechar }) {
             <div style={{ padding: '12px 16px', fontWeight: 600, borderBottom: `1px solid ${C.line}` }}>Todas as compras ({ls.length})</div>
             <div style={{ overflowX: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
-                <thead><tr style={{ background: C.surface2 }}>{['Data', 'Fornecedor', 'NF', 'Projeto', 'Qtd', 'Unit. bruto', 'Unit. líquido', ''].map((h, k) => <th key={k} style={{ padding: '8px 10px', fontSize: 11.5, fontWeight: 600, color: C.ink3, textAlign: k >= 4 && k <= 6 ? 'right' : 'left' }}>{h}</th>)}</tr></thead>
+                <thead><tr style={{ background: C.surface2 }}>{['Data', 'Fornecedor', 'NF', 'Projeto', 'Qtd', 'Unit. bruto', 'Unit. líquido', 'Total líquido', ''].map((h, k) => <th key={k} style={{ padding: '8px 10px', fontSize: 11.5, fontWeight: 600, color: C.ink3, textAlign: k >= 4 && k <= 7 ? 'right' : 'left' }}>{h}</th>)}</tr></thead>
                 <tbody>{[...ls].reverse().map((r, k) => (
                   <tr key={k} style={{ background: k % 2 ? C.surface2 : C.surface }}>
                     <td style={{ padding: '7px 10px', whiteSpace: 'nowrap' }}>{dt(r.data)}</td>
@@ -32547,6 +32547,7 @@ function PrecoCompraFicha({ cod, linhas, base, contatos, onFechar }) {
                     <td style={{ padding: '7px 10px', textAlign: 'right' }}>{(r.qtd || 0).toLocaleString('pt-BR')}</td>
                     <td style={{ padding: '7px 10px', textAlign: 'right' }}>{fmtMoeda(r.unitB)}</td>
                     <td style={{ padding: '7px 10px', textAlign: 'right', fontWeight: 600 }}>{fmtMoeda(r.unitL)}</td>
+                    <td style={{ padding: '7px 10px', textAlign: 'right', fontWeight: 700 }}>{fmtMoeda(r.liq)}</td>
                     <td style={{ padding: '7px 10px', whiteSpace: 'nowrap' }}>
                       <BotaoAbrirSankhya nunota={r.nunota} tipmov={r.tipmov} codtipoper={r.top} label="Ver nota" />
                       {r.oc && <BotaoAbrirSankhya nunota={r.nunotaOc} tipmov="C" codtipoper={r.top} label={`Pedido ${r.oc}`} />}
@@ -32617,7 +32618,7 @@ function PrecoCompraDetalhe({ det, base, contatos, onFechar, onItem, onForn, onF
         <div style={{ flex: 1, overflow: 'auto', background: C.surface }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
             {aba === 'compras' && (<>
-              <thead><tr>{th('Data', 'data')}{th('NF', 'nf')}{th('Fornecedor', 'forn')}{th('Item', 'desc')}{th('Qtd', 'qtd', 'right')}{th('Unit.', null, 'right')}{th('Valor', 'v', 'right')}{th('')}</tr></thead>
+              <thead><tr>{th('Data', 'data')}{th('NF', 'nf')}{th('Fornecedor', 'forn')}{th('Item', 'desc')}{th('Qtd', 'qtd', 'right')}{th(`Unit. ${base === 'liq' ? 'líquido' : 'bruto'}`, null, 'right')}{th(`Total ${base === 'liq' ? 'líquido' : 'bruto'}`, 'v', 'right')}{th('')}</tr></thead>
               <tbody>{ordenar(ls.map(r => ({ ...r, v: val(r) }))).slice(0, 1500).map((r, k) => (
                 <tr key={k} style={{ background: k % 2 ? C.surface2 : C.surface }}>
                   <td style={{ ...td, whiteSpace: 'nowrap', color: C.ink2 }}>{dt(r.data)}</td>
@@ -32642,7 +32643,7 @@ function PrecoCompraDetalhe({ det, base, contatos, onFechar, onItem, onForn, onF
                 </tr>))}</tbody>
             </>)}
             {aba === 'itens' && (<>
-              <thead><tr>{th('Item', 'desc')}{th('Grupo', 'grupo')}{th('Compras', 'n', 'right')}{th('Fornec.', 'forns', 'right')}{th('Qtd', 'qtd', 'right')}{th('Último preço', 'ult', 'right')}{th('Gasto', 'v', 'right')}</tr></thead>
+              <thead><tr>{th('Item', 'desc')}{th('Grupo', 'grupo')}{th('Compras', 'n', 'right')}{th('Fornec.', 'forns', 'right')}{th('Qtd', 'qtd', 'right')}{th('Último preço unit.', 'ult', 'right')}{th('Gasto total', 'v', 'right')}</tr></thead>
               <tbody>{ordenar(itens).map((o, k) => (
                 <tr key={o.k} onClick={() => onItem(o.k)} style={{ background: k % 2 ? C.surface2 : C.surface, cursor: 'pointer' }}>
                   <td style={td}><strong>{o.k}</strong> <span style={{ color: C.ink2 }}>{o.desc}</span></td>
@@ -32776,7 +32777,7 @@ function PrecoCompra() {
         </div>
         {filtrando ? <button onClick={() => { setFGrupo([]); setFForn([]); setBusca(''); }} style={{ fontFamily: 'inherit', fontSize: 12.5, border: 'none', background: 'none', color: C.primary, cursor: 'pointer' }}>limpar</button> : null}
         <span style={{ flex: 1 }} />
-        {seg([['liq', 'Preço líquido'], ['bruto', 'Preço bruto']], base, setBase)}
+        <span title="Líquido = valor do item − ICMS da nota (IPI e ICMS-ST são cobrados por fora e não entram). Unitário = total ÷ quantidade.">{seg([['liq', 'Preço líquido'], ['bruto', 'Preço bruto']], base, setBase)}</span>
       </div>
 
       <div style={{ display: 'flex', gap: 4, borderBottom: `1px solid ${C.line}` }}>
@@ -32814,7 +32815,7 @@ function PrecoCompra() {
           <div style={{ padding: '12px 16px', fontWeight: 600, borderBottom: `1px solid ${C.line}` }}>Itens com maior gasto · clique para abrir a ficha</div>
           <div style={{ overflowX: 'auto', maxHeight: 460 }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-              <thead><tr style={{ background: C.surface2 }}>{['Item', 'Grupo', 'Compras', 'Fornecedores', 'Último preço', 'Gasto'].map((h, k) => <th key={h} style={{ padding: '9px 12px', fontSize: 11.5, fontWeight: 600, color: C.ink3, textAlign: k >= 2 ? 'right' : 'left', position: 'sticky', top: 0, background: C.surface2 }}>{h}</th>)}</tr></thead>
+              <thead><tr style={{ background: C.surface2 }}>{['Item', 'Grupo', 'Compras', 'Fornecedores', 'Último preço unit.', 'Gasto total'].map((h, k) => <th key={h} style={{ padding: '9px 12px', fontSize: 11.5, fontWeight: 600, color: C.ink3, textAlign: k >= 2 ? 'right' : 'left', position: 'sticky', top: 0, background: C.surface2 }}>{h}</th>)}</tr></thead>
               <tbody>{itens.map(o => ({ ...o, g: o.ls.reduce((t, r) => t + val(r), 0), ult: [...o.ls].sort((a, b) => b.data.localeCompare(a.data))[0] })).sort((a, b) => b.g - a.g).slice(0, 100).map((o, k) => (
                 <tr key={o.cod} onClick={() => setItemSel(o.cod)} style={{ background: k % 2 ? C.surface2 : C.surface, cursor: 'pointer' }}>
                   <td style={{ padding: '8px 12px' }}><strong>{o.cod}</strong> <span style={{ color: C.ink2 }}>{o.desc}</span></td>
@@ -32834,21 +32835,27 @@ function PrecoCompra() {
           <div style={{ padding: '12px 16px', borderBottom: `1px solid ${C.line}`, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
             <div style={{ fontWeight: 600 }}>Itens cuja última compra subiu mais de</div>
             {seg([[5, '5%'], [10, '10%'], [20, '20%'], [30, '30%']], limiar, setLimiar)}
-            <span style={{ fontSize: 12, color: C.ink3 }}>em relação à compra anterior · ordenado pelo impacto em R$ (alta × quantidade da última compra)</span>
+            <span style={{ fontSize: 12, color: C.ink3 }}>no preço unitário {base === 'liq' ? 'líquido' : 'bruto'}, em relação à compra anterior · impacto = (unitário novo − anterior) × quantidade da última compra · confira a quantidade: lote menor costuma ter unitário maior</span>
           </div>
           <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-              <thead><tr style={{ background: C.surface2 }}>{['Item', 'Compra anterior', 'Última compra', 'Alta', 'Impacto'].map((h, k) => <th key={h} style={{ padding: '9px 12px', fontSize: 11.5, fontWeight: 600, color: C.ink3, textAlign: k >= 3 ? 'right' : 'left' }}>{h}</th>)}</tr></thead>
+              <thead><tr style={{ background: C.surface2 }}>{['Item', 'Compra anterior (unit. · qtd · total)', 'Última compra (unit. · qtd · total)', 'Alta no unitário', 'Impacto na última compra'].map((h, k) => <th key={h} style={{ padding: '9px 12px', fontSize: 11.5, fontWeight: 600, color: C.ink3, textAlign: k >= 3 ? 'right' : 'left' }}>{h}</th>)}</tr></thead>
               <tbody>
                 {alertas.map((a, k) => (
                   <tr key={a.cod} onClick={() => setItemSel(a.cod)} style={{ background: k % 2 ? C.surface2 : C.surface, cursor: 'pointer' }}>
                     <td style={{ padding: '9px 12px' }}><strong>{a.cod}</strong> <span style={{ color: C.ink2 }}>{a.desc}</span><div style={{ fontSize: 11, color: C.ink3 }}>{a.grupo}</div></td>
-                    <td style={{ padding: '9px 12px', whiteSpace: 'nowrap' }}>{fmtMoeda(u(a.ant))}<div style={{ fontSize: 11, color: C.ink3 }}>{new Date(`${a.ant.data}T12:00:00`).toLocaleDateString('pt-BR')} · {a.ant.forn}</div></td>
-                    <td style={{ padding: '9px 12px', whiteSpace: 'nowrap', fontWeight: 600 }}>{fmtMoeda(u(a.ult))}
-                      <div style={{ fontSize: 11, color: C.ink3, fontWeight: 400 }}>{new Date(`${a.ult.data}T12:00:00`).toLocaleDateString('pt-BR')} · {a.ult.forn}</div>
-                      {a.trocou && <div style={{ fontSize: 11, fontWeight: 700, color: C.warn }}>trocou de fornecedor</div>}</td>
-                    <td style={{ padding: '9px 12px', textAlign: 'right', fontWeight: 700, color: C.loss }}>+{a.pct.toFixed(1)}%</td>
-                    <td style={{ padding: '9px 12px', textAlign: 'right', fontWeight: 700 }}>{fmtMoeda(a.impacto)}</td>
+                    <td style={{ padding: '9px 12px', whiteSpace: 'nowrap' }}>{fmtMoeda(u(a.ant))} <span style={{ fontSize: 11, color: C.ink3 }}>/un</span>
+                      <div style={{ fontSize: 11.5, color: C.ink2 }}>{(a.ant.qtd || 0).toLocaleString('pt-BR')} un · total {fmtMoeda(val(a.ant))}</div>
+                      <div style={{ fontSize: 11, color: C.ink3 }}>{new Date(`${a.ant.data}T12:00:00`).toLocaleDateString('pt-BR')} · NF {a.ant.nf} · {a.ant.forn}</div></td>
+                    <td style={{ padding: '9px 12px', whiteSpace: 'nowrap' }}><strong>{fmtMoeda(u(a.ult))}</strong> <span style={{ fontSize: 11, color: C.ink3 }}>/un</span>
+                      <div style={{ fontSize: 11.5, color: C.ink2 }}>{(a.ult.qtd || 0).toLocaleString('pt-BR')} un · total {fmtMoeda(val(a.ult))}</div>
+                      <div style={{ fontSize: 11, color: C.ink3 }}>{new Date(`${a.ult.data}T12:00:00`).toLocaleDateString('pt-BR')} · NF {a.ult.nf} · {a.ult.forn}</div>
+                      {a.trocou && <div style={{ fontSize: 11, fontWeight: 700, color: C.warn }}>trocou de fornecedor</div>}
+                      {a.ant.qtd > 0 && a.ult.qtd <= a.ant.qtd * 0.6 && <div style={{ fontSize: 11, fontWeight: 700, color: C.warn }} title="lote menor costuma ter preço unitário maior">lote menor ({(a.ult.qtd || 0).toLocaleString('pt-BR')} × {(a.ant.qtd || 0).toLocaleString('pt-BR')} un)</div>}</td>
+                    <td style={{ padding: '9px 12px', textAlign: 'right', fontWeight: 700, color: C.loss }}>+{a.pct.toFixed(1)}%
+                      <div style={{ fontSize: 11, fontWeight: 400, color: C.ink3 }}>{fmtMoeda(u(a.ant))} → {fmtMoeda(u(a.ult))}</div></td>
+                    <td style={{ padding: '9px 12px', textAlign: 'right', fontWeight: 700 }}>{fmtMoeda(a.impacto)}
+                      <div style={{ fontSize: 11, fontWeight: 400, color: C.ink3, whiteSpace: 'nowrap' }}>({fmtMoeda(u(a.ult))} − {fmtMoeda(u(a.ant))}) × {(a.ult.qtd || 0).toLocaleString('pt-BR')} un</div></td>
                   </tr>))}
                 {!alertas.length && <tr><td colSpan={5} style={{ padding: 28, textAlign: 'center', color: C.ink3 }}>Nenhum item subiu mais de {limiar}% na última compra, com os filtros atuais.</td></tr>}
               </tbody>
@@ -32865,7 +32872,7 @@ function PrecoCompra() {
           </div>
           <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-              <thead><tr style={{ background: C.surface2 }}>{['Item', 'Fornecedores', 'Melhor preço', 'Mais caro', 'Diferença', 'Economia potencial'].map((h, k) => <th key={h} style={{ padding: '9px 12px', fontSize: 11.5, fontWeight: 600, color: C.ink3, textAlign: k >= 1 ? 'right' : 'left' }}>{h}</th>)}</tr></thead>
+              <thead><tr style={{ background: C.surface2 }}>{['Item', 'Fornecedores', 'Melhor preço unit.', 'Mais caro unit.', 'Diferença', 'Economia potencial'].map((h, k) => <th key={h} style={{ padding: '9px 12px', fontSize: 11.5, fontWeight: 600, color: C.ink3, textAlign: k >= 1 ? 'right' : 'left' }}>{h}</th>)}</tr></thead>
               <tbody>
                 {comps.slice(0, 200).map((c, k) => (<React.Fragment key={c.cod}>
                   <tr onClick={() => setAbertoComp(x => x === c.cod ? null : c.cod)} style={{ background: abertoComp === c.cod ? C.primarySoft : k % 2 ? C.surface2 : C.surface, cursor: 'pointer' }}>
@@ -32879,7 +32886,7 @@ function PrecoCompra() {
                   {abertoComp === c.cod && (
                     <tr><td colSpan={6} style={{ padding: '6px 16px 12px 36px', background: C.surface }}>
                       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
-                        <thead><tr>{['Fornecedor', 'Compras', 'Qtd', 'Último preço', 'Data', 'Média'].map((h, i) => <th key={h} style={{ padding: '6px 10px', fontSize: 11, color: C.ink3, textAlign: i ? 'right' : 'left' }}>{h}</th>)}</tr></thead>
+                        <thead><tr>{['Fornecedor', 'Compras', 'Qtd total', 'Último preço unit.', 'Data', 'Média unit.'].map((h, i) => <th key={h} style={{ padding: '6px 10px', fontSize: 11, color: C.ink3, textAlign: i ? 'right' : 'left' }}>{h}</th>)}</tr></thead>
                         <tbody>{c.arr.map((f, i) => (
                           <tr key={f.f} style={{ borderTop: `1px solid ${C.lineSoft}`, background: i === 0 ? C.winSoft : 'transparent' }}>
                             <td style={{ padding: '6px 10px', fontWeight: 600 }}>{f.f}</td><td style={{ padding: '6px 10px', textAlign: 'right' }}>{f.n}</td>
