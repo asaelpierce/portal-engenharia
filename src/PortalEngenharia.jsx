@@ -32744,6 +32744,10 @@ function PrecoCompra() {
   const [listaTxt, setListaTxt] = useState('');
   const [listaRes, setListaRes] = useState(null);
   const [copiado, setCopiado] = useState(null);
+  const [limiar, setLimiar] = useState(10);
+  const [itemSel, setItemSel] = useState(null);
+  const [abertoComp, setAbertoComp] = useState(null);
+  const [det, setDet] = useState(null);   // painel de detalhe do que foi clicado
   const [custos, setCustos] = useState({});   // custo cadastrado no Sankhya (TGFCUS) por código
   const custosPedidos = useRef(new Set());
   useEffect(() => {
@@ -32767,10 +32771,6 @@ function PrecoCompra() {
       setCustos(prev => ({ ...prev, ...m }));
     });
   }, [linhas, busca, modoBusca, listaRes, itemSel]);
-  const [limiar, setLimiar] = useState(10);
-  const [itemSel, setItemSel] = useState(null);
-  const [abertoComp, setAbertoComp] = useState(null);
-  const [det, setDet] = useState(null);   // painel de detalhe do que foi clicado
   useEffect(() => {
     (async () => {
       try {
