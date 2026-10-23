@@ -32466,6 +32466,10 @@ function PrecoCompraFicha({ cod, linhas, base, contatos, onFechar }) {
   const C = CRMC;
   useEffect(() => { const t = e => { if (e.key === 'Escape') onFechar(); }; window.addEventListener('keydown', t); return () => window.removeEventListener('keydown', t); }, [onFechar]);
   const ls = linhas.filter(r => r.cod === cod).sort((a, b) => a.data.localeCompare(b.data));
+  const [hov, setHov] = useState(null);       // compra sob o mouse no gráfico
+  const [marcada, setMarcada] = useState(null); // compra clicada (destacada na tabela)
+  const tabelaRef = useRef(null);
+  const marcar = (r) => { setMarcada(r); setTimeout(() => { const el = tabelaRef.current?.querySelector(`[data-k="${r.nunota}|${r.data}|${r.unitL}"]`); el?.scrollIntoView({ behavior: 'smooth', block: 'center' }); }, 30); };
   const u = (r) => (base === 'liq' ? r.unitL : r.unitB);
   const forns = [...new Set(ls.map(r => r.forn))];
   const corF = Object.fromEntries(forns.map((f, i) => [f, PC_CORES[i % PC_CORES.length]]));
@@ -32503,16 +32507,41 @@ function PrecoCompraFicha({ cod, linhas, base, contatos, onFechar }) {
           </div>
           <section style={{ background: C.surface, border: `1px solid ${C.line}`, borderRadius: 12, padding: '14px 16px' }}>
             <div style={{ fontWeight: 600, marginBottom: 6 }}>Preço unitário {base === 'liq' ? 'líquido' : 'bruto'} ao longo do tempo, por fornecedor</div>
-            <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 'auto' }}>
+            <div style={{ position: 'relative' }} onMouseLeave={() => setHov(null)}>
+            <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 'auto', display: 'block' }}>
               {[0, 0.5, 1].map(t => { const v = minP + (maxP - minP) * t; return (<g key={t}><line x1={ml} x2={W - mr} y1={y(v)} y2={y(v)} stroke={C.lineSoft} /><text x={ml - 6} y={y(v) + 4} textAnchor="end" fontSize="11" fill={C.ink3}>{fmtMoeda(v)}</text></g>); })}
               {forns.map(f => { const l = ls.filter(r => r.forn === f && u(r) != null);
                 return (<g key={f}>
                   {l.length > 1 && <polyline points={l.map(r => `${x(r.data)},${y(u(r))}`).join(' ')} fill="none" stroke={corF[f]} strokeWidth="2" opacity="0.6" />}
-                  {l.map((r, k) => <circle key={k} cx={x(r.data)} cy={y(u(r))} r="4.5" fill={corF[f]}><title>{`${dt(r.data)} · ${f} · ${fmtMoeda(u(r))} · NF ${r.nf}`}</title></circle>)}
+                  {l.map((r, k) => { const on = hov === r || marcada === r;
+                    return (<g key={k}>
+                      {on && <line x1={x(r.data)} x2={x(r.data)} y1={y(u(r))} y2={H - mb} stroke={corF[f]} strokeDasharray="3 3" />}
+                      {on && <line x1={ml} x2={x(r.data)} y1={y(u(r))} y2={y(u(r))} stroke={corF[f]} strokeDasharray="3 3" />}
+                      <circle cx={x(r.data)} cy={y(u(r))} r={on ? 7 : 4.5} fill={corF[f]} stroke="#fff" strokeWidth={on ? 2 : 0} style={{ cursor: 'pointer' }}
+                        onMouseEnter={() => setHov(r)} onClick={() => marcar(r)} />
+                    </g>); })}
                 </g>); })}
               <text x={ml} y={H - 8} fontSize="11" fill={C.ink3}>{pri ? dt(pri.data) : ''}</text>
               <text x={W - mr} y={H - 8} fontSize="11" fill={C.ink3} textAnchor="end">{ult ? dt(ult.data) : ''}</text>
             </svg>
+            {hov && (() => { const r = hov; const idx = ls.indexOf(r); const ant = idx > 0 ? ls[idx - 1] : null; const vr = ant && u(ant) ? (u(r) / u(ant) - 1) * 100 : null;
+              const px = 100 * x(r.data) / W, py = 100 * y(u(r)) / H; const esq = px > 62;
+              return (
+                <div style={{ position: 'absolute', left: `${px}%`, top: `${py}%`, transform: `translate(${esq ? 'calc(-100% - 14px)' : '14px'}, -50%)`, pointerEvents: 'none', zIndex: 2,
+                  background: '#0F2340', color: '#fff', borderRadius: 10, padding: '10px 12px', fontSize: 12, lineHeight: 1.5, minWidth: 220, boxShadow: '0 10px 28px rgba(0,0,0,.25)' }}>
+                  <div style={{ fontWeight: 700, fontSize: 12.5 }}>{dt(r.data)} · NF {r.nf}</div>
+                  <div style={{ color: '#B9D4FB', marginBottom: 4 }}><span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 4, background: corF[r.forn], marginRight: 5 }} />{r.forn}</div>
+                  <div><strong style={{ fontSize: 14 }}>{fmtMoeda(u(r))}</strong> /un {base === 'liq' ? 'líquido' : 'bruto'}</div>
+                  <div style={{ color: 'rgba(255,255,255,.75)' }}>{base === 'liq' ? `bruto ${fmtMoeda(r.unitB)}/un` : `líquido ${fmtMoeda(r.unitL)}/un`}</div>
+                  <div>{(r.qtd || 0).toLocaleString('pt-BR')} un · total {fmtMoeda(base === 'liq' ? r.liq : r.bruto)}</div>
+                  {r.projeto && r.projeto !== '<SEM PROJETO>' && <div style={{ color: 'rgba(255,255,255,.75)' }}>projeto {r.projeto}</div>}
+                  {vr != null && <div style={{ marginTop: 4, fontWeight: 700, color: vr > 0.05 ? '#F9A8A0' : vr < -0.05 ? '#9BE3B4' : '#fff' }}>
+                    {vr > 0 ? '▲ +' : vr < 0 ? '▼ ' : ''}{vr.toFixed(1)}% vs compra anterior ({fmtMoeda(u(ant))}/un em {dt(ant.data)})</div>}
+                  <div style={{ marginTop: 4, fontSize: 11, color: 'rgba(255,255,255,.6)' }}>clique para ver na tabela</div>
+                </div>
+              ); })()}
+            </div>
+            <div style={{ fontSize: 11.5, color: C.ink3, marginTop: 4 }}>passe o mouse nas bolinhas para ver o detalhe de cada compra · clique para achá-la na tabela</div>
             <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', fontSize: 12, color: C.ink2 }}>{forns.map(f => <span key={f}><span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 5, background: corF[f], marginRight: 5 }} />{f}</span>)}</div>
           </section>
           <section style={{ background: C.surface, border: `1px solid ${C.line}`, borderRadius: 12, overflow: 'hidden' }}>
@@ -32535,11 +32564,12 @@ function PrecoCompraFicha({ cod, linhas, base, contatos, onFechar }) {
           </section>
           <section style={{ background: C.surface, border: `1px solid ${C.line}`, borderRadius: 12, overflow: 'hidden' }}>
             <div style={{ padding: '12px 16px', fontWeight: 600, borderBottom: `1px solid ${C.line}` }}>Todas as compras ({ls.length})</div>
-            <div style={{ overflowX: 'auto' }}>
+            <div style={{ overflowX: 'auto' }} ref={tabelaRef}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
                 <thead><tr style={{ background: C.surface2 }}>{['Data', 'Fornecedor', 'NF', 'Projeto', 'Qtd', 'Unit. bruto', 'Unit. líquido', 'Total líquido', ''].map((h, k) => <th key={k} style={{ padding: '8px 10px', fontSize: 11.5, fontWeight: 600, color: C.ink3, textAlign: k >= 4 && k <= 7 ? 'right' : 'left' }}>{h}</th>)}</tr></thead>
                 <tbody>{[...ls].reverse().map((r, k) => (
-                  <tr key={k} style={{ background: k % 2 ? C.surface2 : C.surface }}>
+                  <tr key={k} data-k={`${r.nunota}|${r.data}|${r.unitL}`} onMouseEnter={() => setHov(r)} onMouseLeave={() => setHov(null)}
+                    style={{ background: marcada === r ? '#FFF4D6' : hov === r ? C.primarySoft : k % 2 ? C.surface2 : C.surface, outline: marcada === r ? `2px solid ${C.warn}` : 'none', transition: 'background .15s' }}>
                     <td style={{ padding: '7px 10px', whiteSpace: 'nowrap' }}>{dt(r.data)}</td>
                     <td style={{ padding: '7px 10px' }}><span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 4, background: corF[r.forn], marginRight: 6 }} />{r.forn}</td>
                     <td style={{ padding: '7px 10px' }}>{r.nf}</td>
