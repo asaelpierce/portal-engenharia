@@ -32725,7 +32725,10 @@ function PrecoCompra() {
   const [modoBusca, setModoBusca] = useState('desc');   // 'desc' (inteligente) | 'cod' (código exato)
   const [sugAberta, setSugAberta] = useState(false);
   const [base, setBase] = useState('liq');
-  const [aba, setAba] = useState('geral');
+  const [aba, setAba] = useState('orcar');
+  const [listaTxt, setListaTxt] = useState('');
+  const [listaRes, setListaRes] = useState(null);
+  const [copiado, setCopiado] = useState(null);
   const [limiar, setLimiar] = useState(10);
   const [itemSel, setItemSel] = useState(null);
   const [abertoComp, setAbertoComp] = useState(null);
@@ -32736,7 +32739,7 @@ function PrecoCompra() {
         const brutas = [];
         for (let de = 0; de < 60000; de += 1000) {
           const { data, error } = await supabaseSupply.from('nfs_entrada')
-            .select('numero_nf,data_recebimento,cod_fornecedor,fornecedor,codigo_produto,descricao_produto,quantidade_recebida,valor_item,valor_liquido_item,valor_icms,valor_pis,valor_cofins,valor_ipi,projeto,numero_pedido_oc,nunota,tipmov,codtipoper_nota,nunota_pedido_oc')
+            .select('numero_nf,data_recebimento,cod_fornecedor,fornecedor,codigo_produto,descricao_produto,quantidade_recebida,valor_item,valor_liquido_item,valor_icms,valor_pis,valor_cofins,valor_ipi,projeto,numero_pedido_oc,nunota,tipmov,codtipoper_nota,nunota_pedido_oc,unidade,unidade_padrao')
             .not('codigo_produto', 'is', null).not('valor_item', 'is', null).order('data_recebimento').range(de, de + 999);
           if (error) throw error;
           brutas.push(...(data || [])); if (!data || data.length < 1000) break;
@@ -32753,7 +32756,8 @@ function PrecoCompra() {
           return { cod: r.codigo_produto, desc: (r.descricao_produto || '').trim(), forn: (r.fornecedor || '—').trim(), codForn: r.cod_fornecedor, data: String(r.data_recebimento || '').slice(0, 10),
             nf: r.numero_nf, qtd: q, bruto: vb, liq: vl, unitB: q ? vb / q : null, unitL: q ? vl / q : null, nunota: r.nunota, tipmov: r.tipmov, top: r.codtipoper_nota, oc: r.numero_pedido_oc, nunotaOc: r.nunota_pedido_oc,
             projeto: r.projeto, grupo: grupos[r.codigo_produto] || 'Sem grupo',
-            icms: Number(r.valor_icms) || 0, pis: Number(r.valor_pis) || 0, cofins: Number(r.valor_cofins) || 0, ipi: Number(r.valor_ipi) || 0 }; }).filter(r => r.data));
+            icms: Number(r.valor_icms) || 0, pis: Number(r.valor_pis) || 0, cofins: Number(r.valor_cofins) || 0, ipi: Number(r.valor_ipi) || 0,
+            un: (r.unidade || r.unidade_padrao || '').trim() || 'UN' }; }).filter(r => r.data));
       } catch (e) { setErro(e.message || String(e)); }
     })();
   }, []);
@@ -32787,6 +32791,53 @@ function PrecoCompra() {
   const u = (r) => (base === 'liq' ? r.unitL : r.unitB);
   const val = (r) => (base === 'liq' ? r.liq : r.bruto);
   const gasto = F.reduce((t, r) => t + val(r), 0);
+  // ---- preço para orçar (engenharia): o MAIOR entre o último preço e a média ponderada dos últimos 6 meses ----
+  const hojeIso = new Date().toISOString().slice(0, 10);
+  const diasAte = (d) => Math.round((new Date(`${hojeIso}T12:00:00`) - new Date(`${d}T12:00:00`)) / 86400000);
+  const lim6 = new Date(Date.now() - 182 * 86400000).toISOString().slice(0, 10), lim12 = new Date(Date.now() - 365 * 86400000).toISOString().slice(0, 10);
+  const porCodTodos = {}; linhas.forEach(r => { (porCodTodos[r.cod] = porCodTodos[r.cod] || []).push(r); });
+  const precoRef = (cod) => {
+    const ls = [...(porCodTodos[cod] || [])].sort((a, b) => a.data.localeCompare(b.data));
+    if (!ls.length) return null;
+    const ult = ls[ls.length - 1], ant = ls.length > 1 ? ls[ls.length - 2] : null;
+    const c6 = ls.filter(r => r.data >= lim6 && r.qtd > 0), c12 = ls.filter(r => r.data >= lim12 && r.qtd > 0);
+    const q6 = c6.reduce((t, r) => t + r.qtd, 0);
+    const media6 = q6 ? c6.reduce((t, r) => t + val(r), 0) / q6 : null;
+    const pUlt = u(ult);
+    const ref = Math.max(pUlt || 0, media6 || 0) || pUlt;
+    const us12 = c12.map(u).filter(v => v > 0);
+    const min12 = us12.length ? Math.min(...us12) : null, max12 = us12.length ? Math.max(...us12) : null;
+    const idade = diasAte(ult.data);
+    const forns = [...new Set(ls.map(r => r.forn))];
+    const unidades = [...new Set(ls.map(r => r.un))];
+    const atencao = [];
+    if (idade > 180) atencao.push({ t: `preço antigo (${Math.round(idade / 30)} meses)`, cor: 'warn', d: 'última compra há mais de 6 meses: o valor pode estar defasado' });
+    if (ant && u(ant) && pUlt / u(ant) - 1 >= 0.1) atencao.push({ t: `alta recente +${Math.round(100 * (pUlt / u(ant) - 1))}%`, cor: 'loss', d: `última compra ${fmtMoeda(pUlt)} contra ${fmtMoeda(u(ant))} na anterior` });
+    const lote = c12.some(a => c12.some(b2 => a.qtd >= 2 * b2.qtd && u(b2) >= 1.3 * u(a)));
+    if (lote) atencao.push({ t: 'efeito de lote', cor: 'warn', d: 'comprar quantidade menor saiu bem mais caro por unidade: confira a quantidade do orçamento' });
+    if (forns.length === 1) atencao.push({ t: 'fornecedor único', cor: 'info', d: 'só há uma referência de preço' });
+    else { const ultPorF = forns.map(f => { const l = ls.filter(r => r.forn === f); return u(l[l.length - 1]); }).filter(v => v > 0);
+      if (ultPorF.length > 1 && Math.max(...ultPorF) / Math.min(...ultPorF) >= 1.3) atencao.push({ t: 'variação entre fornecedores', cor: 'info', d: `último preço entre ${fmtMoeda(Math.min(...ultPorF))} e ${fmtMoeda(Math.max(...ultPorF))} conforme o fornecedor` }); }
+    if (unidades.length > 1) atencao.push({ t: `unidades diferentes (${unidades.join(', ')})`, cor: 'loss', d: 'o item foi comprado em mais de uma unidade: confira antes de usar' });
+    const conf = (c12.length >= 2 && idade <= 180 && (!min12 || max12 / min12 <= 1.2)) ? 'alta' : idade <= 365 && c12.length >= 1 ? 'média' : 'baixa';
+    return { cod, desc: ult.desc, grupo: ult.grupo, un: ult.un, ult, pUlt, media6, ref, min12, max12, idade, n12: c12.length, n: ls.length, conf, atencao, refFonte: media6 && media6 > (pUlt || 0) ? 'média 6 meses' : 'último preço' };
+  };
+  const copiar = async (v, k) => { try { await navigator.clipboard.writeText(Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 4 })); setCopiado(k); setTimeout(() => setCopiado(null), 1500); } catch { /* sem permissão */ } };
+  const corConf = { alta: [C.win, C.winSoft], 'média': [C.warn, C.warnSoft], baixa: [C.loss, C.lossSoft] };
+  const corAt = { loss: [C.loss, C.lossSoft], warn: [C.warn, C.warnSoft], info: [C.primary, C.primarySoft] };
+  const calcularLista = () => {
+    const lin = listaTxt.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    const res = lin.map((l, k) => {
+      const partes = l.split(/[\t;|]+|\s{2,}/).map(x => x.trim()).filter(Boolean);
+      const p0 = (partes[0] || '').split(/\s+/);
+      const cod = String((partes.length > 1 ? partes[0] : p0[0]) || '').replace(/\D/g, '');
+      const qtdTxt = partes.length > 1 ? partes[1] : p0[1];
+      const qtd = qtdTxt ? Number(String(qtdTxt).replace(/\./g, '').replace(',', '.')) : 1;
+      const pr = cod ? precoRef(cod) : null;
+      return { k, linha: l, cod, qtd: isNaN(qtd) ? 1 : qtd, pr, subtotal: pr ? pr.ref * (isNaN(qtd) ? 1 : qtd) : null };
+    });
+    setListaRes(res);
+  };
   const MES = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
   const nomeP = { '3m': 'últimos 3 meses', '6m': 'últimos 6 meses', '12m': 'últimos 12 meses', ano: String(ano), ano_ant: String(ano - 1), tudo: 'todo o histórico' }[periodo];
   const abrir = (titulo, sub, linhasDet, extra = {}) => setDet({ titulo, sub, linhas: linhasDet, ...extra });
@@ -32866,10 +32917,93 @@ function PrecoCompra() {
       </div>
 
       <div style={{ display: 'flex', gap: 4, borderBottom: `1px solid ${C.line}` }}>
-        {[['geral', 'Visão geral'], ['alertas', `Alertas de alta · ${alertas.length}`], ['fornecedores', `Comparar fornecedores · ${comps.length}`]].map(([k, r]) => (
+        {[['orcar', 'Preço para orçar'], ['geral', 'Visão geral'], ['alertas', `Alertas de alta · ${alertas.length}`], ['fornecedores', `Comparar fornecedores · ${comps.length}`]].map(([k, r]) => (
           <button key={k} onClick={() => setAba(k)} style={{ fontFamily: 'inherit', fontSize: 13.5, fontWeight: aba === k ? 700 : 500, padding: '10px 16px', border: 'none', background: 'transparent', cursor: 'pointer',
             color: aba === k ? C.primary : C.ink2, borderBottom: `2px solid ${aba === k ? C.primary : 'transparent'}`, marginBottom: -1 }}>{r}</button>))}
       </div>
+
+      {aba === 'orcar' && (() => {
+        const achados = palavras.length ? [...new Set(linhas.filter(r => casaBusca(r) && (!fGrupo.length || fGrupo.includes(r.grupo)) && (!fForn.length || fForn.includes(r.forn))).map(r => r.cod))]
+          .map(precoRef).filter(Boolean).sort((a, b) => b.n - a.n).slice(0, 40) : [];
+        const chip = (a, k) => <span key={k} title={a.d} style={{ fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 10, color: corAt[a.cor][0], background: corAt[a.cor][1], whiteSpace: 'nowrap' }}>{a.t}</span>;
+        const confB = (c) => <span title="alta: 2+ compras nos últimos 12 meses, a última há até 6 meses e pouca variação · média: compra nos últimos 12 meses · baixa: compra única ou antiga"
+          style={{ fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 10, color: corConf[c][0], background: corConf[c][1] }}>confiança {c}</span>;
+        const tot = (listaRes || []).reduce((t, x) => t + (x.subtotal || 0), 0);
+        const exportarLista = () => {
+          const l2 = ['Código;Descrição;Unidade;Quantidade;Preço para orçar;Subtotal;Base do preço;Última compra;Fornecedor;Confiança;Atenção',
+            ...(listaRes || []).map(x => x.pr ? [x.cod, `"${x.pr.desc}"`, x.pr.un, String(x.qtd).replace('.', ','), x.pr.ref.toFixed(2).replace('.', ','), x.subtotal.toFixed(2).replace('.', ','), x.pr.refFonte,
+              new Date(`${x.pr.ult.data}T12:00:00`).toLocaleDateString('pt-BR'), `"${x.pr.ult.forn}"`, x.pr.conf, `"${x.pr.atencao.map(a => a.t).join(' | ')}"`].join(';')
+              : [x.cod || x.linha, 'SEM COMPRA NO HISTÓRICO', '', String(x.qtd).replace('.', ','), '', '', '', '', '', '', ''].join(';'))];
+          const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob(['\ufeff' + l2.join('\n')], { type: 'text/csv;charset=utf-8' })); a.download = 'preco_para_orcar.csv'; a.click();
+        };
+        return (<>
+          <div style={{ ...caixa, background: C.primarySoft, borderColor: '#BFD3F2', fontSize: 12.5, color: C.ink2 }}>
+            <strong style={{ color: C.ink }}>Preço para orçar</strong> = o <strong>maior</strong> entre o último preço e a média ponderada dos últimos 6 meses, em preço {base === 'liq' ? 'líquido (sem ICMS, PIS e COFINS; IPI fora)' : 'bruto'} por unidade. Use a busca no topo (código ou descrição) ou cole uma lista de materiais abaixo. Os pontos de atenção são só informativos.
+          </div>
+          {palavras.length > 0 && (
+            <section style={{ ...caixa, padding: 0, overflow: 'hidden' }}>
+              <div style={{ padding: '12px 16px', borderBottom: `1px solid ${C.line}`, fontWeight: 600 }}>{achados.length ? `${achados.length} item(ns) encontrado(s)` : 'Nenhum item com essa busca no histórico de compras'}</div>
+              {achados.map((p, k) => (
+                <div key={p.cod} style={{ display: 'grid', gridTemplateColumns: 'minmax(260px, 2fr) minmax(170px, 1fr) minmax(220px, 1.4fr)', gap: 14, padding: '12px 16px', borderTop: k ? `1px solid ${C.lineSoft}` : 'none', alignItems: 'center' }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div><strong style={{ color: C.primary, cursor: 'pointer' }} onClick={() => setItemSel(p.cod)}>{p.cod}</strong> <span>{p.desc}</span></div>
+                    <div style={{ fontSize: 11.5, color: C.ink3 }}>{p.grupo} · {p.n} compra(s) no histórico · {p.n12} nos últimos 12 meses</div>
+                    <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginTop: 5 }}>{confB(p.conf)}{p.atencao.map(chip)}</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 11.5, color: C.ink3 }}>preço para orçar</div>
+                    <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+                      <span style={{ fontSize: 22, fontWeight: 800, color: C.ink }}>{fmtMoeda(p.ref)}</span><span style={{ fontSize: 12.5, color: C.ink2 }}>/{p.un}</span>
+                      <button onClick={() => copiar(p.ref, p.cod)} title="copiar o valor" style={{ fontFamily: 'inherit', fontSize: 11.5, padding: '3px 8px', borderRadius: 6, border: `1px solid ${C.line}`, background: C.surface, cursor: 'pointer', color: copiado === p.cod ? C.win : C.ink2 }}>{copiado === p.cod ? 'copiado ✓' : 'copiar'}</button>
+                    </div>
+                    <div style={{ fontSize: 11, color: C.ink3 }}>base: {p.refFonte}</div>
+                  </div>
+                  <div style={{ fontSize: 12, color: C.ink2, lineHeight: 1.55 }}>
+                    <div>última: <strong>{fmtMoeda(p.pUlt)}</strong>/{p.un} em {new Date(`${p.ult.data}T12:00:00`).toLocaleDateString('pt-BR')} ({p.idade} dias) · {p.ult.forn}</div>
+                    <div>média 6 meses: {p.media6 ? <strong>{fmtMoeda(p.media6)}</strong> : '—'}{p.min12 != null ? ` · 12 meses: ${fmtMoeda(p.min12)} a ${fmtMoeda(p.max12)}` : ''}</div>
+                    <button onClick={() => setItemSel(p.cod)} style={{ fontFamily: 'inherit', fontSize: 12, border: 'none', background: 'none', color: C.primary, cursor: 'pointer', padding: 0, fontWeight: 600 }}>ver histórico completo →</button>
+                  </div>
+                </div>
+              ))}
+            </section>
+          )}
+          <section style={caixa}>
+            <div style={{ fontWeight: 600 }}>Consultar uma lista de materiais</div>
+            <div style={{ fontSize: 12, color: C.ink3, margin: '2px 0 10px' }}>Cole do Excel: uma linha por item, com o <strong>código</strong> e a <strong>quantidade</strong> (ex.: <code>13876	1200</code> ou <code>13876;1200</code>). Sem quantidade, considera 1.</div>
+            <textarea value={listaTxt} onChange={e => setListaTxt(e.target.value)} rows={6} placeholder={'13876\t1200\n12320\t350\n11922\t4'}
+              style={{ width: '100%', boxSizing: 'border-box', fontFamily: 'ui-monospace, Consolas, monospace', fontSize: 12.5, padding: 10, borderRadius: 8, border: `1px solid ${C.line}` }} />
+            <div style={{ display: 'flex', gap: 8, marginTop: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <button onClick={calcularLista} disabled={!listaTxt.trim()} style={{ fontFamily: 'inherit', fontSize: 13, fontWeight: 700, padding: '8px 16px', borderRadius: 8, border: 'none', background: C.primary, color: '#fff', cursor: 'pointer' }}>Calcular</button>
+              {listaRes && <button onClick={exportarLista} style={{ fontFamily: 'inherit', fontSize: 12.5, padding: '8px 12px', borderRadius: 8, border: `1px solid ${C.line}`, background: C.surface, cursor: 'pointer' }}>Exportar para Excel (CSV)</button>}
+              {listaRes && <button onClick={() => { setListaRes(null); setListaTxt(''); }} style={{ fontFamily: 'inherit', fontSize: 12.5, border: 'none', background: 'none', color: C.primary, cursor: 'pointer' }}>limpar</button>}
+            </div>
+            {listaRes && (
+              <div style={{ overflowX: 'auto', marginTop: 12 }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+                  <thead><tr style={{ background: C.surface2 }}>{['Código', 'Item', 'Qtd', 'Preço para orçar', 'Subtotal', 'Última compra', 'Confiança / atenção'].map((h, k) => <th key={h} style={{ padding: '8px 10px', fontSize: 11.5, fontWeight: 600, color: C.ink3, textAlign: k >= 2 && k <= 4 ? 'right' : 'left', whiteSpace: 'nowrap' }}>{h}</th>)}</tr></thead>
+                  <tbody>
+                    {listaRes.map((x, k) => (
+                      <tr key={x.k} style={{ background: !x.pr ? C.lossSoft : k % 2 ? C.surface2 : C.surface }}>
+                        <td style={{ padding: '8px 10px', fontWeight: 700, color: C.primary, cursor: x.pr ? 'pointer' : 'default' }} onClick={() => x.pr && setItemSel(x.cod)}>{x.cod || '—'}</td>
+                        <td style={{ padding: '8px 10px', maxWidth: 340 }}>{x.pr ? x.pr.desc : <span style={{ color: C.loss, fontWeight: 600 }}>sem compra no histórico{x.cod ? '' : ` (linha: ${x.linha})`}</span>}</td>
+                        <td style={{ padding: '8px 10px', textAlign: 'right', whiteSpace: 'nowrap' }}>{x.qtd.toLocaleString('pt-BR')} {x.pr?.un || ''}</td>
+                        <td style={{ padding: '8px 10px', textAlign: 'right', whiteSpace: 'nowrap', fontWeight: 700 }}>{x.pr ? <>{fmtMoeda(x.pr.ref)}<span style={{ fontWeight: 400, color: C.ink3 }}>/{x.pr.un}</span></> : '—'}</td>
+                        <td style={{ padding: '8px 10px', textAlign: 'right', whiteSpace: 'nowrap', fontWeight: 700 }}>{x.subtotal != null ? fmtMoeda(x.subtotal) : '—'}</td>
+                        <td style={{ padding: '8px 10px', fontSize: 11.5, color: C.ink2, whiteSpace: 'nowrap' }}>{x.pr ? `${new Date(`${x.pr.ult.data}T12:00:00`).toLocaleDateString('pt-BR')} · ${x.pr.ult.forn}` : ''}</td>
+                        <td style={{ padding: '8px 10px' }}>{x.pr && <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>{confB(x.pr.conf)}{x.pr.atencao.map(chip)}</div>}</td>
+                      </tr>))}
+                    <tr style={{ borderTop: `2px solid ${C.line}`, fontWeight: 800 }}>
+                      <td colSpan={4} style={{ padding: '10px' }}>Total do material ({listaRes.filter(x => x.pr).length} de {listaRes.length} itens com preço)</td>
+                      <td style={{ padding: '10px', textAlign: 'right' }}>{fmtMoeda(tot)}</td><td colSpan={2} />
+                    </tr>
+                  </tbody>
+                </table>
+                {listaRes.some(x => !x.pr) && <div style={{ fontSize: 12, color: C.loss, marginTop: 6 }}>Itens em vermelho não têm compra no histórico (desde jan/2025): o total não os inclui.</div>}
+              </div>
+            )}
+          </section>
+        </>);
+      })()}
 
       {aba === 'geral' && (<>
         <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))' }}>
