@@ -32462,7 +32462,7 @@ function DetalheCusteio({ itens, comps, comICMS }) {
 // gráfico por fornecedor. Preço unitário = valor (bruto ou líquido) ÷ quantidade, como a tela anterior.
 // ============================================================================
 const PC_CORES = ['#2F7BEA', '#EA7A33', '#16A34A', '#7C3AED', '#DB2777', '#0D9488', '#D9A21B', '#64748B'];
-function PrecoCompraFicha({ cod, linhas, base, contatos, onFechar }) {
+function PrecoCompraFicha({ cod, linhas, base, contatos, onFechar, custo }) {
   const C = CRMC;
   useEffect(() => { const t = e => { if (e.key === 'Escape') onFechar(); }; window.addEventListener('keydown', t); return () => window.removeEventListener('keydown', t); }, [onFechar]);
   const ls = linhas.filter(r => r.cod === cod).sort((a, b) => a.data.localeCompare(b.data));
@@ -32505,6 +32505,21 @@ function PrecoCompraFicha({ cod, linhas, base, contatos, onFechar }) {
                 <div style={{ fontSize: 11, color: C.ink3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{sub}</div>
               </div>))}
           </div>
+          <section style={{ background: C.surface, border: `1px solid ${C.line}`, borderRadius: 12, padding: '12px 16px' }}>
+            <div style={{ fontWeight: 600, marginBottom: 6 }}>Custo cadastrado no Sankhya {custo?.data ? <span style={{ fontWeight: 400, color: C.ink3, fontSize: 12 }}>· atualizado em {dt(custo.data)}</span> : null}</div>
+            {custo === undefined ? <div style={{ fontSize: 12.5, color: C.ink3 }}>consultando…</div> : !custo ? <div style={{ fontSize: 12.5, color: C.ink3 }}>Este item não tem custo cadastrado no Sankhya.</div> : (
+              <div style={{ display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))' }}>
+                {[['Custo médio sem ICMS', custo.sem_icms, 'mesma regra do líquido'], ['Custo médio com ICMS', custo.com_icms, ''], ['Custo de reposição', custo.reposicao, ''], ['Custo gerencial', custo.gerencial, '']].map(([r, v, sub]) => {
+                  const ultU = ult ? u(ult) : null; const pct = v > 0 && ultU ? (ultU / v - 1) * 100 : null;
+                  return (
+                    <div key={r} style={{ background: C.surface2, borderRadius: 8, padding: '8px 10px' }}>
+                      <div style={{ fontSize: 11.5, color: C.ink3 }}>{r}</div>
+                      <div style={{ fontSize: 16, fontWeight: 700 }}>{v > 0 ? fmtMoeda(v) : '—'}</div>
+                      <div style={{ fontSize: 11, color: pct == null ? C.ink3 : Math.abs(pct) < 10 ? C.win : pct > 0 ? C.loss : C.primary }}>{pct == null ? sub || ' ' : `última compra ${pct > 0 ? '+' : ''}${pct.toFixed(0)}% ${pct > 0 ? 'acima' : 'abaixo'}`}</div>
+                    </div>); })}
+              </div>
+            )}
+          </section>
           <section style={{ background: C.surface, border: `1px solid ${C.line}`, borderRadius: 12, padding: '14px 16px' }}>
             <div style={{ fontWeight: 600, marginBottom: 6 }}>Preço unitário {base === 'liq' ? 'líquido' : 'bruto'} ao longo do tempo, por fornecedor</div>
             <div style={{ position: 'relative' }} onMouseLeave={() => setHov(null)}>
@@ -32729,6 +32744,29 @@ function PrecoCompra() {
   const [listaTxt, setListaTxt] = useState('');
   const [listaRes, setListaRes] = useState(null);
   const [copiado, setCopiado] = useState(null);
+  const [custos, setCustos] = useState({});   // custo cadastrado no Sankhya (TGFCUS) por código
+  const custosPedidos = useRef(new Set());
+  useEffect(() => {
+    if (!linhas) return;
+    const quer = new Set();
+    if (itemSel) quer.add(String(itemSel));
+    (listaRes || []).forEach(x => x.cod && quer.add(String(x.cod)));
+    if (busca.trim()) {
+      const porC = {};
+      const codsB = modoBusca === 'cod' ? busca.split(/[\s,;]+/).map(x => x.replace(/\D/g, '')).filter(Boolean) : [];
+      const tks = modoBusca === 'desc' ? pcTokens(busca) : [];
+      linhas.forEach(r => { const ok = modoBusca === 'cod' ? codsB.includes(String(r.cod)) : tks.length && tks.every(t => pcCompacto(r.desc).includes(t)); if (ok) porC[r.cod] = (porC[r.cod] || 0) + 1; });
+      Object.entries(porC).sort((a, b2) => b2[1] - a[1]).slice(0, 40).forEach(([c]) => quer.add(String(c)));
+    }
+    const faltam = [...quer].filter(c => !custosPedidos.current.has(c));
+    if (!faltam.length) return;
+    faltam.forEach(c => custosPedidos.current.add(c));
+    supabase.rpc('fn_sankhya_custos', { p_cods: faltam.map(Number) }).then(({ data }) => {
+      if (!data?.ok) return;
+      const m = {}; faltam.forEach(c => { m[c] = null; }); (data.custos || []).forEach(c => { m[String(c.cod)] = c; });
+      setCustos(prev => ({ ...prev, ...m }));
+    });
+  }, [linhas, busca, modoBusca, listaRes, itemSel]);
   const [limiar, setLimiar] = useState(10);
   const [itemSel, setItemSel] = useState(null);
   const [abertoComp, setAbertoComp] = useState(null);
@@ -32822,6 +32860,8 @@ function PrecoCompra() {
     const conf = (c12.length >= 2 && idade <= 180 && (!min12 || max12 / min12 <= 1.2)) ? 'alta' : idade <= 365 && c12.length >= 1 ? 'média' : 'baixa';
     return { cod, desc: ult.desc, grupo: ult.grupo, un: ult.un, ult, pUlt, media6, ref, min12, max12, idade, n12: c12.length, n: ls.length, conf, atencao, refFonte: media6 && media6 > (pUlt || 0) ? 'média 6 meses' : 'último preço' };
   };
+  const custoComp = (cod) => { const c = custos[String(cod)]; if (!c) return null; const v = base === 'liq' ? Number(c.sem_icms) : Number(c.com_icms); return v > 0 ? { v, data: c.data, c } : null; };
+  const difCusto = (p) => { const c = custoComp(p.cod); if (!c || !p.ref) return null; return { ...c, pct: (p.ref / c.v - 1) * 100 }; };
   const copiar = async (v, k) => { try { await navigator.clipboard.writeText(Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 4 })); setCopiado(k); setTimeout(() => setCopiado(null), 1500); } catch { /* sem permissão */ } };
   const corConf = { alta: [C.win, C.winSoft], 'média': [C.warn, C.warnSoft], baixa: [C.loss, C.lossSoft] };
   const corAt = { loss: [C.loss, C.lossSoft], warn: [C.warn, C.warnSoft], info: [C.primary, C.primarySoft] };
@@ -32926,14 +32966,24 @@ function PrecoCompra() {
         const achados = palavras.length ? [...new Set(linhas.filter(r => casaBusca(r) && (!fGrupo.length || fGrupo.includes(r.grupo)) && (!fForn.length || fForn.includes(r.forn))).map(r => r.cod))]
           .map(precoRef).filter(Boolean).sort((a, b) => b.n - a.n).slice(0, 40) : [];
         const chip = (a, k) => <span key={k} title={a.d} style={{ fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 10, color: corAt[a.cor][0], background: corAt[a.cor][1], whiteSpace: 'nowrap' }}>{a.t}</span>;
+        const chipCusto = (p) => { const d = difCusto(p); if (!d) return null;
+          if (d.pct >= 10) return <span title={`O custo cadastrado no Sankhya (${fmtMoeda(d.v)}/${p.un}, atualizado em ${new Date(`${d.data}T12:00:00`).toLocaleDateString('pt-BR')}) está ${Math.round(d.pct)}% abaixo do preço para orçar: orçar pelo custo do sistema subestima o material`}
+            style={{ fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 10, color: C.loss, background: C.lossSoft }}>custo do Sankhya defasado ({Math.round(d.pct)}% abaixo)</span>;
+          if (d.pct <= -10) return <span title={`O custo cadastrado no Sankhya (${fmtMoeda(d.v)}) está ${Math.round(-d.pct)}% acima do preço para orçar`} style={{ fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 10, color: C.primary, background: C.primarySoft }}>custo do Sankhya acima do real</span>;
+          return null; };
+        const linhaCusto = (p) => { const c0 = custos[String(p.cod)]; if (c0 === undefined) return <span style={{ color: C.ink3 }}>custo no Sankhya: consultando…</span>;
+          const d = difCusto(p); if (!d) return <span style={{ color: C.ink3 }}>custo no Sankhya: não cadastrado</span>;
+          return <span>custo no Sankhya ({base === 'liq' ? 'sem ICMS' : 'com ICMS'}): <strong>{fmtMoeda(d.v)}</strong> em {new Date(`${d.data}T12:00:00`).toLocaleDateString('pt-BR')} ·{' '}
+            <strong style={{ color: Math.abs(d.pct) < 10 ? C.win : d.pct > 0 ? C.loss : C.primary }}>real {d.pct > 0 ? '+' : ''}{d.pct.toFixed(0)}%</strong></span>; };
         const confB = (c) => <span title="alta: 2+ compras nos últimos 12 meses, a última há até 6 meses e pouca variação · média: compra nos últimos 12 meses · baixa: compra única ou antiga"
           style={{ fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 10, color: corConf[c][0], background: corConf[c][1] }}>confiança {c}</span>;
         const tot = (listaRes || []).reduce((t, x) => t + (x.subtotal || 0), 0);
         const exportarLista = () => {
-          const l2 = ['Código;Descrição;Unidade;Quantidade;Preço para orçar;Subtotal;Base do preço;Última compra;Fornecedor;Confiança;Atenção',
+          const l2 = ['Código;Descrição;Unidade;Quantidade;Preço para orçar;Subtotal;Base do preço;Custo no Sankhya;Diferença real x Sankhya %;Última compra;Fornecedor;Confiança;Atenção',
             ...(listaRes || []).map(x => x.pr ? [x.cod, `"${x.pr.desc}"`, x.pr.un, String(x.qtd).replace('.', ','), x.pr.ref.toFixed(2).replace('.', ','), x.subtotal.toFixed(2).replace('.', ','), x.pr.refFonte,
+              (() => { const d = difCusto(x.pr); return d ? `${d.v.toFixed(2).replace('.', ',')};${d.pct.toFixed(1).replace('.', ',')}` : ';'; })(),
               new Date(`${x.pr.ult.data}T12:00:00`).toLocaleDateString('pt-BR'), `"${x.pr.ult.forn}"`, x.pr.conf, `"${x.pr.atencao.map(a => a.t).join(' | ')}"`].join(';')
-              : [x.cod || x.linha, 'SEM COMPRA NO HISTÓRICO', '', String(x.qtd).replace('.', ','), '', '', '', '', '', '', ''].join(';'))];
+              : [x.cod || x.linha, 'SEM COMPRA NO HISTÓRICO', '', String(x.qtd).replace('.', ','), '', '', '', '', '', '', '', '', ''].join(';'))];
           const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob(['\ufeff' + l2.join('\n')], { type: 'text/csv;charset=utf-8' })); a.download = 'preco_para_orcar.csv'; a.click();
         };
         return (<>
@@ -32948,7 +32998,7 @@ function PrecoCompra() {
                   <div style={{ minWidth: 0 }}>
                     <div><strong style={{ color: C.primary, cursor: 'pointer' }} onClick={() => setItemSel(p.cod)}>{p.cod}</strong> <span>{p.desc}</span></div>
                     <div style={{ fontSize: 11.5, color: C.ink3 }}>{p.grupo} · {p.n} compra(s) no histórico · {p.n12} nos últimos 12 meses</div>
-                    <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginTop: 5 }}>{confB(p.conf)}{p.atencao.map(chip)}</div>
+                    <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginTop: 5 }}>{confB(p.conf)}{p.atencao.map(chip)}{chipCusto(p)}</div>
                   </div>
                   <div>
                     <div style={{ fontSize: 11.5, color: C.ink3 }}>preço para orçar</div>
@@ -32961,6 +33011,7 @@ function PrecoCompra() {
                   <div style={{ fontSize: 12, color: C.ink2, lineHeight: 1.55 }}>
                     <div>última: <strong>{fmtMoeda(p.pUlt)}</strong>/{p.un} em {new Date(`${p.ult.data}T12:00:00`).toLocaleDateString('pt-BR')} ({p.idade} dias) · {p.ult.forn}</div>
                     <div>média 6 meses: {p.media6 ? <strong>{fmtMoeda(p.media6)}</strong> : '—'}{p.min12 != null ? ` · 12 meses: ${fmtMoeda(p.min12)} a ${fmtMoeda(p.max12)}` : ''}</div>
+                    <div>{linhaCusto(p)}</div>
                     <button onClick={() => setItemSel(p.cod)} style={{ fontFamily: 'inherit', fontSize: 12, border: 'none', background: 'none', color: C.primary, cursor: 'pointer', padding: 0, fontWeight: 600 }}>ver histórico completo →</button>
                   </div>
                 </div>
@@ -32980,7 +33031,7 @@ function PrecoCompra() {
             {listaRes && (
               <div style={{ overflowX: 'auto', marginTop: 12 }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
-                  <thead><tr style={{ background: C.surface2 }}>{['Código', 'Item', 'Qtd', 'Preço para orçar', 'Subtotal', 'Última compra', 'Confiança / atenção'].map((h, k) => <th key={h} style={{ padding: '8px 10px', fontSize: 11.5, fontWeight: 600, color: C.ink3, textAlign: k >= 2 && k <= 4 ? 'right' : 'left', whiteSpace: 'nowrap' }}>{h}</th>)}</tr></thead>
+                  <thead><tr style={{ background: C.surface2 }}>{['Código', 'Item', 'Qtd', 'Preço para orçar', 'Subtotal', 'Custo no Sankhya', 'Última compra', 'Confiança / atenção'].map((h, k) => <th key={h} style={{ padding: '8px 10px', fontSize: 11.5, fontWeight: 600, color: C.ink3, textAlign: k >= 2 && k <= 4 ? 'right' : 'left', whiteSpace: 'nowrap' }}>{h}</th>)}</tr></thead>
                   <tbody>
                     {listaRes.map((x, k) => (
                       <tr key={x.k} style={{ background: !x.pr ? C.lossSoft : k % 2 ? C.surface2 : C.surface }}>
@@ -32989,12 +33040,13 @@ function PrecoCompra() {
                         <td style={{ padding: '8px 10px', textAlign: 'right', whiteSpace: 'nowrap' }}>{x.qtd.toLocaleString('pt-BR')} {x.pr?.un || ''}</td>
                         <td style={{ padding: '8px 10px', textAlign: 'right', whiteSpace: 'nowrap', fontWeight: 700 }}>{x.pr ? <>{fmtMoeda(x.pr.ref)}<span style={{ fontWeight: 400, color: C.ink3 }}>/{x.pr.un}</span></> : '—'}</td>
                         <td style={{ padding: '8px 10px', textAlign: 'right', whiteSpace: 'nowrap', fontWeight: 700 }}>{x.subtotal != null ? fmtMoeda(x.subtotal) : '—'}</td>
+                        <td style={{ padding: '8px 10px', fontSize: 11.5, whiteSpace: 'nowrap' }}>{x.pr ? (() => { const d = difCusto(x.pr); return d ? <>{fmtMoeda(d.v)} <strong style={{ color: Math.abs(d.pct) < 10 ? C.win : d.pct > 0 ? C.loss : C.primary }}>({d.pct > 0 ? '+' : ''}{d.pct.toFixed(0)}%)</strong></> : <span style={{ color: C.ink3 }}>{custos[String(x.cod)] === undefined ? '…' : 'não cadastrado'}</span>; })() : ''}</td>
                         <td style={{ padding: '8px 10px', fontSize: 11.5, color: C.ink2, whiteSpace: 'nowrap' }}>{x.pr ? `${new Date(`${x.pr.ult.data}T12:00:00`).toLocaleDateString('pt-BR')} · ${x.pr.ult.forn}` : ''}</td>
-                        <td style={{ padding: '8px 10px' }}>{x.pr && <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>{confB(x.pr.conf)}{x.pr.atencao.map(chip)}</div>}</td>
+                        <td style={{ padding: '8px 10px' }}>{x.pr && <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>{confB(x.pr.conf)}{x.pr.atencao.map(chip)}{chipCusto(x.pr)}</div>}</td>
                       </tr>))}
                     <tr style={{ borderTop: `2px solid ${C.line}`, fontWeight: 800 }}>
                       <td colSpan={4} style={{ padding: '10px' }}>Total do material ({listaRes.filter(x => x.pr).length} de {listaRes.length} itens com preço)</td>
-                      <td style={{ padding: '10px', textAlign: 'right' }}>{fmtMoeda(tot)}</td><td colSpan={2} />
+                      <td style={{ padding: '10px', textAlign: 'right' }}>{fmtMoeda(tot)}</td><td colSpan={3} />
                     </tr>
                   </tbody>
                 </table>
@@ -33125,7 +33177,7 @@ function PrecoCompra() {
       )}
       {det && <PrecoCompraDetalhe det={det} base={base} contatos={contatos} fichaAberta={!!itemSel} onFechar={() => setDet(null)} onItem={c => setItemSel(c)} onForn={f => abrirForn(f)}
         onFiltrar={([k, v]) => { if (k === 'grupo') setFGrupo([v]); if (k === 'forn') setFForn([v]); }} />}
-      {itemSel && <PrecoCompraFicha cod={itemSel} linhas={linhas.filter(r => r.cod === itemSel)} base={base} contatos={contatos} onFechar={() => setItemSel(null)} />}
+      {itemSel && <PrecoCompraFicha custo={custos[String(itemSel)]} cod={itemSel} linhas={linhas.filter(r => r.cod === itemSel)} base={base} contatos={contatos} onFechar={() => setItemSel(null)} />}
     </div>
   );
 }
