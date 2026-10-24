@@ -27566,8 +27566,8 @@ function CRMColunas({ itens, altura = 190, aoClicar }) {
           style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-end', height: '100%', cursor: aoClicar ? 'pointer' : 'default' }}>
           <div style={{ fontSize: 12.5, fontWeight: 600, marginBottom: 5, fontVariantNumeric: 'tabular-nums', color: it.v ? CRMC.ink : CRMC.ink3 }}>{it.rot}</div>
           <div style={{ width: '100%', maxWidth: 110, height: Math.max(3, altura * (it.v || 0) / max), background: it.cor || CRMC.primary, borderRadius: '6px 6px 2px 2px', opacity: it.v ? 1 : 0.25 }} />
-          <div style={{ fontSize: 12, color: CRMC.ink2, marginTop: 7, fontWeight: 600 }}>{it.k}</div>
-          {it.sub && <div style={{ fontSize: 11, color: CRMC.ink3 }}>{it.sub}</div>}
+          <div style={{ fontSize: 12, color: CRMC.ink2, marginTop: 7, fontWeight: 600, maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textAlign: 'center' }}>{it.k}</div>
+          {it.sub && <div style={{ fontSize: 11, color: CRMC.ink3, maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textAlign: 'center', lineHeight: 1.3 }}>{it.sub}</div>}
         </div>
       ))}
     </div>
@@ -34387,7 +34387,7 @@ function CeramicasDashboard() {
   const mesesP = []; { const c = new Date(`${ini}T12:00:00`); c.setDate(1); const b = new Date(`${fim}T12:00:00`); while (c <= b) { mesesP.push(`${c.getFullYear()}-${String(c.getMonth() + 1).padStart(2, '0')}`); c.setMonth(c.getMonth() + 1); } }
   const nomeMes = (m) => `${MES[Number(m.slice(5)) - 1]}/${m.slice(0, 4)}`;
   const valeBase = valeAj.filter(r => (!foco.unidade || r.client === foco.unidade) && (!foco.esp || String(r.espessura_ceramica_mm ?? 'sem regra') === foco.esp) && (!foco.placa || usaPlaca(r, foco.placa)));
-  const pecasMes = mesesP.map(m => { const l = valeBase.filter(r => mesDe(r.data_neg) === m); return { k: MES[Number(m.slice(5)) - 1], m, rot: fmt(l.reduce((t, r) => t + (Number(r.qtd_pecas) || 0), 0)), v: l.reduce((t, r) => t + (Number(r.qtd_pecas) || 0), 0), sub: `${new Set(l.map(r => r.nunota)).size} pedido(s)` }; });
+  const pecasMes = mesesP.map(m => { const l = valeBase.filter(r => mesDe(r.data_neg) === m); return { k: MES[Number(m.slice(5)) - 1], m, rot: fmt(l.reduce((t, r) => t + (Number(r.qtd_pecas) || 0), 0)), v: l.reduce((t, r) => t + (Number(r.qtd_pecas) || 0), 0), sub: `${new Set(l.map(r => r.nunota)).size} ped.` }; });
   const apsBase = dados.aps.filter(a => (!foco.placa || String(a.cod_materia_prima) === foco.placa));
   const consMes = mesesP.map(m => { const l = apsBase.filter(a => mesDe(a.data_ref) === m); const lv = l.filter(a => ehVale(a.cliente_nome) && (!foco.unidade || a.cliente_nome === foco.unidade));
     const v = lv.reduce((t, a) => t + (Number(a.qtd_mp) || 0), 0); return { m, vale: v, outros: l.reduce((t, a) => t + (Number(a.qtd_mp) || 0), 0) - v, lv, l }; });
