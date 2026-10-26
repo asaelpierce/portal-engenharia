@@ -23125,9 +23125,9 @@ function RelatorioEstoqueOCs() {
         const corVar = (v) => (v == null ? C.ink3 : v > 3 ? C.loss : v < -3 ? C.win : C.ink2);
         const fmtVar = (v) => (v == null ? '—' : `${v > 0 ? '+' : ''}${v.toFixed(1)}%`);
         return (
-          <div onClick={() => setAberto(null)} style={{ position: 'fixed', inset: 0, zIndex: 85, background: 'rgba(15,35,64,.35)', display: 'flex', justifyContent: 'flex-end' }}>
-            <aside onClick={e => e.stopPropagation()} style={{ width: 'min(1100px, 100%)', height: '100%', background: '#F7F8FA', display: 'flex', flexDirection: 'column', fontFamily: FONT_BODY, color: C.ink, boxShadow: '-10px 0 40px rgba(16,24,40,.25)' }}>
-              <div style={{ background: '#0F2340', color: '#fff', padding: '16px 22px', display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+          <div onClick={() => setAberto(null)} style={{ position: 'fixed', inset: 0, zIndex: 85, background: 'rgba(15,35,64,.35)', overflowY: 'auto', overscrollBehavior: 'contain' }}>
+            <aside onClick={e => e.stopPropagation()} style={{ marginLeft: 'auto', width: 'min(1100px, 100%)', minHeight: '100%', background: '#F7F8FA', fontFamily: FONT_BODY, color: C.ink, boxShadow: '-10px 0 40px rgba(16,24,40,.25)' }}>
+              <div style={{ position: 'sticky', top: 0, zIndex: 3, background: '#0F2340', color: '#fff', padding: '16px 22px', display: 'flex', gap: 12, alignItems: 'flex-start' }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 12, color: 'rgba(255,255,255,.7)' }}>Código {l.cod_prod} · {l.unidade}</div>
                   <div style={{ fontSize: 16.5, fontWeight: 700 }}>{l.descr_prod}</div>
@@ -23135,7 +23135,7 @@ function RelatorioEstoqueOCs() {
                 <span style={{ fontSize: 12.5, fontWeight: 700, background: '#fff', color: sx.cor, padding: '5px 10px', borderRadius: 8 }}>{sx.r}</span>
                 <button onClick={() => setAberto(null)} style={{ fontFamily: 'inherit', fontSize: 12.5, fontWeight: 600, padding: '7px 12px', borderRadius: 8, border: '1px solid rgba(255,255,255,.3)', background: 'transparent', color: '#fff', cursor: 'pointer' }}>Fechar · Esc</button>
               </div>
-              <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', overscrollBehavior: 'contain', padding: '16px 22px', display: 'grid', alignContent: 'start', gap: 16 }}>
+              <div style={{ padding: '16px 22px 40px', display: 'grid', gap: 16 }}>
                 <div style={{ display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))' }}>
                   {[['Média mensal (12m)', q(l.media_mensal)], ['Tendência', l.tendencia_pct == null ? '—' : `${l.tendencia_pct > 0 ? '+' : ''}${l.tendencia_pct}%`], ['Disponível', q(l.disponivel)], ['A receber (OCs)', q(l.a_receber)],
                     ['Cobertura', l.cobertura_com_oc_meses == null ? '—' : `${q(l.cobertura_com_oc_meses, 1)} meses`], ['Prazo de entrega', l.lead_time_dias ? `${q(l.lead_time_dias)} dias` : '30 dias*'], ['Sugestão de compra', l.sugestao_compra > 0 ? q(l.sugestao_compra) : '—']].map(([r, v]) => (
@@ -32663,16 +32663,16 @@ function PrecoCompraFicha({ cod, linhas, base, contatos, onFechar, custo }) {
   const y = (v) => mt + (H - mt - mb) * (1 - (v - minP) / ((maxP - minP) || 1));
   const dt = (d) => new Date(`${d}T12:00:00`).toLocaleDateString('pt-BR');
   return ReactDOM.createPortal(
-    <div onClick={onFechar} style={{ position: 'fixed', inset: 0, zIndex: 86, background: 'rgba(15,35,64,.35)', display: 'flex', justifyContent: 'flex-end' }}>
-      <aside onClick={e => e.stopPropagation()} style={{ width: 'min(1100px, 100%)', height: '100%', background: C.bg, display: 'flex', flexDirection: 'column', fontFamily: FONT_BODY, color: C.ink, boxShadow: '-10px 0 40px rgba(16,24,40,.25)' }}>
-        <div style={{ background: '#0F2340', color: '#fff', padding: '16px 22px', display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+    <div onClick={onFechar} style={{ position: 'fixed', inset: 0, zIndex: 86, background: 'rgba(15,35,64,.35)', overflowY: 'auto', overscrollBehavior: 'contain' }}>
+      <aside onClick={e => e.stopPropagation()} style={{ marginLeft: 'auto', width: 'min(1100px, 100%)', minHeight: '100%', background: C.bg, fontFamily: FONT_BODY, color: C.ink, boxShadow: '-10px 0 40px rgba(16,24,40,.25)' }}>
+        <div style={{ position: 'sticky', top: 0, zIndex: 3, background: '#0F2340', color: '#fff', padding: '16px 22px', display: 'flex', gap: 12, alignItems: 'flex-start' }}>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontSize: 12, color: 'rgba(255,255,255,.7)' }}>{cod} · {ls[0]?.grupo || 'grupo não informado'}</div>
             <div style={{ fontSize: 16.5, fontWeight: 700 }}>{ls[0]?.desc}</div>
           </div>
           <button onClick={onFechar} style={{ fontFamily: 'inherit', fontSize: 12.5, fontWeight: 600, padding: '8px 12px', borderRadius: 8, border: 'none', background: '#fff', color: '#0F2340', cursor: 'pointer' }}>Fechar <span style={{ fontSize: 10.5, color: C.ink3 }}>Esc</span></button>
         </div>
-        <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', overscrollBehavior: 'contain', padding: '16px 22px', display: 'grid', alignContent: 'start', gap: 14 }}>
+        <div style={{ padding: '16px 22px 40px', display: 'grid', gap: 14 }}>
           <div style={{ display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))' }}>
             {[['Último preço unit.', fmtMoeda(ult && u(ult)), `${ult ? `${(ult.qtd || 0).toLocaleString('pt-BR')} un · total ${fmtMoeda(base === 'liq' ? ult.liq : ult.bruto)} · ${dt(ult.data)}` : ''}`], ['Menor preço unit.', fmtMoeda(Math.min(...precos)), 'em todo o histórico'], ['Maior preço unit.', fmtMoeda(Math.max(...precos)), 'em todo o histórico'],
               ['Variação 1ª → última', varPct == null ? '—' : `${varPct > 0 ? '+' : ''}${varPct.toFixed(1)}%`, `${ls.length} compra(s) · ${forns.length} fornecedor(es)`]].map(([r, v, sub], k) => (
@@ -32840,7 +32840,7 @@ function PrecoCompraDetalhe({ det, base, contatos, onFechar, onItem, onForn, onF
   const ordenar = (arr) => [...arr].sort((a, b) => { const x = a[ord.c] ?? '', y = b[ord.c] ?? ''; return (x > y ? 1 : x < y ? -1 : 0) * (ord.desc ? -1 : 1); });
   const th = (r, c, al = 'left') => (
     <th onClick={c ? () => setOrd(o => ({ c, desc: o.c === c ? !o.desc : true })) : undefined}
-      style={{ padding: '9px 10px', fontSize: 11.5, fontWeight: 600, color: C.ink3, textAlign: al, whiteSpace: 'nowrap', position: 'sticky', top: 0, background: C.surface2, borderBottom: `1px solid ${C.line}`, cursor: c ? 'pointer' : 'default' }}>
+      style={{ padding: '9px 10px', fontSize: 11.5, fontWeight: 600, color: C.ink3, textAlign: al, whiteSpace: 'nowrap', background: C.surface2, borderBottom: `1px solid ${C.line}`, cursor: c ? 'pointer' : 'default' }}>
       {r}{c && ord.c === c ? (ord.desc ? ' ▼' : ' ▲') : ''}</th>
   );
   const exportar = () => {
@@ -32852,9 +32852,9 @@ function PrecoCompraDetalhe({ det, base, contatos, onFechar, onItem, onForn, onF
   const ct = det.contato;
   const td = { padding: '8px 10px' };
   return ReactDOM.createPortal(
-    <div onClick={onFechar} style={{ position: 'fixed', inset: 0, zIndex: 84, background: 'rgba(15,35,64,.35)', display: 'flex', justifyContent: 'flex-end' }}>
-      <aside onClick={e => e.stopPropagation()} style={{ width: 'min(1150px, 100%)', height: '100%', background: C.bg, display: 'flex', flexDirection: 'column', fontFamily: FONT_BODY, color: C.ink, boxShadow: '-10px 0 40px rgba(16,24,40,.25)' }}>
-        <div style={{ background: '#0F2340', color: '#fff', padding: '16px 22px', display: 'flex', gap: 10, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+    <div onClick={onFechar} style={{ position: 'fixed', inset: 0, zIndex: 84, background: 'rgba(15,35,64,.35)', overflowY: 'auto', overscrollBehavior: 'contain' }}>
+      <aside onClick={e => e.stopPropagation()} style={{ marginLeft: 'auto', width: 'min(1150px, 100%)', minHeight: '100%', background: C.bg, fontFamily: FONT_BODY, color: C.ink, boxShadow: '-10px 0 40px rgba(16,24,40,.25)' }}>
+        <div style={{ position: 'sticky', top: 0, zIndex: 3, background: '#0F2340', color: '#fff', padding: '16px 22px', display: 'flex', gap: 10, alignItems: 'flex-start', flexWrap: 'wrap' }}>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontSize: 17, fontWeight: 700 }}>{det.titulo}</div>
             <div style={{ fontSize: 12.5, color: 'rgba(255,255,255,.75)', marginTop: 3 }}>{det.sub}</div>
@@ -32875,7 +32875,7 @@ function PrecoCompraDetalhe({ det, base, contatos, onFechar, onItem, onForn, onF
                 background: aba === k ? C.surface : 'transparent', color: aba === k ? C.ink : C.ink2, boxShadow: aba === k ? '0 1px 2px rgba(16,24,40,.12)' : 'none' }}>{r}</button>))}
           </div>
         </div>
-        <div style={{ flex: 1, minHeight: 0, overflow: 'auto', overscrollBehavior: 'contain', background: C.surface }}>
+        <div style={{ background: C.surface, overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
             {aba === 'compras' && (<>
               <thead><tr>{th('Data', 'data')}{th('NF', 'nf')}{th('Fornecedor', 'forn')}{th('Item', 'desc')}{th('Qtd', 'qtd', 'right')}{th(`Unit. ${base === 'liq' ? 'líquido' : 'bruto'}`, null, 'right')}{th(`Total ${base === 'liq' ? 'líquido' : 'bruto'}`, 'v', 'right')}{th('')}</tr></thead>
