@@ -22961,11 +22961,180 @@ const EOC_SIT = {
   parado: { r: 'Sem consumo 12m', d: 'tem estoque/OC mas não foi consumido nos últimos 12 meses', cor: '#667085', bg: '#F2F4F7', ord: 5 },
   sem_consumo: { r: 'Sem movimento', d: 'sem consumo, estoque nem OC', cor: '#98A2B3', bg: '#F9FAFB', ord: 6 },
 };
+// ESTOQUE MÍNIMO (visão completa): mínimo de segurança, ponto de pedido e máximo por material, calculados pelo
+// consumo dos últimos 12 meses (média e variação) e pelo prazo de entrega real; valores manuais por material
+// sobrepõem o cálculo (mp_estoque_regra). Compara com o mínimo/máximo cadastrados no Sankhya (TGFPRO).
+const EMIN_SIT = {
+  abaixo_minimo: { r: 'Abaixo do mínimo', d: 'disponível menor que o estoque mínimo', cor: '#B42318', ord: 0 },
+  comprar: { r: 'Comprar', d: 'disponível + a receber chegou no ponto de pedido', cor: '#B7791F', ord: 1 },
+  ok: { r: 'OK', d: 'entre o ponto de pedido e o máximo', cor: '#1E8E4F', ord: 2 },
+  acima_maximo: { r: 'Acima do máximo', d: 'disponível maior que o estoque máximo', cor: '#1D5FBF', ord: 3 },
+  sem_consumo: { r: 'Sem consumo 12m', d: 'sem consumo nos últimos 12 meses', cor: '#98A2B3', ord: 4 },
+};
+function EstoqueMinimo({ autor }) {
+  const C = CRMC;
+  const [linhas, setLinhas] = useState(null);
+  const [cfg, setCfg] = useState(null);
+  const [fSit, setFSit] = useState(null);
+  const [busca, setBusca] = useState('');
+  const [ordem, setOrdem] = useState({ c: 'sit', desc: false });
+  const [edit, setEdit] = useState(null);
+  const carregar = useCallback(async () => {
+    const [l, c] = await Promise.all([supabase.from('v_estoque_minimo').select('*'), supabase.from('mp_estoque_config').select('*').eq('id', 1).maybeSingle()]);
+    setLinhas(l.data || []); setCfg(c.data || null);
+  }, []);
+  useEffect(() => { carregar(); }, [carregar]);
+  if (!linhas) return <div style={{ padding: 40, textAlign: 'center', color: C.ink3 }}>Calculando o estoque mínimo…</div>;
+  const q = (v) => (v == null ? '—' : Number(v).toLocaleString('pt-BR', { maximumFractionDigits: 0 }));
+  const q1 = (v) => (v == null ? '—' : Number(v).toLocaleString('pt-BR', { maximumFractionDigits: 1 }));
+  const mudarCfg = async (campo, valor) => {
+    await supabase.from('mp_estoque_config').update({ [campo]: valor, atualizado_por: autor || null, atualizado_em: new Date().toISOString() }).eq('id', 1);
+    carregar();
+  };
+  const t = busca.trim().toLowerCase();
+  const vis = linhas.filter(l => (!fSit || l.situacao_minimo === fSit) && (!t || `${l.cod_prod} ${l.descr_prod}`.toLowerCase().includes(t)));
+  const ch = { sit: l => EMIN_SIT[l.situacao_minimo]?.ord ?? 9, cod: l => l.cod_prod, media: l => Number(l.media_mensal) || 0, min: l => Number(l.minimo) || 0, pp: l => Number(l.ponto_pedido) || 0,
+    disp: l => Number(l.disponivel) || 0, comprar: l => Number(l.comprar_qtd) || 0 };
+  vis.sort((a, b) => { const x = ch[ordem.c](a), y = ch[ordem.c](b); const r = (x > y ? 1 : x < y ? -1 : 0) * (ordem.desc ? -1 : 1); return r || (Number(b.media_mensal) - Number(a.media_mensal)); });
+  const thBase = { padding: '8px 10px', fontSize: 11.5, fontWeight: 600, color: C.ink2, whiteSpace: 'nowrap', background: '#F1F4F8', borderBottom: `1px solid ${C.line}` };
+  const th = (r, c, al = 'right', extra = {}) => (
+    <th onClick={c ? () => setOrdem(o => ({ c, desc: o.c === c ? !o.desc : !['sit', 'cod'].includes(c) })) : undefined}
+      style={{ ...thBase, textAlign: al, cursor: c ? 'pointer' : 'default', position: 'sticky', top: 30, zIndex: 1, ...extra }}>{r}{c && ordem.c === c ? (ordem.desc ? ' ▼' : ' ▲') : ''}</th>);
+  const grupo = (r, n, extra = {}) => <th colSpan={n} style={{ ...thBase, textAlign: 'center', fontSize: 11, letterSpacing: 0.4, textTransform: 'uppercase', color: C.ink3, position: 'sticky', top: 0, zIndex: 2, height: 30, boxSizing: 'border-box', ...extra }}>{r}</th>;
+  const td = { padding: '8px 10px', textAlign: 'right', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap', borderBottom: `1px solid ${C.lineSoft}` };
+  const sep = { borderLeft: `1px solid ${C.line}` };
+  const manual = (l, k) => l[`${k}_manual`] != null;
+  const exportar = () => {
+    const l2 = ['Código;Material;Unidade;Média/mês;Desvio/mês;Prazo (meses);Mínimo;Ponto de pedido;Máximo;Disponível;A receber;Posição;Situação;Comprar;Mínimo Sankhya;Máximo Sankhya;Manual;Observação',
+      ...vis.map(l => [l.cod_prod, `"${l.descr_prod || ''}"`, l.unidade || '', String(l.media_mensal).replace('.', ','), String(l.desvio_mensal).replace('.', ','), String(Number(l.prazo_meses).toFixed(1)).replace('.', ','),
+        l.minimo, l.ponto_pedido, l.maximo, l.disponivel, l.a_receber, l.posicao, EMIN_SIT[l.situacao_minimo]?.r || '', l.comprar_qtd, l.est_min_sankhya ?? '', l.est_max_sankhya ?? '',
+        (manual(l, 'minimo') || manual(l, 'ponto_pedido') || manual(l, 'maximo')) ? 'sim' : '', `"${l.observacao || ''}"`].join(';'))];
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob(['\ufeff' + l2.join('\n')], { type: 'text/csv;charset=utf-8' })); a.download = 'estoque_minimo.csv'; a.click();
+  };
+  const caixa = { background: C.surface, border: `1px solid ${C.line}`, borderRadius: 10 };
+  const seg = (ops, v, set) => (
+    <div style={{ display: 'inline-flex', background: '#E7EBF1', borderRadius: 9, padding: 3, gap: 2 }}>
+      {ops.map(([k, r]) => <button key={k} onClick={() => set(k)} style={{ fontFamily: 'inherit', fontSize: 12.5, fontWeight: Number(v) === k ? 600 : 500, padding: '5px 10px', borderRadius: 7, border: 'none', cursor: 'pointer', background: Number(v) === k ? C.surface : 'transparent', color: Number(v) === k ? C.ink : C.ink2 }}>{r}</button>)}
+    </div>);
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12, fontFamily: FONT_BODY, color: C.ink }}>
+      <div style={{ ...caixa, padding: '12px 16px', fontSize: 12.5, color: C.ink2, lineHeight: 1.6 }}>
+        <strong style={{ color: C.ink }}>Estoque mínimo, ponto de pedido e máximo</strong>, calculados pelo consumo real dos últimos 12 meses e pelo prazo de entrega real de cada material:
+        <div><strong>Mínimo</strong> (segurança) = fator do nível de serviço × variação do consumo mensal × √prazo em meses · <strong>Ponto de pedido</strong> = consumo médio × prazo + mínimo · <strong>Máximo</strong> = ponto de pedido + consumo médio × ciclo de compra.</div>
+        <div>Quando <strong>disponível + a receber</strong> chega no ponto de pedido, a sugestão é comprar até o máximo. Clique num material para ajustar os valores à mão.</div>
+        {cfg && <div style={{ display: 'flex', gap: 14, alignItems: 'center', flexWrap: 'wrap', marginTop: 8 }}>
+          <span>Nível de serviço:</span>{seg([[0.9, '90%'], [0.95, '95%'], [0.98, '98%']], cfg.nivel_servico, v => mudarCfg('nivel_servico', v))}
+          <span>Ciclo de compra:</span>{seg([[1, '1 mês'], [2, '2 meses'], [3, '3 meses'], [6, '6 meses']], cfg.ciclo_meses, v => mudarCfg('ciclo_meses', v))}
+          <span style={{ fontSize: 11.5, color: C.ink3 }}>valem para todos os materiais{cfg.atualizado_por ? ` · alterado por ${cfg.atualizado_por}` : ''}</span>
+        </div>}
+      </div>
+      <div style={{ display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))' }}>
+        {Object.entries(EMIN_SIT).map(([k, sx]) => { const on = fSit === k; const n = linhas.filter(l => l.situacao_minimo === k).length;
+          return (
+            <button key={k} onClick={() => setFSit(on ? null : k)} title={sx.d} style={{ ...caixa, textAlign: 'left', fontFamily: 'inherit', padding: '10px 14px', cursor: 'pointer', borderColor: on ? sx.cor : C.line, borderLeft: `4px solid ${sx.cor}` }}>
+              <div style={{ fontSize: 11.5, color: C.ink2, fontWeight: 600 }}>{sx.r}</div>
+              <div style={{ fontSize: 22, fontWeight: 800, fontVariantNumeric: 'tabular-nums' }}>{n}</div>
+              <div style={{ fontSize: 10.5, color: C.ink3 }}>{sx.d}</div>
+            </button>); })}
+      </div>
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+        <div style={{ position: 'relative' }}>
+          <Search size={14} aria-hidden="true" style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: C.ink3 }} />
+          <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="código ou material" style={{ fontFamily: 'inherit', fontSize: 12.5, padding: '7px 10px 7px 30px', borderRadius: 8, border: `1px solid ${C.line}`, width: 240 }} />
+        </div>
+        {fSit && <button onClick={() => setFSit(null)} style={{ fontFamily: 'inherit', fontSize: 12.5, border: 'none', background: 'none', color: C.primary, cursor: 'pointer' }}>tirar filtro "{EMIN_SIT[fSit].r}"</button>}
+        <span style={{ flex: 1 }} />
+        <span style={{ fontSize: 12, color: C.ink3 }}>{vis.length} de {linhas.length} materiais · ✎ = valor ajustado à mão</span>
+        <button onClick={exportar} style={{ fontFamily: 'inherit', fontSize: 12.5, padding: '7px 12px', borderRadius: 8, border: `1px solid ${C.line}`, background: C.surface, cursor: 'pointer' }}>Exportar CSV</button>
+      </div>
+      <div style={{ ...caixa, overflow: 'auto', maxHeight: 'calc(100vh - 360px)', minHeight: 320 }}>
+        <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, fontSize: 12.5 }}>
+          <thead>
+            <tr>{grupo('', 2)}{grupo('Consumo (12 meses)', 3, sep)}{grupo('Parâmetros', 3, sep)}{grupo('Posição atual', 3, sep)}{grupo('Decisão', 2, sep)}{grupo('Sankhya hoje', 1, sep)}</tr>
+            <tr>
+              {th('Código', 'cod', 'left')}{th('Material', null, 'left')}
+              {th('Média/mês', 'media', 'right', sep)}{th('Variação', null)}{th('Prazo')}
+              {th('Mínimo', 'min', 'right', sep)}{th('Ponto pedido', 'pp')}{th('Máximo')}
+              {th('Disponível', 'disp', 'right', sep)}{th('A receber')}{th('Posição')}
+              {th('Situação', 'sit', 'left', sep)}{th('Comprar', 'comprar')}
+              {th('Mín / Máx', null, 'right', sep)}
+            </tr>
+          </thead>
+          <tbody>
+            {vis.map(l => { const sx = EMIN_SIT[l.situacao_minimo] || EMIN_SIT.ok; const cv = Number(l.media_mensal) ? Math.round(100 * Number(l.desvio_mensal) / Number(l.media_mensal)) : null;
+              const minSk = Number(l.est_min_sankhya) || 0; const defas = minSk > 0 && Number(l.minimo) > 0 && minSk < Number(l.minimo) * 0.7;
+              return (
+                <tr key={l.cod_prod} onClick={() => setEdit({ l, minimo: l.minimo_manual ?? '', ponto_pedido: l.ponto_pedido_manual ?? '', maximo: l.maximo_manual ?? '', observacao: l.observacao || '' })} style={{ cursor: 'pointer' }}
+                  onMouseEnter={e => { e.currentTarget.style.background = '#F7F9FC'; }} onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}>
+                  <td style={{ ...td, textAlign: 'left', fontWeight: 700, color: C.primary }}>{l.cod_prod}</td>
+                  <td style={{ ...td, textAlign: 'left', whiteSpace: 'normal', minWidth: 210, maxWidth: 290 }}><div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={l.descr_prod}>{l.descr_prod}</div><div style={{ fontSize: 10.5, color: C.ink3 }}>{l.unidade}{l.observacao ? ` · ${l.observacao}` : ''}</div></td>
+                  <td style={{ ...td, ...sep, fontWeight: 600 }}>{Number(l.media_mensal) ? q(l.media_mensal) : '—'}</td>
+                  <td style={{ ...td, color: cv == null ? C.ink3 : cv > 100 ? C.loss : cv > 50 ? C.warn : C.ink2 }} title="desvio padrão do consumo mensal em relação à média: acima de 100% = consumo muito irregular">{cv == null ? '—' : `±${cv}%`}</td>
+                  <td style={{ ...td, color: l.lead_time_dias ? C.ink : C.ink3 }}>{q1(l.prazo_meses)} m{l.lead_time_dias ? '' : '*'}</td>
+                  <td style={{ ...td, ...sep, fontWeight: 700 }}>{q(l.minimo)}{manual(l, 'minimo') ? ' ✎' : ''}</td>
+                  <td style={{ ...td, fontWeight: 700 }}>{q(l.ponto_pedido)}{manual(l, 'ponto_pedido') ? ' ✎' : ''}</td>
+                  <td style={td}>{q(l.maximo)}{manual(l, 'maximo') ? ' ✎' : ''}</td>
+                  <td style={{ ...td, ...sep, fontWeight: 700, color: Number(l.disponivel) < Number(l.minimo) ? C.loss : C.ink }}>{q(l.disponivel)}</td>
+                  <td style={{ ...td, color: Number(l.ocs_atrasadas) ? C.loss : C.ink2 }}>{Number(l.a_receber) ? q(l.a_receber) : '—'}</td>
+                  <td style={{ ...td, color: C.ink2 }}>{q(l.posicao)}</td>
+                  <td style={{ ...td, ...sep, textAlign: 'left' }}><span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600, color: sx.cor }}><span style={{ width: 8, height: 8, borderRadius: 4, background: sx.cor }} />{sx.r}</span></td>
+                  <td style={{ ...td, fontWeight: 800 }}>{Number(l.comprar_qtd) > 0 ? q(l.comprar_qtd) : '—'}</td>
+                  <td style={{ ...td, ...sep, color: defas ? C.loss : C.ink3 }} title={defas ? 'mínimo cadastrado no Sankhya está bem abaixo do calculado' : ''}>{minSk || Number(l.est_max_sankhya) ? `${q(minSk)} / ${q(l.est_max_sankhya)}` : '—'}</td>
+                </tr>); })}
+          </tbody>
+        </table>
+      </div>
+      <div style={{ fontSize: 11.5, color: C.ink3, lineHeight: 1.5 }}>
+        Variação = quanto o consumo mensal oscila em relação à média (acima de ±100%, consumo muito irregular: o mínimo calculado fica alto, vale avaliar à mão) · Prazo = prazo de entrega real (* sem histórico: 1 mês) ·
+        Posição = disponível + a receber · Comprar = quantidade para voltar ao máximo quando a posição chega no ponto de pedido · Sankhya hoje = mínimo e máximo cadastrados no produto (em vermelho quando o mínimo do Sankhya está bem abaixo do calculado).
+      </div>
+      {edit && ReactDOM.createPortal(
+        <div onClick={() => setEdit(null)} style={{ position: 'fixed', inset: 0, zIndex: 90, background: 'rgba(15,35,64,.35)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: C.surface, borderRadius: 12, width: 'min(560px, 100%)', padding: '18px 20px', fontFamily: FONT_BODY, color: C.ink, boxShadow: '0 20px 50px rgba(0,0,0,.3)' }}>
+            <div style={{ fontSize: 12, color: C.ink3 }}>Código {edit.l.cod_prod} · {edit.l.unidade}</div>
+            <div style={{ fontSize: 15.5, fontWeight: 700, marginBottom: 10 }}>{edit.l.descr_prod}</div>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5, marginBottom: 12 }}>
+              <thead><tr>{['', 'Calculado', 'Ajuste manual', 'Sankhya hoje'].map((h, k) => <th key={k} style={{ padding: '6px 8px', fontSize: 11, color: C.ink3, textAlign: k ? 'right' : 'left', borderBottom: `1px solid ${C.line}` }}>{h}</th>)}</tr></thead>
+              <tbody>
+                {[['Mínimo', 'minimo', edit.l.minimo_calc, edit.l.est_min_sankhya], ['Ponto de pedido', 'ponto_pedido', edit.l.ponto_pedido_calc, null], ['Máximo', 'maximo', edit.l.maximo_calc, edit.l.est_max_sankhya]].map(([r, k, calc, sk]) => (
+                  <tr key={k}>
+                    <td style={{ padding: '6px 8px', fontWeight: 600 }}>{r}</td>
+                    <td style={{ padding: '6px 8px', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{q(calc)}</td>
+                    <td style={{ padding: '6px 8px', textAlign: 'right' }}>
+                      <input value={edit[k]} onChange={e => setEdit(x => ({ ...x, [k]: e.target.value.replace(/[^\d.,]/g, '') }))} placeholder="usar o calculado" inputMode="decimal"
+                        style={{ fontFamily: 'inherit', fontSize: 12.5, width: 130, padding: '5px 8px', borderRadius: 6, border: `1px solid ${C.line}`, textAlign: 'right' }} />
+                    </td>
+                    <td style={{ padding: '6px 8px', textAlign: 'right', color: C.ink3 }}>{sk ? q(sk) : '—'}</td>
+                  </tr>))}
+              </tbody>
+            </table>
+            <div style={{ fontSize: 12, color: C.ink2, marginBottom: 6 }}>Base do cálculo: consumo médio {q(edit.l.media_mensal)}/mês · variação ±{q(edit.l.desvio_mensal)} · prazo {q1(edit.l.prazo_meses)} meses · nível de serviço {Math.round(100 * Number(edit.l.nivel_servico))}% · ciclo {q1(edit.l.ciclo_meses)} meses</div>
+            <textarea value={edit.observacao} onChange={e => setEdit(x => ({ ...x, observacao: e.target.value }))} placeholder="Observação (ex.: material de projeto específico, contrato com fornecedor…)" rows={2}
+              style={{ width: '100%', boxSizing: 'border-box', fontFamily: 'inherit', fontSize: 12.5, padding: 8, borderRadius: 8, border: `1px solid ${C.line}` }} />
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 12, flexWrap: 'wrap' }}>
+              {(edit.l.minimo_manual != null || edit.l.ponto_pedido_manual != null || edit.l.maximo_manual != null || edit.l.observacao) && (
+                <button onClick={async () => { await supabase.from('mp_estoque_regra').delete().eq('cod_prod', edit.l.cod_prod); setEdit(null); carregar(); }}
+                  style={{ fontFamily: 'inherit', fontSize: 12.5, padding: '8px 12px', borderRadius: 8, border: `1px solid ${C.line}`, background: C.surface, cursor: 'pointer', marginRight: 'auto' }}>Voltar ao calculado</button>)}
+              <button onClick={() => setEdit(null)} style={{ fontFamily: 'inherit', fontSize: 12.5, padding: '8px 12px', borderRadius: 8, border: `1px solid ${C.line}`, background: C.surface, cursor: 'pointer' }}>Cancelar</button>
+              <button onClick={async () => { const num = (v) => (String(v).trim() === '' ? null : Number(String(v).replace(/\./g, '').replace(',', '.')));
+                const { error } = await supabase.from('mp_estoque_regra').upsert({ cod_prod: edit.l.cod_prod, minimo_manual: num(edit.minimo), ponto_pedido_manual: num(edit.ponto_pedido), maximo_manual: num(edit.maximo),
+                  observacao: edit.observacao.trim() || null, atualizado_por: autor || null, atualizado_em: new Date().toISOString() });
+                if (error) { alert(error.message); return; } setEdit(null); carregar(); }}
+                style={{ fontFamily: 'inherit', fontSize: 12.5, fontWeight: 700, padding: '8px 14px', borderRadius: 8, border: 'none', background: C.primary, color: '#fff', cursor: 'pointer' }}>Salvar</button>
+            </div>
+          </div>
+        </div>, document.body)}
+    </div>
+  );
+}
+
 // Estoque x OCs: escolhe a visão pela permissão (fn_estoque_ocs_completo: Daniela e gestores = completa;
 // demais, ex. engenharia = só disponibilidade, sem valores, fornecedores, preços nem consumo).
 function RelatorioEstoqueOCs() {
   const [completo, setCompleto] = useState(null);
-  const [comoEng, setComoEng] = useState(false);   // quem tem a visão completa pode conferir a da engenharia
+  const [comoEng, setComoEng] = useState(false);   // 'min' = estoque mínimo · true = como a engenharia vê · false = completa
+  const [autor, setAutor] = useState(null);
+  useEffect(() => { supabase.auth.getUser().then(({ data }) => setAutor(data?.user?.email || null)); }, []);
   useEffect(() => { supabase.rpc('fn_estoque_ocs_completo').then(({ data }) => setCompleto(!!data)); }, []);
   if (completo === null) return <div style={{ padding: 40, textAlign: 'center', color: CRMC.ink3 }}>Carregando…</div>;
   if (!completo) return <EstoqueDisponibilidade />;
@@ -22974,13 +23143,13 @@ function RelatorioEstoqueOCs() {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', fontFamily: FONT_BODY }}>
         <div style={{ display: 'inline-flex', background: '#E7EBF1', borderRadius: 9, padding: 3, gap: 2 }}>
-          {[[false, 'Visão completa'], [true, 'Ver como a engenharia vê']].map(([k, r]) => (
+          {[[false, 'Consumo e OCs'], ['min', 'Estoque mínimo'], [true, 'Ver como a engenharia vê']].map(([k, r]) => (
             <button key={r} onClick={() => setComoEng(k)} style={{ fontFamily: 'inherit', fontSize: 12.5, fontWeight: comoEng === k ? 600 : 500, padding: '6px 12px', borderRadius: 7, border: 'none', cursor: 'pointer',
               background: comoEng === k ? C.surface : 'transparent', color: comoEng === k ? C.ink : C.ink2 }}>{r}</button>))}
         </div>
-        <span style={{ fontSize: 12, color: C.ink3 }}>{comoEng ? 'É exatamente o que a engenharia e os demais usuários veem: só a disponibilidade, sem preços, OCs, fornecedores e consumo.' : 'Visão completa: só a Daniela e os gestores veem.'}</span>
+        <span style={{ fontSize: 12, color: C.ink3 }}>{comoEng === true ? 'É exatamente o que a engenharia e os demais usuários veem: só a disponibilidade, sem preços, OCs, fornecedores e consumo.' : 'Visão completa: só a Daniela e os gestores veem.'}</span>
       </div>
-      {comoEng ? <EstoqueDisponibilidade /> : <RelatorioEstoqueOCsCompleto />}
+      {comoEng === true ? <EstoqueDisponibilidade /> : comoEng === 'min' ? <EstoqueMinimo autor={autor} /> : <RelatorioEstoqueOCsCompleto />}
     </div>
   );
 }
