@@ -34569,22 +34569,50 @@ function CeramicasDashboard() {
         </section>
       </div>
 
-      <div style={{ display: 'grid', gap: 16, gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))' }}>
+      <div style={{ display: 'grid', gap: 16, gridTemplateColumns: 'minmax(0, 2fr) minmax(300px, 1fr)' }}>
         <section style={caixa}>
-          {titulo('Placas realmente usadas na Vale', 'apontamento nas OPs Vale · clique na placa')}
-          {Object.keys(real).length ? <CRMBarrasH itens={Object.entries(real).sort((a, b) => b[1] - a[1]).slice(0, 10).map(([c, v], i) => ({ k: `${klcDim(descPlaca[c])} · ${c}`, cod: c, v, rot: fmt(v), extra: realTot ? `${Math.round(100 * v / realTot)}%` : '', cor: CORES[i % 8] }))}
-            aoClicar={it => { const l = V.filter(r => usaPlaca(r, it.cod)); abrir(`Placa ${klcDim(descPlaca[it.cod])} (${it.cod}) na Vale${sufixo}`, 'OPs Vale que consumiram esta placa e os pedidos cuja regra usa esta placa.', l, AV.filter(a => String(a.cod_materia_prima) === it.cod), { aba: 'ops', placa: it.cod, filtro: ['placa', it.cod],
-              conta: `apontado ${fmt(real[it.cod])} · previsto pela regra ${fmt(prev[it.cod]?.qtd || 0)}.` }); }} /> : <div style={{ fontSize: 12.5, color: C.ink3 }}>Sem apontamentos de placas em OPs Vale no período.</div>}
+          {titulo('Placas por medida: previsto × usado na Vale', 'previsto = peças vendidas × placas por peça da regra · usado = apontado nas OPs Vale · placas de mesma medida (ex.: 2150 e 12320) somadas · clique na linha para ver pedidos e OPs')}
+          {(() => {
+            const dimDe = (cod, desc) => cerDim(desc) || cerDim(descPlaca[cod]) || `cód. ${cod}`;
+            const porDim = {};
+            Object.values(prev).forEach(o => { const d = dimDe(o.cod, o.desc); const x = porDim[d] || (porDim[d] = { d, prev: 0, real: 0, cods: new Set() }); x.prev += o.qtd; x.cods.add(o.cod); });
+            Object.entries(real).forEach(([c, v]) => { const d = dimDe(c, descPlaca[c]); const x = porDim[d] || (porDim[d] = { d, prev: 0, real: 0, cods: new Set() }); x.real += v; x.cods.add(c); });
+            const linhas = Object.values(porDim).sort((a2, b2) => Math.max(b2.prev, b2.real) - Math.max(a2.prev, a2.real)).slice(0, 12);
+            const mx = Math.max(1, ...linhas.map(x => Math.max(x.prev, x.real)));
+            if (!linhas.length) return <div style={{ fontSize: 12.5, color: C.ink3 }}>Sem regra nem apontamento de placas no recorte.</div>;
+            return (<>
+              <div style={{ display: 'flex', gap: 16, fontSize: 12, color: C.ink2, marginBottom: 8 }}>
+                <span><span style={{ display: 'inline-block', width: 12, height: 8, borderRadius: 2, background: '#7C3AED', marginRight: 6 }} />previsto (regra)</span>
+                <span><span style={{ display: 'inline-block', width: 12, height: 8, borderRadius: 2, background: KLC_CATS.consumo.cor, marginRight: 6 }} />usado (OPs Vale)</span>
+              </div>
+              {linhas.map(x => { const dif = x.prev && x.real ? (x.real / x.prev - 1) * 100 : null; const cods = [...x.cods];
+                return (
+                  <div key={x.d} onClick={() => { const l = V.filter(r => cods.some(c => usaPlaca(r, c))); abrir(`Placa ${x.d}${sufixo}`, `códigos ${cods.join(', ')} · previsto pela regra e usado nas OPs Vale`, l, AV.filter(a => cods.includes(String(a.cod_materia_prima))), { aba: 'ops', conta: `previsto ${fmt(x.prev)} · usado ${fmt(x.real)}${dif != null ? ` · diferença ${dif > 0 ? '+' : ''}${dif.toFixed(0)}%` : ''}` }); }}
+                    style={{ display: 'grid', gridTemplateColumns: 'minmax(120px, 170px) 1fr minmax(150px, auto)', gap: 12, alignItems: 'center', padding: '7px 4px', borderTop: `1px solid ${C.lineSoft}`, cursor: 'pointer' }}
+                    onMouseEnter={e => { e.currentTarget.style.background = C.surface2; }} onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontWeight: 700, fontSize: 13 }}>{x.d}</div>
+                      <div style={{ fontSize: 11, color: C.ink3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={cods.map(c => `${c} · ${descPlaca[c] || ''}`).join('\n')}>cód. {cods.join(', ')}</div>
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      <div style={{ height: 9, borderRadius: 4, background: C.lineSoft, overflow: 'hidden' }}><div style={{ width: `${100 * x.prev / mx}%`, height: '100%', background: '#7C3AED' }} /></div>
+                      <div style={{ height: 9, borderRadius: 4, background: C.lineSoft, overflow: 'hidden' }}><div style={{ width: `${100 * x.real / mx}%`, height: '100%', background: KLC_CATS.consumo.cor }} /></div>
+                    </div>
+                    <div style={{ fontSize: 12, lineHeight: 1.45, textAlign: 'right', whiteSpace: 'nowrap' }}>
+                      <div><span style={{ color: '#7C3AED' }}>previsto</span> <strong>{x.prev ? fmt(x.prev) : '—'}</strong></div>
+                      <div><span style={{ color: KLC_CATS.consumo.cor }}>usado</span> <strong>{x.real ? fmt(x.real) : '—'}</strong>
+                        {dif != null && <span style={{ marginLeft: 6, fontWeight: 700, color: Math.abs(dif) <= 10 ? C.win : dif > 0 ? C.loss : C.primary }}>{dif > 0 ? '+' : ''}{dif.toFixed(0)}%</span>}
+                        {!x.prev && x.real > 0 && <span style={{ marginLeft: 6, fontSize: 11, color: C.ink3 }}>sem previsto</span>}
+                      </div>
+                    </div>
+                  </div>
+                ); })}
+              <div style={{ fontSize: 11.5, color: C.ink3, marginTop: 6 }}>% = usado em relação ao previsto (verde: até 10% de diferença · vermelho: usou mais · azul: usou menos). Previsto conta peças vendidas no período e usado conta produção no período, então meses isolados podem não bater.</div>
+            </>);
+          })()}
         </section>
         <section style={caixa}>
-          {titulo('Cerâmica prevista por tipo', 'regra de cerâmica × peças vendidas · clique para conferir')}
-          {Object.keys(prev).length ? <CRMBarrasH itens={Object.values(prev).sort((a, b) => b.qtd - a.qtd).slice(0, 10).map((o, i) => ({ k: `${o.desc || klcDim(descPlaca[o.cod])} · ${o.cod}`, cod: o.cod, v: o.qtd, rot: fmt(o.qtd), extra: prevTot ? `${Math.round(100 * o.qtd / prevTot)}%` : '', cor: CORES[i % 8] }))}
-            aoClicar={it => { const l = V.filter(r => usaPlaca(r, it.cod)); abrir(`Previsto da cerâmica ${it.cod}${sufixo}`, 'Pedidos cuja regra leva esta cerâmica: a coluna "Previsto" mostra só esta placa (peças × placas por peça).', l, AV.filter(a => String(a.cod_materia_prima) === it.cod), { placa: it.cod, filtro: ['placa', it.cod],
-              conta: `${fmt(prev[it.cod]?.qtd)} placas previstas em ${l.length} itens de pedido.` }); }} />
-            : <div style={{ fontSize: 12.5, color: C.ink3 }}>Sem regra de cerâmica para os itens do período.</div>}
-        </section>
-        <section style={caixa}>
-          {titulo('Peças por espessura de cerâmica', 'clique na fatia ou na legenda')}
+          {titulo('Peças vendidas por espessura da cerâmica', 'pela regra de cada código Vale · "sem regra" = código sem regra cadastrada · clique para ver os pedidos')}
           {esps.length ? <CRMRosca itens={esps} centro={fmt(pecas)} sub="peças" fmt={fmt}
             aoClicar={it => { const l = V.filter(r => String(r.espessura_ceramica_mm ?? 'sem regra') === it.kk); abrir(`Peças com cerâmica ${it.k}${sufixo}`, it.kk === 'sem regra' ? 'Itens cujo código Vale não tem regra de cerâmica cadastrada.' : 'Itens cuja regra usa cerâmica desta espessura.', l, apsDosBrs(l), { filtro: ['esp', it.kk] }); }} /> : null}
         </section>
