@@ -23097,6 +23097,33 @@ function RelatorioEstoqueOCs() {
         const anosM = Object.keys(porAno).sort();
         const tdD = { padding: '7px 9px', textAlign: 'right', fontVariantNumeric: 'tabular-nums', borderBottom: `1px solid ${C.lineSoft}`, whiteSpace: 'nowrap' };
         const thD = { padding: '7px 9px', fontSize: 11, fontWeight: 600, color: C.ink2, background: '#F1F4F8', borderBottom: `1px solid ${C.line}`, textAlign: 'right' };
+        const simb = (o) => (!o.codmoeda ? 'R$' : /DOLAR/i.test(o.moeda || '') ? 'US$' : /EURO/i.test(o.moeda || '') ? '€' : (o.moeda || '').trim());
+        const pMoe = (o) => (o.codmoeda ? Number(o.valor_unit_moeda) : Number(o.valor_unit)) || 0;
+        const precoOC = (o) => `${simb(o)} ${pMoe(o).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 4 })}`;
+        // análise de preço: por ano e moeda, médio ponderado pela quantidade
+        const analise = (() => {
+          if (!hist || !hist.length) return [];
+          const g = {};
+          hist.forEach(o => { if (!(Number(o.qtd_pedida) > 0) || !(pMoe(o) > 0)) return; const ano = String(o.data_oc).slice(0, 4); const k = `${simb(o)}|${ano}`;
+            const x = g[k] || (g[k] = { s: simb(o), ano, n: 0, qtd: 0, v: 0, vBRL: 0, min: Infinity, max: 0, chQ: 0, chV: 0 });
+            x.n++; x.qtd += Number(o.qtd_pedida); x.v += pMoe(o) * Number(o.qtd_pedida); x.vBRL += Number(o.valor_unit || 0) * Number(o.qtd_pedida);
+            x.min = Math.min(x.min, pMoe(o)); x.max = Math.max(x.max, pMoe(o));
+            o.chegadas.forEach(c => { if (Number(c.qtd_nota) > 0) { x.chQ += Number(c.qtd_nota); x.chV += Number(c.valor_total_nota) || 0; } }); });
+          const arr = Object.values(g).sort((a2, b2) => a2.s.localeCompare(b2.s) || a2.ano.localeCompare(b2.ano)).map(x => ({ ...x, med: x.v / x.qtd, medBRL: x.vBRL / x.qtd, chegada: x.chQ ? x.chV / x.chQ : null }));
+          arr.forEach((x, k) => { const ant = arr[k - 1]; x.var = ant && ant.s === x.s && ant.med ? (x.med / ant.med - 1) * 100 : null; });
+          return arr;
+        })();
+        const resumoPreco = (() => {
+          const v = (hist || []).filter(o => pMoe(o) > 0).sort((a2, b2) => String(a2.data_oc).localeCompare(String(b2.data_oc)));
+          if (!v.length) return null;
+          const ult = v[v.length - 1], pri = v.find(o => simb(o) === simb(ult)) || v[0];
+          const lim = new Date(Date.now() - 365 * 86400000).toISOString().slice(0, 10);
+          const u12 = v.filter(o => simb(o) === simb(ult) && String(o.data_oc) >= lim);
+          const q12 = u12.reduce((t2, o) => t2 + Number(o.qtd_pedida), 0); const m12 = q12 ? u12.reduce((t2, o) => t2 + pMoe(o) * Number(o.qtd_pedida), 0) / q12 : null;
+          return { ult, pri, m12, vsPri: pMoe(pri) ? (pMoe(ult) / pMoe(pri) - 1) * 100 : null, vs12: m12 ? (pMoe(ult) / m12 - 1) * 100 : null };
+        })();
+        const corVar = (v) => (v == null ? C.ink3 : v > 3 ? C.loss : v < -3 ? C.win : C.ink2);
+        const fmtVar = (v) => (v == null ? '—' : `${v > 0 ? '+' : ''}${v.toFixed(1)}%`);
         return (
           <div onClick={() => setAberto(null)} style={{ position: 'fixed', inset: 0, zIndex: 85, background: 'rgba(15,35,64,.35)', display: 'flex', justifyContent: 'flex-end' }}>
             <aside onClick={e => e.stopPropagation()} style={{ width: 'min(1100px, 100%)', height: '100%', background: '#F7F8FA', display: 'flex', flexDirection: 'column', fontFamily: FONT_BODY, color: C.ink, boxShadow: '-10px 0 40px rgba(16,24,40,.25)' }}>
@@ -23170,15 +23197,50 @@ function RelatorioEstoqueOCs() {
                 </div>
                 <section style={{ ...caixa, overflow: 'hidden' }}>
                   <div style={{ padding: '10px 14px', borderBottom: `1px solid ${C.line}`, display: 'flex', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
-                    <strong>OCs emitidas desde 2025 e quando chegaram</strong>
+                    <strong>Análise de preço (OCs desde 2021)</strong>
+                    <span style={{ fontSize: 11.5, color: C.ink3 }}>preço na moeda da OC, médio ponderado pela quantidade · custo de chegada = valor do item na nota de entrada ÷ quantidade (R$, com impostos de importação na nacionalização)</span>
+                  </div>
+                  {resumoPreco && (
+                    <div style={{ display: 'flex', gap: 22, flexWrap: 'wrap', padding: '10px 14px', borderBottom: `1px solid ${C.lineSoft}`, fontSize: 12.5 }}>
+                      <span>Último preço: <strong>{precoOC(resumoPreco.ult)}</strong> <span style={{ color: C.ink3 }}>(OC {resumoPreco.ult.numero_oc}, {dt(resumoPreco.ult.data_oc)})</span></span>
+                      <span>vs média dos últimos 12 meses: <strong style={{ color: corVar(resumoPreco.vs12) }}>{fmtVar(resumoPreco.vs12)}</strong></span>
+                      <span>vs primeiro preço do histórico ({dt(resumoPreco.pri.data_oc)}): <strong style={{ color: corVar(resumoPreco.vsPri) }}>{fmtVar(resumoPreco.vsPri)}</strong></span>
+                    </div>
+                  )}
+                  <div style={{ overflowX: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                      <thead><tr>{['Moeda', 'Ano', 'OCs', 'Qtd comprada', 'Preço médio', 'Mínimo', 'Máximo', 'Var. vs ano anterior', 'R$/un na OC', 'Custo chegada R$/un'].map((h, k) => <th key={h} style={{ ...thD, textAlign: k < 2 ? 'left' : 'right' }}>{h}</th>)}</tr></thead>
+                      <tbody>
+                        {hist === null && <tr><td colSpan={10} style={{ padding: 14, textAlign: 'center', color: C.ink3 }}>Carregando…</td></tr>}
+                        {hist && !analise.length && <tr><td colSpan={10} style={{ padding: 14, textAlign: 'center', color: C.ink3 }}>Sem OCs com preço desde 2021.</td></tr>}
+                        {analise.map(x => (
+                          <tr key={`${x.s}-${x.ano}`}>
+                            <td style={{ ...tdD, textAlign: 'left', color: C.ink2 }}>{x.s}</td>
+                            <td style={{ ...tdD, textAlign: 'left', fontWeight: 700 }}>{x.ano}</td>
+                            <td style={tdD}>{x.n}</td>
+                            <td style={tdD}>{q(x.qtd)}</td>
+                            <td style={{ ...tdD, fontWeight: 800 }}>{x.s} {x.med.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 4 })}</td>
+                            <td style={{ ...tdD, color: C.ink2 }}>{x.min.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 4 })}</td>
+                            <td style={{ ...tdD, color: C.ink2 }}>{x.max.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 4 })}</td>
+                            <td style={{ ...tdD, fontWeight: 700, color: corVar(x.var) }}>{fmtVar(x.var)}</td>
+                            <td style={tdD}>{fmtMoeda(x.medBRL)}</td>
+                            <td style={tdD}>{x.chegada != null ? fmtMoeda(x.chegada) : '—'}</td>
+                          </tr>))}
+                      </tbody>
+                    </table>
+                  </div>
+                </section>
+                <section style={{ ...caixa, overflow: 'hidden' }}>
+                  <div style={{ padding: '10px 14px', borderBottom: `1px solid ${C.line}`, display: 'flex', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
+                    <strong>OCs emitidas desde 2021 e quando chegaram</strong>
                     <span style={{ fontSize: 11.5, color: C.ink3 }}>chegada = nota de entrada vinculada à OC no Sankhya (Docs vinculados / TGFVAR) · dias = da emissão da OC até a nota</span>
                   </div>
                   <div style={{ overflowX: 'auto' }}>
                     <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-                      <thead><tr>{['OC', 'Emitida', 'Fornecedor', 'Pedida', 'Entregue', 'Situação', 'Chegada (NF · data · qtd)', 'Dias'].map((h, k) => <th key={h} style={{ ...thD, textAlign: [0, 1, 2, 5, 6].includes(k) ? 'left' : 'right' }}>{h}</th>)}</tr></thead>
+                      <thead><tr>{['OC', 'Emitida', 'Fornecedor', 'Pedida', 'Preço na OC', 'R$/un na OC', 'Entregue', 'Situação', 'Chegada (NF · data · qtd)', 'Custo chegada R$/un', 'Dias'].map((h, k) => <th key={h} style={{ ...thD, textAlign: [0, 1, 2, 7, 8].includes(k) ? 'left' : 'right' }}>{h}</th>)}</tr></thead>
                       <tbody>
-                        {hist === null && <tr><td colSpan={8} style={{ padding: 14, textAlign: 'center', color: C.ink3 }}>Carregando…</td></tr>}
-                        {hist && !hist.length && <tr><td colSpan={8} style={{ padding: 14, textAlign: 'center', color: C.ink3 }}>Nenhuma OC emitida desde 2025.</td></tr>}
+                        {hist === null && <tr><td colSpan={11} style={{ padding: 14, textAlign: 'center', color: C.ink3 }}>Carregando…</td></tr>}
+                        {hist && !hist.length && <tr><td colSpan={11} style={{ padding: 14, textAlign: 'center', color: C.ink3 }}>Nenhuma OC emitida desde 2021.</td></tr>}
                         {(hist || []).map(o => { const ent = Number(o.qtd_entregue) || 0, ped = Number(o.qtd_pedida) || 0;
                           const st = o.pendente ? (ent > 0 ? ['em aberto (parcial)', C.warn] : ['em aberto', C.primary]) : ent >= ped - 0.0001 ? ['atendida', C.win] : ent > 0 ? ['encerrada parcial', C.warn] : ['encerrada sem entrega', C.ink3];
                           const linhasCh = o.chegadas.length ? o.chegadas : [null];
@@ -23189,10 +23251,13 @@ function RelatorioEstoqueOCs() {
                                 <td rowSpan={linhasCh.length} style={{ ...tdD, textAlign: 'left', verticalAlign: 'top' }}>{dt(o.data_oc)}</td>
                                 <td rowSpan={linhasCh.length} style={{ ...tdD, textAlign: 'left', whiteSpace: 'normal', verticalAlign: 'top', maxWidth: 200 }}>{o.fornecedor}</td>
                                 <td rowSpan={linhasCh.length} style={{ ...tdD, verticalAlign: 'top' }}>{q(ped)}</td>
+                                <td rowSpan={linhasCh.length} style={{ ...tdD, verticalAlign: 'top', fontWeight: 700 }}>{precoOC(o)}</td>
+                                <td rowSpan={linhasCh.length} style={{ ...tdD, verticalAlign: 'top', color: C.ink2 }}>{fmtMoeda(o.valor_unit)}</td>
                                 <td rowSpan={linhasCh.length} style={{ ...tdD, verticalAlign: 'top', fontWeight: 600 }}>{q(ent)}</td>
                                 <td rowSpan={linhasCh.length} style={{ ...tdD, textAlign: 'left', verticalAlign: 'top', color: st[1], fontWeight: 600 }}>{st[0]}{o.pendente && o.prev_entrega ? <div style={{ fontSize: 10.5, color: C.ink3, fontWeight: 400 }}>prev. {dt(o.prev_entrega)}</div> : null}</td>
                               </>}
                               <td style={{ ...tdD, textAlign: 'left' }}>{c ? <>NF <strong>{c.numero_nf}</strong> · {dt(c.data_nota)} · {q(c.qtd_atendida)}<span style={{ color: C.ink3 }}> (TOP {c.top_nota})</span></> : <span style={{ color: C.ink3 }}>—</span>}</td>
+                              <td style={{ ...tdD }}>{c && Number(c.qtd_nota) ? fmtMoeda(Number(c.valor_total_nota) / Number(c.qtd_nota)) : '—'}</td>
                               <td style={{ ...tdD, fontWeight: 600 }}>{c ? Math.round((new Date(`${c.data_nota}T12:00:00`) - new Date(`${o.data_oc}T12:00:00`)) / 86400000) : '—'}</td>
                             </tr>)); })}
                       </tbody>
