@@ -967,6 +967,7 @@ function PortalConteudo({ currentUser, session }) {
           {renderTab('custeio_op', <TabErrorBoundary tab="Custeio por OP"><CusteioPorOP /></TabErrorBoundary>)}
           {renderTab('custeio_plano', <TabErrorBoundary tab="Custeio - Plano"><CusteioPlano /></TabErrorBoundary>)}
           {renderTab('orcamento_material', <TabErrorBoundary tab="Matéria-prima em Orçamento"><OrcamentoMaterial currentUser={currentUser} /></TabErrorBoundary>)}
+          {renderTab('conferencia_op', <TabErrorBoundary tab="Conferência de OPs"><ConferenciaOP /></TabErrorBoundary>)}
           {renderTab('estoque_ocs', <TabErrorBoundary tab="Estoque x OCs"><RelatorioEstoqueOCs /></TabErrorBoundary>)}
           {renderTab('almoxarifado', <TabErrorBoundary tab="Estoque"><Almoxarifado currentUser={currentUser} /></TabErrorBoundary>)}
           {renderTab('equipamentos', <TabErrorBoundary tab="Equipamentos de Terceiros"><EquipamentosTerceiros /></TabErrorBoundary>)}
@@ -1029,6 +1030,7 @@ function Sidebar({ view, setView, pendCount, papel, telasPermitidas }) {
     { id: 'custeio_plano', label: 'Custeio — Plano',      icon: ClipboardList },
     { id: 'orcamento_material', label: 'Matéria-prima em Orçamento', icon: Package },
     { id: 'estoque_ocs',  label: 'Estoque x OCs',        icon: Package },
+    { id: 'conferencia_op', label: 'Conferência de OPs',  icon: ClipboardCheck },
     { id: 'almoxarifado', label: 'Estoque',                icon: Package },
     { id: 'equipamentos', label: 'Equip. Terceiros',       icon: Webhook },
     { id: 'recebimento_terceiros', label: 'Validação de Recebimento', icon: ClipboardCheck },
@@ -23129,6 +23131,193 @@ function EstoqueMinimo({ autor }) {
   );
 }
 
+// CONFERÊNCIA DE OPs (Sankhya, OPs desde 2025): produto acabado a produzir (TPRIPA) × apontado; matéria-prima
+// requisitada (requisição, TIPMOV J) × consumida (apontamento, TIPMOV F), via TPRROPE -> TPRIATV. Carga a cada hora.
+const OPC_SIT = {
+  finalizada_faltando_pa: { r: 'Finalizada faltando produto', d: 'OP finalizada com menos produto acabado apontado do que a quantidade a produzir', cor: '#B42318', ord: 0 },
+  finalizada_sem_apontamento: { r: 'Finalizada sem apontamento', d: 'OP finalizada sem nenhum apontamento de produção', cor: '#B42318', ord: 1 },
+  apontou_mais_pa: { r: 'Apontou produto a mais', d: 'mais produto acabado apontado do que a OP pedia', cor: '#C2372D', ord: 2 },
+  divergencia_mp: { r: 'Divergência de matéria-prima', d: 'consumiu mais ou menos matéria-prima do que foi requisitado (±2%)', cor: '#B7791F', ord: 3 },
+  em_andamento: { r: 'Em andamento', d: 'OP ainda não finalizada', cor: '#1D5FBF', ord: 4 },
+  ok: { r: 'OK', d: 'produto acabado e matéria-prima conferem', cor: '#1E8E4F', ord: 5 },
+  cancelada: { r: 'Cancelada', d: 'OP cancelada no Sankhya', cor: '#98A2B3', ord: 6 },
+};
+const OPC_MP = {
+  consumiu_mais: { r: 'Consumiu mais', cor: '#B42318' }, consumiu_menos: { r: 'Consumiu menos', cor: '#B7791F' },
+  requisitado_sem_consumo: { r: 'Requisitado, não consumido', cor: '#B7791F' }, consumido_sem_requisicao: { r: 'Consumido sem requisição', cor: '#667085' }, ok: { r: 'OK', cor: '#1E8E4F' },
+};
+function ConferenciaOP() {
+  const C = CRMC;
+  const [ops, setOps] = useState(null);
+  const [fSit, setFSit] = useState(null);
+  const [busca, setBusca] = useState('');
+  const [ano, setAno] = useState('todos');
+  const [ordem, setOrdem] = useState({ c: 'sit', desc: false });
+  const [aberta, setAberta] = useState(null);
+  const [mps, setMps] = useState([]);
+  const [docs, setDocs] = useState([]);
+  useEffect(() => {
+    (async () => {
+      const todas = [];
+      for (let de = 0; de < 10000; de += 1000) {
+        const { data } = await supabase.from('v_op_conferencia').select('*').order('idiproc', { ascending: false }).range(de, de + 999);
+        todas.push(...(data || [])); if (!data || data.length < 1000) break;
+      }
+      setOps(todas);
+    })();
+  }, []);
+  useEffect(() => {
+    if (!aberta) return undefined;
+    setMps([]); setDocs([]);
+    supabase.from('v_op_conferencia_mp').select('*').eq('idiproc', aberta.idiproc).then(({ data }) => setMps(data || []));
+    supabase.from('op_doc').select('*').eq('idiproc', aberta.idiproc).order('data').then(({ data }) => setDocs(data || []));
+    const t = (e) => { if (e.key === 'Escape') setAberta(null); };
+    window.addEventListener('keydown', t); return () => window.removeEventListener('keydown', t);
+  }, [aberta]);
+  if (!ops) return <div style={{ padding: 40, textAlign: 'center', color: C.ink3 }}>Carregando as OPs…</div>;
+  const q = (v) => (v == null ? '—' : Number(v).toLocaleString('pt-BR', { maximumFractionDigits: 3 }));
+  const dt = (d) => (d ? new Date(`${String(d).slice(0, 10)}T12:00:00`).toLocaleDateString('pt-BR') : '—');
+  const t = busca.trim().toLowerCase();
+  const base = ops.filter(o => (ano === 'todos' || String(o.dhinc || '').startsWith(ano)));
+  const vis = base.filter(o => (!fSit || o.situacao === fSit) && (!t || `${o.idiproc} ${o.br || ''} ${o.codprodpa} ${o.descr_pa} ${o.cliente_nome || ''}`.toLowerCase().includes(t)));
+  const ch = { sit: o => OPC_SIT[o.situacao]?.ord ?? 9, op: o => o.idiproc, data: o => o.dhinc || '', dif: o => Number(o.pa_diferenca) || 0,
+    mp: o => (o.mp_consumiu_mais || 0) + (o.mp_consumiu_menos || 0) };
+  vis.sort((a, b) => { const x = ch[ordem.c](a), y = ch[ordem.c](b); const r = (x > y ? 1 : x < y ? -1 : 0) * (ordem.desc ? -1 : 1); return r || (b.idiproc - a.idiproc); });
+  const th = (r, c, al = 'right') => (
+    <th onClick={c ? () => setOrdem(o => ({ c, desc: o.c === c ? !o.desc : c !== 'sit' })) : undefined}
+      style={{ padding: '9px 10px', fontSize: 11.5, fontWeight: 600, color: C.ink2, textAlign: al, whiteSpace: 'nowrap', background: '#F1F4F8', borderBottom: `1px solid ${C.line}`, position: 'sticky', top: 0, zIndex: 1, cursor: c ? 'pointer' : 'default' }}>
+      {r}{c && ordem.c === c ? (ordem.desc ? ' ▼' : ' ▲') : ''}</th>);
+  const td = { padding: '8px 10px', textAlign: 'right', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap', borderBottom: `1px solid ${C.lineSoft}` };
+  const caixa = { background: C.surface, border: `1px solid ${C.line}`, borderRadius: 10 };
+  const exportar = () => {
+    const l2 = ['OP;Abertura;Situação OP;BR;Cliente;Produto acabado;Código PA;A produzir;Apontado;Diferença;MP consumiu mais;MP consumiu menos;MP requisitada sem consumo;MP sem requisição;Último apontamento;Conferência',
+      ...vis.map(o => [o.idiproc, dt(o.dhinc), o.status, o.br || '', `"${o.cliente_nome || ''}"`, `"${o.descr_pa || ''}"`, o.codprodpa, o.qtd_produzir, o.pa_apontado, o.pa_diferenca,
+        o.mp_consumiu_mais, o.mp_consumiu_menos, o.mp_req_sem_consumo, o.mp_sem_requisicao, o.ultimo_apontamento ? dt(o.ultimo_apontamento) : '', OPC_SIT[o.situacao]?.r || o.situacao].join(';'))];
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob(['\ufeff' + l2.join('\n')], { type: 'text/csv;charset=utf-8' })); a.download = 'conferencia_ops.csv'; a.click();
+  };
+  const STOP = { A: 'Em andamento', F: 'Finalizada', C: 'Cancelada', S: 'Suspensa', P: 'Pendente', AP: 'Aguardando' };
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12, fontFamily: FONT_BODY, color: C.ink }}>
+      <div style={{ ...caixa, padding: '12px 16px', fontSize: 12.5, color: C.ink2, lineHeight: 1.55 }}>
+        <strong style={{ color: C.ink }}>Conferência de OPs</strong> — direto do Sankhya, OPs abertas desde 2025: <strong>produto acabado</strong> = quantidade a produzir da OP × quantidade apontada nos apontamentos de produção;
+        <strong> matéria-prima</strong> = quantidade requisitada para a OP × quantidade consumida nos apontamentos (tolerância de ±2%). Atualiza a cada hora. Clique numa OP para ver material a material.
+      </div>
+      <div style={{ display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))' }}>
+        {Object.entries(OPC_SIT).map(([k, sx]) => { const on = fSit === k; const n = base.filter(o => o.situacao === k).length;
+          return (
+            <button key={k} onClick={() => setFSit(on ? null : k)} title={sx.d} style={{ ...caixa, textAlign: 'left', fontFamily: 'inherit', padding: '10px 14px', cursor: 'pointer', borderColor: on ? sx.cor : C.line, borderLeft: `4px solid ${sx.cor}` }}>
+              <div style={{ fontSize: 11.5, color: C.ink2, fontWeight: 600 }}>{sx.r}</div>
+              <div style={{ fontSize: 22, fontWeight: 800, fontVariantNumeric: 'tabular-nums' }}>{n}</div>
+            </button>); })}
+      </div>
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+        <div style={{ position: 'relative' }}>
+          <Search size={14} aria-hidden="true" style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: C.ink3 }} />
+          <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="OP, BR, produto ou cliente" style={{ fontFamily: 'inherit', fontSize: 12.5, padding: '7px 10px 7px 30px', borderRadius: 8, border: `1px solid ${C.line}`, width: 260 }} />
+        </div>
+        <div style={{ display: 'inline-flex', background: '#E7EBF1', borderRadius: 9, padding: 3, gap: 2 }}>
+          {[['todos', 'Desde 2025'], ['2026', '2026'], ['2025', '2025']].map(([k, r]) => (
+            <button key={k} onClick={() => setAno(k)} style={{ fontFamily: 'inherit', fontSize: 12.5, fontWeight: ano === k ? 600 : 500, padding: '6px 12px', borderRadius: 7, border: 'none', cursor: 'pointer', background: ano === k ? C.surface : 'transparent', color: ano === k ? C.ink : C.ink2 }}>{r}</button>))}
+        </div>
+        {fSit && <button onClick={() => setFSit(null)} style={{ fontFamily: 'inherit', fontSize: 12.5, border: 'none', background: 'none', color: C.primary, cursor: 'pointer' }}>tirar filtro "{OPC_SIT[fSit].r}"</button>}
+        <span style={{ flex: 1 }} />
+        <span style={{ fontSize: 12, color: C.ink3 }}>{vis.length} de {base.length} OPs</span>
+        <button onClick={exportar} style={{ fontFamily: 'inherit', fontSize: 12.5, padding: '7px 12px', borderRadius: 8, border: `1px solid ${C.line}`, background: C.surface, cursor: 'pointer' }}>Exportar CSV</button>
+      </div>
+      <div style={{ ...caixa, overflow: 'auto', maxHeight: 'calc(100vh - 330px)', minHeight: 320 }}>
+        <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, fontSize: 12.5 }}>
+          <thead><tr>{th('OP', 'op', 'left')}{th('Abertura', 'data', 'left')}{th('BR / cliente', null, 'left')}{th('Produto acabado', null, 'left')}{th('A produzir')}{th('Apontado')}{th('Diferença', 'dif')}{th('MP divergentes', 'mp')}{th('Último apont.')}{th('Conferência', 'sit', 'left')}</tr></thead>
+          <tbody>
+            {vis.slice(0, 600).map(o => { const sx = OPC_SIT[o.situacao] || OPC_SIT.ok; const dmp = (o.mp_consumiu_mais || 0) + (o.mp_consumiu_menos || 0);
+              return (
+                <tr key={o.idiproc} onClick={() => setAberta(o)} style={{ cursor: 'pointer' }}
+                  onMouseEnter={e => { e.currentTarget.style.background = '#F7F9FC'; }} onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}>
+                  <td style={{ ...td, textAlign: 'left', fontWeight: 700, color: C.primary }}>{o.idiproc}<div style={{ fontSize: 10.5, color: C.ink3, fontWeight: 400 }}>{STOP[o.status] || o.status}</div></td>
+                  <td style={{ ...td, textAlign: 'left', color: C.ink2 }}>{dt(o.dhinc)}</td>
+                  <td style={{ ...td, textAlign: 'left', whiteSpace: 'normal', maxWidth: 180 }}><strong>{o.br || '—'}</strong><div style={{ fontSize: 10.5, color: C.ink3 }}>{o.cliente_nome || ''}</div></td>
+                  <td style={{ ...td, textAlign: 'left', whiteSpace: 'normal', minWidth: 220, maxWidth: 320 }}><div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={o.descr_pa}>{o.descr_pa}</div><div style={{ fontSize: 10.5, color: C.ink3 }}>cód. {o.codprodpa}</div></td>
+                  <td style={{ ...td, fontWeight: 600 }}>{q(o.qtd_produzir)}</td>
+                  <td style={{ ...td, fontWeight: 700 }}>{q(o.pa_apontado)}</td>
+                  <td style={{ ...td, fontWeight: 700, color: Number(o.pa_diferenca) === 0 ? C.ink3 : Number(o.pa_diferenca) > 0 ? C.loss : (o.status === 'F' ? C.loss : C.ink2) }}>{Number(o.pa_diferenca) === 0 ? '—' : `${Number(o.pa_diferenca) > 0 ? '+' : ''}${q(o.pa_diferenca)}`}</td>
+                  <td style={{ ...td, color: dmp ? C.warn : C.ink3, fontWeight: dmp ? 700 : 400 }} title={`consumiu mais: ${o.mp_consumiu_mais} · consumiu menos: ${o.mp_consumiu_menos} · requisitado sem consumo: ${o.mp_req_sem_consumo} · consumido sem requisição: ${o.mp_sem_requisicao}`}>{dmp ? `${dmp} de ${o.mp_itens}` : '—'}</td>
+                  <td style={{ ...td, color: C.ink2 }}>{dt(o.ultimo_apontamento)}</td>
+                  <td style={{ ...td, textAlign: 'left' }}><span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600, color: sx.cor }}><span style={{ width: 8, height: 8, borderRadius: 4, background: sx.cor }} />{sx.r}</span></td>
+                </tr>); })}
+            {vis.length > 600 && <tr><td colSpan={10} style={{ padding: 12, textAlign: 'center', color: C.ink3, fontSize: 12 }}>Mostrando as 600 primeiras de {vis.length}: use a busca, o ano ou os cartões para filtrar (a exportação traz todas).</td></tr>}
+          </tbody>
+        </table>
+      </div>
+      {aberta && ReactDOM.createPortal((() => { const o = aberta; const sx = OPC_SIT[o.situacao] || OPC_SIT.ok;
+        const thD = { padding: '7px 9px', fontSize: 11, fontWeight: 600, color: C.ink2, background: '#F1F4F8', borderBottom: `1px solid ${C.line}`, textAlign: 'right' };
+        const tdD = { padding: '7px 9px', textAlign: 'right', fontVariantNumeric: 'tabular-nums', borderBottom: `1px solid ${C.lineSoft}`, whiteSpace: 'nowrap' };
+        const ordMp = { consumiu_mais: 0, consumiu_menos: 1, requisitado_sem_consumo: 2, consumido_sem_requisicao: 3, ok: 4 };
+        return (
+          <div onClick={() => setAberta(null)} style={{ position: 'fixed', inset: 0, zIndex: 85, background: 'rgba(15,35,64,.35)', overflowY: 'auto', overscrollBehavior: 'contain' }}>
+            <aside onClick={e => e.stopPropagation()} style={{ marginLeft: 'auto', width: 'min(1100px, 100%)', minHeight: '100%', background: '#F7F8FA', fontFamily: FONT_BODY, color: C.ink, boxShadow: '-10px 0 40px rgba(16,24,40,.25)' }}>
+              <div style={{ position: 'sticky', top: 0, zIndex: 3, background: '#0F2340', color: '#fff', padding: '16px 22px', display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 12, color: 'rgba(255,255,255,.7)' }}>OP {o.idiproc} · {STOP[o.status] || o.status} · aberta em {dt(o.dhinc)}{o.lote ? ` · lote ${o.lote}` : ''}{o.br ? ` · ${o.br}` : ''}</div>
+                  <div style={{ fontSize: 16, fontWeight: 700 }}>{o.descr_pa}</div>
+                </div>
+                <span style={{ fontSize: 12.5, fontWeight: 700, background: '#fff', color: sx.cor, padding: '5px 10px', borderRadius: 8 }}>{sx.r}</span>
+                <button onClick={() => setAberta(null)} style={{ fontFamily: 'inherit', fontSize: 12.5, fontWeight: 600, padding: '7px 12px', borderRadius: 8, border: '1px solid rgba(255,255,255,.3)', background: 'transparent', color: '#fff', cursor: 'pointer' }}>Fechar · Esc</button>
+              </div>
+              <div style={{ padding: '16px 22px 40px', display: 'grid', gap: 16 }}>
+                <div style={{ display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))' }}>
+                  {[['A produzir', q(o.qtd_produzir)], ['Apontado', q(o.pa_apontado)], ['Diferença', Number(o.pa_diferenca) === 0 ? 'confere' : `${Number(o.pa_diferenca) > 0 ? '+' : ''}${q(o.pa_diferenca)}`],
+                    ['Apontamentos', String(o.apontamentos)], ['Último apontamento', dt(o.ultimo_apontamento)], ['Matérias-primas', `${o.mp_itens} (${(o.mp_consumiu_mais || 0) + (o.mp_consumiu_menos || 0)} divergentes)`]].map(([r, v]) => (
+                    <div key={r} style={{ ...caixa, padding: '10px 12px' }}><div style={{ fontSize: 11.5, color: C.ink3 }}>{r}</div><div style={{ fontSize: 18, fontWeight: 800, fontVariantNumeric: 'tabular-nums' }}>{v}</div></div>))}
+                </div>
+                <section style={{ ...caixa, overflow: 'hidden' }}>
+                  <div style={{ padding: '10px 14px', fontWeight: 700, borderBottom: `1px solid ${C.line}` }}>Matéria-prima: requisitado × consumido</div>
+                  <div style={{ overflowX: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+                      <thead><tr>{['Código', 'Material', 'Requisitado', 'Entregue', 'Consumido', 'Diferença', '%', 'Situação'].map((h, k) => <th key={h} style={{ ...thD, textAlign: k < 2 || k === 7 ? 'left' : 'right' }}>{h}</th>)}</tr></thead>
+                      <tbody>
+                        {!mps.length && <tr><td colSpan={8} style={{ padding: 14, textAlign: 'center', color: C.ink3 }}>Sem requisição nem consumo registrados.</td></tr>}
+                        {[...mps].sort((a, b) => (ordMp[a.situacao] ?? 9) - (ordMp[b.situacao] ?? 9)).map(m => { const sm = OPC_MP[m.situacao] || OPC_MP.ok;
+                          return (
+                            <tr key={m.codprod}>
+                              <td style={{ ...tdD, textAlign: 'left', fontWeight: 700 }}>{m.codprod}</td>
+                              <td style={{ ...tdD, textAlign: 'left', whiteSpace: 'normal', maxWidth: 340 }}>{m.descr}<span style={{ color: C.ink3 }}> · {m.unidade}</span></td>
+                              <td style={tdD}>{Number(m.requisitado) ? q(m.requisitado) : '—'}</td>
+                              <td style={{ ...tdD, color: C.ink2 }}>{Number(m.entregue) ? q(m.entregue) : '—'}</td>
+                              <td style={{ ...tdD, fontWeight: 700 }}>{Number(m.consumido) ? q(m.consumido) : '—'}</td>
+                              <td style={{ ...tdD, color: Number(m.diferenca) > 0 ? C.loss : Number(m.diferenca) < 0 ? C.warn : C.ink3 }}>{Number(m.diferenca) ? `${Number(m.diferenca) > 0 ? '+' : ''}${q(m.diferenca)}` : '—'}</td>
+                              <td style={{ ...tdD, color: C.ink2 }}>{m.diferenca_pct != null && Number(m.diferenca_pct) !== 0 ? `${Number(m.diferenca_pct) > 0 ? '+' : ''}${m.diferenca_pct}%` : '—'}</td>
+                              <td style={{ ...tdD, textAlign: 'left', color: sm.cor, fontWeight: 600 }}>{sm.r}</td>
+                            </tr>); })}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div style={{ padding: '8px 14px', fontSize: 11.5, color: C.ink3 }}>Requisitado = requisições da OP · Entregue = quanto o almoxarifado atendeu da requisição · Consumido = baixado nos apontamentos de produção. "Consumido sem requisição" costuma ser material de baixa automática (consumíveis); "requisitado, não consumido" em OP finalizada indica material que ficou sobrando.</div>
+                </section>
+                <section style={{ ...caixa, overflow: 'hidden' }}>
+                  <div style={{ padding: '10px 14px', fontWeight: 700, borderBottom: `1px solid ${C.line}` }}>Documentos da OP ({docs.length})</div>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+                    <thead><tr>{['Data', 'Tipo', 'Operação', 'Nº', 'Nº único', 'Situação'].map((h, k) => <th key={h} style={{ ...thD, textAlign: k < 3 ? 'left' : 'right' }}>{h}</th>)}</tr></thead>
+                    <tbody>
+                      {!docs.length && <tr><td colSpan={6} style={{ padding: 14, textAlign: 'center', color: C.ink3 }}>Nenhum documento.</td></tr>}
+                      {docs.map(d => (
+                        <tr key={d.nunota}>
+                          <td style={{ ...tdD, textAlign: 'left' }}>{dt(d.data)}</td>
+                          <td style={{ ...tdD, textAlign: 'left', fontWeight: 600 }}>{d.tipmov === 'F' ? 'Apontamento' : d.tipmov === 'J' ? 'Requisição' : d.tipmov}</td>
+                          <td style={{ ...tdD, textAlign: 'left', whiteSpace: 'normal' }}>{d.top} · {d.descr_top}</td>
+                          <td style={tdD}>{d.numnota}</td>
+                          <td style={{ ...tdD, color: C.ink2 }}>{d.nunota}</td>
+                          <td style={{ ...tdD, color: d.statusnota === 'L' ? C.win : C.warn }}>{d.statusnota === 'L' ? 'liberada' : d.statusnota}</td>
+                        </tr>))}
+                    </tbody>
+                  </table>
+                </section>
+              </div>
+            </aside>
+          </div>
+        ); })(), document.body)}
+    </div>
+  );
+}
+
 // Estoque x OCs: escolhe a visão pela permissão (fn_estoque_ocs_completo: Daniela e gestores = completa;
 // demais, ex. engenharia = só disponibilidade, sem valores, fornecedores, preços nem consumo).
 function RelatorioEstoqueOCs() {
@@ -38424,6 +38613,7 @@ const TELAS_CATALOGO = [
   { id: 'custeio_plano', label: 'Custeio — Plano' },
   { id: 'orcamento_material', label: 'Matéria-prima em Orçamento' },
   { id: 'estoque_ocs', label: 'Estoque x OCs' },
+  { id: 'conferencia_op', label: 'Conferência de OPs' },
   { id: 'almoxarifado', label: 'Estoque' },
   { id: 'equipamentos', label: 'Equip. Terceiros' },
   { id: 'recebimento_terceiros', label: 'Validação de Recebimento' },
