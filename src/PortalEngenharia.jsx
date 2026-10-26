@@ -22965,9 +22965,24 @@ const EOC_SIT = {
 // demais, ex. engenharia = só disponibilidade, sem valores, fornecedores, preços nem consumo).
 function RelatorioEstoqueOCs() {
   const [completo, setCompleto] = useState(null);
+  const [comoEng, setComoEng] = useState(false);   // quem tem a visão completa pode conferir a da engenharia
   useEffect(() => { supabase.rpc('fn_estoque_ocs_completo').then(({ data }) => setCompleto(!!data)); }, []);
   if (completo === null) return <div style={{ padding: 40, textAlign: 'center', color: CRMC.ink3 }}>Carregando…</div>;
-  return completo ? <RelatorioEstoqueOCsCompleto /> : <EstoqueDisponibilidade />;
+  if (!completo) return <EstoqueDisponibilidade />;
+  const C = CRMC;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', fontFamily: FONT_BODY }}>
+        <div style={{ display: 'inline-flex', background: '#E7EBF1', borderRadius: 9, padding: 3, gap: 2 }}>
+          {[[false, 'Visão completa'], [true, 'Ver como a engenharia vê']].map(([k, r]) => (
+            <button key={r} onClick={() => setComoEng(k)} style={{ fontFamily: 'inherit', fontSize: 12.5, fontWeight: comoEng === k ? 600 : 500, padding: '6px 12px', borderRadius: 7, border: 'none', cursor: 'pointer',
+              background: comoEng === k ? C.surface : 'transparent', color: comoEng === k ? C.ink : C.ink2 }}>{r}</button>))}
+        </div>
+        <span style={{ fontSize: 12, color: C.ink3 }}>{comoEng ? 'É exatamente o que a engenharia e os demais usuários veem: só a disponibilidade, sem preços, OCs, fornecedores e consumo.' : 'Visão completa: só a Daniela e os gestores veem.'}</span>
+      </div>
+      {comoEng ? <EstoqueDisponibilidade /> : <RelatorioEstoqueOCsCompleto />}
+    </div>
+  );
 }
 function EstoqueDisponibilidade() {
   const C = CRMC;
