@@ -16117,6 +16117,57 @@ function CardsPlannerSaude() {
   );
 }
 
+// Conversões de produto acabado (TOP 3312 saída -> TOP 3311 entrada): histórico e casos em que um projeto foi
+// faturado com produção de outro. Carga a cada hora (fn_sync_pa_transferencia) e aviso automático (fn_pa_transferencia_avisar).
+function ConversoesPA() {
+  const [lista, setLista] = useState(null);
+  const [soCruzadas, setSoCruzadas] = useState(false);
+  useEffect(() => { supabase.from('pa_transferencia').select('*').order('data', { ascending: false }).then(({ data }) => setLista(data || [])); }, []);
+  if (!lista) return <div style={{ padding: 30, color: T.inkFaint, textAlign: 'center' }}>Carregando as conversões…</div>;
+  const cruz = (t) => t.venda_br && t.br_op_origem && t.venda_br !== t.br_op_origem;
+  const vis = soCruzadas ? lista.filter(cruz) : lista;
+  const dt = (d) => (d ? new Date(`${String(d).slice(0, 10)}T12:00:00`).toLocaleDateString('pt-BR') : '—');
+  const q = (v) => Number(v || 0).toLocaleString('pt-BR', { maximumFractionDigits: 3 });
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '12px 16px', fontSize: 12.5, color: T.inkDim }}>
+        <strong style={{ color: T.ink }}>Conversões de produto acabado</strong> — movimentação interna de PA no Sankhya (saída TOP 3312 → entrada TOP 3311): o saldo de um código vira outro código.
+        Quando a produção de um projeto é faturada em <strong>outro</strong> projeto, o de origem fica sem o material (pode precisar produzir de novo) e o custo de produção fica na OP de origem.
+        Atualiza a cada hora em dias úteis e avisa por sininho e e-mail quando aparece uma nova.
+      </div>
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 13 }}><strong>{lista.length}</strong> conversões desde 2025 · <strong style={{ color: T.rustText }}>{lista.filter(cruz).length}</strong> faturaram outro projeto</span>
+        <label style={{ fontSize: 12.5, display: 'inline-flex', gap: 6, alignItems: 'center', cursor: 'pointer' }}>
+          <input type="checkbox" checked={soCruzadas} onChange={e => setSoCruzadas(e.target.checked)} /> só as que faturaram outro projeto
+        </label>
+      </div>
+      <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflowX: 'auto' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+          <thead><tr style={{ background: T.panelAlt }}>{['Data / quem', 'Saiu (código)', 'Entrou (código)', 'Qtd', 'Produzido para', 'Faturado em', 'Justificativa'].map(h => (
+            <th key={h} style={{ padding: '9px 10px', fontSize: 11, fontWeight: 700, color: T.inkFaint, textAlign: h === 'Qtd' ? 'right' : 'left', whiteSpace: 'nowrap' }}>{h}</th>))}</tr></thead>
+          <tbody>
+            {vis.map(t => { const c = cruz(t);
+              return (
+                <tr key={t.nunota_saida} style={{ borderTop: `1px solid ${T.lineSoft}`, background: c ? T.rustSoft : 'transparent' }}>
+                  <td style={{ padding: '8px 10px', whiteSpace: 'nowrap' }}><strong>{dt(t.data)}</strong><div style={{ fontSize: 11, color: T.inkFaint }}>{t.usuario || '—'}</div></td>
+                  <td style={{ padding: '8px 10px', maxWidth: 240 }}><strong>{t.cod_saida}</strong> <span style={{ color: T.inkDim }}>{t.desc_saida}</span></td>
+                  <td style={{ padding: '8px 10px', maxWidth: 240 }}><strong>{t.cod_entrada}</strong> <span style={{ color: T.inkDim }}>{t.desc_entrada}</span></td>
+                  <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 700 }}>{q(t.quantidade)}</td>
+                  <td style={{ padding: '8px 10px', whiteSpace: 'nowrap' }}><strong>{t.br_op_origem || t.projeto || '—'}</strong>{t.op_origem && <div style={{ fontSize: 11, color: T.inkFaint }}>OP {t.op_origem}</div>}</td>
+                  <td style={{ padding: '8px 10px', whiteSpace: 'nowrap' }}>
+                    {t.venda_nf ? <><strong style={{ color: c ? T.rustText : T.ink }}>{t.venda_br || '—'}</strong><div style={{ fontSize: 11, color: T.inkFaint }}>NF {t.venda_nf} · {dt(t.venda_data)}</div></> : <span style={{ color: T.inkFaint }}>ainda não faturado</span>}
+                    {c && <div style={{ fontSize: 11, fontWeight: 700, color: T.rustText }}>⚠ outro projeto</div>}
+                  </td>
+                  <td style={{ padding: '8px 10px', fontSize: 12, color: T.inkDim, maxWidth: 280, fontStyle: t.observacao ? 'italic' : 'normal' }}>{t.observacao || '—'}</td>
+                </tr>); })}
+            {!vis.length && <tr><td colSpan={7} style={{ padding: 24, textAlign: 'center', color: T.inkFaint }}>Nenhuma conversão.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 function MonitoramentoOP({ currentUser }) {
   const STATUS_PLANNER_LABEL = { notStarted: 'Não iniciado', inProgress: 'Em andamento', completed: 'Concluído' };
   // IDs reais dos buckets do quadro "Gestão Comercial" no Planner — o portal
@@ -17069,7 +17120,7 @@ function MonitoramentoOP({ currentUser }) {
     <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
 
       <div style={{ display: 'flex', gap: 4, borderBottom: `1px solid ${T.line}` }}>
-        {[{ id: 'op', label: 'Monitoramento de OP' }, { id: 'cards', label: 'Cards do Planner' }, { id: 'cotacao', label: `Cotação — Card no Planner${solicitacoes.filter(s => !s.card_planner_solicitado).length ? ` (${solicitacoes.filter(s => !s.card_planner_solicitado).length})` : ''}` }, { id: 'conhecimento_pronto', label: `Fluxo Conhecimento → OP${(cardsConhecPronto.filter(c => !c.data_finalizado).length + cardsOpsGeradas.filter(c => c.status_verificacao_op !== 'finalizado').length) ? ` (${cardsConhecPronto.filter(c => !c.data_finalizado).length + cardsOpsGeradas.filter(c => c.status_verificacao_op !== 'finalizado').length})` : ''}` }].map(aba => (
+        {[{ id: 'op', label: 'Monitoramento de OP' }, { id: 'cards', label: 'Cards do Planner' }, { id: 'pa', label: 'Conversões de PA' }, { id: 'cotacao', label: `Cotação — Card no Planner${solicitacoes.filter(s => !s.card_planner_solicitado).length ? ` (${solicitacoes.filter(s => !s.card_planner_solicitado).length})` : ''}` }, { id: 'conhecimento_pronto', label: `Fluxo Conhecimento → OP${(cardsConhecPronto.filter(c => !c.data_finalizado).length + cardsOpsGeradas.filter(c => c.status_verificacao_op !== 'finalizado').length) ? ` (${cardsConhecPronto.filter(c => !c.data_finalizado).length + cardsOpsGeradas.filter(c => c.status_verificacao_op !== 'finalizado').length})` : ''}` }].map(aba => (
           <button key={aba.id} onClick={() => setAbaMonitoramento(aba.id)}
             style={{
               background: 'none', border: 'none', cursor: 'pointer', padding: '10px 16px', fontSize: 13, fontWeight: 600,
@@ -17082,6 +17133,7 @@ function MonitoramentoOP({ currentUser }) {
       </div>
 
       {abaMonitoramento === 'cards' && <CardsPlannerSaude />}
+      {abaMonitoramento === 'pa' && <ConversoesPA />}
       {abaMonitoramento === 'cotacao' && (
         <Panel subtitle="Solicitações de compra (Kaio.R e Alexandre.P) que precisam ter um Card criado no Microsoft Planner — clique em 'Marcar' e o Power Automate cria o card automaticamente. A lista atualiza sozinha a cada 15s."
           right={
