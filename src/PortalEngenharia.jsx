@@ -23068,7 +23068,8 @@ function RelatorioEstoqueOCs() {
                     {anos.map((a, k) => <td key={a} style={{ ...td, ...(k === 0 ? sep : {}), color: Number(l[`c${a}`]) ? (a === '2026' ? C.ink : C.ink2) : C.ink3, fontWeight: a === '2026' ? 600 : 400 }}>{Number(l[`c${a}`]) ? q(l[`c${a}`]) : '—'}</td>)}
                     <td style={{ ...td, ...sep, fontWeight: 700 }}>{Number(l.media_mensal) ? q(l.media_mensal) : '—'}</td>
                     <td style={{ ...td, color: l.tendencia_pct == null ? C.ink3 : l.tendencia_pct > 10 ? C.loss : l.tendencia_pct < -10 ? C.primary : C.ink2 }}>{l.tendencia_pct == null ? '—' : `${l.tendencia_pct > 0 ? '+' : ''}${l.tendencia_pct}%`}</td>
-                    <td style={{ ...td, color: l.disponivel < 0 ? C.loss : C.ink }}>{q(l.disponivel)}</td>
+                    <td style={{ ...td, color: l.disponivel < 0 ? C.loss : C.ink, cursor: 'help' }}
+                      title={`Matéria-prima ${q(l.estoque_mp)} + em processamento ${q(l.estoque_processamento)}${Number(l.estoque_outros) ? ` + outros locais ${q(l.estoque_outros)}` : ''} − reservado para OPs ${q(l.reservado)} = ${q(l.disponivel)}`}>{q(l.disponivel)}</td>
                     <td style={{ ...td, color: l.ocs_atrasadas ? C.loss : C.ink }}>{l.a_receber ? q(l.a_receber) : '—'}</td>
                     <td style={{ ...td, ...sep, color: l.lead_time_dias ? C.ink : C.ink3 }}>{l.lead_time_dias ? q(l.lead_time_dias) : '30*'}</td>
                     <td style={{ ...td, fontWeight: 700, color: sx.cor }}>{l.cobertura_com_oc_meses == null ? '—' : `${q(l.cobertura_com_oc_meses, 1)} m`}</td>
@@ -23080,7 +23081,7 @@ function RelatorioEstoqueOCs() {
         </div>
       </div>
       <div style={{ fontSize: 11.5, color: C.ink3, lineHeight: 1.5 }}>
-        Média/mês = consumo dos últimos 12 meses ÷ 12 · Tend. = últimos 12 meses contra os 12 anteriores · Cobertura = (disponível + a receber) ÷ média/mês, em meses · Prazo = dias entre o pedido de compra e a chegada da nota (média dos últimos 24 meses; * sem histórico, 30 dias) · Sugestão = o necessário para cobrir o prazo de entrega + 1 mês · Clique numa linha para o detalhe.
+        Disponível = estoque em matéria-prima + em processamento − reservado para OPs (direto do Sankhya, a cada hora) · Média/mês = consumo dos últimos 12 meses ÷ 12 · Tend. = últimos 12 meses contra os 12 anteriores · Cobertura = (disponível + a receber) ÷ média/mês, em meses · Prazo = dias entre o pedido de compra e a chegada da nota (média dos últimos 24 meses; * sem histórico, 30 dias) · Sugestão = o necessário para cobrir o prazo de entrega + 1 mês · Clique numa linha para o detalhe.
       </div>
 
       {aberto && ReactDOM.createPortal((() => { const l = aberto; const sx = EOC_SIT[l.situacao] || EOC_SIT.sem_consumo;
@@ -23129,7 +23130,9 @@ function RelatorioEstoqueOCs() {
                     <div style={{ padding: '10px 14px', fontWeight: 700, borderBottom: `1px solid ${C.line}` }}>Conta da reposição</div>
                     <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
                       <tbody>
-                        {[['Estoque físico', q(l.estoque)], ['(−) Reservado para OPs', q(l.reservado)], ['= Disponível', q(l.disponivel), true], ['(+) A receber em OCs', q(l.a_receber)], ['= Disponível + a receber', q(Number(l.disponivel) + Number(l.a_receber)), true],
+                        {[['Estoque em matéria-prima (local 1050)', q(l.estoque_mp)], ['(+) Em processamento (local 1090)', q(l.estoque_processamento)],
+                          ...(Number(l.estoque_outros) ? [['(+) Outros locais', q(l.estoque_outros)]] : []), ['= Estoque total', q(l.estoque), true],
+                          ['(−) Reservado para OPs', q(l.reservado)], ['= Disponível', q(l.disponivel), true], ['(+) A receber em OCs', q(l.a_receber)], ['= Disponível + a receber', q(Number(l.disponivel) + Number(l.a_receber)), true],
                           ['(÷) Média mensal (12m)', q(l.media_mensal)], ['= Cobertura', l.cobertura_com_oc_meses == null ? '—' : `${q(l.cobertura_com_oc_meses, 1)} meses`, true],
                           ['Prazo de entrega', l.lead_time_dias ? `${q(l.lead_time_dias)} dias (${q(l.lead_time_dias / 30, 1)} meses) · máx. ${q(l.lead_time_max)} · ${l.lead_time_entregas} entrega(s)` : '30 dias (sem histórico)'],
                           ['Sugestão (prazo + 1 mês)', l.sugestao_compra > 0 ? `${q(l.sugestao_compra)} ${l.unidade || ''}` : 'não precisa comprar', true]].map(([r, v, forte]) => (
