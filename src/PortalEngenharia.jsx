@@ -28404,6 +28404,11 @@ function CRMFaturamentoBR({ negocio: n, autor, onMudou }) {
   const [d, setD] = useState(null);
   const [erro, setErro] = useState(null);
   const [form, setForm] = useState(null);   // { nunota, data, motivo, obs }
+  const [transf, setTransf] = useState([]);  // conversões de produto acabado (TOP 3312 -> 3311) envolvendo este BR
+  useEffect(() => {
+    if (!n.br) return;
+    supabase.from('pa_transferencia').select('*').or(`br_op_origem.eq.${n.br},venda_br.eq.${n.br},projeto.eq.${n.br}`).order('data').then(({ data }) => setTransf(data || []));
+  }, [n.br]);
   const moeda = (v) => fmtMoedaCompacta(v);
   const qtd = (v) => Number(v || 0).toLocaleString('pt-BR', { maximumFractionDigits: 3 });
   const fmtD = (x) => (x ? new Date(`${String(x).slice(0, 10)}T12:00:00`).toLocaleDateString('pt-BR') : '—');
@@ -28436,8 +28441,28 @@ function CRMFaturamentoBR({ negocio: n, autor, onMudou }) {
   const totPed = d.pedidos.reduce((x, p) => x + liqPed(p), 0);
   const totEnt = d.pedidos.reduce((x, p) => x + liqPed(p) * fracEnt(p), 0);
   const comSaldo = d.pedidos.filter(p => p.itens.some(i => Number(i.qtd) - Number(i.entregue) > 0.0001));
+  const avisosTransf = transf.map(t => {
+    const q = `${qtd(t.quantidade)}`;
+    const quem = `${fmtD(t.data)} por ${t.usuario || '—'}`;
+    if (t.br_op_origem === n.br && t.venda_br && t.venda_br !== n.br)
+      return { cor: CRMC.loss, bg: CRMC.lossSoft, titulo: 'Produção deste projeto foi faturada em outro projeto',
+        txt: `${q} do cód. ${t.cod_saida} produzidos para este projeto${t.op_origem ? ` (OP ${t.op_origem})` : ''} foram convertidos para o cód. ${t.cod_entrada} em ${quem} e faturados no ${t.venda_br}${t.venda_nf ? ` (NF ${t.venda_nf}, ${fmtD(t.venda_data)})` : ''}. Este projeto pode precisar de nova produção.`, t };
+    if (t.venda_br === n.br && t.br_op_origem && t.br_op_origem !== n.br)
+      return { cor: CRMC.warn, bg: CRMC.warnSoft, titulo: 'Faturado com produção de outro projeto',
+        txt: `A NF ${t.venda_nf || '—'} saiu com ${q} do cód. ${t.cod_entrada}, convertidos do cód. ${t.cod_saida} produzido para o ${t.br_op_origem}${t.op_origem ? ` (OP ${t.op_origem})` : ''}, em ${quem}. O custo de produção está naquela OP.`, t };
+    return { cor: CRMC.primary, bg: CRMC.primarySoft, titulo: 'Conversão de código de produto acabado',
+      txt: `${q} do cód. ${t.cod_saida} convertidos para o cód. ${t.cod_entrada} em ${quem}${t.venda_nf ? `; faturado na NF ${t.venda_nf}` : ''}.`, t };
+  });
   return (
     <div>
+      {avisosTransf.map((a, k) => (
+        <div key={k} style={{ marginBottom: 10, padding: '10px 12px', borderRadius: 10, background: a.bg, border: `1px solid ${a.cor}55`, fontSize: 12.5, color: CRMC.ink }}>
+          <div style={{ fontWeight: 700, color: a.cor }}>⇄ {a.titulo}</div>
+          <div style={{ marginTop: 3 }}>{a.txt}</div>
+          {a.t.observacao && <div style={{ marginTop: 3, color: CRMC.ink2, fontStyle: 'italic' }}>Justificativa no Sankhya: "{a.t.observacao}"</div>}
+          <div style={{ marginTop: 3, fontSize: 11.5, color: CRMC.ink3 }}>Movimentação interna de PA: saída nº único {a.t.nunota_saida} (TOP 3312) · entrada nº único {a.t.nunota_entrada} (TOP 3311)</div>
+        </div>
+      ))}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8, marginBottom: 8 }}>
         <div style={{ fontSize: 12.5, fontWeight: 700 }}>Faturamento no Sankhya</div>
         <button onClick={carregar} style={{ fontFamily: 'inherit', fontSize: 11.5, border: 'none', background: 'none', color: CRMC.primary, cursor: 'pointer' }}>atualizar</button>
