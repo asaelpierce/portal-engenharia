@@ -22970,6 +22970,7 @@ function RelatorioEstoqueOCs() {
   const [aberto, setAberto] = useState(null);
   const [mensal, setMensal] = useState([]);
   const [ocs, setOcs] = useState([]);
+  const [hist, setHist] = useState(null);   // OCs emitidas desde 2025 + chegadas (TGFVAR)
   const [atualizado, setAtualizado] = useState(null);
   useEffect(() => {
     (async () => {
@@ -22985,6 +22986,13 @@ function RelatorioEstoqueOCs() {
     setMensal([]); setOcs([]);
     supabase.from('v_consumo_mp_mensal').select('mes,qtd').eq('cod_prod', aberto.cod_prod).order('mes').then(({ data }) => setMensal(data || []));
     supabase.from('mp_oc_pendente').select('*').eq('cod_prod', aberto.cod_prod).order('prev_entrega').then(({ data }) => setOcs(data || []));
+    setHist(null);
+    (async () => {
+      const { data: h } = await supabase.from('mp_oc_historico').select('*').eq('cod_prod', aberto.cod_prod).order('data_oc', { ascending: false });
+      const nus = [...new Set((h || []).map(x => x.nunota))];
+      const { data: ch } = nus.length ? await supabase.from('mp_oc_chegada').select('*').in('nunota_oc', nus).order('data_nota') : { data: [] };
+      setHist((h || []).map(x => ({ ...x, chegadas: (ch || []).filter(c => c.nunota_oc === x.nunota && c.sequencia_oc === x.sequencia) })));
+    })();
     const t = (e) => { if (e.key === 'Escape') setAberto(null); };
     window.addEventListener('keydown', t); return () => window.removeEventListener('keydown', t);
   }, [aberto]);
@@ -23160,6 +23168,37 @@ function RelatorioEstoqueOCs() {
                     </table>
                   </section>
                 </div>
+                <section style={{ ...caixa, overflow: 'hidden' }}>
+                  <div style={{ padding: '10px 14px', borderBottom: `1px solid ${C.line}`, display: 'flex', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
+                    <strong>OCs emitidas desde 2025 e quando chegaram</strong>
+                    <span style={{ fontSize: 11.5, color: C.ink3 }}>chegada = nota de entrada vinculada à OC no Sankhya (Docs vinculados / TGFVAR) · dias = da emissão da OC até a nota</span>
+                  </div>
+                  <div style={{ overflowX: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                      <thead><tr>{['OC', 'Emitida', 'Fornecedor', 'Pedida', 'Entregue', 'Situação', 'Chegada (NF · data · qtd)', 'Dias'].map((h, k) => <th key={h} style={{ ...thD, textAlign: [0, 1, 2, 5, 6].includes(k) ? 'left' : 'right' }}>{h}</th>)}</tr></thead>
+                      <tbody>
+                        {hist === null && <tr><td colSpan={8} style={{ padding: 14, textAlign: 'center', color: C.ink3 }}>Carregando…</td></tr>}
+                        {hist && !hist.length && <tr><td colSpan={8} style={{ padding: 14, textAlign: 'center', color: C.ink3 }}>Nenhuma OC emitida desde 2025.</td></tr>}
+                        {(hist || []).map(o => { const ent = Number(o.qtd_entregue) || 0, ped = Number(o.qtd_pedida) || 0;
+                          const st = o.pendente ? (ent > 0 ? ['em aberto (parcial)', C.warn] : ['em aberto', C.primary]) : ent >= ped - 0.0001 ? ['atendida', C.win] : ent > 0 ? ['encerrada parcial', C.warn] : ['encerrada sem entrega', C.ink3];
+                          const linhasCh = o.chegadas.length ? o.chegadas : [null];
+                          return linhasCh.map((c, k) => (
+                            <tr key={`${o.nunota}-${o.sequencia}-${k}`}>
+                              {k === 0 && <>
+                                <td rowSpan={linhasCh.length} style={{ ...tdD, textAlign: 'left', fontWeight: 700, verticalAlign: 'top' }}>{o.numero_oc}<div style={{ fontSize: 10.5, fontWeight: 400, color: C.ink3 }}>TOP {o.top}</div></td>
+                                <td rowSpan={linhasCh.length} style={{ ...tdD, textAlign: 'left', verticalAlign: 'top' }}>{dt(o.data_oc)}</td>
+                                <td rowSpan={linhasCh.length} style={{ ...tdD, textAlign: 'left', whiteSpace: 'normal', verticalAlign: 'top', maxWidth: 200 }}>{o.fornecedor}</td>
+                                <td rowSpan={linhasCh.length} style={{ ...tdD, verticalAlign: 'top' }}>{q(ped)}</td>
+                                <td rowSpan={linhasCh.length} style={{ ...tdD, verticalAlign: 'top', fontWeight: 600 }}>{q(ent)}</td>
+                                <td rowSpan={linhasCh.length} style={{ ...tdD, textAlign: 'left', verticalAlign: 'top', color: st[1], fontWeight: 600 }}>{st[0]}{o.pendente && o.prev_entrega ? <div style={{ fontSize: 10.5, color: C.ink3, fontWeight: 400 }}>prev. {dt(o.prev_entrega)}</div> : null}</td>
+                              </>}
+                              <td style={{ ...tdD, textAlign: 'left' }}>{c ? <>NF <strong>{c.numero_nf}</strong> · {dt(c.data_nota)} · {q(c.qtd_atendida)}<span style={{ color: C.ink3 }}> (TOP {c.top_nota})</span></> : <span style={{ color: C.ink3 }}>—</span>}</td>
+                              <td style={{ ...tdD, fontWeight: 600 }}>{c ? Math.round((new Date(`${c.data_nota}T12:00:00`) - new Date(`${o.data_oc}T12:00:00`)) / 86400000) : '—'}</td>
+                            </tr>)); })}
+                      </tbody>
+                    </table>
+                  </div>
+                </section>
               </div>
             </aside>
           </div>
