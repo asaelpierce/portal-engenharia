@@ -977,13 +977,10 @@ function PortalConteudo({ currentUser, session }) {
           {renderTab('plaquinha_equipamento', <TabErrorBoundary tab="Plaquinha de Equipamento"><PlaquinhaEquipamento currentUser={currentUser} /></TabErrorBoundary>)}
           {renderTab('plaquinha_engenharia', <TabErrorBoundary tab="Plaquinha — Engenharia"><PlaquinhaEngenharia currentUser={currentUser} /></TabErrorBoundary>)}
           {renderTab('conf_apontamento', <TabErrorBoundary tab="Conf. Apontamento"><ConfApontamento /></TabErrorBoundary>)}
-          {renderTab('reservas_pendentes', <TabErrorBoundary tab="Reservas Pendentes"><ReservasPendentes /></TabErrorBoundary>)}
           {renderTab('verificacao_projetos', <TabErrorBoundary tab="Verificação de Projetos"><VerificacaoProjetos currentUser={currentUser} /></TabErrorBoundary>)}
-          {renderTab('analise_comercial', <TabErrorBoundary tab="Follow Up Comercial"><AnaliseComercial currentUser={currentUser} /></TabErrorBoundary>)}
           {renderTab('prospeccao_clientes', <TabErrorBoundary tab="Prospecção de Clientes"><ProspeccaoClientes /></TabErrorBoundary>)}
           {renderTab('almoxarifado_fluxo', <TabErrorBoundary tab="Fluxo de Materiais"><AlmoxarifadoFluxo currentUser={currentUser} etiquetaInicial={etiquetaUrl} /></TabErrorBoundary>)}
           {renderTab('pedidosvale', <TabErrorBoundary tab="Cerâmicas"><CeramicasVale currentUser={currentUser} abaInicial="vale" /></TabErrorBoundary>)}
-          {renderTab('aberturacotacao', <TabErrorBoundary tab="Abertura de Cotação"><AberturaCotacao currentUser={currentUser} /></TabErrorBoundary>)}
           {renderTab('criar_br', <TabErrorBoundary tab="Criar BR"><CriarBR currentUser={currentUser} /></TabErrorBoundary>)}
           {renderTab('ranking', <TabErrorBoundary tab="Ranking"><RankingPontuacao /></TabErrorBoundary>)}
           {renderTab('metas', <TabErrorBoundary tab="Metas"><PainelMetas currentUser={currentUser} /></TabErrorBoundary>)}
@@ -1041,12 +1038,9 @@ function Sidebar({ view, setView, pendCount, papel, telasPermitidas }) {
     { id: 'plaquinha_equipamento', label: 'Plaquinha de Equipamento', icon: Package },
     { id: 'plaquinha_engenharia', label: 'Plaquinha — Engenharia', icon: ClipboardCheck },
     { id: 'conf_apontamento', label: 'Conf. Apontamento', icon: ClipboardCheck },
-    { id: 'reservas_pendentes', label: 'Reservas Pendentes', icon: AlertTriangle },
     { id: 'verificacao_projetos', label: 'Verificação de Projetos', icon: ClipboardCheck },
-    { id: 'analise_comercial', label: 'Follow Up Comercial', icon: TrendingUp },
     { id: 'prospeccao_clientes', label: 'Prospecção de Clientes', icon: UserPlus },
     { id: 'almoxarifado_fluxo', label: 'Fluxo de Materiais', icon: Package },
-    { id: 'aberturacotacao', label: 'Abertura de Cotação',  icon: FileStack },
     { id: 'criar_br', label: 'Criar BR',            icon: FilePlus },
     { id: 'ranking',      label: 'Ranking de Pontuação',    icon: TrendingUp },
     { id: 'metas',        label: 'Metas',                   icon: SlidersHorizontal },
@@ -38411,13 +38405,10 @@ const TELAS_CATALOGO = [
   { id: 'plaquinha_equipamento', label: 'Plaquinha de Equipamento' },
   { id: 'plaquinha_engenharia', label: 'Plaquinha — Engenharia' },
   { id: 'conf_apontamento', label: 'Conf. Apontamento' },
-  { id: 'reservas_pendentes', label: 'Reservas Pendentes' },
   { id: 'verificacao_projetos', label: 'Verificação de Projetos' },
-  { id: 'analise_comercial', label: 'Follow Up Comercial' },
   { id: 'prospeccao_clientes', label: 'Prospecção de Clientes' },
   { id: 'almoxarifado_fluxo', label: 'Fluxo de Materiais' },
   { id: 'pedidosvale',  label: 'Cerâmicas — aba Pedidos Vale' },
-  { id: 'aberturacotacao', label: 'Abertura de Cotação' },
   { id: 'criar_br', label: 'Criar BR' },
   { id: 'ranking',      label: 'Ranking de Pontuação' },
   { id: 'metas',        label: 'Metas' },
