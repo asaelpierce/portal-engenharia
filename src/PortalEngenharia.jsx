@@ -34465,6 +34465,7 @@ function CeramicasDashboard() {
   const semRegra = V.filter(r => !r.ceramica_1_codigo);
   const comObs = V.filter(r => r.regra_observada);
   const fmt = (v) => Math.round(v || 0).toLocaleString('pt-BR');
+  const fmtCompacto = (v) => { const n = Math.round(v || 0); return n >= 10000 ? `${(n / 1000).toLocaleString('pt-BR', { maximumFractionDigits: 1 })} mil` : n.toLocaleString('pt-BR'); };
   const MES = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
   const CORES = ['#2F7BEA', '#16A34A', '#EA7A33', '#7C3AED', '#0D9488', '#DB2777', '#D9A21B', '#64748B'];
   const mesesP = []; { const c = new Date(`${ini}T12:00:00`); c.setDate(1); const b = new Date(`${fim}T12:00:00`); while (c <= b) { mesesP.push(`${c.getFullYear()}-${String(c.getMonth() + 1).padStart(2, '0')}`); c.setMonth(c.getMonth() + 1); } }
@@ -34549,7 +34550,13 @@ function CeramicasDashboard() {
               <div key={x.m} onClick={() => abrir(`Placas apontadas em ${nomeMes(x.m)}${sufixo}`, `Vale ${fmt(x.vale)} · demais clientes ${fmt(x.outros)}. A lista mostra todos; a coluna Cliente separa.`, [], x.l, { aba: 'ops', filtro: ['mes', x.m] })}
                 title={`${nomeMes(x.m)}: Vale ${fmt(x.vale)} · outros ${fmt(x.outros)} · clique para ver as OPs`}
                 style={{ flex: 1, minWidth: 0, height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', alignItems: 'center', cursor: 'pointer', opacity: foco.mes && foco.mes !== x.m ? 0.35 : 1 }}>
-                <div style={{ fontSize: 11, fontWeight: 600, color: KLC_CATS.consumo.cor, marginBottom: 3 }}>{x.vale + x.outros ? `${Math.round(100 * x.vale / (x.vale + x.outros))}%` : ''}</div>
+                {x.vale + x.outros ? (
+                  <div style={{ textAlign: 'center', marginBottom: 4, lineHeight: 1.25, maxWidth: '100%' }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: C.ink, whiteSpace: 'nowrap' }}>{fmtCompacto(x.vale + x.outros)}</div>
+                    <div style={{ fontSize: 10.5, fontWeight: 600, color: KLC_CATS.consumo.cor, whiteSpace: 'nowrap' }}>Vale {fmtCompacto(x.vale)}</div>
+                    <div style={{ fontSize: 10, color: C.ink3 }}>{Math.round(100 * x.vale / (x.vale + x.outros))}%</div>
+                  </div>
+                ) : null}
                 <div style={{ width: '100%', maxWidth: 46, height: `${150 * (x.vale + x.outros) / maxCons}px`, display: 'flex', flexDirection: 'column-reverse', borderRadius: '5px 5px 0 0', overflow: 'hidden' }}>
                   <div style={{ height: `${x.vale + x.outros ? 100 * x.vale / (x.vale + x.outros) : 0}%`, background: KLC_CATS.consumo.cor }} />
                   <div style={{ flex: 1, background: '#CBD5E1' }} />
@@ -34558,7 +34565,7 @@ function CeramicasDashboard() {
               </div>
             ))}
           </div>
-          <div style={{ fontSize: 11.5, color: C.ink3, marginTop: 6 }}>% em cima = parte da Vale no consumo do mês</div>
+          <div style={{ fontSize: 11.5, color: C.ink3, marginTop: 6 }}>em cima de cada barra: total de placas do mês · em vermelho, quanto foi para a Vale e o % · clique no mês para ver as OPs</div>
         </section>
       </div>
 
