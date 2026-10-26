@@ -22961,7 +22961,80 @@ const EOC_SIT = {
   parado: { r: 'Sem consumo 12m', d: 'tem estoque/OC mas não foi consumido nos últimos 12 meses', cor: '#667085', bg: '#F2F4F7', ord: 5 },
   sem_consumo: { r: 'Sem movimento', d: 'sem consumo, estoque nem OC', cor: '#98A2B3', bg: '#F9FAFB', ord: 6 },
 };
+// Estoque x OCs: escolhe a visão pela permissão (fn_estoque_ocs_completo: Daniela e gestores = completa;
+// demais, ex. engenharia = só disponibilidade, sem valores, fornecedores, preços nem consumo).
 function RelatorioEstoqueOCs() {
+  const [completo, setCompleto] = useState(null);
+  useEffect(() => { supabase.rpc('fn_estoque_ocs_completo').then(({ data }) => setCompleto(!!data)); }, []);
+  if (completo === null) return <div style={{ padding: 40, textAlign: 'center', color: CRMC.ink3 }}>Carregando…</div>;
+  return completo ? <RelatorioEstoqueOCsCompleto /> : <EstoqueDisponibilidade />;
+}
+function EstoqueDisponibilidade() {
+  const C = CRMC;
+  const [linhas, setLinhas] = useState(null);
+  const [busca, setBusca] = useState('');
+  const [so, setSo] = useState('todos');   // todos | disponivel | sem
+  const [ordem, setOrdem] = useState({ c: 'cod', desc: false });
+  useEffect(() => { supabase.from('v_estoque_disponivel').select('*').then(({ data }) => setLinhas(data || [])); }, []);
+  if (!linhas) return <div style={{ padding: 40, textAlign: 'center', color: C.ink3 }}>Carregando a disponibilidade…</div>;
+  const q = (v) => (v == null ? '—' : Number(v).toLocaleString('pt-BR', { maximumFractionDigits: 2 }));
+  const dt = (d) => (d ? new Date(`${String(d).slice(0, 10)}T12:00:00`).toLocaleDateString('pt-BR') : '—');
+  const t = busca.trim().toLowerCase();
+  const vis = linhas.filter(l => (!t || `${l.cod_prod} ${l.descr_prod}`.toLowerCase().includes(t))
+    && (so === 'todos' || (so === 'disponivel' ? Number(l.disponivel) > 0 : Number(l.disponivel) <= 0)));
+  const ch = { cod: l => l.cod_prod, desc: l => l.descr_prod || '', disp: l => Number(l.disponivel) || 0, rec: l => Number(l.a_receber) || 0, prox: l => l.proxima_chegada || '9999' };
+  vis.sort((a, b) => { const x = ch[ordem.c](a), y = ch[ordem.c](b); return (x > y ? 1 : x < y ? -1 : 0) * (ordem.desc ? -1 : 1); });
+  const th = (r, c, al = 'right') => (
+    <th onClick={c ? () => setOrdem(o => ({ c, desc: o.c === c ? !o.desc : c === 'disp' || c === 'rec' })) : undefined}
+      style={{ padding: '9px 12px', fontSize: 11.5, fontWeight: 600, color: C.ink2, textAlign: al, whiteSpace: 'nowrap', background: '#F1F4F8', borderBottom: `1px solid ${C.line}`, position: 'sticky', top: 0, cursor: c ? 'pointer' : 'default' }}>
+      {r}{c && ordem.c === c ? (ordem.desc ? ' ▼' : ' ▲') : ''}</th>
+  );
+  const td = { padding: '8px 12px', textAlign: 'right', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap', borderBottom: `1px solid ${C.lineSoft}` };
+  const atual = linhas.map(l => l.sincronizado_em).filter(Boolean).sort().pop();
+  const exportar = () => {
+    const l2 = ['Código;Material;Unidade;Matéria-prima;Em processamento;Reservado;Disponível;A receber;Próxima chegada',
+      ...vis.map(l => [l.cod_prod, `"${l.descr_prod || ''}"`, l.unidade || '', l.estoque_mp, l.estoque_processamento, l.reservado, l.disponivel, l.a_receber, l.proxima_chegada ? dt(l.proxima_chegada) : ''].join(';'))];
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob(['\ufeff' + l2.join('\n')], { type: 'text/csv;charset=utf-8' })); a.download = 'estoque_disponivel.csv'; a.click();
+  };
+  const seg = (k, r) => <button key={k} onClick={() => setSo(k)} style={{ fontFamily: 'inherit', fontSize: 12.5, fontWeight: so === k ? 600 : 500, padding: '6px 12px', borderRadius: 7, border: 'none', cursor: 'pointer', background: so === k ? C.surface : 'transparent', color: so === k ? C.ink : C.ink2 }}>{r}</button>;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12, fontFamily: FONT_BODY, color: C.ink }}>
+      <div style={{ background: C.surface, border: `1px solid ${C.line}`, borderRadius: 10, padding: '12px 16px', fontSize: 12.5, color: C.ink2 }}>
+        <strong style={{ color: C.ink }}>Disponibilidade de matéria-prima</strong> — disponível = estoque em matéria-prima + em processamento − reservado para OPs (direto do Sankhya){atual ? `, atualizado em ${new Date(atual).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}` : ''}. "A receber" e "próxima chegada" vêm das ordens de compra em aberto.
+      </div>
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+        <div style={{ position: 'relative' }}>
+          <Search size={14} aria-hidden="true" style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: C.ink3 }} />
+          <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="código ou material" style={{ fontFamily: 'inherit', fontSize: 12.5, padding: '7px 10px 7px 30px', borderRadius: 8, border: `1px solid ${C.line}`, width: 260 }} />
+        </div>
+        <div style={{ display: 'inline-flex', background: '#E7EBF1', borderRadius: 9, padding: 3, gap: 2 }}>{seg('todos', 'Todos')}{seg('disponivel', 'Com disponível')}{seg('sem', 'Sem disponível')}</div>
+        <span style={{ flex: 1 }} />
+        <span style={{ fontSize: 12, color: C.ink3 }}>{vis.length} de {linhas.length} materiais</span>
+        <button onClick={exportar} style={{ fontFamily: 'inherit', fontSize: 12.5, padding: '7px 12px', borderRadius: 8, border: `1px solid ${C.line}`, background: C.surface, cursor: 'pointer' }}>Exportar CSV</button>
+      </div>
+      <div style={{ background: C.surface, border: `1px solid ${C.line}`, borderRadius: 10, overflow: 'auto', maxHeight: 'calc(100vh - 300px)', minHeight: 300 }}>
+        <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, fontSize: 12.5 }}>
+          <thead><tr>{th('Código', 'cod', 'left')}{th('Material', 'desc', 'left')}{th('Unid.', null, 'center')}{th('Matéria-prima')}{th('Em processamento')}{th('Reservado')}{th('Disponível', 'disp')}{th('A receber', 'rec')}{th('Próxima chegada', 'prox')}</tr></thead>
+          <tbody>
+            {vis.map(l => (
+              <tr key={l.cod_prod}>
+                <td style={{ ...td, textAlign: 'left', fontWeight: 700, color: C.primary }}>{l.cod_prod}</td>
+                <td style={{ ...td, textAlign: 'left', whiteSpace: 'normal', minWidth: 260 }}>{l.descr_prod || '—'}</td>
+                <td style={{ ...td, textAlign: 'center', color: C.ink3 }}>{l.unidade}</td>
+                <td style={{ ...td, color: C.ink2 }}>{q(l.estoque_mp)}</td>
+                <td style={{ ...td, color: C.ink2 }}>{q(l.estoque_processamento)}</td>
+                <td style={{ ...td, color: C.ink2 }}>{q(l.reservado)}</td>
+                <td style={{ ...td, fontWeight: 800, color: Number(l.disponivel) > 0 ? C.ink : C.loss }}>{q(l.disponivel)}</td>
+                <td style={td}>{Number(l.a_receber) ? q(l.a_receber) : '—'}</td>
+                <td style={td}>{l.proxima_chegada ? dt(l.proxima_chegada) : '—'}</td>
+              </tr>))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+function RelatorioEstoqueOCsCompleto() {
   const C = CRMC;
   const [linhas, setLinhas] = useState(null);
   const [busca, setBusca] = useState('');
