@@ -22981,53 +22981,56 @@ function RelatorioEstoqueOCs() {
     })();
   }, []);
   useEffect(() => {
-    if (!aberto) return;
+    if (!aberto) return undefined;
     setMensal([]); setOcs([]);
     supabase.from('v_consumo_mp_mensal').select('mes,qtd').eq('cod_prod', aberto.cod_prod).order('mes').then(({ data }) => setMensal(data || []));
     supabase.from('mp_oc_pendente').select('*').eq('cod_prod', aberto.cod_prod).order('prev_entrega').then(({ data }) => setOcs(data || []));
+    const t = (e) => { if (e.key === 'Escape') setAberto(null); };
+    window.addEventListener('keydown', t); return () => window.removeEventListener('keydown', t);
   }, [aberto]);
   if (!linhas) return <div style={{ padding: 40, textAlign: 'center', color: C.ink3 }}>Carregando estoque e consumo…</div>;
-  const q = (v, d = 0) => (v == null ? '—' : Number(v).toLocaleString('pt-BR', { maximumFractionDigits: d }));
+  const q = (v, d = 0) => (v == null || v === '' ? '—' : Number(v).toLocaleString('pt-BR', { maximumFractionDigits: d }));
   const dt = (d) => (d ? new Date(`${String(d).slice(0, 10)}T12:00:00`).toLocaleDateString('pt-BR') : '—');
   const t = busca.trim().toLowerCase();
   const vis = linhas.filter(l => (!fSit || l.situacao === fSit) && (!t || `${l.cod_prod} ${l.descr_prod}`.toLowerCase().includes(t)));
-  const chave = { sit: l => EOC_SIT[l.situacao]?.ord ?? 9, cod: l => l.cod_prod, media: l => Number(l.media_mensal) || 0, cob: l => l.cobertura_com_oc_meses ?? 999, sug: l => Number(l.sugestao_compra) || 0, tend: l => l.tendencia_pct ?? -999, lead: l => l.lead_time_dias ?? -1 };
+  const anos = ['2021', '2022', '2023', '2024', '2025', '2026'];
+  const chave = { sit: l => EOC_SIT[l.situacao]?.ord ?? 9, cod: l => l.cod_prod, media: l => Number(l.media_mensal) || 0, cob: l => l.cobertura_com_oc_meses ?? 999,
+    sug: l => Number(l.sugestao_compra) || 0, tend: l => l.tendencia_pct ?? -999, lead: l => l.lead_time_dias ?? -1, disp: l => Number(l.disponivel) || 0, rec: l => Number(l.a_receber) || 0,
+    ...Object.fromEntries(anos.map(a => [`c${a}`, l => Number(l[`c${a}`]) || 0])) };
   vis.sort((a, b) => { const x = chave[ordem.c](a), y = chave[ordem.c](b); const r = (x > y ? 1 : x < y ? -1 : 0) * (ordem.desc ? -1 : 1); return r || (Number(b.consumo_12m) - Number(a.consumo_12m)); });
   const cont = (k) => linhas.filter(l => l.situacao === k).length;
   const valorReceber = linhas.reduce((s2, l) => s2 + (Number(l.valor_receber) || 0), 0);
   const atrasadas = linhas.reduce((s2, l) => s2 + (Number(l.ocs_atrasadas) || 0), 0);
-  const th = (r, c, al = 'right') => (
-    <th onClick={c ? () => setOrdem(o => ({ c, desc: o.c === c ? !o.desc : c !== 'sit' && c !== 'cod' && c !== 'cob' })) : undefined}
-      style={{ padding: '9px 10px', fontSize: 11.5, fontWeight: 600, color: C.ink3, textAlign: al, whiteSpace: 'nowrap', position: 'sticky', top: 0, background: C.surface2, borderBottom: `1px solid ${C.line}`, cursor: c ? 'pointer' : 'default', zIndex: 1 }}>
-      {r}{c && ordem.c === c ? (ordem.desc ? ' ▼' : ' ▲') : ''}</th>
+  const thBase = { padding: '8px 10px', fontSize: 11.5, fontWeight: 600, color: C.ink2, whiteSpace: 'nowrap', background: '#F1F4F8', borderBottom: `1px solid ${C.line}` };
+  const th = (r, c, al = 'right', extra = {}) => (
+    <th onClick={c ? () => setOrdem(o => ({ c, desc: o.c === c ? !o.desc : !['sit', 'cod', 'cob'].includes(c) })) : undefined}
+      style={{ ...thBase, textAlign: al, cursor: c ? 'pointer' : 'default', position: 'sticky', top: 30, zIndex: 1, ...extra }}>{r}{c && ordem.c === c ? (ordem.desc ? ' ▼' : ' ▲') : ''}</th>
   );
+  const grupo = (r, n, extra = {}) => <th colSpan={n} style={{ ...thBase, textAlign: 'center', fontSize: 11, letterSpacing: 0.4, textTransform: 'uppercase', color: C.ink3, position: 'sticky', top: 0, zIndex: 2, height: 30, boxSizing: 'border-box', ...extra }}>{r}</th>;
+  const td = { padding: '8px 10px', textAlign: 'right', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap', borderBottom: `1px solid ${C.lineSoft}` };
+  const sep = { borderLeft: `1px solid ${C.line}` };
   const exportar = () => {
-    const l2 = ['Código;Material;Unidade;2021;2022;2023;2024;2025;2026;Consumo 12m;Média mensal;Tendência %;Estoque;Reservado;Disponível;A receber (OCs);OCs;Próx. entrega;Prazo entrega (dias);Cobertura (meses);Cobertura c/ OC (meses);Sugestão de compra;Situação',
+    const l2 = ['Código;Material;Unidade;2021;2022;2023;2024;2025;2026;Consumo 12m;Média mensal;Tendência %;Estoque;Reservado;Disponível;A receber (OCs);OCs;Próx. entrega;Prazo entrega (dias);Cobertura (meses);Cobertura sem OC (meses);Sugestão de compra;Situação',
       ...vis.map(l => [l.cod_prod, `"${l.descr_prod || ''}"`, l.unidade || '', l.c2021, l.c2022, l.c2023, l.c2024, l.c2025, l.c2026, l.consumo_12m, String(l.media_mensal).replace('.', ','), l.tendencia_pct ?? '', l.estoque, l.reservado, l.disponivel,
-        l.a_receber, l.ocs_abertas, l.prox_entrega ? dt(l.prox_entrega) : '', l.lead_time_dias ?? '', String(l.cobertura_meses ?? '').replace('.', ','), String(l.cobertura_com_oc_meses ?? '').replace('.', ','), l.sugestao_compra, EOC_SIT[l.situacao]?.r || l.situacao].join(';'))];
+        l.a_receber, l.ocs_abertas, l.prox_entrega ? dt(l.prox_entrega) : '', l.lead_time_dias ?? '', String(l.cobertura_com_oc_meses ?? '').replace('.', ','), String(l.cobertura_meses ?? '').replace('.', ','), l.sugestao_compra, EOC_SIT[l.situacao]?.r || l.situacao].join(';'))];
     const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob(['\ufeff' + l2.join('\n')], { type: 'text/csv;charset=utf-8' })); a.download = 'estoque_consumo_ocs.csv'; a.click();
   };
-  const caixa = { background: C.surface, border: `1px solid ${C.line}`, borderRadius: 12, boxShadow: '0 1px 2px rgba(16,24,40,.04)' };
-  const anos = ['2021', '2022', '2023', '2024', '2025', '2026'];
+  const caixa = { background: C.surface, border: `1px solid ${C.line}`, borderRadius: 10 };
+  const MESES = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14, fontFamily: FONT_BODY, color: C.ink }}>
-      <div style={{ ...caixa, padding: '12px 16px', fontSize: 12.5, color: C.ink2, lineHeight: 1.55 }}>
-        <strong style={{ color: C.ink }}>Estoque × Consumo × OCs</strong> — consumo <strong>real</strong> (apontamento de produção) desde 2021; <strong>média mensal</strong> = consumo dos últimos 12 meses ÷ 12;
-        <strong> cobertura</strong> = (disponível + a receber em OCs) ÷ média mensal, em meses; <strong>situação</strong> compara a cobertura com o <strong>prazo de entrega real</strong> do material (pedido de compra → nota, últimos 24 meses; sem histórico, considera 30 dias);
-        <strong> sugestão de compra</strong> = o necessário para cobrir o prazo de entrega + 1 mês. {atualizado && <span style={{ color: C.ink3 }}>OCs atualizadas em {new Date(atualizado).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}.</span>}
-      </div>
-      <div style={{ display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))' }}>
+      <div style={{ display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fit, minmax(135px, 1fr))' }}>
         {['zerado', 'critico', 'atencao', 'ok', 'excesso', 'parado'].map(k => { const sx = EOC_SIT[k]; const on = fSit === k;
           return (
-            <button key={k} onClick={() => setFSit(on ? null : k)} title={sx.d} style={{ ...caixa, textAlign: 'left', fontFamily: 'inherit', padding: '11px 14px', cursor: 'pointer', borderColor: on ? sx.cor : C.line, boxShadow: on ? `0 0 0 3px ${sx.cor}22` : caixa.boxShadow }}>
-              <div style={{ fontSize: 12, color: C.ink2 }}>{sx.r}</div>
-              <div style={{ fontSize: 24, fontWeight: 800, color: sx.cor }}>{cont(k)}</div>
-              <div style={{ fontSize: 11, color: C.ink3 }}>{sx.d}</div>
+            <button key={k} onClick={() => setFSit(on ? null : k)} title={sx.d} style={{ ...caixa, textAlign: 'left', fontFamily: 'inherit', padding: '10px 14px', cursor: 'pointer', borderColor: on ? sx.cor : C.line, borderLeft: `4px solid ${sx.cor}` }}>
+              <div style={{ fontSize: 11.5, color: C.ink2, fontWeight: 600 }}>{sx.r}</div>
+              <div style={{ fontSize: 22, fontWeight: 800, color: C.ink, fontVariantNumeric: 'tabular-nums' }}>{cont(k)}</div>
+              <div style={{ fontSize: 10.5, color: C.ink3, lineHeight: 1.3 }}>{sx.d}</div>
             </button>); })}
-        <div style={{ ...caixa, padding: '11px 14px' }}>
-          <div style={{ fontSize: 12, color: C.ink2 }}>A receber em OCs</div>
-          <div style={{ fontSize: 20, fontWeight: 800 }}>{fmtMoedaCompacta(valorReceber)}</div>
-          <div style={{ fontSize: 11, color: atrasadas ? C.loss : C.ink3 }}>{atrasadas ? `${atrasadas} item(ns) de OC com entrega atrasada` : 'nenhuma OC atrasada'}</div>
+        <div style={{ ...caixa, padding: '10px 14px', borderLeft: `4px solid ${C.ink2}` }}>
+          <div style={{ fontSize: 11.5, color: C.ink2, fontWeight: 600 }}>A receber em OCs</div>
+          <div style={{ fontSize: 20, fontWeight: 800, fontVariantNumeric: 'tabular-nums' }}>{fmtMoedaCompacta(valorReceber)}</div>
+          <div style={{ fontSize: 10.5, color: atrasadas ? C.loss : C.ink3 }}>{atrasadas ? `${atrasadas} item(ns) com entrega atrasada` : 'nenhuma OC atrasada'}</div>
         </div>
       </div>
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -23037,92 +23040,127 @@ function RelatorioEstoqueOCs() {
         </div>
         {fSit && <button onClick={() => setFSit(null)} style={{ fontFamily: 'inherit', fontSize: 12.5, border: 'none', background: 'none', color: C.primary, cursor: 'pointer' }}>tirar filtro "{EOC_SIT[fSit].r}"</button>}
         <span style={{ flex: 1 }} />
-        <span style={{ fontSize: 12.5, color: C.ink2 }}>{vis.length} de {linhas.length} materiais monitorados</span>
+        <span style={{ fontSize: 12, color: C.ink3 }}>{vis.length} de {linhas.length} materiais{atualizado ? ` · OCs atualizadas ${new Date(atualizado).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}` : ''}</span>
         <button onClick={exportar} style={{ fontFamily: 'inherit', fontSize: 12.5, padding: '7px 12px', borderRadius: 8, border: `1px solid ${C.line}`, background: C.surface, cursor: 'pointer' }}>Exportar CSV</button>
       </div>
       <div style={{ ...caixa, overflow: 'hidden' }}>
-        <div style={{ overflow: 'auto', maxHeight: 'calc(100vh - 360px)', minHeight: 320 }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
-            <thead><tr>
-              {th('Material', 'cod', 'left')}{th('Consumo por ano (2021 → 2026)', null, 'left')}{th('Média mensal', 'media')}{th('Tendência', 'tend')}{th('Disponível')}{th('A receber (OCs)')}{th('Prazo entrega', 'lead')}{th('Cobertura', 'cob')}{th('Sugestão compra', 'sug')}{th('Situação', 'sit', 'left')}
-            </tr></thead>
+        <div style={{ overflow: 'auto', maxHeight: 'calc(100vh - 330px)', minHeight: 320 }}>
+          <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, fontSize: 12.5 }}>
+            <thead>
+              <tr>{grupo('', 2)}{grupo('Consumo anual (apontamento de produção)', 6, sep)}{grupo('Estoque', 4, sep)}{grupo('Reposição', 4, sep)}</tr>
+              <tr>
+                {th('Código', 'cod', 'left')}{th('Material', null, 'left')}
+                {anos.map((a, k) => <React.Fragment key={a}>{th(a, `c${a}`, 'right', k === 0 ? sep : {})}</React.Fragment>)}
+                {th('Média/mês', 'media', 'right', sep)}{th('Tend.', 'tend')}{th('Disponível', 'disp')}{th('A receber', 'rec')}
+                {th('Prazo (dias)', 'lead', 'right', sep)}{th('Cobertura', 'cob')}{th('Sugestão', 'sug')}{th('Situação', 'sit', 'left')}
+              </tr>
+            </thead>
             <tbody>
-              {vis.map((l, k) => { const sx = EOC_SIT[l.situacao] || EOC_SIT.sem_consumo; const maxAno = Math.max(1, ...anos.map(a => Number(l[`c${a}`]) || 0)); const leadM = (Number(l.lead_time_dias) || 30) / 30;
+              {vis.map(l => { const sx = EOC_SIT[l.situacao] || EOC_SIT.sem_consumo;
                 return (
-                  <React.Fragment key={l.cod_prod}>
-                    <tr onClick={() => setAberto(a => a?.cod_prod === l.cod_prod ? null : l)} style={{ background: aberto?.cod_prod === l.cod_prod ? C.primarySoft : k % 2 ? C.surface2 : C.surface, cursor: 'pointer' }}>
-                      <td style={{ padding: '8px 10px', minWidth: 230, maxWidth: 320 }}>
-                        <div><strong style={{ color: C.primary }}>{l.cod_prod}</strong> <span style={{ color: C.ink3, fontSize: 11 }}>{l.unidade}</span></div>
-                        <div style={{ fontSize: 11.5, color: C.ink2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={l.descr_prod}>{l.descr_prod || '—'}</div>
-                      </td>
-                      <td style={{ padding: '8px 10px' }} title={anos.map(a => `${a}: ${q(l[`c${a}`])}`).join('\n')}>
-                        <div style={{ display: 'flex', alignItems: 'flex-end', gap: 3, height: 26 }}>
-                          {anos.map(a => <div key={a} style={{ width: 12, height: `${Math.max(2, 26 * (Number(l[`c${a}`]) || 0) / maxAno)}px`, background: a === '2026' ? C.primary : '#B9C6D8', borderRadius: 2 }} />)}
-                        </div>
-                        <div style={{ fontSize: 10.5, color: C.ink3, whiteSpace: 'nowrap' }}>2025: {q(l.c2025)} · 2026: {q(l.c2026)}</div>
-                      </td>
-                      <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 700, whiteSpace: 'nowrap' }}>{q(l.media_mensal)}<div style={{ fontSize: 10.5, color: C.ink3, fontWeight: 400 }}>{l.meses_com_consumo}/12 meses</div></td>
-                      <td style={{ padding: '8px 10px', textAlign: 'right', whiteSpace: 'nowrap', fontWeight: 600, color: l.tendencia_pct == null ? C.ink3 : l.tendencia_pct > 10 ? C.loss : l.tendencia_pct < -10 ? C.primary : C.ink2 }}>
-                        {l.tendencia_pct == null ? '—' : `${l.tendencia_pct > 0 ? '▲ +' : l.tendencia_pct < 0 ? '▼ ' : ''}${l.tendencia_pct}%`}</td>
-                      <td style={{ padding: '8px 10px', textAlign: 'right', whiteSpace: 'nowrap', color: l.disponivel < 0 ? C.loss : C.ink }}>{q(l.disponivel)}
-                        {l.reservado > 0 && <div style={{ fontSize: 10.5, color: C.ink3 }}>estoque {q(l.estoque)} · res. {q(l.reservado)}</div>}</td>
-                      <td style={{ padding: '8px 10px', textAlign: 'right', whiteSpace: 'nowrap' }}>{l.a_receber ? <><strong>{q(l.a_receber)}</strong><div style={{ fontSize: 10.5, color: l.ocs_atrasadas ? C.loss : C.ink3 }}>{l.ocs_abertas} OC · {l.ocs_atrasadas ? `${l.ocs_atrasadas} atrasada(s)` : `prev. ${dt(l.prox_entrega)}`}</div></> : <span style={{ color: C.ink3 }}>—</span>}</td>
-                      <td style={{ padding: '8px 10px', textAlign: 'right', whiteSpace: 'nowrap' }} title={l.lead_time_dias ? `média de ${l.lead_time_entregas} entrega(s) nos últimos 24 meses · máximo ${q(l.lead_time_max)} dias` : 'sem histórico de entrega: considera 30 dias'}>{l.lead_time_dias ? `${q(l.lead_time_dias)} dias` : <span style={{ color: C.ink3 }}>30 dias*</span>}</td>
-                      <td style={{ padding: '8px 10px', textAlign: 'right', minWidth: 120 }}>
-                        {l.cobertura_com_oc_meses == null ? <span style={{ color: C.ink3 }}>—</span> : <>
-                          <strong style={{ color: sx.cor }}>{q(l.cobertura_com_oc_meses, 1)} meses</strong>
-                          <div style={{ position: 'relative', height: 6, borderRadius: 3, background: C.lineSoft, marginTop: 3 }}>
-                            <div style={{ width: `${Math.min(100, 100 * Math.max(0, l.cobertura_com_oc_meses) / Math.max(leadM + 1, 6))}%`, height: '100%', borderRadius: 3, background: sx.cor }} />
-                            <div title="prazo de entrega" style={{ position: 'absolute', top: -2, bottom: -2, left: `${Math.min(100, 100 * leadM / Math.max(leadM + 1, 6))}%`, width: 2, background: C.ink }} />
-                          </div>
-                          {l.a_receber > 0 && <div style={{ fontSize: 10.5, color: C.ink3 }}>sem as OCs: {q(l.cobertura_meses, 1)}</div>}
-                        </>}
-                      </td>
-                      <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 700, whiteSpace: 'nowrap', color: l.sugestao_compra > 0 ? C.ink : C.ink3 }}>{l.sugestao_compra > 0 ? q(l.sugestao_compra) : '—'}</td>
-                      <td style={{ padding: '8px 10px', whiteSpace: 'nowrap' }}><span title={sx.d} style={{ fontSize: 11.5, fontWeight: 700, color: sx.cor, background: sx.bg, padding: '3px 9px', borderRadius: 10 }}>{sx.r}</span></td>
-                    </tr>
-                    {aberto?.cod_prod === l.cod_prod && (
-                      <tr><td colSpan={10} style={{ padding: '12px 16px 16px', background: C.surface, borderBottom: `2px solid ${C.primary}` }}>
-                        <div style={{ display: 'grid', gap: 14, gridTemplateColumns: 'minmax(0, 2fr) minmax(280px, 1fr)' }}>
-                          <div>
-                            <div style={{ fontWeight: 700, marginBottom: 6 }}>Consumo mês a mês (apontamento de produção)</div>
-                            {(() => { const ult = mensal.slice(-36); const mx = Math.max(1, ...ult.map(m => Number(m.qtd) || 0)); const MES = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
-                              return ult.length ? (
-                                <div style={{ display: 'flex', alignItems: 'flex-end', gap: 2, height: 130, borderBottom: `1px solid ${C.line}` }}>
-                                  {ult.map(m => { const d0 = new Date(`${m.mes}T12:00:00`); return (
-                                    <div key={m.mes} title={`${MES[d0.getMonth()]}/${d0.getFullYear()}: ${q(m.qtd)} ${l.unidade || ''}`} style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-end', height: '100%' }}>
-                                      <div style={{ width: '100%', height: `${Math.max(2, 115 * (Number(m.qtd) || 0) / mx)}px`, background: d0.getFullYear() === new Date().getFullYear() ? C.primary : '#B9C6D8', borderRadius: '2px 2px 0 0' }} />
-                                      {d0.getMonth() === 0 && <div style={{ fontSize: 9.5, color: C.ink3 }}>{d0.getFullYear()}</div>}
-                                    </div>); })}
-                                </div>) : <div style={{ fontSize: 12.5, color: C.ink3 }}>Sem consumo apontado.</div>; })()}
-                            <div style={{ fontSize: 11, color: C.ink3, marginTop: 4 }}>últimos 36 meses · azul = ano atual · passe o mouse para ver a quantidade</div>
-                            <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: 8, fontSize: 12 }}>
-                              {anos.map(a => <span key={a}><span style={{ color: C.ink3 }}>{a}:</span> <strong>{q(l[`c${a}`])}</strong></span>)}
-                              <span><span style={{ color: C.ink3 }}>últimos 12m:</span> <strong>{q(l.consumo_12m)}</strong> <span style={{ color: C.ink3 }}>(12m anteriores: {q(l.consumo_12m_anterior)})</span></span>
-                            </div>
-                          </div>
-                          <div style={{ fontSize: 12.5, lineHeight: 1.6 }}>
-                            <div style={{ fontWeight: 700, marginBottom: 4 }}>Reposição</div>
-                            <div>Estoque {q(l.estoque)} − reservado {q(l.reservado)} = <strong>disponível {q(l.disponivel)}</strong></div>
-                            <div>+ a receber em OCs: <strong>{q(l.a_receber)}</strong></div>
-                            <div>÷ média mensal {q(l.media_mensal)} = <strong style={{ color: sx.cor }}>{q(l.cobertura_com_oc_meses, 1)} meses</strong></div>
-                            <div>prazo de entrega: <strong>{l.lead_time_dias ? `${q(l.lead_time_dias)} dias` : '30 dias (sem histórico)'}</strong>{l.lead_time_max ? ` · máx. ${q(l.lead_time_max)}` : ''}</div>
-                            <div>sugestão de compra (prazo + 1 mês): <strong>{l.sugestao_compra > 0 ? `${q(l.sugestao_compra)} ${l.unidade || ''}` : 'não precisa'}</strong></div>
-                            <div style={{ fontWeight: 700, margin: '10px 0 4px' }}>OCs em aberto ({ocs.length})</div>
-                            {!ocs.length ? <div style={{ color: C.ink3 }}>Nenhuma.</div> : ocs.map(o => (
-                              <div key={`${o.nunota}-${o.sequencia}`} style={{ borderTop: `1px solid ${C.lineSoft}`, padding: '4px 0', color: o.prev_entrega && o.prev_entrega < new Date().toISOString().slice(0, 10) ? C.loss : C.ink }}>
-                                OC <strong>{o.numero_oc}</strong> · {o.fornecedor} · saldo <strong>{q(o.saldo)}</strong> de {q(o.qtd_pedida)} · prev. {dt(o.prev_entrega)}
-                              </div>))}
-                          </div>
-                        </div>
-                      </td></tr>
-                    )}
-                  </React.Fragment>); })}
+                  <tr key={l.cod_prod} onClick={() => setAberto(l)} style={{ cursor: 'pointer' }}
+                    onMouseEnter={e => { e.currentTarget.style.background = '#F7F9FC'; }} onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}>
+                    <td style={{ ...td, textAlign: 'left', fontWeight: 700, color: C.primary }}>{l.cod_prod}</td>
+                    <td style={{ ...td, textAlign: 'left', whiteSpace: 'normal', minWidth: 220, maxWidth: 300, color: C.ink }}>
+                      <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={l.descr_prod}>{l.descr_prod || '—'}</div>
+                      <div style={{ fontSize: 10.5, color: C.ink3 }}>{l.unidade}</div>
+                    </td>
+                    {anos.map((a, k) => <td key={a} style={{ ...td, ...(k === 0 ? sep : {}), color: Number(l[`c${a}`]) ? (a === '2026' ? C.ink : C.ink2) : C.ink3, fontWeight: a === '2026' ? 600 : 400 }}>{Number(l[`c${a}`]) ? q(l[`c${a}`]) : '—'}</td>)}
+                    <td style={{ ...td, ...sep, fontWeight: 700 }}>{Number(l.media_mensal) ? q(l.media_mensal) : '—'}</td>
+                    <td style={{ ...td, color: l.tendencia_pct == null ? C.ink3 : l.tendencia_pct > 10 ? C.loss : l.tendencia_pct < -10 ? C.primary : C.ink2 }}>{l.tendencia_pct == null ? '—' : `${l.tendencia_pct > 0 ? '+' : ''}${l.tendencia_pct}%`}</td>
+                    <td style={{ ...td, color: l.disponivel < 0 ? C.loss : C.ink }}>{q(l.disponivel)}</td>
+                    <td style={{ ...td, color: l.ocs_atrasadas ? C.loss : C.ink }}>{l.a_receber ? q(l.a_receber) : '—'}</td>
+                    <td style={{ ...td, ...sep, color: l.lead_time_dias ? C.ink : C.ink3 }}>{l.lead_time_dias ? q(l.lead_time_dias) : '30*'}</td>
+                    <td style={{ ...td, fontWeight: 700, color: sx.cor }}>{l.cobertura_com_oc_meses == null ? '—' : `${q(l.cobertura_com_oc_meses, 1)} m`}</td>
+                    <td style={{ ...td, fontWeight: 700 }}>{l.sugestao_compra > 0 ? q(l.sugestao_compra) : '—'}</td>
+                    <td style={{ ...td, textAlign: 'left' }}><span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600, color: sx.cor }}><span style={{ width: 8, height: 8, borderRadius: 4, background: sx.cor }} />{sx.r}</span></td>
+                  </tr>); })}
             </tbody>
           </table>
         </div>
       </div>
-      <div style={{ fontSize: 11.5, color: C.ink3 }}>* sem histórico de entrega nos últimos 24 meses: considera 30 dias. Clique numa linha para ver o consumo mês a mês e as OCs. A lista de materiais monitorados fica na tabela mp_monitorado.</div>
+      <div style={{ fontSize: 11.5, color: C.ink3, lineHeight: 1.5 }}>
+        Média/mês = consumo dos últimos 12 meses ÷ 12 · Tend. = últimos 12 meses contra os 12 anteriores · Cobertura = (disponível + a receber) ÷ média/mês, em meses · Prazo = dias entre o pedido de compra e a chegada da nota (média dos últimos 24 meses; * sem histórico, 30 dias) · Sugestão = o necessário para cobrir o prazo de entrega + 1 mês · Clique numa linha para o detalhe.
+      </div>
+
+      {aberto && ReactDOM.createPortal((() => { const l = aberto; const sx = EOC_SIT[l.situacao] || EOC_SIT.sem_consumo;
+        const porAno = {}; mensal.forEach(m => { const d0 = new Date(`${m.mes}T12:00:00`); (porAno[d0.getFullYear()] = porAno[d0.getFullYear()] || Array(12).fill(0))[d0.getMonth()] += Number(m.qtd) || 0; });
+        const anosM = Object.keys(porAno).sort();
+        const tdD = { padding: '7px 9px', textAlign: 'right', fontVariantNumeric: 'tabular-nums', borderBottom: `1px solid ${C.lineSoft}`, whiteSpace: 'nowrap' };
+        const thD = { padding: '7px 9px', fontSize: 11, fontWeight: 600, color: C.ink2, background: '#F1F4F8', borderBottom: `1px solid ${C.line}`, textAlign: 'right' };
+        return (
+          <div onClick={() => setAberto(null)} style={{ position: 'fixed', inset: 0, zIndex: 85, background: 'rgba(15,35,64,.35)', display: 'flex', justifyContent: 'flex-end' }}>
+            <aside onClick={e => e.stopPropagation()} style={{ width: 'min(1100px, 100%)', height: '100%', background: '#F7F8FA', display: 'flex', flexDirection: 'column', fontFamily: FONT_BODY, color: C.ink, boxShadow: '-10px 0 40px rgba(16,24,40,.25)' }}>
+              <div style={{ background: '#0F2340', color: '#fff', padding: '16px 22px', display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 12, color: 'rgba(255,255,255,.7)' }}>Código {l.cod_prod} · {l.unidade}</div>
+                  <div style={{ fontSize: 16.5, fontWeight: 700 }}>{l.descr_prod}</div>
+                </div>
+                <span style={{ fontSize: 12.5, fontWeight: 700, background: '#fff', color: sx.cor, padding: '5px 10px', borderRadius: 8 }}>{sx.r}</span>
+                <button onClick={() => setAberto(null)} style={{ fontFamily: 'inherit', fontSize: 12.5, fontWeight: 600, padding: '7px 12px', borderRadius: 8, border: '1px solid rgba(255,255,255,.3)', background: 'transparent', color: '#fff', cursor: 'pointer' }}>Fechar · Esc</button>
+              </div>
+              <div style={{ flex: 1, overflow: 'auto', padding: '16px 22px', display: 'flex', flexDirection: 'column', gap: 16 }}>
+                <div style={{ display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))' }}>
+                  {[['Média mensal (12m)', q(l.media_mensal)], ['Tendência', l.tendencia_pct == null ? '—' : `${l.tendencia_pct > 0 ? '+' : ''}${l.tendencia_pct}%`], ['Disponível', q(l.disponivel)], ['A receber (OCs)', q(l.a_receber)],
+                    ['Cobertura', l.cobertura_com_oc_meses == null ? '—' : `${q(l.cobertura_com_oc_meses, 1)} meses`], ['Prazo de entrega', l.lead_time_dias ? `${q(l.lead_time_dias)} dias` : '30 dias*'], ['Sugestão de compra', l.sugestao_compra > 0 ? q(l.sugestao_compra) : '—']].map(([r, v]) => (
+                    <div key={r} style={{ ...caixa, padding: '10px 12px' }}><div style={{ fontSize: 11.5, color: C.ink3 }}>{r}</div><div style={{ fontSize: 18, fontWeight: 800, fontVariantNumeric: 'tabular-nums' }}>{v}</div></div>))}
+                </div>
+                <section style={{ ...caixa, overflow: 'hidden' }}>
+                  <div style={{ padding: '10px 14px', fontWeight: 700, borderBottom: `1px solid ${C.line}` }}>Consumo mês a mês ({l.unidade}) · apontamento de produção</div>
+                  <div style={{ overflowX: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                      <thead><tr><th style={{ ...thD, textAlign: 'left' }}>Ano</th>{MESES.map(m => <th key={m} style={thD}>{m}</th>)}<th style={{ ...thD, borderLeft: `1px solid ${C.line}` }}>Total</th><th style={thD}>Média/mês</th></tr></thead>
+                      <tbody>
+                        {!anosM.length && <tr><td colSpan={15} style={{ padding: 16, textAlign: 'center', color: C.ink3 }}>{mensal.length === 0 ? 'Carregando…' : 'Sem consumo apontado.'}</td></tr>}
+                        {anosM.map(a => { const vs = porAno[a]; const tot = vs.reduce((x, y) => x + y, 0); const nM = String(new Date().getFullYear()) === a ? new Date().getMonth() + 1 : 12;
+                          return (
+                            <tr key={a}>
+                              <td style={{ ...tdD, textAlign: 'left', fontWeight: 700 }}>{a}</td>
+                              {vs.map((v, k) => <td key={k} style={{ ...tdD, color: v ? C.ink : C.ink3 }}>{v ? q(v) : '—'}</td>)}
+                              <td style={{ ...tdD, fontWeight: 800, borderLeft: `1px solid ${C.line}` }}>{q(tot)}</td>
+                              <td style={{ ...tdD, color: C.ink2 }}>{q(tot / nM)}</td>
+                            </tr>); })}
+                      </tbody>
+                    </table>
+                  </div>
+                </section>
+                <div style={{ display: 'grid', gap: 16, gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))' }}>
+                  <section style={{ ...caixa, overflow: 'hidden' }}>
+                    <div style={{ padding: '10px 14px', fontWeight: 700, borderBottom: `1px solid ${C.line}` }}>Conta da reposição</div>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+                      <tbody>
+                        {[['Estoque físico', q(l.estoque)], ['(−) Reservado para OPs', q(l.reservado)], ['= Disponível', q(l.disponivel), true], ['(+) A receber em OCs', q(l.a_receber)], ['= Disponível + a receber', q(Number(l.disponivel) + Number(l.a_receber)), true],
+                          ['(÷) Média mensal (12m)', q(l.media_mensal)], ['= Cobertura', l.cobertura_com_oc_meses == null ? '—' : `${q(l.cobertura_com_oc_meses, 1)} meses`, true],
+                          ['Prazo de entrega', l.lead_time_dias ? `${q(l.lead_time_dias)} dias (${q(l.lead_time_dias / 30, 1)} meses) · máx. ${q(l.lead_time_max)} · ${l.lead_time_entregas} entrega(s)` : '30 dias (sem histórico)'],
+                          ['Sugestão (prazo + 1 mês)', l.sugestao_compra > 0 ? `${q(l.sugestao_compra)} ${l.unidade || ''}` : 'não precisa comprar', true]].map(([r, v, forte]) => (
+                          <tr key={r}><td style={{ padding: '7px 14px', borderBottom: `1px solid ${C.lineSoft}`, color: forte ? C.ink : C.ink2, fontWeight: forte ? 700 : 400 }}>{r}</td>
+                            <td style={{ padding: '7px 14px', borderBottom: `1px solid ${C.lineSoft}`, textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontWeight: forte ? 800 : 500 }}>{v}</td></tr>))}
+                      </tbody>
+                    </table>
+                  </section>
+                  <section style={{ ...caixa, overflow: 'hidden' }}>
+                    <div style={{ padding: '10px 14px', fontWeight: 700, borderBottom: `1px solid ${C.line}` }}>OCs em aberto ({ocs.length})</div>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                      <thead><tr>{['OC', 'Fornecedor', 'Pedida', 'Saldo', 'Previsão'].map((h, k) => <th key={h} style={{ ...thD, textAlign: k < 2 ? 'left' : 'right' }}>{h}</th>)}</tr></thead>
+                      <tbody>
+                        {!ocs.length && <tr><td colSpan={5} style={{ padding: 14, textAlign: 'center', color: C.ink3 }}>Nenhuma OC em aberto.</td></tr>}
+                        {ocs.map(o => { const atr = o.prev_entrega && o.prev_entrega < new Date().toISOString().slice(0, 10);
+                          return (
+                            <tr key={`${o.nunota}-${o.sequencia}`}>
+                              <td style={{ ...tdD, textAlign: 'left', fontWeight: 700 }}>{o.numero_oc}</td>
+                              <td style={{ ...tdD, textAlign: 'left', whiteSpace: 'normal' }}>{o.fornecedor}</td>
+                              <td style={tdD}>{q(o.qtd_pedida)}</td>
+                              <td style={{ ...tdD, fontWeight: 700 }}>{q(o.saldo)}</td>
+                              <td style={{ ...tdD, color: atr ? C.loss : C.ink, fontWeight: atr ? 700 : 400 }}>{dt(o.prev_entrega)}{atr ? ' (atrasada)' : ''}</td>
+                            </tr>); })}
+                      </tbody>
+                    </table>
+                  </section>
+                </div>
+              </div>
+            </aside>
+          </div>
+        ); })(), document.body)}
     </div>
   );
 }
