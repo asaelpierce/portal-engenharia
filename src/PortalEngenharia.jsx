@@ -22948,230 +22948,185 @@ function AnaliticoMP() {
 }
 
 
+// ESTOQUE × CONSUMO × OCs (v2, 26/10/2026): consumo REAL (apontamento de produção) ano a ano desde 2021 e média
+// dos últimos 12 meses; estoque disponível; OCs em aberto com saldo a receber; prazo de entrega real (pedido ->
+// nota, 24 meses); cobertura EM MESES; situação contra o prazo de entrega; sugestão de compra. Fonte:
+// v_estoque_consumo_mp, v_consumo_mp_mensal, mp_oc_pendente, mp_lead_time (carga a cada hora).
+const EOC_SIT = {
+  zerado: { r: 'Zerado', d: 'sem disponível e sem OC a receber', cor: '#B42318', bg: '#FEE4E2', ord: 0 },
+  critico: { r: 'Crítico', d: 'disponível + a receber não cobre o prazo de entrega', cor: '#C2372D', bg: '#FDECEA', ord: 1 },
+  atencao: { r: 'Atenção', d: 'cobre o prazo de entrega com menos de 1 mês de folga', cor: '#B7791F', bg: '#FDF3E1', ord: 2 },
+  ok: { r: 'OK', d: 'cobertura confortável', cor: '#1E8E4F', bg: '#E6F4EC', ord: 3 },
+  excesso: { r: 'Excesso', d: 'estoque para mais de 12 meses', cor: '#1D5FBF', bg: '#E8F0FB', ord: 4 },
+  parado: { r: 'Sem consumo 12m', d: 'tem estoque/OC mas não foi consumido nos últimos 12 meses', cor: '#667085', bg: '#F2F4F7', ord: 5 },
+  sem_consumo: { r: 'Sem movimento', d: 'sem consumo, estoque nem OC', cor: '#98A2B3', bg: '#F9FAFB', ord: 6 },
+};
 function RelatorioEstoqueOCs() {
-  const [linhas, setLinhas] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const C = CRMC;
+  const [linhas, setLinhas] = useState(null);
   const [busca, setBusca] = useState('');
-  const [filtroSituacao, setFiltroSituacao] = useState('todos');
-  const [sincronizando, setSincronizando] = useState(false);
-  const [ultimoSync, setUltimoSync] = useState(null);
-  const [drillProduto, setDrillProduto] = useState(null); // cod_prod selecionado -- mostra as OCs dele
-
-  const carregar = useCallback(async () => {
-    setLoading(true);
-    const { data } = await supabase.from('v_relatorio_estoque_ocs').select('*').order('cod_prod');
-    setLinhas(data || []);
-    setLoading(false);
-  }, []);
-  useEffect(() => { carregar(); }, [carregar]);
-
-  const atualizarDoSankhya = async () => {
-    setSincronizando(true);
-    try {
-      const [r1, r2, r3] = await Promise.all([
-        fetch(`${SUPABASE_URL}/functions/v1/sankhya-ordens-compra-sync`, { method: 'POST' }).then(r => r.json()),
-        fetch(`${SUPABASE_URL}/functions/v1/sankhya-ordens-producao-sync`, { method: 'POST' }).then(r => r.json()),
-        fetch(`${SUPABASE_URL}/functions/v1/sincronizar-saldo-mp-espelho`, { method: 'POST' }).then(r => r.json()),
-      ]);
-      setUltimoSync(new Date().toISOString());
-      await carregar();
-      if (!r1.ok || !r2.ok || !r3.ok) {
-        alert('Alguma sincronização deu erro:\n' + [r1, r2, r3].filter(r => !r.ok).map(r => r.erro).join('\n'));
-      }
-    } catch (e) {
-      alert('Erro ao sincronizar: ' + e);
-    }
-    setSincronizando(false);
-  };
-
-  const filtradas = useMemo(() => {
-    return linhas.filter(l => {
-      if (filtroSituacao !== 'todos' && l.situacao !== filtroSituacao) return false;
-      if (!busca.trim()) return true;
-      const b = busca.toLowerCase();
-      return String(l.cod_prod).includes(b) || (l.descr_prod || '').toLowerCase().includes(b);
-    });
-  }, [linhas, busca, filtroSituacao]);
-
-  const kpis = useMemo(() => {
-    const comOc = linhas.filter(l => l.qtd_ocs > 0);
-    const porSituacao = {};
-    linhas.forEach(l => { porSituacao[l.situacao] = (porSituacao[l.situacao] || 0) + 1; });
-    const valorTotal = comOc.reduce((s, l) => s + (l.valor_total_ocs || 0), 0);
-    return { total: linhas.length, comOc: comOc.length, porSituacao, valorTotal };
-  }, [linhas]);
-
-  const SITUACOES = ['— Sem OC', '⚠ Estoque zerado', '🔴 Estoque crítico', '🟡 Estoque baixo', '✅ Normal'];
-  const corSituacao = (s) => ({
-    '— Sem OC': { cor: T.inkFaint, bg: T.panelAlt },
-    '⚠ Estoque zerado': { cor: T.rustText, bg: T.rustSoft },
-    '🔴 Estoque crítico': { cor: '#c0392b', bg: '#fadbd8' },
-    '🟡 Estoque baixo': { cor: T.amberText, bg: T.amberSoft },
-    '✅ Normal': { cor: T.oliveText, bg: T.oliveSoft },
-  }[s] || { cor: T.inkFaint, bg: T.panelAlt });
-
-  const fmtMoeda = (v) => v == null ? '—' : v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
-  const fmtData = (iso) => !iso ? '—' : new Date(iso + 'T00:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit' });
-
-  const [ocsDoProduto, setOcsDoProduto] = useState([]);
+  const [fSit, setFSit] = useState(null);
+  const [ordem, setOrdem] = useState({ c: 'sit', desc: false });
+  const [aberto, setAberto] = useState(null);
+  const [mensal, setMensal] = useState([]);
+  const [ocs, setOcs] = useState([]);
+  const [atualizado, setAtualizado] = useState(null);
   useEffect(() => {
-    if (!drillProduto) return;
-    supabase.from('ordens_compra_sankhya').select('*').eq('cod_prod', drillProduto).order('data_pedido', { ascending: false })
-      .then(({ data }) => setOcsDoProduto(data || []));
-  }, [drillProduto]);
-
-  if (loading) return <div style={{ padding: 40, textAlign: 'center', color: T.inkFaint }}>Carregando…</div>;
-
+    (async () => {
+      const [l, oc] = await Promise.all([
+        supabase.from('v_estoque_consumo_mp').select('*'),
+        supabase.from('mp_oc_pendente').select('sincronizado_em').order('sincronizado_em', { ascending: false }).limit(1),
+      ]);
+      setLinhas(l.data || []); setAtualizado(oc.data?.[0]?.sincronizado_em || null);
+    })();
+  }, []);
+  useEffect(() => {
+    if (!aberto) return;
+    setMensal([]); setOcs([]);
+    supabase.from('v_consumo_mp_mensal').select('mes,qtd').eq('cod_prod', aberto.cod_prod).order('mes').then(({ data }) => setMensal(data || []));
+    supabase.from('mp_oc_pendente').select('*').eq('cod_prod', aberto.cod_prod).order('prev_entrega').then(({ data }) => setOcs(data || []));
+  }, [aberto]);
+  if (!linhas) return <div style={{ padding: 40, textAlign: 'center', color: C.ink3 }}>Carregando estoque e consumo…</div>;
+  const q = (v, d = 0) => (v == null ? '—' : Number(v).toLocaleString('pt-BR', { maximumFractionDigits: d }));
+  const dt = (d) => (d ? new Date(`${String(d).slice(0, 10)}T12:00:00`).toLocaleDateString('pt-BR') : '—');
+  const t = busca.trim().toLowerCase();
+  const vis = linhas.filter(l => (!fSit || l.situacao === fSit) && (!t || `${l.cod_prod} ${l.descr_prod}`.toLowerCase().includes(t)));
+  const chave = { sit: l => EOC_SIT[l.situacao]?.ord ?? 9, cod: l => l.cod_prod, media: l => Number(l.media_mensal) || 0, cob: l => l.cobertura_com_oc_meses ?? 999, sug: l => Number(l.sugestao_compra) || 0, tend: l => l.tendencia_pct ?? -999, lead: l => l.lead_time_dias ?? -1 };
+  vis.sort((a, b) => { const x = chave[ordem.c](a), y = chave[ordem.c](b); const r = (x > y ? 1 : x < y ? -1 : 0) * (ordem.desc ? -1 : 1); return r || (Number(b.consumo_12m) - Number(a.consumo_12m)); });
+  const cont = (k) => linhas.filter(l => l.situacao === k).length;
+  const valorReceber = linhas.reduce((s2, l) => s2 + (Number(l.valor_receber) || 0), 0);
+  const atrasadas = linhas.reduce((s2, l) => s2 + (Number(l.ocs_atrasadas) || 0), 0);
+  const th = (r, c, al = 'right') => (
+    <th onClick={c ? () => setOrdem(o => ({ c, desc: o.c === c ? !o.desc : c !== 'sit' && c !== 'cod' && c !== 'cob' })) : undefined}
+      style={{ padding: '9px 10px', fontSize: 11.5, fontWeight: 600, color: C.ink3, textAlign: al, whiteSpace: 'nowrap', position: 'sticky', top: 0, background: C.surface2, borderBottom: `1px solid ${C.line}`, cursor: c ? 'pointer' : 'default', zIndex: 1 }}>
+      {r}{c && ordem.c === c ? (ordem.desc ? ' ▼' : ' ▲') : ''}</th>
+  );
+  const exportar = () => {
+    const l2 = ['Código;Material;Unidade;2021;2022;2023;2024;2025;2026;Consumo 12m;Média mensal;Tendência %;Estoque;Reservado;Disponível;A receber (OCs);OCs;Próx. entrega;Prazo entrega (dias);Cobertura (meses);Cobertura c/ OC (meses);Sugestão de compra;Situação',
+      ...vis.map(l => [l.cod_prod, `"${l.descr_prod || ''}"`, l.unidade || '', l.c2021, l.c2022, l.c2023, l.c2024, l.c2025, l.c2026, l.consumo_12m, String(l.media_mensal).replace('.', ','), l.tendencia_pct ?? '', l.estoque, l.reservado, l.disponivel,
+        l.a_receber, l.ocs_abertas, l.prox_entrega ? dt(l.prox_entrega) : '', l.lead_time_dias ?? '', String(l.cobertura_meses ?? '').replace('.', ','), String(l.cobertura_com_oc_meses ?? '').replace('.', ','), l.sugestao_compra, EOC_SIT[l.situacao]?.r || l.situacao].join(';'))];
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob(['\ufeff' + l2.join('\n')], { type: 'text/csv;charset=utf-8' })); a.download = 'estoque_consumo_ocs.csv'; a.click();
+  };
+  const caixa = { background: C.surface, border: `1px solid ${C.line}`, borderRadius: 12, boxShadow: '0 1px 2px rgba(16,24,40,.04)' };
+  const anos = ['2021', '2022', '2023', '2024', '2025', '2026'];
   return (
-    <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-      <Panel title="Estoque × Consumo × Ordens de Compra 2026" subtitle="Cruza estoque disponível, consumo do ano e OCs abertas — pros códigos de matéria-prima monitorados.">
-        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 4 }}>
-          <div style={{ background: T.panelAlt, borderRadius: 8, padding: '10px 16px', fontSize: 12.5 }}>
-            <strong>{kpis.total}</strong> produtos monitorados
-          </div>
-          <div style={{ background: T.panelAlt, borderRadius: 8, padding: '10px 16px', fontSize: 12.5 }}>
-            <strong>{kpis.comOc}</strong> com OC em 2026
-          </div>
-          <div style={{ background: T.panelAlt, borderRadius: 8, padding: '10px 16px', fontSize: 12.5 }}>
-            Valor total OCs: <strong>{fmtMoeda(kpis.valorTotal)}</strong>
-          </div>
-          {ultimoSync && <div style={{ fontSize: 11.5, color: T.inkFaint, alignSelf: 'center' }}>Sincronizado às {new Date(ultimoSync).toLocaleTimeString('pt-BR')}</div>}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14, fontFamily: FONT_BODY, color: C.ink }}>
+      <div style={{ ...caixa, padding: '12px 16px', fontSize: 12.5, color: C.ink2, lineHeight: 1.55 }}>
+        <strong style={{ color: C.ink }}>Estoque × Consumo × OCs</strong> — consumo <strong>real</strong> (apontamento de produção) desde 2021; <strong>média mensal</strong> = consumo dos últimos 12 meses ÷ 12;
+        <strong> cobertura</strong> = (disponível + a receber em OCs) ÷ média mensal, em meses; <strong>situação</strong> compara a cobertura com o <strong>prazo de entrega real</strong> do material (pedido de compra → nota, últimos 24 meses; sem histórico, considera 30 dias);
+        <strong> sugestão de compra</strong> = o necessário para cobrir o prazo de entrega + 1 mês. {atualizado && <span style={{ color: C.ink3 }}>OCs atualizadas em {new Date(atualizado).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}.</span>}
+      </div>
+      <div style={{ display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))' }}>
+        {['zerado', 'critico', 'atencao', 'ok', 'excesso', 'parado'].map(k => { const sx = EOC_SIT[k]; const on = fSit === k;
+          return (
+            <button key={k} onClick={() => setFSit(on ? null : k)} title={sx.d} style={{ ...caixa, textAlign: 'left', fontFamily: 'inherit', padding: '11px 14px', cursor: 'pointer', borderColor: on ? sx.cor : C.line, boxShadow: on ? `0 0 0 3px ${sx.cor}22` : caixa.boxShadow }}>
+              <div style={{ fontSize: 12, color: C.ink2 }}>{sx.r}</div>
+              <div style={{ fontSize: 24, fontWeight: 800, color: sx.cor }}>{cont(k)}</div>
+              <div style={{ fontSize: 11, color: C.ink3 }}>{sx.d}</div>
+            </button>); })}
+        <div style={{ ...caixa, padding: '11px 14px' }}>
+          <div style={{ fontSize: 12, color: C.ink2 }}>A receber em OCs</div>
+          <div style={{ fontSize: 20, fontWeight: 800 }}>{fmtMoedaCompacta(valorReceber)}</div>
+          <div style={{ fontSize: 11, color: atrasadas ? C.loss : C.ink3 }}>{atrasadas ? `${atrasadas} item(ns) de OC com entrega atrasada` : 'nenhuma OC atrasada'}</div>
         </div>
-      </Panel>
-
+      </div>
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
         <div style={{ position: 'relative' }}>
-          <Search size={13} style={{ position: 'absolute', left: 9, top: 9, color: T.inkFaint }} />
-          <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Buscar código ou descrição…" style={{ ...inputStyle(), width: 260, paddingLeft: 28 }} />
+          <Search size={14} aria-hidden="true" style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: C.ink3 }} />
+          <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="código ou material" style={{ fontFamily: 'inherit', fontSize: 12.5, padding: '7px 10px 7px 30px', borderRadius: 8, border: `1px solid ${C.line}`, width: 240 }} />
         </div>
-        <select value={filtroSituacao} onChange={e => setFiltroSituacao(e.target.value)} style={selectStyleFat(220)}>
-          <option value="todos">Todos os status</option>
-          {SITUACOES.map(s => <option key={s} value={s}>{s} ({kpis.porSituacao[s] || 0})</option>)}
-        </select>
-        <button onClick={atualizarDoSankhya} disabled={sincronizando}
-          style={{ fontSize: 12.5, fontWeight: 700, color: '#fff', background: T.terracotta, border: 'none', borderRadius: 6, padding: '8px 14px', cursor: 'pointer', opacity: sincronizando ? 0.6 : 1, marginLeft: 'auto' }}>
-          {sincronizando ? 'Sincronizando…' : '🔄 Atualizar do Sankhya'}
-        </button>
-        <BotaoExportar small onClick={() => exportCSV(filtradas, 'estoque_ocs_2026.csv',
-          ['cod_prod', 'descr_prod', 'unidade', 'consumo_2026', 'estoque_total', 'reservado', 'disponivel', 'qtd_ocs', 'numeros_ocs', 'qtd_total_comprada', 'valor_total_ocs', 'cobertura', 'situacao', 'observacao'])} />
+        {fSit && <button onClick={() => setFSit(null)} style={{ fontFamily: 'inherit', fontSize: 12.5, border: 'none', background: 'none', color: C.primary, cursor: 'pointer' }}>tirar filtro "{EOC_SIT[fSit].r}"</button>}
+        <span style={{ flex: 1 }} />
+        <span style={{ fontSize: 12.5, color: C.ink2 }}>{vis.length} de {linhas.length} materiais monitorados</span>
+        <button onClick={exportar} style={{ fontFamily: 'inherit', fontSize: 12.5, padding: '7px 12px', borderRadius: 8, border: `1px solid ${C.line}`, background: C.surface, cursor: 'pointer' }}>Exportar CSV</button>
       </div>
-
-      <Panel>
-        <div style={{ overflowX: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11.5 }}>
-            <thead>
-              <tr style={{ background: T.panelAlt, borderBottom: `1px solid ${T.line}` }}>
-                <th style={thFat(60)}>Cód</th>
-                <th style={thFat(0)}>Descrição</th>
-                <th style={{ ...thFat(60), textAlign: 'center' }}>Unid</th>
-                <th style={{ ...thFat(80), textAlign: 'right' }}>Consumo 2026</th>
-                <th style={{ ...thFat(80), textAlign: 'right' }}>Estoque</th>
-                <th style={{ ...thFat(80), textAlign: 'right' }}>Reservado</th>
-                <th style={{ ...thFat(80), textAlign: 'right' }}>Disponível</th>
-                <th style={{ ...thFat(70), textAlign: 'center' }}>Nº OCs</th>
-                <th style={{ ...thFat(90), textAlign: 'right' }}>Vlr Total OCs</th>
-                <th style={{ ...thFat(70), textAlign: 'center' }}>Cobertura</th>
-                <th style={thFat(140)}>Situação</th>
-              </tr>
-            </thead>
+      <div style={{ ...caixa, overflow: 'hidden' }}>
+        <div style={{ overflow: 'auto', maxHeight: 'calc(100vh - 360px)', minHeight: 320 }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+            <thead><tr>
+              {th('Material', 'cod', 'left')}{th('Consumo por ano (2021 → 2026)', null, 'left')}{th('Média mensal', 'media')}{th('Tendência', 'tend')}{th('Disponível')}{th('A receber (OCs)')}{th('Prazo entrega', 'lead')}{th('Cobertura', 'cob')}{th('Sugestão compra', 'sug')}{th('Situação', 'sit', 'left')}
+            </tr></thead>
             <tbody>
-              {filtradas.length === 0 ? (
-                <tr><td colSpan={11} style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Nada encontrado.</td></tr>
-              ) : filtradas.map(l => {
-                const cor = corSituacao(l.situacao);
+              {vis.map((l, k) => { const sx = EOC_SIT[l.situacao] || EOC_SIT.sem_consumo; const maxAno = Math.max(1, ...anos.map(a => Number(l[`c${a}`]) || 0)); const leadM = (Number(l.lead_time_dias) || 30) / 30;
                 return (
-                  <tr key={l.cod_prod} style={{ borderBottom: `1px solid ${T.lineSoft}`, cursor: l.qtd_ocs > 0 ? 'pointer' : 'default' }}
-                    onClick={() => l.qtd_ocs > 0 && setDrillProduto(l.cod_prod)}>
-                    <td style={{ padding: '7px 12px', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText }}>{l.cod_prod}</td>
-                    <td style={{ padding: '7px 12px' }}>{l.descr_prod || <span style={{ color: T.inkFaint, fontStyle: 'italic' }}>sem cadastro de estoque</span>}</td>
-                    <td style={{ padding: '7px 12px', textAlign: 'center', color: T.inkFaint }}>{l.unidade || '—'}</td>
-                    <td style={{ padding: '7px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY }}>{l.consumo_2026 ? Number(l.consumo_2026).toLocaleString('pt-BR') : '—'}</td>
-                    <td style={{ padding: '7px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY }}>{l.estoque_total ?? '—'}</td>
-                    <td style={{ padding: '7px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, color: T.inkFaint }}>{l.reservado ?? '—'}</td>
-                    <td style={{ padding: '7px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY, fontWeight: 700, color: (l.disponivel ?? 0) < 0 ? T.rustText : T.ink }}>{l.disponivel ?? '—'}</td>
-                    <td style={{ padding: '7px 12px', textAlign: 'center', fontFamily: FONT_DISPLAY, fontWeight: l.qtd_ocs ? 700 : 400, color: l.qtd_ocs ? T.blueText : T.inkFaint }}>{l.qtd_ocs || '—'}</td>
-                    <td style={{ padding: '7px 12px', textAlign: 'right', fontFamily: FONT_DISPLAY }}>{fmtMoeda(l.valor_total_ocs)}</td>
-                    <td style={{ padding: '7px 12px', textAlign: 'center', fontFamily: FONT_DISPLAY }}>{l.cobertura ?? '—'}</td>
-                    <td style={{ padding: '7px 12px' }}>
-                      <span style={{ fontSize: 11, fontWeight: 700, color: cor.cor, background: cor.bg, padding: '3px 8px', borderRadius: 4, whiteSpace: 'nowrap' }}>{l.situacao}</span>
-                    </td>
-                  </tr>
-                );
-              })}
+                  <React.Fragment key={l.cod_prod}>
+                    <tr onClick={() => setAberto(a => a?.cod_prod === l.cod_prod ? null : l)} style={{ background: aberto?.cod_prod === l.cod_prod ? C.primarySoft : k % 2 ? C.surface2 : C.surface, cursor: 'pointer' }}>
+                      <td style={{ padding: '8px 10px', minWidth: 230, maxWidth: 320 }}>
+                        <div><strong style={{ color: C.primary }}>{l.cod_prod}</strong> <span style={{ color: C.ink3, fontSize: 11 }}>{l.unidade}</span></div>
+                        <div style={{ fontSize: 11.5, color: C.ink2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={l.descr_prod}>{l.descr_prod || '—'}</div>
+                      </td>
+                      <td style={{ padding: '8px 10px' }} title={anos.map(a => `${a}: ${q(l[`c${a}`])}`).join('\n')}>
+                        <div style={{ display: 'flex', alignItems: 'flex-end', gap: 3, height: 26 }}>
+                          {anos.map(a => <div key={a} style={{ width: 12, height: `${Math.max(2, 26 * (Number(l[`c${a}`]) || 0) / maxAno)}px`, background: a === '2026' ? C.primary : '#B9C6D8', borderRadius: 2 }} />)}
+                        </div>
+                        <div style={{ fontSize: 10.5, color: C.ink3, whiteSpace: 'nowrap' }}>2025: {q(l.c2025)} · 2026: {q(l.c2026)}</div>
+                      </td>
+                      <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 700, whiteSpace: 'nowrap' }}>{q(l.media_mensal)}<div style={{ fontSize: 10.5, color: C.ink3, fontWeight: 400 }}>{l.meses_com_consumo}/12 meses</div></td>
+                      <td style={{ padding: '8px 10px', textAlign: 'right', whiteSpace: 'nowrap', fontWeight: 600, color: l.tendencia_pct == null ? C.ink3 : l.tendencia_pct > 10 ? C.loss : l.tendencia_pct < -10 ? C.primary : C.ink2 }}>
+                        {l.tendencia_pct == null ? '—' : `${l.tendencia_pct > 0 ? '▲ +' : l.tendencia_pct < 0 ? '▼ ' : ''}${l.tendencia_pct}%`}</td>
+                      <td style={{ padding: '8px 10px', textAlign: 'right', whiteSpace: 'nowrap', color: l.disponivel < 0 ? C.loss : C.ink }}>{q(l.disponivel)}
+                        {l.reservado > 0 && <div style={{ fontSize: 10.5, color: C.ink3 }}>estoque {q(l.estoque)} · res. {q(l.reservado)}</div>}</td>
+                      <td style={{ padding: '8px 10px', textAlign: 'right', whiteSpace: 'nowrap' }}>{l.a_receber ? <><strong>{q(l.a_receber)}</strong><div style={{ fontSize: 10.5, color: l.ocs_atrasadas ? C.loss : C.ink3 }}>{l.ocs_abertas} OC · {l.ocs_atrasadas ? `${l.ocs_atrasadas} atrasada(s)` : `prev. ${dt(l.prox_entrega)}`}</div></> : <span style={{ color: C.ink3 }}>—</span>}</td>
+                      <td style={{ padding: '8px 10px', textAlign: 'right', whiteSpace: 'nowrap' }} title={l.lead_time_dias ? `média de ${l.lead_time_entregas} entrega(s) nos últimos 24 meses · máximo ${q(l.lead_time_max)} dias` : 'sem histórico de entrega: considera 30 dias'}>{l.lead_time_dias ? `${q(l.lead_time_dias)} dias` : <span style={{ color: C.ink3 }}>30 dias*</span>}</td>
+                      <td style={{ padding: '8px 10px', textAlign: 'right', minWidth: 120 }}>
+                        {l.cobertura_com_oc_meses == null ? <span style={{ color: C.ink3 }}>—</span> : <>
+                          <strong style={{ color: sx.cor }}>{q(l.cobertura_com_oc_meses, 1)} meses</strong>
+                          <div style={{ position: 'relative', height: 6, borderRadius: 3, background: C.lineSoft, marginTop: 3 }}>
+                            <div style={{ width: `${Math.min(100, 100 * Math.max(0, l.cobertura_com_oc_meses) / Math.max(leadM + 1, 6))}%`, height: '100%', borderRadius: 3, background: sx.cor }} />
+                            <div title="prazo de entrega" style={{ position: 'absolute', top: -2, bottom: -2, left: `${Math.min(100, 100 * leadM / Math.max(leadM + 1, 6))}%`, width: 2, background: C.ink }} />
+                          </div>
+                          {l.a_receber > 0 && <div style={{ fontSize: 10.5, color: C.ink3 }}>sem as OCs: {q(l.cobertura_meses, 1)}</div>}
+                        </>}
+                      </td>
+                      <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 700, whiteSpace: 'nowrap', color: l.sugestao_compra > 0 ? C.ink : C.ink3 }}>{l.sugestao_compra > 0 ? q(l.sugestao_compra) : '—'}</td>
+                      <td style={{ padding: '8px 10px', whiteSpace: 'nowrap' }}><span title={sx.d} style={{ fontSize: 11.5, fontWeight: 700, color: sx.cor, background: sx.bg, padding: '3px 9px', borderRadius: 10 }}>{sx.r}</span></td>
+                    </tr>
+                    {aberto?.cod_prod === l.cod_prod && (
+                      <tr><td colSpan={10} style={{ padding: '12px 16px 16px', background: C.surface, borderBottom: `2px solid ${C.primary}` }}>
+                        <div style={{ display: 'grid', gap: 14, gridTemplateColumns: 'minmax(0, 2fr) minmax(280px, 1fr)' }}>
+                          <div>
+                            <div style={{ fontWeight: 700, marginBottom: 6 }}>Consumo mês a mês (apontamento de produção)</div>
+                            {(() => { const ult = mensal.slice(-36); const mx = Math.max(1, ...ult.map(m => Number(m.qtd) || 0)); const MES = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
+                              return ult.length ? (
+                                <div style={{ display: 'flex', alignItems: 'flex-end', gap: 2, height: 130, borderBottom: `1px solid ${C.line}` }}>
+                                  {ult.map(m => { const d0 = new Date(`${m.mes}T12:00:00`); return (
+                                    <div key={m.mes} title={`${MES[d0.getMonth()]}/${d0.getFullYear()}: ${q(m.qtd)} ${l.unidade || ''}`} style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-end', height: '100%' }}>
+                                      <div style={{ width: '100%', height: `${Math.max(2, 115 * (Number(m.qtd) || 0) / mx)}px`, background: d0.getFullYear() === new Date().getFullYear() ? C.primary : '#B9C6D8', borderRadius: '2px 2px 0 0' }} />
+                                      {d0.getMonth() === 0 && <div style={{ fontSize: 9.5, color: C.ink3 }}>{d0.getFullYear()}</div>}
+                                    </div>); })}
+                                </div>) : <div style={{ fontSize: 12.5, color: C.ink3 }}>Sem consumo apontado.</div>; })()}
+                            <div style={{ fontSize: 11, color: C.ink3, marginTop: 4 }}>últimos 36 meses · azul = ano atual · passe o mouse para ver a quantidade</div>
+                            <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: 8, fontSize: 12 }}>
+                              {anos.map(a => <span key={a}><span style={{ color: C.ink3 }}>{a}:</span> <strong>{q(l[`c${a}`])}</strong></span>)}
+                              <span><span style={{ color: C.ink3 }}>últimos 12m:</span> <strong>{q(l.consumo_12m)}</strong> <span style={{ color: C.ink3 }}>(12m anteriores: {q(l.consumo_12m_anterior)})</span></span>
+                            </div>
+                          </div>
+                          <div style={{ fontSize: 12.5, lineHeight: 1.6 }}>
+                            <div style={{ fontWeight: 700, marginBottom: 4 }}>Reposição</div>
+                            <div>Estoque {q(l.estoque)} − reservado {q(l.reservado)} = <strong>disponível {q(l.disponivel)}</strong></div>
+                            <div>+ a receber em OCs: <strong>{q(l.a_receber)}</strong></div>
+                            <div>÷ média mensal {q(l.media_mensal)} = <strong style={{ color: sx.cor }}>{q(l.cobertura_com_oc_meses, 1)} meses</strong></div>
+                            <div>prazo de entrega: <strong>{l.lead_time_dias ? `${q(l.lead_time_dias)} dias` : '30 dias (sem histórico)'}</strong>{l.lead_time_max ? ` · máx. ${q(l.lead_time_max)}` : ''}</div>
+                            <div>sugestão de compra (prazo + 1 mês): <strong>{l.sugestao_compra > 0 ? `${q(l.sugestao_compra)} ${l.unidade || ''}` : 'não precisa'}</strong></div>
+                            <div style={{ fontWeight: 700, margin: '10px 0 4px' }}>OCs em aberto ({ocs.length})</div>
+                            {!ocs.length ? <div style={{ color: C.ink3 }}>Nenhuma.</div> : ocs.map(o => (
+                              <div key={`${o.nunota}-${o.sequencia}`} style={{ borderTop: `1px solid ${C.lineSoft}`, padding: '4px 0', color: o.prev_entrega && o.prev_entrega < new Date().toISOString().slice(0, 10) ? C.loss : C.ink }}>
+                                OC <strong>{o.numero_oc}</strong> · {o.fornecedor} · saldo <strong>{q(o.saldo)}</strong> de {q(o.qtd_pedida)} · prev. {dt(o.prev_entrega)}
+                              </div>))}
+                          </div>
+                        </div>
+                      </td></tr>
+                    )}
+                  </React.Fragment>); })}
             </tbody>
           </table>
         </div>
-      </Panel>
-
-      {drillProduto && (
-        <Overlay onClose={() => setDrillProduto(null)}>
-          <div className="scale-in" style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, width: '100%', maxWidth: 720, maxHeight: '85vh', overflowY: 'auto', boxShadow: '0 24px 60px rgba(0,0,0,.18)' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 20px', borderBottom: `1px solid ${T.line}` }}>
-              <div style={{ fontFamily: FONT_DISPLAY, fontSize: 15, fontWeight: 700 }}>OCs do produto {drillProduto}</div>
-              <button onClick={() => setDrillProduto(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.inkFaint }}><X size={18} /></button>
-            </div>
-            <div style={{ padding: '12px 20px' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-                <thead>
-                  <tr style={{ textAlign: 'left', color: T.inkFaint, borderBottom: `1px solid ${T.line}` }}>
-                    <th style={{ padding: '4px 8px' }}>OC</th>
-                    <th style={{ padding: '4px 8px' }}>Data</th>
-                    <th style={{ padding: '4px 8px' }}>Fornecedor</th>
-                    <th style={{ padding: '4px 8px', textAlign: 'right' }}>Qtd</th>
-                    <th style={{ padding: '4px 8px', textAlign: 'right' }}>Vlr Total</th>
-                    <th style={{ padding: '4px 8px' }}>Prev. Entrega</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {ocsDoProduto.map(oc => (
-                    <tr key={oc.pedido_oc} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
-                      <td style={{ padding: '5px 8px', fontFamily: FONT_DISPLAY, fontWeight: 700, color: T.blueText }}>{oc.pedido_oc}</td>
-                      <td style={{ padding: '5px 8px' }}>{fmtData(oc.data_pedido)}</td>
-                      <td style={{ padding: '5px 8px' }}>{oc.fornecedor}</td>
-                      <td style={{ padding: '5px 8px', textAlign: 'right', fontFamily: FONT_DISPLAY }}>{oc.qtd_pedida} {oc.unidade}</td>
-                      <td style={{ padding: '5px 8px', textAlign: 'right', fontFamily: FONT_DISPLAY }}>{fmtMoeda(oc.valor_total)}</td>
-                      <td style={{ padding: '5px 8px' }}>{fmtData(oc.prev_entrega)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </Overlay>
-      )}
+      </div>
+      <div style={{ fontSize: 11.5, color: C.ink3 }}>* sem histórico de entrega nos últimos 24 meses: considera 30 dias. Clique numa linha para ver o consumo mês a mês e as OCs. A lista de materiais monitorados fica na tabela mp_monitorado.</div>
     </div>
   );
 }
 
-// ============================================================================
-// Custeio — Fase 1: materiais diretos
-//
-// Custo de material por produto, a partir da ORDEM DE PRODUÇÃO (não da
-// conclusão), valorizado a custo médio SEM ICMS: imposto recuperável não
-// compõe custo de estoque (CPC 16 / IAS 2). O valor com ICMS fica visível
-// ao lado porque é ele que reconcilia contra o custo médio do Sankhya.
-//
-// Grão: OP + SEQ_PA. Uma OP pode produzir mais de um lote, e a quantidade
-// se repete em cada linha de matéria-prima — somar direto multiplica a
-// produção pelo número de insumos.
-//
-// Unidade importa: custo unitário só é calculado quando o produto é
-// contável. Em conjunto (CJ) ou metro quadrado, mostra custo por OP.
-// ============================================================================
-// ============================================================================
-// Custeio — Diagnóstico e Apontamento
-//
-// Duas coisas numa aba só, porque uma justifica a outra:
-//  1. Onde está o custo hoje e o que impede de chegar ao produto. É a
-//     apresentação para a contabilidade e o financeiro.
-//  2. O apontamento de horas por OP e setor, que é a peça que falta.
-//
-// Os setores vêm dos centros de custo produtivos da própria contabilidade,
-// não de uma lista inventada: o que se aponta aqui casa com o que se lança lá.
-// ============================================================================
-// Margem: receita líquida contra custo cheio. O custo é líquido de imposto
-// recuperável, então a receita precisa ser também — comparar custo líquido
-// com preço bruto produz margem otimista e falsa.
 function MargemProduto({ dados, placar, param, onParam }) {
   const [comp, setComp] = useState('');
   const [foco, setFoco] = useState('todos');
