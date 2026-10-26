@@ -23135,7 +23135,7 @@ function RelatorioEstoqueOCs() {
                 <span style={{ fontSize: 12.5, fontWeight: 700, background: '#fff', color: sx.cor, padding: '5px 10px', borderRadius: 8 }}>{sx.r}</span>
                 <button onClick={() => setAberto(null)} style={{ fontFamily: 'inherit', fontSize: 12.5, fontWeight: 600, padding: '7px 12px', borderRadius: 8, border: '1px solid rgba(255,255,255,.3)', background: 'transparent', color: '#fff', cursor: 'pointer' }}>Fechar · Esc</button>
               </div>
-              <div style={{ flex: 1, overflow: 'auto', padding: '16px 22px', display: 'flex', flexDirection: 'column', gap: 16 }}>
+              <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', overscrollBehavior: 'contain', padding: '16px 22px', display: 'grid', alignContent: 'start', gap: 16 }}>
                 <div style={{ display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))' }}>
                   {[['Média mensal (12m)', q(l.media_mensal)], ['Tendência', l.tendencia_pct == null ? '—' : `${l.tendencia_pct > 0 ? '+' : ''}${l.tendencia_pct}%`], ['Disponível', q(l.disponivel)], ['A receber (OCs)', q(l.a_receber)],
                     ['Cobertura', l.cobertura_com_oc_meses == null ? '—' : `${q(l.cobertura_com_oc_meses, 1)} meses`], ['Prazo de entrega', l.lead_time_dias ? `${q(l.lead_time_dias)} dias` : '30 dias*'], ['Sugestão de compra', l.sugestao_compra > 0 ? q(l.sugestao_compra) : '—']].map(([r, v]) => (
@@ -32672,7 +32672,7 @@ function PrecoCompraFicha({ cod, linhas, base, contatos, onFechar, custo }) {
           </div>
           <button onClick={onFechar} style={{ fontFamily: 'inherit', fontSize: 12.5, fontWeight: 600, padding: '8px 12px', borderRadius: 8, border: 'none', background: '#fff', color: '#0F2340', cursor: 'pointer' }}>Fechar <span style={{ fontSize: 10.5, color: C.ink3 }}>Esc</span></button>
         </div>
-        <div style={{ flex: 1, overflow: 'auto', padding: '16px 22px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', overscrollBehavior: 'contain', padding: '16px 22px', display: 'grid', alignContent: 'start', gap: 14 }}>
           <div style={{ display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))' }}>
             {[['Último preço unit.', fmtMoeda(ult && u(ult)), `${ult ? `${(ult.qtd || 0).toLocaleString('pt-BR')} un · total ${fmtMoeda(base === 'liq' ? ult.liq : ult.bruto)} · ${dt(ult.data)}` : ''}`], ['Menor preço unit.', fmtMoeda(Math.min(...precos)), 'em todo o histórico'], ['Maior preço unit.', fmtMoeda(Math.max(...precos)), 'em todo o histórico'],
               ['Variação 1ª → última', varPct == null ? '—' : `${varPct > 0 ? '+' : ''}${varPct.toFixed(1)}%`, `${ls.length} compra(s) · ${forns.length} fornecedor(es)`]].map(([r, v, sub], k) => (
@@ -32875,7 +32875,7 @@ function PrecoCompraDetalhe({ det, base, contatos, onFechar, onItem, onForn, onF
                 background: aba === k ? C.surface : 'transparent', color: aba === k ? C.ink : C.ink2, boxShadow: aba === k ? '0 1px 2px rgba(16,24,40,.12)' : 'none' }}>{r}</button>))}
           </div>
         </div>
-        <div style={{ flex: 1, overflow: 'auto', background: C.surface }}>
+        <div style={{ flex: 1, minHeight: 0, overflow: 'auto', overscrollBehavior: 'contain', background: C.surface }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
             {aba === 'compras' && (<>
               <thead><tr>{th('Data', 'data')}{th('NF', 'nf')}{th('Fornecedor', 'forn')}{th('Item', 'desc')}{th('Qtd', 'qtd', 'right')}{th(`Unit. ${base === 'liq' ? 'líquido' : 'bruto'}`, null, 'right')}{th(`Total ${base === 'liq' ? 'líquido' : 'bruto'}`, 'v', 'right')}{th('')}</tr></thead>
@@ -34295,7 +34295,7 @@ function KalocerDetalhe({ item, ini, fim, onFechar }) {
             ))}
           </div>
         </div>
-        <div ref={rolagemRef} style={{ flex: 1, overflow: 'auto' }}>{corpo()}</div>
+        <div ref={rolagemRef} style={{ flex: 1, minHeight: 0, overflow: 'auto', overscrollBehavior: 'contain' }}>{corpo()}</div>
       </div>
     </div>
   , document.body);
@@ -34396,7 +34396,7 @@ function CeramicaDetalhe({ det, regras, obsPorCod = {}, descPlaca, onFechar, onF
             ))}
           </div>
         </div>
-        <div style={{ flex: 1, overflow: 'auto', background: C.surface }}>
+        <div style={{ flex: 1, minHeight: 0, overflow: 'auto', overscrollBehavior: 'contain', background: C.surface }}>
           {aba === 'pedidos' && (
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
               <thead><tr>{th('Data', 'data')}{th('Pedido Vale', 'pedido')}{th('BR', 'br')}{th('Unidade', 'unidade')}{th('Código Vale', 'cod')}{th('Peças', 'pecas', 'right')}{th('Regra (placas por peça)')}{th(det.placa ? `Previsto ${klcDim(descPlaca[det.placa])}` : 'Cerâmica prevista', 'prev', 'right')}{th('Faturamento', 'sit')}</tr></thead>
