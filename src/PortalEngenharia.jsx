@@ -34138,8 +34138,10 @@ const cerRegraTxt = (r) => [1, 2, 3, 4].filter(k => Number(r[`qtd_ceramica_${k}`
 const cerPrevItem = (r, cod) => [1, 2, 3, 4].reduce((t, k) => t + ((!cod || String(r[`ceramica_${k}_codigo`]) === String(cod)) ? (Number(r[`qtd_total_ceramica_${k}`]) || 0) : 0), 0);
 const cerSituacao = (r) => {
   const q = Number(r.qtd_pedido ?? r.qtd_pecas) || 0, e = Number(r.qtd_entregue) || 0;
-  if (q > 0 && e >= q) return { k: 'faturado', r: 'Faturado', cor: '#1E8E4F', bg: '#E6F4EC', d: r.data_faturamento };
-  if (e > 0) return { k: 'parcial', r: `Parcial · ${Math.round(e).toLocaleString('pt-BR')} de ${Math.round(q).toLocaleString('pt-BR')}`, cor: '#B7791F', bg: '#FDF3E1', d: r.data_prevista_entrega };
+  // data REAL da nota (crm_pontualidade, pedido -> nota). pedidos_itens.data_faturamento é a PREVISTA, não a da nota.
+  const nf = r.nf_numeros ? `NF ${r.nf_numeros}` : null;
+  if (q > 0 && e >= q) return { k: 'faturado', r: 'Faturado', cor: '#1E8E4F', bg: '#E6F4EC', d: r.nf_data_ultima || null, nf, prev: r.data_prevista_entrega };
+  if (e > 0) return { k: 'parcial', r: `Parcial · ${Math.round(e).toLocaleString('pt-BR')} de ${Math.round(q).toLocaleString('pt-BR')}`, cor: '#B7791F', bg: '#FDF3E1', d: r.data_prevista_entrega, nf, nfData: r.nf_data_ultima };
   return { k: 'pendente', r: 'Em carteira', cor: '#1D5FBF', bg: '#E8F0FB', d: r.data_prevista_entrega || r.data_faturamento };
 };
 
@@ -34181,7 +34183,7 @@ function CeramicaDetalhe({ det, regras, obsPorCod = {}, descPlaca, onFechar, onF
   const exportar = () => {
     const linhas = aba === 'ops'
       ? ['Data;OP;BR;Cliente;Produto acabado;Placa;Código placa;Quantidade', ...aps.map(a => [dt(a.data_ref), a.nro_ordem_producao, a.br || '', `"${a.cliente_nome || ''}"`, `"${a.desc_prod_acabado || ''}"`, klcDim(descPlaca[a.cod_materia_prima]), a.cod_materia_prima, String(a.qtd_mp).replace('.', ',')].join(';'))]
-      : ['Data;Pedido Vale;Nº único;BR;Unidade;Código Vale;Produto;Peças;Regra;Cerâmica prevista;Situação;Data fat./prevista', ...peds.map(r => [dt(r.data_neg), r.pedido_cliente || '', r.nunota, r.br || '', `"${r.client}"`, r.cod_vale || '', `"${r.descricao_produto || ''}"`, fmt(r.qtd_pecas), `"${r.regra || 'sem regra'}"`, fmt(r.prev), r.sit.r, dt(r.sit.d)].join(';'))];
+      : ['Data;Pedido Vale;Nº único;BR;Unidade;Código Vale;Produto;Peças;Regra;Cerâmica prevista;Situação;NF;Data da NF;Data prevista', ...peds.map(r => [dt(r.data_neg), r.pedido_cliente || '', r.nunota, r.br || '', `"${r.client}"`, r.cod_vale || '', `"${r.descricao_produto || ''}"`, fmt(r.qtd_pecas), `"${r.regra || 'sem regra'}"`, fmt(r.prev), r.sit.r, r.nf_numeros || '', r.nf_data_ultima ? dt(r.nf_data_ultima) : '', r.data_prevista_entrega ? dt(r.data_prevista_entrega) : ''].join(';'))];
     const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob(['\ufeff' + linhas.join('\n')], { type: 'text/csv;charset=utf-8' })); a.download = `ceramicas_${det.titulo.replace(/\W+/g, '_').toLowerCase()}.csv`; a.click();
   };
   const th = (r, c, al = 'left') => (
@@ -34234,7 +34236,11 @@ function CeramicaDetalhe({ det, regras, obsPorCod = {}, descPlaca, onFechar, onF
                     <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{r.prev ? fmt(r.prev) : '—'}</td>
                     <td style={{ padding: '8px 10px', whiteSpace: 'nowrap' }}>
                       <span style={{ fontSize: 11.5, fontWeight: 600, color: r.sit.cor, background: r.sit.bg, padding: '2px 8px', borderRadius: 10 }}>{r.sit.r}</span>
-                      <div style={{ fontSize: 11, color: C.ink3, marginTop: 2 }}>{r.sit.k === 'faturado' ? `em ${dt(r.sit.d)}` : r.sit.d ? `previsto ${dt(r.sit.d)}` : ''}</div>
+                      <div style={{ fontSize: 11, color: C.ink3, marginTop: 2 }}>
+                        {r.sit.k === 'faturado' ? (r.sit.d ? `${r.sit.nf || 'NF'} em ${dt(r.sit.d)}` : 'data da NF não disponível (pedido antigo)')
+                          : r.sit.k === 'parcial' ? `${r.sit.nf ? `${r.sit.nf} em ${dt(r.sit.nfData)} · ` : ''}resto previsto ${dt(r.sit.d)}`
+                          : r.sit.d ? `previsto ${dt(r.sit.d)}` : ''}
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -34314,7 +34320,7 @@ function CeramicaDetalhe({ det, regras, obsPorCod = {}, descPlaca, onFechar, onF
               <p style={{ margin: '0 0 10px' }}><strong style={{ color: C.ink }}>Cerâmica prevista</strong> = peças do pedido × placas por peça da regra, somado por cerâmica. Itens sem regra cadastrada <strong>não entram</strong> (aparecem em amarelo na aba Regras).</p>
               <p style={{ margin: '0 0 10px' }}><strong style={{ color: C.ink }}>Regra observada nas OPs:</strong> para cada peça Vale, placas apontadas ÷ peças produzidas, somando todas as OPs dela (desde 2025). Mostra também o mínimo e o máximo por OP e a confiança (alta = 3+ OPs e variação até 20%). Serve para os códigos <strong>sem regra</strong> (chave no topo do dashboard) e para <strong>conferir</strong> as cadastradas — a conferência compara pela medida da placa, então trocar a placa de 92% pela de 95% de mesma medida não é erro.</p>
               <p style={{ margin: '0 0 10px' }}><strong style={{ color: C.ink }}>Apontado nas OPs (real):</strong> consumo de placas lançado no apontamento de produção do Sankhya, nas OPs de clientes Vale, só para os códigos da lista de placas Kalocer.</p>
-              <p style={{ margin: '0 0 10px' }}><strong style={{ color: C.ink }}>Faturamento:</strong> pela quantidade entregue do item no Sankhya — Faturado (entregue tudo), Parcial (parte entregue) ou Em carteira (nada entregue, com a data prevista).</p>
+              <p style={{ margin: '0 0 10px' }}><strong style={{ color: C.ink }}>Faturamento:</strong> pela quantidade entregue do item no Sankhya — Faturado (entregue tudo), Parcial (parte entregue) ou Em carteira (nada entregue, com a data prevista). A data mostrada no faturado é a <strong>data da nota fiscal</strong> (ligação pedido → nota); pedidos de 2023/2024 podem não ter a nota carregada.</p>
               <p style={{ margin: 0 }}><strong style={{ color: C.ink }}>Por que previsto e real podem não bater:</strong> o previsto conta as peças <strong>vendidas</strong> no período e o real o que foi <strong>produzido</strong> no período (a produção pode cair em outro mês); itens sem regra não têm previsto; e perdas/retrabalho aparecem só no real.</p>
               {det.conta && <div style={{ marginTop: 14, padding: '12px 14px', background: C.primarySoft, borderRadius: 10, color: C.ink }}><strong>Neste recorte:</strong> {det.conta}</div>}
             </div>
