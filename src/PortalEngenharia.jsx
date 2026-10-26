@@ -38441,6 +38441,7 @@ function PermissoesManager() {
   const [busca, setBusca] = useState('');
   const [marcados, setMarcados] = useState(new Set());
   const [lote, setLote] = useState({ telas: new Set(), papel: '', msg: null });
+  const [senhaDe, setSenhaDe] = useState(null);   // colaborador para trocar a senha / criar login
   useEffect(() => {
     supabase.from('faturamento_resumo').select('vendedor_nome').not('vendedor_nome', 'is', null)
       .then(({ data }) => setVendedoresSankhya([...new Set((data || []).map(v => v.vendedor_nome))].sort()));
@@ -38699,7 +38700,8 @@ function PermissoesManager() {
           {usuario && ehAdmin && (
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 10, fontSize: 12 }}>
               <span style={{ color: estado(usuario).cor, fontWeight: 600 }}>{estado(usuario).t}</span>
-              {usuario.email && <span style={{ color: T.inkFaint }}>{usuario.email}</span>}
+              {usuario.email && <span style={{ color: T.inkFaint }}>login: <strong style={{ color: T.ink }}>{usuario.email.endsWith('@sem-email.kalenborn.com.br') ? usuario.email.split('@')[0] : usuario.email}</strong></span>}
+              <button disabled={salvando} onClick={() => setSenhaDe(usuario)} style={btnL({ fontWeight: 700 })}>{info[usuario.id]?.tem_login ? 'Trocar senha' : 'Criar login'}</button>
               <span style={{ flex: 1 }} />
               {usuario.ativo === false
                 ? <button disabled={salvando} onClick={async () => { setMarcados(new Set([usuario.id])); setSalvando(true); const { error } = await supabase.rpc('fn_admin_definir_ativo', { p_ids: [usuario.id], p_ativo: true }); setMarcados(new Set()); await fim(error ? `Erro: ${error.message}` : `${usuario.nome} reativado.`); }} style={btnL()}>Reativar</button>
@@ -38789,11 +38791,88 @@ function PermissoesManager() {
         </div>
       </div>
 
+      {senhaDe && <ModalSenhaColaborador colab={senhaDe} temLogin={!!info[senhaDe.id]?.tem_login} onFechar={() => setSenhaDe(null)} onPronto={async () => { await carregar(); }} />}
       {criandoUsuario && (
         <ModalCriarUsuario onFechar={() => setCriandoUsuario(false)} onCriado={async () => { setCriandoUsuario(false); await carregar(); }} />
       )}
     </Panel>
   );
+}
+
+// Trocar a senha de um colaborador (ou criar o login de quem ainda não tem). As senhas não ficam guardadas de
+// forma legível, então não dá para VER a atual: o gestor define uma nova e passa para a pessoa.
+function ModalSenhaColaborador({ colab, temLogin, onFechar, onPronto }) {
+  const [senha, setSenha] = useState('');
+  const [modoLogin, setModoLogin] = useState(colab.email ? 'email' : 'usuario');
+  const [email, setEmail] = useState(colab.email || '');
+  const [usuario, setUsuario] = useState('');
+  const [enviando, setEnviando] = useState(false);
+  const [erro, setErro] = useState(null);
+  const [feito, setFeito] = useState(null);
+  const [mostrar, setMostrar] = useState(true);
+  const gerar = () => { const c = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789'; const a = new Uint32Array(10); crypto.getRandomValues(a); setSenha([...a].map(x => c[x % c.length]).join('')); setMostrar(true); };
+  const enviar = async () => {
+    setErro(null);
+    if (senha.length < 6) { setErro('A senha precisa ter pelo menos 6 caracteres.'); return; }
+    setEnviando(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const r = await fetch(`${SUPABASE_URL}/functions/v1/admin-senha-colaborador`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${session?.access_token}` },
+        body: JSON.stringify({ colaborador_id: colab.id, senha, ...(temLogin ? {} : modoLogin === 'usuario' ? { usuario } : { email }) }),
+      });
+      const d = await r.json();
+      if (!d.ok) { setErro(d.erro || 'Não foi possível.'); setEnviando(false); return; }
+      setFeito({ login: d.login, acao: d.acao }); await onPronto();
+    } catch (e) { setErro(String(e.message || e)); }
+    setEnviando(false);
+  };
+  const inp = { fontFamily: 'inherit', fontSize: 13, padding: '8px 10px', borderRadius: 7, border: `1px solid ${T.line}`, width: '100%', boxSizing: 'border-box' };
+  return ReactDOM.createPortal(
+    <div onClick={onFechar} style={{ position: 'fixed', inset: 0, zIndex: 95, background: 'rgba(15,35,64,.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: T.panel, borderRadius: 12, width: 'min(460px, 100%)', padding: '18px 20px', boxShadow: '0 20px 50px rgba(0,0,0,.3)', color: T.ink }}>
+        <div style={{ fontSize: 15.5, fontWeight: 700 }}>{temLogin ? 'Trocar senha' : 'Criar login'} · {colab.nome}</div>
+        {!feito ? (<>
+          <div style={{ fontSize: 12, color: T.inkFaint, margin: '4px 0 12px' }}>
+            {temLogin ? 'A senha atual não pode ser vista (o portal guarda só uma versão criptografada). Defina uma nova e passe para a pessoa.' : 'Este colaborador ainda não tem login. Defina o login e a senha para ele conseguir entrar.'}
+          </div>
+          {!temLogin && (
+            <div style={{ marginBottom: 10 }}>
+              <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
+                {[['email', 'Com e-mail'], ['usuario', 'Sem e-mail (usuário)']].map(([k, r]) => (
+                  <button key={k} onClick={() => setModoLogin(k)} style={{ fontFamily: 'inherit', fontSize: 12, padding: '5px 10px', borderRadius: 6, border: `1px solid ${modoLogin === k ? T.terracotta : T.line}`, background: modoLogin === k ? T.terracottaSoft : T.panelAlt, cursor: 'pointer' }}>{r}</button>))}
+              </div>
+              {modoLogin === 'email'
+                ? <input value={email} onChange={e => setEmail(e.target.value)} placeholder="e-mail da empresa" style={inp} />
+                : <input value={usuario} onChange={e => setUsuario(e.target.value.replace(/\s/g, ''))} placeholder="usuário (ex.: joao.silva)" style={inp} />}
+            </div>
+          )}
+          <div style={{ display: 'flex', gap: 6 }}>
+            <input value={senha} onChange={e => setSenha(e.target.value)} type={mostrar ? 'text' : 'password'} placeholder="nova senha (mínimo 6)" style={{ ...inp, flex: 1 }} autoComplete="new-password" />
+            <button onClick={gerar} style={{ fontFamily: 'inherit', fontSize: 12, padding: '6px 10px', borderRadius: 7, border: `1px solid ${T.line}`, background: T.panelAlt, cursor: 'pointer', whiteSpace: 'nowrap' }}>Gerar</button>
+            <button onClick={() => setMostrar(v => !v)} style={{ fontFamily: 'inherit', fontSize: 12, padding: '6px 10px', borderRadius: 7, border: `1px solid ${T.line}`, background: T.panelAlt, cursor: 'pointer' }}>{mostrar ? 'ocultar' : 'mostrar'}</button>
+          </div>
+          {erro && <div style={{ fontSize: 12.5, color: T.rustText, marginTop: 8 }}>{erro}</div>}
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 14 }}>
+            <button onClick={onFechar} style={{ fontFamily: 'inherit', fontSize: 12.5, padding: '8px 12px', borderRadius: 8, border: `1px solid ${T.line}`, background: T.panelAlt, cursor: 'pointer' }}>Cancelar</button>
+            <button disabled={enviando} onClick={enviar} style={{ fontFamily: 'inherit', fontSize: 12.5, fontWeight: 700, padding: '8px 14px', borderRadius: 8, border: 'none', background: T.terracotta, color: '#fff', cursor: 'pointer' }}>{enviando ? 'salvando…' : temLogin ? 'Trocar senha' : 'Criar login'}</button>
+          </div>
+        </>) : (
+          <div style={{ marginTop: 10 }}>
+            <div style={{ fontSize: 13, color: T.oliveText, fontWeight: 700 }}>✓ {feito.acao === 'login_criado' ? 'Login criado.' : 'Senha trocada.'} Passe para a pessoa:</div>
+            <div style={{ background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 8, padding: '10px 12px', marginTop: 8, fontSize: 13.5, lineHeight: 1.7 }}>
+              <div>Login: <strong>{feito.login}</strong></div>
+              <div>Senha: <strong style={{ fontFamily: 'ui-monospace, Consolas, monospace' }}>{senha}</strong></div>
+            </div>
+            <div style={{ fontSize: 11.5, color: T.inkFaint, marginTop: 6 }}>Esta é a única vez que a senha aparece: copie agora. Depois de fechar, não dá para ver de novo (só trocar).</div>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 12 }}>
+              <button onClick={() => navigator.clipboard?.writeText(`Login: ${feito.login}\nSenha: ${senha}`)} style={{ fontFamily: 'inherit', fontSize: 12.5, padding: '8px 12px', borderRadius: 8, border: `1px solid ${T.line}`, background: T.panelAlt, cursor: 'pointer' }}>Copiar</button>
+              <button onClick={onFechar} style={{ fontFamily: 'inherit', fontSize: 12.5, fontWeight: 700, padding: '8px 14px', borderRadius: 8, border: 'none', background: T.terracotta, color: '#fff', cursor: 'pointer' }}>Fechar</button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>, document.body);
 }
 
 function ModalCriarUsuario({ onFechar, onCriado }) {
