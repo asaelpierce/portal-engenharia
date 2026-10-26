@@ -23144,13 +23144,13 @@ function RelatorioEstoqueOCs() {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', fontFamily: FONT_BODY }}>
         <div style={{ display: 'inline-flex', background: '#E7EBF1', borderRadius: 9, padding: 3, gap: 2 }}>
-          {[[false, 'Consumo e OCs'], ['min', 'Estoque mínimo'], [true, 'Ver como a engenharia vê']].map(([k, r]) => (
+          {[[false, 'Consumo e OCs'], [true, 'Ver como a engenharia vê']].map(([k, r]) => (
             <button key={r} onClick={() => setComoEng(k)} style={{ fontFamily: 'inherit', fontSize: 12.5, fontWeight: comoEng === k ? 600 : 500, padding: '6px 12px', borderRadius: 7, border: 'none', cursor: 'pointer',
               background: comoEng === k ? C.surface : 'transparent', color: comoEng === k ? C.ink : C.ink2 }}>{r}</button>))}
         </div>
         <span style={{ fontSize: 12, color: C.ink3 }}>{comoEng === true ? 'É exatamente o que a engenharia e os demais usuários veem: só a disponibilidade, sem preços, OCs, fornecedores e consumo.' : 'Visão completa: só a Daniela e os gestores veem.'}</span>
       </div>
-      {comoEng === true ? <EstoqueDisponibilidade /> : comoEng === 'min' ? <EstoqueMinimo autor={autor} /> : <RelatorioEstoqueOCsCompleto />}
+      {comoEng === true ? <EstoqueDisponibilidade /> : <RelatorioEstoqueOCsCompleto />}
     </div>
   );
 }
@@ -36688,6 +36688,14 @@ function Almoxarifado({ currentUser }) {
   const [sortDir, setSortDir] = useState('desc');
   const [sincronizando, setSincronizando] = useState(false);
   const [mensagemSync, setMensagemSync] = useState(null);
+  // Estoque mínimo: só para quem tem a visão completa de estoque (Daniela e gestores)
+  const [podeMinimo, setPodeMinimo] = useState(false);
+  const [visaoEstoque, setVisaoEstoque] = useState('saldo');   // saldo | minimo
+  const [autorMin, setAutorMin] = useState(null);
+  useEffect(() => {
+    supabase.rpc('fn_estoque_ocs_completo').then(({ data }) => setPodeMinimo(!!data));
+    supabase.auth.getUser().then(({ data }) => setAutorMin(data?.user?.email || null));
+  }, []);
 
   const carregar = useCallback(() => {
     setLoading(true);
@@ -36845,8 +36853,28 @@ function Almoxarifado({ currentUser }) {
     );
   }
 
+  const chaveVisao = podeMinimo ? (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+      <div style={{ display: 'inline-flex', background: '#E7EBF1', borderRadius: 9, padding: 3, gap: 2 }}>
+        {[['saldo', 'Saldo de estoque'], ['minimo', 'Estoque mínimo']].map(([k, r]) => (
+          <button key={k} onClick={() => setVisaoEstoque(k)} style={{ fontFamily: 'inherit', fontSize: 12.5, fontWeight: visaoEstoque === k ? 600 : 500, padding: '6px 12px', borderRadius: 7, border: 'none', cursor: 'pointer',
+            background: visaoEstoque === k ? '#fff' : 'transparent', color: visaoEstoque === k ? T.ink : T.inkDim }}>{r}</button>))}
+      </div>
+      {visaoEstoque === 'minimo' && <span style={{ fontSize: 12, color: T.inkFaint }}>Visível só para a Daniela e os gestores.</span>}
+    </div>
+  ) : null;
+  if (podeMinimo && visaoEstoque === 'minimo') {
+    return (
+      <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 14, maxWidth: 1600 }}>
+        {chaveVisao}
+        <EstoqueMinimo autor={autorMin} />
+      </div>
+    );
+  }
+
   return (
     <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 18, maxWidth: 1400 }}>
+      {chaveVisao}
 
       {erro && (
         <div style={{ background: T.rustSoft, border: `1px solid ${T.rust}33`, borderRadius: 8, padding: '12px 16px', display: 'flex', gap: 10, alignItems: 'center' }}>
