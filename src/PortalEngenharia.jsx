@@ -314,6 +314,11 @@ export default function PortalEngenharia() {
     if (!session?.user?.email) { setCurrentUser(null); return; }
     supabase.from('colaboradores').select('*').eq('email', session.user.email).maybeSingle()
       .then(async ({ data }) => {
+        if (data && data.ativo === false) {   // desativado na administração: não entra
+          await supabase.auth.signOut();
+          window.alert('Seu acesso ao portal foi desativado. Fale com o gestor.');
+          return;
+        }
         if (data) {
           const { data: telasData } = await supabase.from('colaborador_telas').select('tela').eq('colaborador_id', data.id);
           setCurrentUser({
@@ -38429,6 +38434,13 @@ function PermissoesManager() {
   const [salvando, setSalvando] = useState(false);
   const [criandoUsuario, setCriandoUsuario] = useState(false); // controla o modal
   const [vendedoresSankhya, setVendedoresSankhya] = useState([]);
+  // administração em lote
+  const [info, setInfo] = useState({});            // id -> { tem_login, ultimo_login, bloqueado, refs }
+  const [ehAdmin, setEhAdmin] = useState(false);
+  const [filtro, setFiltro] = useState('ativos');   // ativos | inativos | todos
+  const [busca, setBusca] = useState('');
+  const [marcados, setMarcados] = useState(new Set());
+  const [lote, setLote] = useState({ telas: new Set(), papel: '', msg: null });
   useEffect(() => {
     supabase.from('faturamento_resumo').select('vendedor_nome').not('vendedor_nome', 'is', null)
       .then(({ data }) => setVendedoresSankhya([...new Set((data || []).map(v => v.vendedor_nome))].sort()));
@@ -38437,10 +38449,13 @@ function PermissoesManager() {
   const carregar = useCallback(async () => {
     setLoading(true);
     const [{ data: c }, { data: t }] = await Promise.all([
-      supabase.from('colaboradores').select('*').eq('ativo', true).order('nome'),
+      supabase.from('colaboradores').select('*').order('nome'),
       supabase.from('colaborador_telas').select('*'),
     ]);
     setColabs(c || []);
+    const { data: adm, error: eAdm } = await supabase.rpc('fn_admin_usuarios');
+    setEhAdmin(!eAdm);
+    setInfo(Object.fromEntries((adm || []).map(x => [x.id, x])));
     const mapa = {};
     (t || []).forEach(row => {
       if (!mapa[row.colaborador_id]) mapa[row.colaborador_id] = new Set();
@@ -38521,31 +38536,180 @@ function PermissoesManager() {
     setSalvando(false);
   };
 
+  // ---------- administração em lote ----------
+  const primeiro = (n) => String(n || '').trim().split(/\s+/)[0].toLowerCase();
+  const dupDe = (c) => colabs.find(o => o.id !== c.id && primeiro(o.nome) === primeiro(c.nome) && primeiro(c.nome).length > 2 && (!c.email || !o.email));
+  const estado = (c) => { const x = info[c.id] || {};
+    if (c.ativo === false) return { t: 'inativo', cor: T.inkFaint };
+    if (!x.tem_login) return { t: 'sem login', cor: T.rustText };
+    if (!x.ultimo_login) return { t: 'nunca entrou', cor: T.amberText };
+    return { t: `último acesso ${new Date(x.ultimo_login).toLocaleDateString('pt-BR')}`, cor: T.inkFaint }; };
+  const t0 = busca.trim().toLowerCase();
+  const visiveis = colabs.filter(c => (filtro === 'todos' || (filtro === 'ativos' ? c.ativo !== false : c.ativo === false))
+    && (!t0 || `${c.nome} ${c.email || ''} ${c.papel}`.toLowerCase().includes(t0)));
+  const marcar = (id) => setMarcados(m => { const n = new Set(m); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const marcarGrupo = (f) => setMarcados(new Set(visiveis.filter(f).map(c => c.id)));
+  const idsMarcados = [...marcados];
+  const nomesMarcados = colabs.filter(c => marcados.has(c.id)).map(c => c.nome);
+  const fim = async (msg) => { setLote(l => ({ ...l, msg })); await carregar(); setSalvando(false); };
+  const loteTelas = async (modo) => {   // 'add' | 'remover' | 'exato'
+    const sel = [...lote.telas]; if (!sel.length && modo !== 'exato') return;
+    if (modo === 'exato' && !window.confirm(`Definir EXATAMENTE ${sel.length ? `estas ${sel.length} tela(s)` : 'nenhuma tela (bloqueia tudo)'} para ${idsMarcados.length} usuário(s)?`)) return;
+    setSalvando(true);
+    for (const id of idsMarcados) {
+      const atual = telasPorUsuario[id] && telasPorUsuario[id].size ? [...telasPorUsuario[id]].filter(t => t !== '__bloqueado_tudo__') : TELAS_CATALOGO.map(t => t.id);
+      let nova = modo === 'add' ? [...new Set([...atual, ...sel])] : modo === 'remover' ? atual.filter(t => !sel.includes(t)) : sel;
+      await supabase.from('colaborador_telas').delete().eq('colaborador_id', id);
+      await supabase.from('colaborador_telas').insert((nova.length ? nova : ['__bloqueado_tudo__']).map(t => ({ colaborador_id: id, tela: t })));
+    }
+    await fim(`Telas ${modo === 'add' ? 'adicionadas' : modo === 'remover' ? 'removidas' : 'definidas'} para ${idsMarcados.length} usuário(s).`);
+  };
+  const loteAcessoTotal = async () => {
+    if (!window.confirm(`Liberar ACESSO TOTAL (todas as telas) para ${idsMarcados.length} usuário(s)?`)) return;
+    setSalvando(true);
+    for (const id of idsMarcados) await supabase.from('colaborador_telas').delete().eq('colaborador_id', id);
+    await fim(`Acesso total liberado para ${idsMarcados.length} usuário(s).`);
+  };
+  const lotePapel = async () => {
+    if (!lote.papel) return;
+    setSalvando(true);
+    await supabase.from('colaboradores').update({ papel: lote.papel }).in('id', idsMarcados);
+    await fim(`Papel "${lote.papel}" aplicado a ${idsMarcados.length} usuário(s).`);
+  };
+  const loteFlag = async (campo, valor) => {
+    setSalvando(true);
+    await supabase.from('colaboradores').update({ [campo]: valor }).in('id', idsMarcados);
+    await fim(`Permissão ${valor ? 'ligada' : 'desligada'} para ${idsMarcados.length} usuário(s).`);
+  };
+  const loteAtivo = async (ativo) => {
+    if (!ativo && !window.confirm(`Desativar ${idsMarcados.length} usuário(s)? Eles deixam de conseguir entrar no portal (dá para reativar depois).\n\n${nomesMarcados.join(', ')}`)) return;
+    setSalvando(true);
+    const { error } = await supabase.rpc('fn_admin_definir_ativo', { p_ids: idsMarcados, p_ativo: ativo });
+    if (!error) setMarcados(new Set());
+    await fim(error ? `Erro: ${error.message}` : `${idsMarcados.length} usuário(s) ${ativo ? 'reativado(s)' : 'desativado(s)'}.`);
+  };
+  const loteExcluir = async () => {
+    if (!window.confirm(`EXCLUIR definitivamente ${idsMarcados.length} usuário(s)? Apaga o cadastro e o login, sem volta.\nQuem tiver histórico (propostas, aprovações…) não é excluído: aparece como recusado, para você desativar.\n\n${nomesMarcados.join(', ')}`)) return;
+    setSalvando(true);
+    const { data, error } = await supabase.rpc('fn_admin_excluir', { p_ids: idsMarcados });
+    if (error) { await fim(`Erro: ${error.message}`); return; }
+    setMarcados(new Set()); setSelecionado(null);
+    const ex = (data?.excluidos || []).map(x => x.nome), rc = (data?.recusados || []);
+    await fim(`${ex.length} excluído(s)${ex.length ? `: ${ex.join(', ')}` : ''}.${rc.length ? ` Não excluídos: ${rc.map(x => `${x.nome} (${x.motivo})`).join('; ')}.` : ''}`);
+  };
+  const FLAGS = [['ve_produtividade_completa', 'Vê produtividade de todos'], ['ve_almoxarifado_completo', 'Vê almoxarifado completo'], ['ve_almoxarifado_apenas_fila', 'Almoxarifado: só a fila'],
+    ['movimenta_estoque', 'Movimenta estoque'], ['ve_estoque_ocs_completo', 'Vê Estoque x OCs completo'], ['ve_todos_vendedores', 'Vê todos os vendedores']];
+  const btnL = (extra = {}) => ({ fontFamily: 'inherit', fontSize: 12, padding: '6px 11px', borderRadius: 6, border: `1px solid ${T.line}`, background: T.panelAlt, cursor: 'pointer', ...extra });
+
   return (
     <Panel title="Permissões de acesso por usuário" subtitle="Controla quais telas cada colaborador vê e se a produtividade é própria ou de todos">
       <div style={{ display: 'flex', gap: 20, marginTop: 12, flexWrap: 'wrap' }}>
-        <div style={{ minWidth: 220, display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 420, overflow: 'auto' }}>
+        <div style={{ minWidth: 260, maxWidth: 320, display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 640, overflow: 'auto' }}>
           <button onClick={() => setCriandoUsuario(true)}
             style={{ fontSize: 12, fontWeight: 700, color: '#fff', background: T.oliveText, border: 'none', borderRadius: 6, padding: '8px 10px', cursor: 'pointer', marginBottom: 6 }}>
             + Criar novo usuário
           </button>
+          {ehAdmin && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 6 }}>
+              <div style={{ display: 'flex', gap: 4 }}>
+                {[['ativos', 'Ativos'], ['inativos', 'Inativos'], ['todos', 'Todos']].map(([k, r]) => (
+                  <button key={k} onClick={() => setFiltro(k)} style={btnL({ flex: 1, padding: '5px 6px', fontWeight: filtro === k ? 700 : 500, background: filtro === k ? T.terracottaSoft : T.panelAlt })}>
+                    {r} ({colabs.filter(c => k === 'todos' || (k === 'ativos' ? c.ativo !== false : c.ativo === false)).length})</button>))}
+              </div>
+              <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="buscar nome, e-mail ou papel" style={{ fontFamily: 'inherit', fontSize: 12, padding: '6px 8px', borderRadius: 6, border: `1px solid ${T.line}` }} />
+              <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', fontSize: 11 }}>
+                <span style={{ color: T.inkFaint }}>marcar:</span>
+                <button onClick={() => marcarGrupo(() => true)} style={btnL({ fontSize: 11, padding: '2px 7px' })}>todos</button>
+                <button onClick={() => marcarGrupo(c => !info[c.id]?.tem_login)} style={btnL({ fontSize: 11, padding: '2px 7px' })}>sem login</button>
+                <button onClick={() => marcarGrupo(c => info[c.id]?.tem_login && !info[c.id]?.ultimo_login)} style={btnL({ fontSize: 11, padding: '2px 7px' })}>nunca entrou</button>
+                {marcados.size > 0 && <button onClick={() => setMarcados(new Set())} style={btnL({ fontSize: 11, padding: '2px 7px' })}>nenhum</button>}
+              </div>
+            </div>
+          )}
           {loading && <div style={{ fontSize: 12, color: T.inkFaint }}>Carregando…</div>}
-          {colabs.map(c => {
+          {visiveis.map(c => {
             const restrito = (telasPorUsuario[c.id]?.size || 0) > 0;
+            const st = estado(c); const dup = dupDe(c); const ref = info[c.id]?.refs || 0;
             return (
-              <button key={c.id} onClick={() => setSelecionado(c.id)} style={{
-                textAlign: 'left', padding: '8px 10px', borderRadius: 6, border: `1px solid ${T.line}`,
-                background: selecionado === c.id ? T.terracottaSoft : T.panelAlt, cursor: 'pointer',
-              }}>
-                <div style={{ fontSize: 12.5, fontWeight: 600, color: T.ink }}>{c.nome}</div>
-                <div style={{ fontSize: 10.5, color: T.inkFaint }}>{c.papel} · {restrito ? 'acesso restrito' : 'acesso total'}</div>
-              </button>
+              <div key={c.id} style={{ display: 'flex', alignItems: 'stretch', gap: 6 }}>
+                {ehAdmin && <input type="checkbox" checked={marcados.has(c.id)} onChange={() => marcar(c.id)} aria-label={`marcar ${c.nome}`} style={{ marginTop: 10 }} />}
+                <button onClick={() => setSelecionado(c.id)} style={{
+                  flex: 1, textAlign: 'left', padding: '7px 10px', borderRadius: 6, border: `1px solid ${marcados.has(c.id) ? T.terracotta : T.line}`,
+                  background: selecionado === c.id ? T.terracottaSoft : c.ativo === false ? T.panel : T.panelAlt, cursor: 'pointer', opacity: c.ativo === false ? 0.7 : 1,
+                }}>
+                  <div style={{ fontSize: 12.5, fontWeight: 600, color: T.ink }}>{c.nome}</div>
+                  <div style={{ fontSize: 10.5, color: T.inkFaint }}>{c.papel} · {restrito ? 'acesso restrito' : <span style={{ color: T.amberText, fontWeight: 600 }}>acesso total</span>}</div>
+                  {ehAdmin && <div style={{ fontSize: 10.5, color: st.cor, fontWeight: 600 }}>{st.t}{ref ? <span style={{ color: T.inkFaint, fontWeight: 400 }}> · {ref} no histórico</span> : null}</div>}
+                  {ehAdmin && dup && <div style={{ fontSize: 10.5, color: T.rustText, fontWeight: 600 }}>possível duplicado de {dup.nome}</div>}
+                </button>
+              </div>
             );
           })}
         </div>
 
         <div style={{ flex: 1, minWidth: 260 }}>
-          {!usuario && <div style={{ fontSize: 12.5, color: T.inkFaint }}>Selecione um colaborador à esquerda.</div>}
+          {lote.msg && <div style={{ fontSize: 12.5, fontWeight: 600, color: lote.msg.startsWith('Erro') ? T.rustText : T.oliveText, background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 8, padding: '8px 10px', marginBottom: 10 }}>
+            {lote.msg} <button onClick={() => setLote(l => ({ ...l, msg: null }))} style={{ border: 'none', background: 'none', cursor: 'pointer', color: T.inkFaint }}>✕</button></div>}
+          {ehAdmin && marcados.size > 0 ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+              <div style={{ fontSize: 13.5, fontWeight: 700 }}>Alterar {marcados.size} usuário(s) de uma vez</div>
+              <div style={{ fontSize: 11.5, color: T.inkFaint }}>{nomesMarcados.join(', ')}</div>
+              <div style={{ border: `1px solid ${T.line}`, borderRadius: 8, padding: '10px 12px' }}>
+                <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 6 }}>Telas</div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(190px, 1fr))', gap: 4 }}>
+                  {TELAS_CATALOGO.map(t => (
+                    <label key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+                      <input type="checkbox" checked={lote.telas.has(t.id)} onChange={() => setLote(l => { const n = new Set(l.telas); n.has(t.id) ? n.delete(t.id) : n.add(t.id); return { ...l, telas: n }; })} />{t.label}
+                    </label>))}
+                </div>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
+                  <button disabled={salvando || !lote.telas.size} onClick={() => loteTelas('add')} style={btnL()}>Adicionar as marcadas</button>
+                  <button disabled={salvando || !lote.telas.size} onClick={() => loteTelas('remover')} style={btnL()}>Remover as marcadas</button>
+                  <button disabled={salvando} onClick={() => loteTelas('exato')} style={btnL()}>Deixar exatamente as marcadas</button>
+                  <button disabled={salvando} onClick={loteAcessoTotal} style={btnL()}>Liberar acesso total</button>
+                </div>
+              </div>
+              <div style={{ border: `1px solid ${T.line}`, borderRadius: 8, padding: '10px 12px', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <strong style={{ fontSize: 12.5 }}>Papel</strong>
+                <select value={lote.papel} onChange={e => setLote(l => ({ ...l, papel: e.target.value }))} style={{ fontFamily: 'inherit', fontSize: 12.5, padding: '5px 8px', borderRadius: 6, border: `1px solid ${T.line}` }}>
+                  <option value="">escolha…</option>
+                  {[...new Set(colabs.map(c => c.papel).filter(Boolean))].sort().map(pp => <option key={pp} value={pp}>{pp}</option>)}
+                </select>
+                <button disabled={salvando || !lote.papel} onClick={lotePapel} style={btnL()}>Aplicar</button>
+              </div>
+              <div style={{ border: `1px solid ${T.line}`, borderRadius: 8, padding: '10px 12px' }}>
+                <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 6 }}>Permissões especiais</div>
+                {FLAGS.map(([k, r]) => (
+                  <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, padding: '3px 0' }}>
+                    <span style={{ flex: 1 }}>{r} <span style={{ color: T.inkFaint, fontSize: 11 }}>({colabs.filter(c => marcados.has(c.id) && c[k]).length} de {marcados.size} hoje)</span></span>
+                    <button disabled={salvando} onClick={() => loteFlag(k, true)} style={btnL({ padding: '3px 9px' })}>ligar</button>
+                    <button disabled={salvando} onClick={() => loteFlag(k, false)} style={btnL({ padding: '3px 9px' })}>desligar</button>
+                  </div>))}
+              </div>
+              <div style={{ border: `1px solid ${T.rustText}55`, borderRadius: 8, padding: '10px 12px', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', background: T.rustSoft }}>
+                <strong style={{ fontSize: 12.5, color: T.rustText }}>Acesso</strong>
+                <button disabled={salvando} onClick={() => loteAtivo(false)} style={btnL()}>Desativar (bloqueia o login)</button>
+                <button disabled={salvando} onClick={() => loteAtivo(true)} style={btnL()}>Reativar</button>
+                <button disabled={salvando} onClick={loteExcluir} style={btnL({ background: T.rustText, color: '#fff', border: 'none', fontWeight: 700 })}>Excluir definitivamente</button>
+                <span style={{ fontSize: 11, color: T.inkFaint, width: '100%' }}>Quem tem histórico (propostas, aprovações…) não pode ser excluído, só desativado: o histórico continua com o nome.</span>
+              </div>
+            </div>
+          ) : (<>
+          {!usuario && <div style={{ fontSize: 12.5, color: T.inkFaint }}>Selecione um colaborador à esquerda{ehAdmin ? ', ou marque vários para alterar de uma vez' : ''}.</div>}
+          {usuario && ehAdmin && (
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 10, fontSize: 12 }}>
+              <span style={{ color: estado(usuario).cor, fontWeight: 600 }}>{estado(usuario).t}</span>
+              {usuario.email && <span style={{ color: T.inkFaint }}>{usuario.email}</span>}
+              <span style={{ flex: 1 }} />
+              {usuario.ativo === false
+                ? <button disabled={salvando} onClick={async () => { setMarcados(new Set([usuario.id])); setSalvando(true); const { error } = await supabase.rpc('fn_admin_definir_ativo', { p_ids: [usuario.id], p_ativo: true }); setMarcados(new Set()); await fim(error ? `Erro: ${error.message}` : `${usuario.nome} reativado.`); }} style={btnL()}>Reativar</button>
+                : <button disabled={salvando} onClick={async () => { if (!window.confirm(`Desativar ${usuario.nome}? Deixa de conseguir entrar (dá para reativar).`)) return; setSalvando(true); const { error } = await supabase.rpc('fn_admin_definir_ativo', { p_ids: [usuario.id], p_ativo: false }); await fim(error ? `Erro: ${error.message}` : `${usuario.nome} desativado.`); }} style={btnL()}>Desativar</button>}
+              <button disabled={salvando} onClick={async () => { if (!window.confirm(`EXCLUIR ${usuario.nome} definitivamente (cadastro e login)?`)) return; setSalvando(true);
+                const { data, error } = await supabase.rpc('fn_admin_excluir', { p_ids: [usuario.id] }); setSelecionado(null);
+                await fim(error ? `Erro: ${error.message}` : (data?.recusados || []).length ? `Não excluído: ${data.recusados[0].motivo}.` : `${usuario.nome} excluído.`); }}
+                style={btnL({ background: T.rustText, color: '#fff', border: 'none', fontWeight: 700 })}>Excluir</button>
+            </div>
+          )}
           {usuario && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
               <div style={{ display: 'flex', gap: 8 }}>
@@ -38621,6 +38785,7 @@ function PermissoesManager() {
               </div>
             </div>
           )}
+          </>)}
         </div>
       </div>
 
