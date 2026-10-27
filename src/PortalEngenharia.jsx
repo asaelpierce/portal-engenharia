@@ -888,8 +888,8 @@ function PortalConteudo({ currentUser, session }) {
         .g-brilho { animation: brilho 2.4s ease-in-out infinite; }
         .g-card { transition: transform .25s cubic-bezier(.34,1.3,.5,1), box-shadow .25s; }
         .g-card:hover { transform: translateY(-3px); box-shadow: 0 8px 26px rgba(28,26,23,.10); }
-        .fade-up { animation: fadeUp .35s ease both; }
-        .scale-in { animation: scaleIn .2s ease both; }
+        .fade-up { animation: fadeUp .35s ease backwards; }
+        .scale-in { animation: scaleIn .2s ease backwards; }
         .spin { animation: spin 1s linear infinite; }
         .focus-ring:focus-visible { outline: 2px solid ${T.terracotta}; outline-offset: 2px; }
 
@@ -5264,7 +5264,7 @@ function FiltroMulti({ valor, opcoes, onChange, todosRotulo = 'todos', largura =
   useEffect(() => {
     if (!aberto) return;
     const fechar = e => { if (!e.target.closest || !e.target.closest('[data-filtro-multi]')) setAberto(null); };
-    const rolar = () => setAberto(null);
+    const rolar = (e) => { if (e.target && e.target.closest && e.target.closest('[data-filtro-multi]')) return; setAberto(null); };
     document.addEventListener('mousedown', fechar); window.addEventListener('scroll', rolar, true);
     return () => { document.removeEventListener('mousedown', fechar); window.removeEventListener('scroll', rolar, true); };
   }, [aberto]);
@@ -5282,8 +5282,8 @@ function FiltroMulti({ valor, opcoes, onChange, todosRotulo = 'todos', largura =
           color: sel.length ? T.ink : T.inkFaint, fontWeight: sel.length ? 600 : 400, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
         {rot} <span style={{ float: 'right', color: T.inkFaint }}>▾</span>
       </button>
-      {aberto && (
-        <div data-filtro-multi style={{ position: 'fixed', left: aberto.x, top: aberto.y, width: aberto.w, zIndex: 60, background: T.panel,
+      {aberto && ReactDOM.createPortal(
+        <div data-filtro-multi style={{ position: 'fixed', left: aberto.x, top: Math.min(aberto.y, window.innerHeight - 200), width: aberto.w, zIndex: 1000, background: T.panel,
           border: `1px solid ${T.line}`, borderRadius: 8, boxShadow: '0 8px 24px rgba(0,0,0,.16)', padding: 6, maxHeight: 320, overflowY: 'auto', textAlign: 'left' }}>
           <div style={{ display: 'flex', gap: 6, padding: '2px 4px 6px', borderBottom: `1px solid ${T.lineSoft}`, marginBottom: 4 }}>
             <button type="button" onClick={() => onChange(opcoes.map(o => o.v))} style={{ fontFamily: 'inherit', fontSize: 11, border: 'none', background: 'none', color: T.blueText, fontWeight: 700, cursor: 'pointer', padding: 0 }}>marcar todos</button>
@@ -5297,7 +5297,7 @@ function FiltroMulti({ valor, opcoes, onChange, todosRotulo = 'todos', largura =
             </label>
           ))}
           {opcoes.length === 0 && <div style={{ fontSize: 11.5, color: T.inkFaint, padding: 6 }}>sem opções</div>}
-        </div>
+        </div>, document.body
       )}
     </span>
   );
