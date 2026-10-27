@@ -314,6 +314,7 @@ export default function PortalEngenharia() {
     if (!session?.user?.email) { setCurrentUser(null); return; }
     supabase.from('colaboradores').select('*').eq('email', session.user.email).maybeSingle()
       .then(async ({ data }) => {
+        if (data && data.ativo !== false) almoxSincronizarConfigEtiqueta();
         if (data && data.ativo === false) {   // desativado na administração: não entra
           await supabase.auth.signOut();
           window.alert('Seu acesso ao portal foi desativado. Fale com o gestor.');
@@ -10017,7 +10018,24 @@ const almoxConfigEtiqueta = () => {
   try { return { w: 105.5, h: 50, dx: 0, dy: 0, giro: 0, ...(JSON.parse(localStorage.getItem('almox_etiqueta_cfg_v4') || '{}')) }; }
   catch { return { w: 105.5, h: 50, dx: 0, dy: 0, giro: 0 }; }
 };
-const almoxSalvarConfigEtiqueta = (cfg) => { try { localStorage.setItem('almox_etiqueta_cfg_v4', JSON.stringify(cfg)); } catch {} };
+// Também no portal, por usuário (almox_etiqueta_config): dá para ver e copiar a configuração de outra pessoa.
+const almoxSalvarConfigEtiqueta = (cfg) => {
+  try { localStorage.setItem('almox_etiqueta_cfg_v4', JSON.stringify(cfg)); } catch {}
+  supabase.auth.getSession().then(({ data }) => { const email = data?.session?.user?.email?.toLowerCase();
+    if (email) supabase.from('almox_etiqueta_config').upsert({ email, cfg, atualizado_em: new Date().toISOString(), atualizado_por: email }); }).catch(() => {});
+};
+// Ao entrar no portal: se o usuário já tem configuração no portal, ela vale neste computador; se não tem,
+// mas o computador tem uma (configurada antes desta mudança), ela sobe para o portal.
+async function almoxSincronizarConfigEtiqueta() {
+  try {
+    const { data: ses } = await supabase.auth.getSession(); const email = ses?.session?.user?.email?.toLowerCase();
+    if (!email) return;
+    const { data } = await supabase.from('almox_etiqueta_config').select('cfg').eq('email', email).maybeSingle();
+    if (data?.cfg) { localStorage.setItem('almox_etiqueta_cfg_v4', JSON.stringify(data.cfg)); return; }
+    const local = localStorage.getItem('almox_etiqueta_cfg_v4');
+    if (local) await supabase.from('almox_etiqueta_config').upsert({ email, cfg: JSON.parse(local), atualizado_por: `${email} (deste computador)` });
+  } catch { /* sem rede: segue com a do computador */ }
+}
 
 // reduz a foto antes de enviar (lado maior 1600 px, JPEG 0,8)
 async function almoxComprimirFoto(file) {
