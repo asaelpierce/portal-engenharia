@@ -29140,6 +29140,7 @@ function CRMCarteira({ resp, onAbrirNegocio }) {
     parciais: ['Faturamento parcial', l => l.parcial],
     atrasados: ['Previsão vencida', l => l.dias_atraso > 0],
     servicos: ['Serviços', l => l.servico],
+    risco: ['Em risco', l => !!l.risco_nivel],
   };
   const t = busca.trim().toLowerCase();
   const vis = noPeriodo.filter(l => SIT[fSit][1](l) && (!t || `${l.br || ''} ${l.cliente || ''} ${l.numnota} ${l.pedido_cliente || ''} ${l.vendedor || ''}`.toLowerCase().includes(t)));
@@ -29149,6 +29150,7 @@ function CRMCarteira({ resp, onAbrirNegocio }) {
   const K = noPeriodo;
   const material = K.filter(l => !l.servico), semEnt = material.filter(l => !l.parcial), parciais = K.filter(l => l.parcial), atrasados = K.filter(l => l.dias_atraso > 0);
   const servicos = K.filter(l => l.servico), servAguarda = servicos.filter(l => l.servico_situacao === 'aguarda_material');
+  const emRisco = K.filter(l => l.risco_nivel), riscoAlto = emRisco.filter(l => l.risco_nivel === 'alto');
   // por mês de previsão (vencidos juntos, serviços pela própria data)
   const hoje = iso(new Date());
   const MESES = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
@@ -29188,9 +29190,9 @@ function CRMCarteira({ resp, onAbrirNegocio }) {
   const situacao = (l) => l.servico ? (l.servico_situacao === 'aguarda_material' ? ['Serviço · aguarda material', '#0D9488'] : ['Serviço · liberado p/ faturar', '#1E8E4F'])
     : l.parcial ? ['Material · parcial', C.warn] : ['Material · sem entrega', C.ink2];
   const exportar = () => {
-    const l2 = ['BR;Cliente;Vendedor;Pedido do cliente;Pedido Sankhya;Tipo;Data do pedido;Previsão de faturamento;Dias de atraso;Valor líquido do pedido;% pendente;Falta faturar (líquido);Situação',
+    const l2 = ['BR;Cliente;Vendedor;Pedido do cliente;Pedido Sankhya;Tipo;Data do pedido;Previsão de faturamento;Dias de atraso;Valor líquido do pedido;% pendente;Falta faturar (líquido);Situação;Risco;Motivos do risco',
       ...vis.map(l => [l.br || '', `"${l.cliente || ''}"`, l.vendedor || '', l.pedido_cliente || '', l.numnota, `"${l.descr_top || ''}"`, dt(l.data_pedido), dt(l.prevista), l.dias_atraso || 0,
-        String(l.liquido_pedido ?? '').replace('.', ','), l.pct_pendente != null ? String((Number(l.pct_pendente) * 100).toFixed(1)).replace('.', ',') : '', String(l.falta_liquido ?? '').replace('.', ','), situacao(l)[0]].join(';'))];
+        String(l.liquido_pedido ?? '').replace('.', ','), l.pct_pendente != null ? String((Number(l.pct_pendente) * 100).toFixed(1)).replace('.', ',') : '', String(l.falta_liquido ?? '').replace('.', ','), situacao(l)[0], l.risco_nivel || '', `"${(l.risco_motivos || []).join(' | ')}"`].join(';'))];
     const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob(['\ufeff' + l2.join('\n')], { type: 'text/csv;charset=utf-8' })); a.download = 'minha_carteira.csv'; a.click();
   };
   const atual = linhas.map(l => l.saldo_em).filter(Boolean).sort().pop();
@@ -29214,11 +29216,12 @@ function CRMCarteira({ resp, onAbrirNegocio }) {
         <span style={{ fontSize: 11.5, color: C.ink3 }}>{dIni || dFim ? 'cartões, lista e vendedores mostram só esse período' : 'sem filtro de data: toda a carteira'}</span>
       </div>
       <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))' }}>
-        {kpi('Carteira líquida a faturar', moeda(soma(K)), `${K.length} pedidos · ${new Set(K.map(l => l.br)).size} BRs · material + serviços`, C.primary, 'todos')}
+        {kpi('Carteira líquida a faturar', moeda(soma(K)), `${K.length} pedidos · ${new Set(K.map(l => l.br)).size} BRs · firme ${moeda(soma(K) - soma(emRisco))} + em risco ${moeda(soma(emRisco))}`, C.primary, 'todos')}
         {kpi('Material', moeda(soma(material)), `sem entrega ${moeda(soma(semEnt))} + saldo dos parciais ${moeda(soma(parciais))}`, '#0F2340', 'material')}
         {kpi('Faturamento parcial', moeda(soma(parciais)), `${parciais.length} pedidos · só o saldo que falta (já incluído em Material)`, C.warn, 'parciais')}
         {kpi('Previsão vencida', moeda(soma(atrasados)), `${atrasados.length} pedidos de material atrasados (serviço não entra)`, C.loss, 'atrasados')}
         {kpi('Serviços', moeda(soma(servicos)), `${servAguarda.length} aguardam o material · ${servicos.length - servAguarda.length} liberados p/ faturar`, '#0D9488', 'servicos')}
+        {kpi('Em risco (ressalva)', moeda(soma(emRisco)), `${emRisco.length} pedidos · ${riscoAlto.length} de risco alto · continuam somados na carteira`, '#B42318', 'risco')}
       </div>
       <div style={{ display: 'grid', gap: 14, gridTemplateColumns: !resp && porVend.length > 1 ? 'repeat(auto-fit, minmax(380px, 1fr))' : '1fr' }}>
         <section style={{ ...caixa, overflow: 'hidden' }}>
@@ -29282,7 +29285,14 @@ function CRMCarteira({ resp, onAbrirNegocio }) {
                   <td style={{ ...td, color: C.ink2 }}>{moeda(l.liquido_pedido)}</td>
                   <td style={{ ...td, color: C.ink2 }}>{l.pct_pendente != null ? `${(Number(l.pct_pendente) * 100).toFixed(0)}%` : '—'}</td>
                   <td style={{ ...td, fontWeight: 800 }}>{moeda(l.falta_liquido)}</td>
-                  <td style={{ ...td, textAlign: 'left' }}><span style={{ fontSize: 11.5, fontWeight: 700, color: sCor }}>{sTxt}</span></td>
+                  <td style={{ ...td, textAlign: 'left', whiteSpace: 'normal', minWidth: 170, maxWidth: 300 }}>
+                    <span style={{ fontSize: 11.5, fontWeight: 700, color: sCor }}>{sTxt}</span>
+                    {l.risco_nivel && (
+                      <div title={(l.risco_motivos || []).join('\n')} style={{ marginTop: 3, fontSize: 11, fontWeight: 600, color: l.risco_nivel === 'alto' ? '#B42318' : '#B7791F', background: l.risco_nivel === 'alto' ? '#FEE4E2' : '#FDF3E1', borderRadius: 6, padding: '3px 6px', lineHeight: 1.35 }}>
+                        ⚠ risco {l.risco_nivel}: {(l.risco_motivos || [])[0]}{(l.risco_motivos || []).length > 1 ? ` (+${l.risco_motivos.length - 1})` : ''}
+                      </div>)}
+                    {l.reprogramado_para && <div style={{ marginTop: 3, fontSize: 10.5, color: C.ink3 }}>reprogramado p/ {dt(l.reprogramado_para)}{l.reprogramado_motivo ? ` · ${l.reprogramado_motivo}` : ''}</div>}
+                  </td>
                 </tr>); })}
             {!vis.length && <tr><td colSpan={9} style={{ padding: 24, textAlign: 'center', color: C.ink3 }}>Nenhum pedido nesse filtro.</td></tr>}
           </tbody>
@@ -29290,7 +29300,8 @@ function CRMCarteira({ resp, onAbrirNegocio }) {
       </div>
       <div style={{ fontSize: 11.5, color: C.ink3, lineHeight: 1.5 }}>
         Falta faturar = valor líquido do pedido (sem impostos, como no CRM e na Diretoria) × parte dos itens ainda não entregue, item a item no Sankhya (atualiza a cada hora). Pedido parcial conta só o saldo.
-        Serviço só é faturado depois que o material chega, por isso nunca entra como atrasado: "aguarda material" enquanto o BR ainda tem pedido de material pendente. Clique na linha para abrir o negócio.
+        Serviço só é faturado depois que o material chega, por isso nunca entra como atrasado: "aguarda material" enquanto o BR ainda tem pedido de material pendente.
+        Em risco (ressalva, o valor continua na carteira): <strong>alto</strong> = negócio pausado ou marcado como perdido no CRM, ou OP suspensa; <strong>médio</strong> = faturou uma parte e parou (última nota há mais de 60 dias, metade ou mais pendente) ou previsão vencida há mais de 90 dias. Clique na linha para abrir o negócio.
       </div>
     </div>
   );
