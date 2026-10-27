@@ -29132,62 +29132,67 @@ function CRMRosca({ itens, centro, sub, fmt, aoClicar }) {
 function CRMCarteira({ resp, onAbrirNegocio }) {
   const C = CRMC;
   const [linhas, setLinhas] = useState(null);
-  const [fSit, setFSit] = useState('todos');
-  const [fVend, setFVend] = useState(null);
-  const [dIni, setDIni] = useState('');
-  const [dFim, setDFim] = useState('');
-  const [busca, setBusca] = useState('');
+  const [fSit, setFSit] = useState('todos');           // atalho pelos cartões
+  const F0 = { top: [], cli: [], vend: [], sit: [], risco: [], meses: [], dIni: '', dFim: '', vMin: '', vMax: '', busca: '' };
+  const [f, setF] = useState(F0);
+  const [ocultos, setOcultos] = useState(new Set());   // pedidos tirados da conta (nunota)
   const [ordem, setOrdem] = useState({ c: 'falta', desc: true });
+  const [painel, setPainel] = useState(true);
   useEffect(() => { supabase.from('v_crm_carteira').select('*').then(({ data }) => setLinhas(data || [])); }, []);
   if (!linhas) return <div style={{ padding: 40, textAlign: 'center', color: C.ink3 }}>Carregando a carteira…</div>;
   const moeda = (v) => Number(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
   const dt = (d) => (d ? new Date(`${String(d).slice(0, 10)}T12:00:00`).toLocaleDateString('pt-BR') : '—');
   const iso = (d) => d.toISOString().slice(0, 10);
   const soma = (arr) => arr.reduce((t, l) => t + (Number(l.falta_liquido) || 0), 0);
-  // base: vendedor do topo do CRM (resp) e itens ainda pendentes
+  const num = (v) => (String(v).trim() === '' ? null : Number(String(v).replace(/\./g, '').replace(',', '.')));
+  const set = (k, v) => setF(x => ({ ...x, [k]: v }));
+  const toggle = (k, v) => setF(x => ({ ...x, [k]: x[k].includes(v) ? x[k].filter(y => y !== v) : [...x[k], v] }));
+  const MESES = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
+  const mesDe = (l) => !l.prevista ? 'sem data' : l.dias_atraso > 0 ? 'vencido' : l.prevista.slice(0, 7);
+  const nomeMes = (m) => m === 'vencido' ? 'Previsão vencida (material)' : m === 'sem data' ? 'Sem previsão' : `${MESES[Number(m.slice(5)) - 1]}/${m.slice(0, 4)}`;
+  const situacao = (l) => l.servico ? (l.servico_situacao === 'aguarda_material' ? 'Serviço · aguarda material' : 'Serviço · liberado p/ faturar')
+    : l.parcial ? 'Material · parcial' : 'Material · sem entrega';
+  const corSit = (t) => t.startsWith('Serviço · aguarda') ? '#0D9488' : t.startsWith('Serviço') ? '#1E8E4F' : t.endsWith('parcial') ? C.warn : C.ink2;
+  const riscoDe = (l) => l.risco_nivel === 'alto' ? 'Risco alto' : l.risco_nivel === 'medio' ? 'Risco médio' : 'Sem risco';
+  const topDe = (l) => `${l.codtipoper} · ${l.descr_top || ''}`;
+  // base: vendedor do topo do CRM, itens ainda pendentes
   const base = linhas.filter(l => !l.itens_encerrados && (!resp || (l.vendedor || '').toUpperCase() === String(resp).toUpperCase().trim()));
-  const doVend = base.filter(l => !fVend || l.vendedor === fVend);
-  const noPeriodo = doVend.filter(l => (!dIni || (l.prevista && l.prevista >= dIni)) && (!dFim || (l.prevista && l.prevista <= dFim)));
+  const t = f.busca.trim().toLowerCase();
+  const vMin = num(f.vMin), vMax = num(f.vMax);
+  // aplica todos os filtros do painel, exceto os que o quadro "omitir" pede (para os quadros de mês/vendedor continuarem navegáveis)
+  const aplica = (arr, omitir = []) => arr.filter(l =>
+    !ocultos.has(l.nunota)
+    && (omitir.includes('top') || !f.top.length || f.top.includes(topDe(l)))
+    && (omitir.includes('cli') || !f.cli.length || f.cli.includes(l.cliente))
+    && (omitir.includes('vend') || !f.vend.length || f.vend.includes(l.vendedor))
+    && (!f.sit.length || f.sit.includes(situacao(l)))
+    && (!f.risco.length || f.risco.includes(riscoDe(l)))
+    && (omitir.includes('meses') || !f.meses.length || f.meses.includes(mesDe(l)))
+    && (!f.dIni || (l.prevista && l.prevista >= f.dIni)) && (!f.dFim || (l.prevista && l.prevista <= f.dFim))
+    && (vMin == null || Number(l.falta_liquido) >= vMin) && (vMax == null || Number(l.falta_liquido) <= vMax)
+    && (!t || `${l.br || ''} ${l.cliente || ''} ${l.numnota} ${l.pedido_cliente || ''} ${l.vendedor || ''} ${l.descr_top || ''}`.toLowerCase().includes(t)));
+  const K = aplica(base);
   const SIT = {
-    todos: ['Toda a carteira', () => true],
-    material: ['Material', l => !l.servico],
-    sem_entrega: ['Material sem entrega', l => !l.servico && !l.parcial],
-    parciais: ['Faturamento parcial', l => l.parcial],
-    atrasados: ['Previsão vencida', l => l.dias_atraso > 0],
-    servicos: ['Serviços', l => l.servico],
-    risco: ['Em risco', l => !!l.risco_nivel],
+    todos: ['Toda a seleção', () => true], material: ['Material', l => !l.servico], parciais: ['Faturamento parcial', l => l.parcial],
+    atrasados: ['Previsão vencida', l => l.dias_atraso > 0], servicos: ['Serviços', l => l.servico], risco: ['Em risco', l => !!l.risco_nivel],
   };
-  const t = busca.trim().toLowerCase();
-  const vis = noPeriodo.filter(l => SIT[fSit][1](l) && (!t || `${l.br || ''} ${l.cliente || ''} ${l.numnota} ${l.pedido_cliente || ''} ${l.vendedor || ''}`.toLowerCase().includes(t)));
-  const ch = { falta: l => Number(l.falta_liquido) || 0, prev: l => l.prevista || '9999', br: l => l.br || '', cli: l => l.cliente || '', atraso: l => l.dias_atraso || 0 };
+  const vis = K.filter(l => SIT[fSit][1](l));
+  const ch = { falta: l => Number(l.falta_liquido) || 0, prev: l => l.prevista || '9999', br: l => l.br || '', cli: l => l.cliente || '', top: l => topDe(l), sit: l => situacao(l) };
   vis.sort((a, b) => { const x = ch[ordem.c](a), y = ch[ordem.c](b); return (x > y ? 1 : x < y ? -1 : 0) * (ordem.desc ? -1 : 1); });
-  // cartões: refletem vendedor e período escolhidos
-  const K = noPeriodo;
   const material = K.filter(l => !l.servico), semEnt = material.filter(l => !l.parcial), parciais = K.filter(l => l.parcial), atrasados = K.filter(l => l.dias_atraso > 0);
   const servicos = K.filter(l => l.servico), servAguarda = servicos.filter(l => l.servico_situacao === 'aguarda_material');
   const emRisco = K.filter(l => l.risco_nivel), riscoAlto = emRisco.filter(l => l.risco_nivel === 'alto');
-  // por mês de previsão (vencidos juntos, serviços pela própria data)
-  const hoje = iso(new Date());
-  const MESES = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
-  const porMes = {}; doVend.forEach(l => { const m = !l.prevista ? 'sem data' : l.dias_atraso > 0 ? 'vencido' : l.prevista.slice(0, 7);
-    const x = porMes[m] || (porMes[m] = { m, n: 0, v: 0 }); x.n++; x.v += Number(l.falta_liquido) || 0; });
-  const nomeMes = (m) => m === 'vencido' ? 'Previsão vencida (material)' : m === 'sem data' ? 'Sem previsão' : `${MESES[Number(m.slice(5)) - 1]}/${m.slice(0, 4)}`;
-  const meses = Object.values(porMes).sort((a, b) => (a.m === 'vencido' ? -1 : b.m === 'vencido' ? 1 : a.m.localeCompare(b.m)));
-  const mesAtivo = (m) => m === 'vencido' ? fSit === 'atrasados' && !dIni && !dFim : !!dIni && dIni === `${m}-01` && dFim === iso(new Date(Number(m.slice(0, 4)), Number(m.slice(5)), 0));
-  const clicarMes = (m) => {
-    if (m === 'vencido') { setDIni(''); setDFim(''); setFSit(mesAtivo(m) ? 'todos' : 'atrasados'); return; }
-    if (m === 'sem data') return;
-    if (mesAtivo(m)) { setDIni(''); setDFim(''); return; }
-    setFSit(f => f === 'atrasados' ? 'todos' : f);
-    setDIni(`${m}-01`); setDFim(iso(new Date(Number(m.slice(0, 4)), Number(m.slice(5)), 0)));
-  };
-  const porVend = Object.values(base.filter(l => (!dIni || (l.prevista && l.prevista >= dIni)) && (!dFim || (l.prevista && l.prevista <= dFim)))
-    .reduce((acc, l) => { const k = l.vendedor || '—'; const x = acc[k] || (acc[k] = { k, n: 0, v: 0, atr: 0 }); x.n++; x.v += Number(l.falta_liquido) || 0; if (l.dias_atraso > 0) x.atr += Number(l.falta_liquido) || 0; return acc; }, {})).sort((a, b) => b.v - a.v);
+  // quadros (cada um ignora o próprio filtro, para dar para escolher vários)
+  const porMes = {}; aplica(base, ['meses']).forEach(l => { const m = mesDe(l); const x = porMes[m] || (porMes[m] = { m, n: 0, v: 0 }); x.n++; x.v += Number(l.falta_liquido) || 0; });
+  const meses = Object.values(porMes).sort((a, b) => (a.m === 'vencido' ? -1 : b.m === 'vencido' ? 1 : a.m === 'sem data' ? 1 : b.m === 'sem data' ? -1 : a.m.localeCompare(b.m)));
+  const porVend = Object.values(aplica(base, ['vend']).reduce((acc, l) => { const k = l.vendedor || '—'; const x = acc[k] || (acc[k] = { k, n: 0, v: 0, atr: 0 }); x.n++; x.v += Number(l.falta_liquido) || 0; if (l.dias_atraso > 0) x.atr += Number(l.falta_liquido) || 0; return acc; }, {})).sort((a, b) => b.v - a.v);
+  const opc = (fn) => [...new Set(base.map(fn).filter(Boolean))].sort().map(v => ({ v, r: v }));
   const atalho = (k) => { const h = new Date(); const y = h.getFullYear(), mo = h.getMonth();
-    if (k === 'mes') { setDIni(iso(new Date(y, mo, 1))); setDFim(iso(new Date(y, mo + 1, 0))); }
-    if (k === 'prox') { setDIni(iso(new Date(y, mo + 1, 1))); setDFim(iso(new Date(y, mo + 2, 0))); }
-    if (k === '3m') { setDIni(hoje); setDFim(iso(new Date(y, mo + 3, 0))); }
-    if (k === 'limpar') { setDIni(''); setDFim(''); } };
+    if (k === 'mes') setF(x => ({ ...x, dIni: iso(new Date(y, mo, 1)), dFim: iso(new Date(y, mo + 1, 0)) }));
+    if (k === 'prox') setF(x => ({ ...x, dIni: iso(new Date(y, mo + 1, 1)), dFim: iso(new Date(y, mo + 2, 0)) }));
+    if (k === '3m') setF(x => ({ ...x, dIni: iso(h), dFim: iso(new Date(y, mo + 3, 0)) }));
+    if (k === 'limpar') setF(x => ({ ...x, dIni: '', dFim: '' })); };
+  const filtrosAtivos = f.top.length + f.cli.length + f.vend.length + f.sit.length + f.risco.length + f.meses.length + (f.dIni || f.dFim ? 1 : 0) + (vMin != null || vMax != null ? 1 : 0) + (t ? 1 : 0) + ocultos.size + (fSit !== 'todos' ? 1 : 0);
   const caixa = { background: C.surface, border: `1px solid ${C.line}`, borderRadius: 12 };
   const kpi = (r, v, sub, cor, k) => (
     <button onClick={() => setFSit(fSit === k ? 'todos' : k)} title="clique para filtrar a lista"
@@ -29197,39 +29202,71 @@ function CRMCarteira({ resp, onAbrirNegocio }) {
       <div style={{ fontSize: 11.5, color: C.ink3, lineHeight: 1.35 }}>{sub}</div>
     </button>);
   const th = (r, c, al = 'right') => (
-    <th onClick={c ? () => setOrdem(o => ({ c, desc: o.c === c ? !o.desc : c === 'falta' || c === 'atraso' })) : undefined}
+    <th onClick={c ? () => setOrdem(o => ({ c, desc: o.c === c ? !o.desc : c === 'falta' })) : undefined}
       style={{ padding: '9px 10px', fontSize: 11.5, fontWeight: 600, color: C.ink2, textAlign: al, whiteSpace: 'nowrap', background: '#F1F4F8', borderBottom: `1px solid ${C.line}`, position: 'sticky', top: 0, zIndex: 1, cursor: c ? 'pointer' : 'default' }}>
       {r}{c && ordem.c === c ? (ordem.desc ? ' ▼' : ' ▲') : ''}</th>);
   const td = { padding: '8px 10px', textAlign: 'right', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap', borderBottom: `1px solid ${C.lineSoft}` };
   const linhaClic = (ativo) => ({ cursor: 'pointer', background: ativo ? C.primarySoft : 'transparent' });
-  const situacao = (l) => l.servico ? (l.servico_situacao === 'aguarda_material' ? ['Serviço · aguarda material', '#0D9488'] : ['Serviço · liberado p/ faturar', '#1E8E4F'])
-    : l.parcial ? ['Material · parcial', C.warn] : ['Material · sem entrega', C.ink2];
   const exportar = () => {
-    const l2 = ['BR;Cliente;Vendedor;Pedido do cliente;Pedido Sankhya;Tipo;Data do pedido;Previsão de faturamento;Dias de atraso;Valor líquido do pedido;% pendente;Falta faturar (líquido);Situação;Risco;Motivos do risco',
-      ...vis.map(l => [l.br || '', `"${l.cliente || ''}"`, l.vendedor || '', l.pedido_cliente || '', l.numnota, `"${l.descr_top || ''}"`, dt(l.data_pedido), dt(l.prevista), l.dias_atraso || 0,
-        String(l.liquido_pedido ?? '').replace('.', ','), l.pct_pendente != null ? String((Number(l.pct_pendente) * 100).toFixed(1)).replace('.', ',') : '', String(l.falta_liquido ?? '').replace('.', ','), situacao(l)[0], l.risco_nivel || '', `"${(l.risco_motivos || []).join(' | ')}"`].join(';'))];
+    const l2 = ['BR;Cliente;Vendedor;Pedido do cliente;Pedido Sankhya;Tipo de operação;Data do pedido;Previsão de faturamento;Dias de atraso;Valor líquido do pedido;% pendente;Falta faturar (líquido);Situação;Risco;Motivos do risco',
+      ...vis.map(l => [l.br || '', `"${l.cliente || ''}"`, l.vendedor || '', l.pedido_cliente || '', l.numnota, `"${topDe(l)}"`, dt(l.data_pedido), dt(l.prevista), l.dias_atraso || 0,
+        String(l.liquido_pedido ?? '').replace('.', ','), l.pct_pendente != null ? String((Number(l.pct_pendente) * 100).toFixed(1)).replace('.', ',') : '', String(l.falta_liquido ?? '').replace('.', ','),
+        situacao(l), l.risco_nivel || '', `"${(l.risco_motivos || []).join(' | ')}"`].join(';'))];
     const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob(['\ufeff' + l2.join('\n')], { type: 'text/csv;charset=utf-8' })); a.download = 'minha_carteira.csv'; a.click();
   };
   const atual = linhas.map(l => l.saldo_em).filter(Boolean).sort().pop();
-  const chip = (txt, limpar) => (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12, fontWeight: 600, background: C.primary, color: '#fff', borderRadius: 14, padding: '3px 4px 3px 10px' }}>
-      {txt}<button onClick={limpar} aria-label="tirar filtro" style={{ border: 'none', background: 'rgba(255,255,255,.25)', color: '#fff', borderRadius: 10, width: 18, height: 18, cursor: 'pointer', fontSize: 11 }}>✕</button>
-    </span>);
-  const inpD = { fontFamily: 'inherit', fontSize: 12.5, padding: '6px 8px', borderRadius: 8, border: `1px solid ${C.line}` };
+  const inp = { fontFamily: 'inherit', fontSize: 12.5, padding: '6px 8px', borderRadius: 8, border: `1px solid ${C.line}`, boxSizing: 'border-box' };
   const btnA = { fontFamily: 'inherit', fontSize: 12, padding: '6px 10px', borderRadius: 8, border: `1px solid ${C.line}`, background: C.surface, cursor: 'pointer', color: C.ink2 };
+  const campo = (rot, el) => <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11.5, fontWeight: 600, color: C.ink2, minWidth: 0 }}>{rot}{el}</label>;
+  const ocultosLista = linhas.filter(l => ocultos.has(l.nunota));
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14, fontFamily: FONT_BODY, color: C.ink }}>
-      <div style={{ ...caixa, padding: '10px 14px', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-        <CalendarDays size={16} aria-hidden="true" style={{ color: C.ink3 }} />
-        <strong style={{ fontSize: 13 }}>Previsão de faturamento</strong>
-        <span style={{ fontSize: 12.5, color: C.ink2 }}>de</span><input type="date" value={dIni} onChange={e => setDIni(e.target.value)} style={inpD} />
-        <span style={{ fontSize: 12.5, color: C.ink2 }}>até</span><input type="date" value={dFim} onChange={e => setDFim(e.target.value)} style={inpD} />
-        <button onClick={() => atalho('mes')} style={btnA}>Este mês</button>
-        <button onClick={() => atalho('prox')} style={btnA}>Próximo mês</button>
-        <button onClick={() => atalho('3m')} style={btnA}>Próximos 3 meses</button>
-        {(dIni || dFim) && <button onClick={() => atalho('limpar')} style={{ ...btnA, border: 'none', color: C.primary }}>limpar datas</button>}
-        <span style={{ fontSize: 11.5, color: C.ink3 }}>{dIni || dFim ? 'cartões, lista e vendedores mostram só esse período' : 'sem filtro de data: toda a carteira'}</span>
+      {/* painel de filtros */}
+      <div style={{ ...caixa, padding: '10px 14px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <button onClick={() => setPainel(v => !v)} style={{ fontFamily: 'inherit', fontSize: 13, fontWeight: 700, border: 'none', background: 'none', cursor: 'pointer', color: C.ink, padding: 0 }}>{painel ? '▾' : '▸'} Filtros</button>
+          <span style={{ fontSize: 12, color: C.ink3 }}>{filtrosAtivos ? `${filtrosAtivos} filtro(s) ativo(s)` : 'nenhum filtro: toda a carteira'}</span>
+          {filtrosAtivos > 0 && <button onClick={() => { setF(F0); setOcultos(new Set()); setFSit('todos'); }} style={{ ...btnA, border: 'none', color: C.primary, fontWeight: 600 }}>limpar todos</button>}
+          <span style={{ flex: 1 }} />
+          <div style={{ position: 'relative' }}>
+            <Search size={14} aria-hidden="true" style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: C.ink3 }} />
+            <input value={f.busca} onChange={e => set('busca', e.target.value)} placeholder="BR, cliente, pedido, operação…" style={{ ...inp, padding: '7px 10px 7px 30px', width: 240 }} />
+          </div>
+        </div>
+        {painel && (<>
+          <div style={{ display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', marginTop: 10 }}>
+            {campo('Tipo de operação', <FiltroMulti valor={f.top} onChange={v => set('top', v)} opcoes={opc(topDe)} todosRotulo="todos os tipos" fonte={12.5} />)}
+            {campo('Cliente', <FiltroMulti valor={f.cli} onChange={v => set('cli', v)} opcoes={opc(l => l.cliente)} todosRotulo="todos os clientes" fonte={12.5} />)}
+            {campo('Vendedor', <FiltroMulti valor={f.vend} onChange={v => set('vend', v)} opcoes={opc(l => l.vendedor)} todosRotulo="todos os vendedores" fonte={12.5} />)}
+            {campo('Situação', <FiltroMulti valor={f.sit} onChange={v => set('sit', v)} opcoes={['Material · sem entrega', 'Material · parcial', 'Serviço · aguarda material', 'Serviço · liberado p/ faturar'].map(v => ({ v, r: v }))} todosRotulo="todas" fonte={12.5} />)}
+            {campo('Risco', <FiltroMulti valor={f.risco} onChange={v => set('risco', v)} opcoes={['Risco alto', 'Risco médio', 'Sem risco'].map(v => ({ v, r: v }))} todosRotulo="todos" fonte={12.5} />)}
+            {campo('Mês de previsão', <FiltroMulti valor={f.meses} onChange={v => set('meses', v)} opcoes={[...new Set(base.map(mesDe))].sort((a, b) => (a === 'vencido' ? -1 : b === 'vencido' ? 1 : a.localeCompare(b))).map(v => ({ v, r: nomeMes(v) }))} todosRotulo="todos os meses" fonte={12.5} />)}
+          </div>
+          <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end', flexWrap: 'wrap', marginTop: 10 }}>
+            {campo('Previsão de', <input type="date" value={f.dIni} onChange={e => set('dIni', e.target.value)} style={inp} />)}
+            {campo('até', <input type="date" value={f.dFim} onChange={e => set('dFim', e.target.value)} style={inp} />)}
+            <button onClick={() => atalho('mes')} style={btnA}>Este mês</button>
+            <button onClick={() => atalho('prox')} style={btnA}>Próximo mês</button>
+            <button onClick={() => atalho('3m')} style={btnA}>Próximos 3 meses</button>
+            {(f.dIni || f.dFim) && <button onClick={() => atalho('limpar')} style={{ ...btnA, border: 'none', color: C.primary }}>limpar datas</button>}
+            <span style={{ width: 12 }} />
+            {campo('Falta faturar de (R$)', <input value={f.vMin} onChange={e => set('vMin', e.target.value.replace(/[^\d.,]/g, ''))} placeholder="ex.: 10.000" inputMode="decimal" style={{ ...inp, width: 130 }} />)}
+            {campo('até (R$)', <input value={f.vMax} onChange={e => set('vMax', e.target.value.replace(/[^\d.,]/g, ''))} placeholder="ex.: 500.000" inputMode="decimal" style={{ ...inp, width: 130 }} />)}
+          </div>
+          {ocultosLista.length > 0 && (
+            <div style={{ marginTop: 10, fontSize: 12, color: C.ink2, display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+              <strong>Tirados da conta ({ocultosLista.length}, {moeda(soma(ocultosLista))}):</strong>
+              {ocultosLista.map(l => (
+                <span key={l.nunota} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: '#F2F4F7', border: `1px solid ${C.line}`, borderRadius: 14, padding: '2px 4px 2px 9px' }}>
+                  {l.br} · {l.pedido_cliente || l.numnota}
+                  <button onClick={() => setOcultos(o => { const n = new Set(o); n.delete(l.nunota); return n; })} title="voltar para a conta" style={{ border: 'none', background: '#E4E7EC', borderRadius: 10, width: 18, height: 18, cursor: 'pointer', fontSize: 11 }}>↺</button>
+                </span>))}
+              <button onClick={() => setOcultos(new Set())} style={{ ...btnA, border: 'none', color: C.primary, padding: '2px 4px' }}>voltar todos</button>
+            </div>
+          )}
+        </>)}
       </div>
+
       <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))' }}>
         {kpi('Carteira líquida a faturar', moeda(soma(K)), `${K.length} pedidos · ${new Set(K.map(l => l.br)).size} BRs · firme ${moeda(soma(K) - soma(emRisco))} + em risco ${moeda(soma(emRisco))}`, C.primary, 'todos')}
         {kpi('Material', moeda(soma(material)), `sem entrega ${moeda(soma(semEnt))} + saldo dos parciais ${moeda(soma(parciais))}`, '#0F2340', 'material')}
@@ -29238,15 +29275,16 @@ function CRMCarteira({ resp, onAbrirNegocio }) {
         {kpi('Serviços', moeda(soma(servicos)), `${servAguarda.length} aguardam o material · ${servicos.length - servAguarda.length} liberados p/ faturar`, '#0D9488', 'servicos')}
         {kpi('Em risco (ressalva)', moeda(soma(emRisco)), `${emRisco.length} pedidos · ${riscoAlto.length} de risco alto · continuam somados na carteira`, '#B42318', 'risco')}
       </div>
+
       <div style={{ display: 'grid', gap: 14, gridTemplateColumns: !resp && porVend.length > 1 ? 'repeat(auto-fit, minmax(380px, 1fr))' : '1fr' }}>
         <section style={{ ...caixa, overflow: 'hidden' }}>
-          <div style={{ padding: '11px 14px', borderBottom: `1px solid ${C.line}`, display: 'flex', justifyContent: 'space-between' }}><strong>Por mês de faturamento previsto</strong><span style={{ fontSize: 11.5, color: C.ink3 }}>clique no mês para filtrar</span></div>
+          <div style={{ padding: '11px 14px', borderBottom: `1px solid ${C.line}`, display: 'flex', justifyContent: 'space-between' }}><strong>Por mês de faturamento previsto</strong><span style={{ fontSize: 11.5, color: C.ink3 }}>clique para marcar um ou vários meses</span></div>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
-            <tbody>{meses.map(x => { const on = mesAtivo(x.m);
+            <tbody>{meses.map(x => { const on = f.meses.includes(x.m);
               return (
-                <tr key={x.m} onClick={() => clicarMes(x.m)} style={linhaClic(on)}
+                <tr key={x.m} onClick={() => toggle('meses', x.m)} style={linhaClic(on)}
                   onMouseEnter={e => { if (!on) e.currentTarget.style.background = '#F7F9FC'; }} onMouseLeave={e => { if (!on) e.currentTarget.style.background = 'transparent'; }}>
-                  <td style={{ ...td, textAlign: 'left', fontWeight: 600, color: x.m === 'vencido' ? C.loss : C.ink }}>{on ? '▸ ' : ''}{nomeMes(x.m)}</td>
+                  <td style={{ ...td, textAlign: 'left', fontWeight: 600, color: x.m === 'vencido' ? C.loss : C.ink }}>{on ? '☑ ' : '☐ '}{nomeMes(x.m)}</td>
                   <td style={{ ...td, color: C.ink3 }}>{x.n} pedido(s)</td>
                   <td style={{ ...td, fontWeight: 700, color: x.m === 'vencido' ? C.loss : C.ink }}>{moeda(x.v)}</td>
                 </tr>); })}</tbody>
@@ -29254,13 +29292,13 @@ function CRMCarteira({ resp, onAbrirNegocio }) {
         </section>
         {!resp && porVend.length > 1 && (
           <section style={{ ...caixa, overflow: 'hidden' }}>
-            <div style={{ padding: '11px 14px', borderBottom: `1px solid ${C.line}`, display: 'flex', justifyContent: 'space-between' }}><strong>Por vendedor</strong><span style={{ fontSize: 11.5, color: C.ink3 }}>clique no vendedor para filtrar</span></div>
+            <div style={{ padding: '11px 14px', borderBottom: `1px solid ${C.line}`, display: 'flex', justifyContent: 'space-between' }}><strong>Por vendedor</strong><span style={{ fontSize: 11.5, color: C.ink3 }}>clique para marcar um ou vários</span></div>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
-              <tbody>{porVend.map(x => { const on = fVend === x.k;
+              <tbody>{porVend.map(x => { const on = f.vend.includes(x.k);
                 return (
-                  <tr key={x.k} onClick={() => setFVend(on ? null : x.k)} style={linhaClic(on)}
+                  <tr key={x.k} onClick={() => toggle('vend', x.k)} style={linhaClic(on)}
                     onMouseEnter={e => { if (!on) e.currentTarget.style.background = '#F7F9FC'; }} onMouseLeave={e => { if (!on) e.currentTarget.style.background = 'transparent'; }}>
-                    <td style={{ ...td, textAlign: 'left', fontWeight: 600 }}>{on ? '▸ ' : ''}{x.k}</td>
+                    <td style={{ ...td, textAlign: 'left', fontWeight: 600 }}>{on ? '☑ ' : '☐ '}{x.k}</td>
                     <td style={{ ...td, color: C.ink3 }}>{x.n} pedido(s)</td>
                     <td style={{ ...td, color: x.atr ? C.loss : C.ink3 }}>{x.atr ? `${moeda(x.atr)} vencido` : '—'}</td>
                     <td style={{ ...td, fontWeight: 700 }}>{moeda(x.v)}</td>
@@ -29269,16 +29307,11 @@ function CRMCarteira({ resp, onAbrirNegocio }) {
           </section>
         )}
       </div>
+
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
         <div style={{ display: 'inline-flex', background: '#E7EBF1', borderRadius: 9, padding: 3, gap: 2, flexWrap: 'wrap' }}>
           {Object.entries(SIT).map(([k, [r]]) => (
             <button key={k} onClick={() => setFSit(k)} style={{ fontFamily: 'inherit', fontSize: 12.5, fontWeight: fSit === k ? 600 : 500, padding: '6px 11px', borderRadius: 7, border: 'none', cursor: 'pointer', background: fSit === k ? C.surface : 'transparent', color: fSit === k ? C.ink : C.ink2 }}>{r}</button>))}
-        </div>
-        {fVend && chip(`vendedor: ${fVend}`, () => setFVend(null))}
-        {(dIni || dFim) && chip(`previsão ${dIni ? dt(dIni) : '…'} a ${dFim ? dt(dFim) : '…'}`, () => atalho('limpar'))}
-        <div style={{ position: 'relative' }}>
-          <Search size={14} aria-hidden="true" style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: C.ink3 }} />
-          <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="BR, cliente ou pedido" style={{ fontFamily: 'inherit', fontSize: 12.5, padding: '7px 10px 7px 30px', borderRadius: 8, border: `1px solid ${C.line}`, width: 220 }} />
         </div>
         <span style={{ flex: 1 }} />
         <span style={{ fontSize: 12, color: C.ink3 }}>{vis.length} pedido(s) · <strong style={{ color: C.ink }}>{moeda(soma(vis))}</strong>{atual ? ` · atualizado ${new Date(atual).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}` : ''}</span>
@@ -29286,37 +29319,42 @@ function CRMCarteira({ resp, onAbrirNegocio }) {
       </div>
       <div style={{ ...caixa, overflow: 'auto', maxHeight: 'calc(100vh - 380px)', minHeight: 300 }}>
         <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, fontSize: 12.5 }}>
-          <thead><tr>{th('BR', 'br', 'left')}{th('Cliente', 'cli', 'left')}{th('Vendedor', null, 'left')}{th('Pedido do cliente', null, 'left')}{th('Previsão', 'prev')}{th('Líquido do pedido', null)}{th('% pendente', null)}{th('Falta faturar', 'falta')}{th('Situação', 'atraso', 'left')}</tr></thead>
+          <thead><tr>{th('BR', 'br', 'left')}{th('Cliente', 'cli', 'left')}{th('Vendedor', null, 'left')}{th('Pedido do cliente', null, 'left')}{th('Tipo de operação', 'top', 'left')}{th('Previsão', 'prev')}{th('Líquido do pedido', null)}{th('% pend.', null)}{th('Falta faturar', 'falta')}{th('Situação', 'sit', 'left')}{th('', null, 'center')}</tr></thead>
           <tbody>
-            {vis.map(l => { const [sTxt, sCor] = situacao(l);
+            {vis.map(l => { const sTxt = situacao(l);
               return (
                 <tr key={l.nunota} onClick={() => l.negocio_id && onAbrirNegocio(l.negocio_id)} style={{ cursor: l.negocio_id ? 'pointer' : 'default' }}
                   onMouseEnter={e => { e.currentTarget.style.background = '#F7F9FC'; }} onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}>
                   <td style={{ ...td, textAlign: 'left', fontWeight: 700, color: C.primary }}>{l.br || '—'}</td>
-                  <td style={{ ...td, textAlign: 'left', whiteSpace: 'normal', maxWidth: 240 }}>{l.cliente}</td>
+                  <td style={{ ...td, textAlign: 'left', whiteSpace: 'normal', maxWidth: 220 }}>{l.cliente}</td>
                   <td style={{ ...td, textAlign: 'left', color: C.ink2 }}>{l.vendedor}</td>
                   <td style={{ ...td, textAlign: 'left' }}><strong>{l.pedido_cliente || '—'}</strong><div style={{ fontSize: 10.5, color: C.ink3 }}>Sankhya nº {l.numnota} · {dt(l.data_pedido)}</div></td>
+                  <td style={{ ...td, textAlign: 'left', whiteSpace: 'normal', maxWidth: 190, fontSize: 11.5, color: C.ink2 }}>{l.descr_top}<div style={{ fontSize: 10.5, color: C.ink3 }}>TOP {l.codtipoper}</div></td>
                   <td style={{ ...td, color: l.dias_atraso > 0 ? C.loss : C.ink, fontWeight: l.dias_atraso > 0 ? 700 : 400 }}>{dt(l.prevista)}{l.dias_atraso > 0 && <div style={{ fontSize: 10.5 }}>{l.dias_atraso} dia(s) de atraso</div>}</td>
                   <td style={{ ...td, color: C.ink2 }}>{moeda(l.liquido_pedido)}</td>
                   <td style={{ ...td, color: C.ink2 }}>{l.pct_pendente != null ? `${(Number(l.pct_pendente) * 100).toFixed(0)}%` : '—'}</td>
                   <td style={{ ...td, fontWeight: 800 }}>{moeda(l.falta_liquido)}</td>
-                  <td style={{ ...td, textAlign: 'left', whiteSpace: 'normal', minWidth: 170, maxWidth: 300 }}>
-                    <span style={{ fontSize: 11.5, fontWeight: 700, color: sCor }}>{sTxt}</span>
+                  <td style={{ ...td, textAlign: 'left', whiteSpace: 'normal', minWidth: 160, maxWidth: 280 }}>
+                    <span style={{ fontSize: 11.5, fontWeight: 700, color: corSit(sTxt) }}>{sTxt}</span>
                     {l.risco_nivel && (
                       <div title={(l.risco_motivos || []).join('\n')} style={{ marginTop: 3, fontSize: 11, fontWeight: 600, color: l.risco_nivel === 'alto' ? '#B42318' : '#B7791F', background: l.risco_nivel === 'alto' ? '#FEE4E2' : '#FDF3E1', borderRadius: 6, padding: '3px 6px', lineHeight: 1.35 }}>
                         ⚠ risco {l.risco_nivel}: {(l.risco_motivos || [])[0]}{(l.risco_motivos || []).length > 1 ? ` (+${l.risco_motivos.length - 1})` : ''}
                       </div>)}
                     {l.reprogramado_para && <div style={{ marginTop: 3, fontSize: 10.5, color: C.ink3 }}>reprogramado p/ {dt(l.reprogramado_para)}{l.reprogramado_motivo ? ` · ${l.reprogramado_motivo}` : ''}</div>}
                   </td>
+                  <td style={{ ...td, textAlign: 'center' }}>
+                    <button onClick={e => { e.stopPropagation(); setOcultos(o => new Set(o).add(l.nunota)); }} title="tirar este pedido da conta (dá para voltar no painel de filtros)"
+                      style={{ border: `1px solid ${C.line}`, background: C.surface, borderRadius: 6, width: 24, height: 24, cursor: 'pointer', color: C.ink3, fontSize: 12 }}>✕</button>
+                  </td>
                 </tr>); })}
-            {!vis.length && <tr><td colSpan={9} style={{ padding: 24, textAlign: 'center', color: C.ink3 }}>Nenhum pedido nesse filtro.</td></tr>}
+            {!vis.length && <tr><td colSpan={11} style={{ padding: 24, textAlign: 'center', color: C.ink3 }}>Nenhum pedido com esses filtros.</td></tr>}
           </tbody>
         </table>
       </div>
       <div style={{ fontSize: 11.5, color: C.ink3, lineHeight: 1.5 }}>
         Falta faturar = valor líquido do pedido (sem impostos, como no CRM e na Diretoria) × parte dos itens ainda não entregue, item a item no Sankhya (atualiza a cada hora). Pedido parcial conta só o saldo.
-        Serviço só é faturado depois que o material chega, por isso nunca entra como atrasado: "aguarda material" enquanto o BR ainda tem pedido de material pendente.
-        Em risco (ressalva, o valor continua na carteira): <strong>alto</strong> = negócio pausado ou marcado como perdido no CRM, ou OP suspensa; <strong>médio</strong> = faturou uma parte e parou (última nota há mais de 60 dias, metade ou mais pendente) ou previsão vencida há mais de 90 dias. Clique na linha para abrir o negócio.
+        Serviço só é faturado depois que o material chega, por isso nunca entra como atrasado. Em risco (ressalva, o valor continua na carteira): <strong>alto</strong> = negócio pausado ou perdido no CRM, ou OP suspensa; <strong>médio</strong> = faturou uma parte e parou, ou previsão vencida há mais de 90 dias.
+        Todos os filtros se combinam; o ✕ tira um pedido da conta só nesta tela (não muda nada no Sankhya). Clique na linha para abrir o negócio.
       </div>
     </div>
   );
