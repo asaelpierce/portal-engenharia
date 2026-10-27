@@ -968,6 +968,7 @@ function PortalConteudo({ currentUser, session }) {
           {renderTab('custeio_op', <TabErrorBoundary tab="Custeio por OP"><CusteioPorOP /></TabErrorBoundary>)}
           {renderTab('custeio_plano', <TabErrorBoundary tab="Custeio - Plano"><CusteioPlano /></TabErrorBoundary>)}
           {renderTab('orcamento_material', <TabErrorBoundary tab="Matéria-prima em Orçamento"><OrcamentoMaterial currentUser={currentUser} /></TabErrorBoundary>)}
+          {renderTab('planejamento', <TabErrorBoundary tab="Planejamento (PCP)"><PlanejamentoPCP /></TabErrorBoundary>)}
           {renderTab('conferencia_op', <TabErrorBoundary tab="Conferência de OPs"><ConferenciaOP /></TabErrorBoundary>)}
           {renderTab('estoque_ocs', <TabErrorBoundary tab="Estoque x OCs"><RelatorioEstoqueOCs /></TabErrorBoundary>)}
           {renderTab('almoxarifado', <TabErrorBoundary tab="Estoque"><Almoxarifado currentUser={currentUser} /></TabErrorBoundary>)}
@@ -1032,6 +1033,7 @@ function Sidebar({ view, setView, pendCount, papel, telasPermitidas }) {
     { id: 'orcamento_material', label: 'Matéria-prima em Orçamento', icon: Package },
     { id: 'estoque_ocs',  label: 'Estoque x OCs',        icon: Package },
     { id: 'conferencia_op', label: 'Conferência de OPs',  icon: ClipboardCheck },
+    { id: 'planejamento', label: 'Planejamento (PCP)',   icon: CalendarDays },
     { id: 'almoxarifado', label: 'Estoque',                icon: Package },
     { id: 'equipamentos', label: 'Equip. Terceiros',       icon: Webhook },
     { id: 'recebimento_terceiros', label: 'Validação de Recebimento', icon: ClipboardCheck },
@@ -23149,6 +23151,287 @@ function EstoqueMinimo({ autor }) {
   );
 }
 
+// ============================================================================
+// PLANEJAMENTO (PCP) — tela separada (27/10/2026). Substitui a Planilha Mestra e o OOH mensal:
+//  · Mês (OOH): programação original congelada do mês (plan_ooh) × faturado no mês (notas do Sankhya) × falta × estimativa atual
+//  · Lista mestra: carteira do Sankhya + campos do PCP (setor, estimativa de faturamento, andamento, data do CP, considerações),
+//    editáveis aqui, com histórico (plan_projeto_hist) e divergência entre a data do PCP e a previsão do Sankhya.
+// ============================================================================
+const PLAN_ANDAMENTOS = ['A INICIAR', 'EM ANDAMENTO', 'CONCLUIDO', 'FATURADO', 'ESTOQUE'];
+const PLAN_SETORES = ['KALIMPACT', 'REVESTIMENTO', 'PG1', 'PG2', 'SERVIÇO'];
+const PLAN_SIT = {
+  faturado: { r: 'Faturado', cor: '#1E8E4F' }, parcial: { r: 'Parcial', cor: '#B7791F' }, pendente: { r: 'Pendente', cor: '#1D5FBF' },
+  reprogramado: { r: 'Reprogramado', cor: '#B42318' }, faturado_antes: { r: 'Faturado antes do mês', cor: '#667085' }, sem_valor: { r: 'Sem valor', cor: '#98A2B3' },
+};
+function PlanejamentoPCP() {
+  const C = CRMC;
+  const [aba, setAba] = useState('mes');
+  const [autor, setAutor] = useState(null);
+  useEffect(() => { supabase.auth.getUser().then(({ data }) => setAutor(data?.user?.email || null)); }, []);
+  const caixa = { background: C.surface, border: `1px solid ${C.line}`, borderRadius: 12 };
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14, fontFamily: FONT_BODY, color: C.ink }}>
+      <div style={{ ...caixa, padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
+        <div style={{ flex: 1, minWidth: 260 }}>
+          <div style={{ fontSize: 16, fontWeight: 800 }}>Planejamento (PCP)</div>
+          <div style={{ fontSize: 12, color: C.ink3 }}>Programação do mês e lista mestra dos projetos, ligadas ao Sankhya (carteira e faturamento atualizados sozinhos). Os campos do PCP são editados aqui.</div>
+        </div>
+        <div style={{ display: 'inline-flex', background: '#E7EBF1', borderRadius: 9, padding: 3, gap: 2 }}>
+          {[['mes', 'Mês (OOH)'], ['mestra', 'Lista mestra']].map(([k, r]) => (
+            <button key={k} onClick={() => setAba(k)} style={{ fontFamily: 'inherit', fontSize: 13, fontWeight: aba === k ? 700 : 500, padding: '7px 14px', borderRadius: 7, border: 'none', cursor: 'pointer', background: aba === k ? C.surface : 'transparent', color: aba === k ? C.ink : C.ink2 }}>{r}</button>))}
+        </div>
+      </div>
+      {aba === 'mes' ? <PlanMes /> : <PlanMestra autor={autor} />}
+    </div>
+  );
+}
+
+function PlanMes() {
+  const C = CRMC;
+  const [meses, setMeses] = useState([]);
+  const [mes, setMes] = useState(null);
+  const [linhas, setLinhas] = useState(null);
+  const [fatTotal, setFatTotal] = useState(0);
+  const [fSit, setFSit] = useState(null);
+  const [fSetor, setFSetor] = useState(null);
+  const [msg, setMsg] = useState(null);
+  const carregarMeses = useCallback(async () => {
+    const { data } = await supabase.from('plan_ooh').select('mes').order('mes', { ascending: false });
+    const ms = [...new Set((data || []).map(x => x.mes))]; setMeses(ms); setMes(m => m || ms[0] || null);
+  }, []);
+  useEffect(() => { carregarMeses(); }, [carregarMeses]);
+  useEffect(() => {
+    if (!mes) return;
+    setLinhas(null);
+    Promise.all([
+      supabase.from('v_plan_ooh_mes').select('*').eq('mes', mes),
+      supabase.from('v_plan_faturado_mes').select('faturado').eq('mes', mes),
+    ]).then(([a, b]) => { setLinhas(a.data || []); setFatTotal((b.data || []).reduce((t, x) => t + Number(x.faturado || 0), 0)); });
+  }, [mes]);
+  const moeda = (v) => Number(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 });
+  const dt = (d) => (d ? new Date(`${String(d).slice(0, 10)}T12:00:00`).toLocaleDateString('pt-BR') : '—');
+  const nomeMes = (m) => m ? new Date(`${m}T12:00:00`).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' }) : '';
+  const congelar = async () => {
+    const h = new Date(); const prox = new Date(h.getFullYear(), h.getMonth() + 1, 1).toISOString().slice(0, 10);
+    const alvo = window.prompt('Congelar a programação de qual mês? (AAAA-MM)', prox.slice(0, 7));
+    if (!alvo) return;
+    const { data, error } = await supabase.rpc('fn_plan_congelar_mes', { p_mes: `${alvo}-01` });
+    setMsg(error ? `Erro: ${error.message}` : data?.ok ? `Programação de ${alvo} congelada: ${data.projetos} projeto(s) da lista mestra com estimativa do PCP no mês.` : data?.erro);
+    carregarMeses(); if (data?.ok) setMes(`${alvo}-01`);
+  };
+  const caixa = { background: C.surface, border: `1px solid ${C.line}`, borderRadius: 12 };
+  const td = { padding: '8px 10px', textAlign: 'right', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap', borderBottom: `1px solid ${C.lineSoft}` };
+  const thS = (al = 'right') => ({ padding: '9px 10px', fontSize: 11.5, fontWeight: 600, color: C.ink2, textAlign: al, whiteSpace: 'nowrap', background: '#F1F4F8', borderBottom: `1px solid ${C.line}`, position: 'sticky', top: 0 });
+  if (!meses.length) return <div style={{ ...caixa, padding: 30, textAlign: 'center', color: C.ink3 }}>Nenhuma programação mensal ainda. <button onClick={congelar} style={{ fontFamily: 'inherit', border: 'none', background: 'none', color: C.primary, cursor: 'pointer', fontWeight: 600 }}>Congelar a programação de um mês</button></div>;
+  const L = linhas || [];
+  const prev = L.reduce((t, x) => t + Number(x.previsto || 0), 0);
+  const fatProg = L.reduce((t, x) => t + Number(x.faturado_mes || 0), 0);
+  const soma = (k, f) => L.filter(f).reduce((t, x) => t + Number(x[k] || 0), 0);
+  const porSetor = {}; L.forEach(x => { const k = x.setores || '—'; const o = porSetor[k] || (porSetor[k] = { k, n: 0, prev: 0, fat: 0, falta: 0 }); o.n++; o.prev += Number(x.previsto || 0); o.fat += Number(x.faturado_mes || 0); o.falta += x.situacao === 'pendente' || x.situacao === 'parcial' ? Number(x.falta_agora || 0) : 0; });
+  const porSemana = {}; L.forEach(x => { const k = x.semana || '—'; const o = porSemana[k] || (porSemana[k] = { k, n: 0, prev: 0, fat: 0 }); o.n++; o.prev += Number(x.previsto || 0); o.fat += Number(x.faturado_mes || 0); });
+  const vis = L.filter(x => (!fSit || x.situacao === fSit) && (!fSetor || (x.setores || '—') === fSetor)).sort((a, b) => String(a.data_prevista || '').localeCompare(String(b.data_prevista || '')));
+  const card = (r, v, sub, cor, k) => (
+    <button onClick={k ? () => setFSit(fSit === k ? null : k) : undefined} style={{ ...caixa, textAlign: 'left', fontFamily: 'inherit', padding: '12px 15px', cursor: k ? 'pointer' : 'default', borderLeft: `4px solid ${cor}`, borderColor: k && fSit === k ? cor : C.line }}>
+      <div style={{ fontSize: 12, color: C.ink2, fontWeight: 600 }}>{r}</div>
+      <div style={{ fontSize: 21, fontWeight: 800, fontVariantNumeric: 'tabular-nums' }}>{v}</div>
+      <div style={{ fontSize: 11.5, color: C.ink3, lineHeight: 1.35 }}>{sub}</div>
+    </button>);
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+        <strong>Programação de</strong>
+        <select value={mes || ''} onChange={e => { setMes(e.target.value); setFSit(null); setFSetor(null); }} style={{ fontFamily: 'inherit', fontSize: 13, padding: '6px 10px', borderRadius: 8, border: `1px solid ${C.line}` }}>
+          {meses.map(m => <option key={m} value={m}>{nomeMes(m)}</option>)}
+        </select>
+        <span style={{ fontSize: 12, color: C.ink3 }}>programação original congelada × o que o Sankhya faturou no mês</span>
+        <span style={{ flex: 1 }} />
+        <button onClick={congelar} style={{ fontFamily: 'inherit', fontSize: 12.5, padding: '7px 12px', borderRadius: 8, border: `1px solid ${C.line}`, background: C.surface, cursor: 'pointer' }}>Congelar a programação de um mês</button>
+      </div>
+      {msg && <div style={{ ...caixa, padding: '8px 12px', fontSize: 12.5, color: msg.startsWith('Erro') ? C.loss : C.win }}>{msg}</div>}
+      {!linhas ? <div style={{ padding: 30, textAlign: 'center', color: C.ink3 }}>Carregando…</div> : (<>
+        <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(185px, 1fr))' }}>
+          {card('Programado (original)', moeda(prev), `${L.length} projetos congelados no início do mês`, C.primary)}
+          {card('Faturado da programação', moeda(fatProg), `${prev ? Math.round(100 * fatProg / prev) : 0}% do programado · notas do Sankhya no mês`, '#1E8E4F', 'faturado')}
+          {card('Pendente', moeda(soma('falta_agora', x => x.situacao === 'pendente' || x.situacao === 'parcial')), `${L.filter(x => x.situacao === 'pendente').length} pendentes + ${L.filter(x => x.situacao === 'parcial').length} parciais · ainda a faturar`, '#1D5FBF', 'pendente')}
+          {card('Reprogramado', moeda(soma('previsto', x => x.situacao === 'reprogramado')), `${L.filter(x => x.situacao === 'reprogramado').length} projetos com estimativa do PCP depois do mês`, '#B42318', 'reprogramado')}
+          {card('Faturado fora da programação', moeda(Math.max(0, fatTotal - fatProg)), `faturado no mês em projetos que não estavam no OOH`, '#7C3AED')}
+          {card('Faturado total no mês', moeda(fatTotal), 'todas as notas de venda do mês (Sankhya)', '#0F2340')}
+        </div>
+        <div style={{ display: 'grid', gap: 14, gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))' }}>
+          <section style={{ ...caixa, overflow: 'hidden' }}>
+            <div style={{ padding: '10px 14px', borderBottom: `1px solid ${C.line}`, display: 'flex', justifyContent: 'space-between' }}><strong>Por setor</strong><span style={{ fontSize: 11.5, color: C.ink3 }}>clique para filtrar</span></div>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+              <thead><tr><th style={thS('left')}>Setor</th><th style={thS()}>Projetos</th><th style={thS()}>Programado</th><th style={thS()}>Faturado</th><th style={thS()}>%</th></tr></thead>
+              <tbody>{Object.values(porSetor).sort((a, b) => b.prev - a.prev).map(o => (
+                <tr key={o.k} onClick={() => setFSetor(fSetor === o.k ? null : o.k)} style={{ cursor: 'pointer', background: fSetor === o.k ? C.primarySoft : 'transparent' }}>
+                  <td style={{ ...td, textAlign: 'left', fontWeight: 600 }}>{o.k}</td><td style={td}>{o.n}</td><td style={td}>{moeda(o.prev)}</td>
+                  <td style={{ ...td, fontWeight: 700 }}>{moeda(o.fat)}</td><td style={{ ...td, color: C.ink2 }}>{o.prev ? `${Math.round(100 * o.fat / o.prev)}%` : '—'}</td>
+                </tr>))}</tbody>
+            </table>
+          </section>
+          <section style={{ ...caixa, overflow: 'hidden' }}>
+            <div style={{ padding: '10px 14px', borderBottom: `1px solid ${C.line}` }}><strong>Por semana programada</strong></div>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+              <thead><tr><th style={thS('left')}>Semana</th><th style={thS()}>Projetos</th><th style={thS()}>Programado</th><th style={thS()}>Faturado</th></tr></thead>
+              <tbody>{Object.values(porSemana).sort((a, b) => String(a.k).localeCompare(String(b.k), 'pt-BR', { numeric: true })).map(o => (
+                <tr key={o.k}><td style={{ ...td, textAlign: 'left', fontWeight: 600 }}>semana {o.k}</td><td style={td}>{o.n}</td><td style={td}>{moeda(o.prev)}</td><td style={{ ...td, fontWeight: 700 }}>{moeda(o.fat)}</td></tr>))}</tbody>
+            </table>
+          </section>
+        </div>
+        <section style={{ ...caixa, overflow: 'hidden' }}>
+          <div style={{ padding: '10px 14px', borderBottom: `1px solid ${C.line}`, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+            <strong>Projetos programados</strong>
+            {(fSit || fSetor) && <button onClick={() => { setFSit(null); setFSetor(null); }} style={{ fontFamily: 'inherit', fontSize: 12, border: 'none', background: 'none', color: C.primary, cursor: 'pointer' }}>limpar filtro</button>}
+            <span style={{ flex: 1 }} /><span style={{ fontSize: 12, color: C.ink3 }}>{vis.length} de {L.length}</span>
+          </div>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+              <thead><tr>{['BR', 'Cliente', 'Vendedor', 'Setor', 'Previsto p/', 'Programado', 'Faturado no mês', 'Falta agora', 'Estimativa atual (PCP)', 'Situação'].map((h, k) => <th key={h} style={thS([0, 1, 2, 3, 9].includes(k) ? 'left' : 'right')}>{h}</th>)}</tr></thead>
+              <tbody>{vis.map(x => { const sx = PLAN_SIT[x.situacao] || PLAN_SIT.pendente; const mudou = x.estimativa_atual && x.data_prevista && x.estimativa_atual !== x.data_prevista;
+                return (
+                  <tr key={x.br_num}>
+                    <td style={{ ...td, textAlign: 'left', fontWeight: 700, color: C.primary }}>{x.br}</td>
+                    <td style={{ ...td, textAlign: 'left', whiteSpace: 'normal', maxWidth: 220 }}>{x.cliente}</td>
+                    <td style={{ ...td, textAlign: 'left', color: C.ink2 }}>{x.vendedor}</td>
+                    <td style={{ ...td, textAlign: 'left', color: C.ink2 }}>{x.setores}</td>
+                    <td style={td}>{dt(x.data_prevista)}</td>
+                    <td style={td}>{moeda(x.previsto)}</td>
+                    <td style={{ ...td, fontWeight: 700, color: Number(x.faturado_mes) ? C.win : C.ink3 }}>{Number(x.faturado_mes) ? moeda(x.faturado_mes) : '—'}{x.nfs_mes && <div style={{ fontSize: 10.5, color: C.ink3, fontWeight: 400 }}>NF {x.nfs_mes}</div>}</td>
+                    <td style={{ ...td, color: Number(x.falta_agora) ? C.ink : C.ink3 }}>{Number(x.falta_agora) ? moeda(x.falta_agora) : '—'}</td>
+                    <td style={{ ...td, color: mudou ? C.loss : C.ink2, fontWeight: mudou ? 700 : 400 }}>{dt(x.estimativa_atual)}{mudou && <div style={{ fontSize: 10.5, fontWeight: 400 }}>era {dt(x.data_prevista)}</div>}</td>
+                    <td style={{ ...td, textAlign: 'left' }}><span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 700, color: sx.cor }}><span style={{ width: 8, height: 8, borderRadius: 4, background: sx.cor }} />{sx.r}</span></td>
+                  </tr>); })}</tbody>
+            </table>
+          </div>
+        </section>
+      </>)}
+    </div>
+  );
+}
+
+function PlanMestra({ autor }) {
+  const C = CRMC;
+  const [linhas, setLinhas] = useState(null);
+  const [f, setF] = useState({ setor: [], andamento: [], vend: [], busca: '', so: 'carteira' });
+  const [salvando, setSalvando] = useState(null);
+  const [hist, setHist] = useState(null);
+  const carregar = useCallback(async () => { const { data } = await supabase.from('v_plan_mestra').select('*'); setLinhas(data || []); }, []);
+  useEffect(() => { carregar(); }, [carregar]);
+  if (!linhas) return <div style={{ padding: 30, textAlign: 'center', color: C.ink3 }}>Carregando a lista mestra…</div>;
+  const moeda = (v) => Number(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 });
+  const dt = (d) => (d ? new Date(`${String(d).slice(0, 10)}T12:00:00`).toLocaleDateString('pt-BR') : '—');
+  const salvar = async (l, campo, valor) => {
+    setSalvando(`${l.br_num}-${l.servico}-${campo}`);
+    const { error } = await supabase.from('plan_projeto').upsert({ br_num: l.br_num, servico: l.servico, br_planilha: l.br, [campo]: valor === '' ? null : valor, atualizado_por: autor }, { onConflict: 'br_num,servico' });
+    setSalvando(null);
+    if (error) { alert(error.message); return; }
+    setLinhas(ls => ls.map(x => x.br_num === l.br_num && x.servico === l.servico ? { ...x, [campo]: valor === '' ? null : valor, tem_planejamento: true, atualizado_por: autor, atualizado_em: new Date().toISOString() } : x));
+  };
+  const abrirHist = async (l) => { const { data } = await supabase.from('plan_projeto_hist').select('*').eq('br_num', l.br_num).eq('servico', l.servico).order('em', { ascending: false }); setHist({ l, itens: data || [] }); };
+  const t = f.busca.trim().toLowerCase();
+  const vis = linhas.filter(l => (f.so === 'todos' || (f.so === 'carteira' ? l.em_carteira : f.so === 'sem_plan' ? l.em_carteira && !l.tem_planejamento : f.so === 'diverg' ? l.em_carteira && l.divergencia_dias && Math.abs(l.divergencia_dias) > 0 : f.so === 'pausado' ? !!l.pausado_em || /paralis|paraliz|paus|cancel/i.test(l.consideracoes || '') : true))
+    && (!f.setor.length || f.setor.includes(l.setor || '—')) && (!f.andamento.length || f.andamento.includes(l.andamento || '—')) && (!f.vend.length || f.vend.includes(l.vendedor || '—'))
+    && (!t || `${l.br} ${l.cliente || ''} ${l.pedidos_cliente || ''} ${l.consideracoes || ''}`.toLowerCase().includes(t)))
+    .sort((a, b) => String(a.estimativa_pcp || a.prevista_sankhya || '9999').localeCompare(String(b.estimativa_pcp || b.prevista_sankhya || '9999')));
+  const opc = (fn) => [...new Set(linhas.map(fn))].sort().map(v => ({ v, r: v }));
+  const cart = linhas.filter(l => l.em_carteira);
+  const caixa = { background: C.surface, border: `1px solid ${C.line}`, borderRadius: 12 };
+  const td = { padding: '6px 8px', textAlign: 'right', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap', borderBottom: `1px solid ${C.lineSoft}`, verticalAlign: 'top' };
+  const inp = { fontFamily: 'inherit', fontSize: 12, padding: '4px 6px', borderRadius: 6, border: `1px solid ${C.line}`, background: '#fff', boxSizing: 'border-box' };
+  const thS = (al = 'right') => ({ padding: '9px 8px', fontSize: 11.5, fontWeight: 600, color: C.ink2, textAlign: al, whiteSpace: 'nowrap', background: '#F1F4F8', borderBottom: `1px solid ${C.line}`, position: 'sticky', top: 0, zIndex: 1 });
+  const exportar = () => {
+    const l2 = ['BR;Material/Serviço;Cliente;Vendedor;Setor;Pedido do cliente;Falta faturar;Faturado (total);Previsão Sankhya;Estimativa PCP;Diferença (dias);Data CP;Andamento;Status PCP;Considerações;Atualizado por',
+      ...vis.map(l => [l.br, l.servico ? 'Serviço' : 'Material', `"${l.cliente || ''}"`, l.vendedor || '', l.setor || '', l.pedidos_cliente || '', String(l.falta_faturar ?? '').replace('.', ','), String(l.faturado_total ?? '').replace('.', ','),
+        dt(l.prevista_sankhya), dt(l.estimativa_pcp), l.divergencia_dias ?? '', dt(l.data_cp), l.andamento || '', l.status_pcp || '', `"${(l.consideracoes || '').replace(/"/g, "'")}"`, l.atualizado_por || ''].join(';'))];
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob(['\ufeff' + l2.join('\n')], { type: 'text/csv;charset=utf-8' })); a.download = 'lista_mestra_pcp.csv'; a.click();
+  };
+  const SO = [['carteira', `Em carteira · ${cart.length}`], ['sem_plan', `Sem planejamento · ${cart.filter(l => !l.tem_planejamento).length}`], ['diverg', `Data PCP ≠ Sankhya · ${cart.filter(l => l.divergencia_dias && Math.abs(l.divergencia_dias) > 0).length}`],
+    ['pausado', `Pausados / paralisados · ${linhas.filter(l => !!l.pausado_em || /paralis|paraliz|paus|cancel/i.test(l.consideracoes || '')).length}`], ['todos', `Todos · ${linhas.length}`]];
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div style={{ ...caixa, padding: '10px 14px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          <div style={{ display: 'inline-flex', background: '#E7EBF1', borderRadius: 9, padding: 3, gap: 2, flexWrap: 'wrap' }}>
+            {SO.map(([k, r]) => <button key={k} onClick={() => setF(x => ({ ...x, so: k }))} style={{ fontFamily: 'inherit', fontSize: 12.5, fontWeight: f.so === k ? 700 : 500, padding: '6px 11px', borderRadius: 7, border: 'none', cursor: 'pointer', background: f.so === k ? C.surface : 'transparent', color: f.so === k ? C.ink : C.ink2 }}>{r}</button>)}
+          </div>
+          <span style={{ flex: 1 }} />
+          <span style={{ fontSize: 12, color: C.ink3 }}>{vis.length} linha(s) · falta faturar <strong style={{ color: C.ink }}>{moeda(vis.reduce((x, l) => x + Number(l.falta_faturar || 0), 0))}</strong></span>
+          <button onClick={exportar} style={{ fontFamily: 'inherit', fontSize: 12.5, padding: '7px 12px', borderRadius: 8, border: `1px solid ${C.line}`, background: C.surface, cursor: 'pointer' }}>Exportar CSV</button>
+        </div>
+        <div style={{ display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))' }}>
+          <label style={{ fontSize: 11.5, fontWeight: 600, color: C.ink2 }}>Setor<FiltroMulti valor={f.setor} onChange={v => setF(x => ({ ...x, setor: v }))} opcoes={opc(l => l.setor || '—')} todosRotulo="todos" fonte={12.5} /></label>
+          <label style={{ fontSize: 11.5, fontWeight: 600, color: C.ink2 }}>Andamento<FiltroMulti valor={f.andamento} onChange={v => setF(x => ({ ...x, andamento: v }))} opcoes={opc(l => l.andamento || '—')} todosRotulo="todos" fonte={12.5} /></label>
+          <label style={{ fontSize: 11.5, fontWeight: 600, color: C.ink2 }}>Vendedor<FiltroMulti valor={f.vend} onChange={v => setF(x => ({ ...x, vend: v }))} opcoes={opc(l => l.vendedor || '—')} todosRotulo="todos" fonte={12.5} /></label>
+          <label style={{ fontSize: 11.5, fontWeight: 600, color: C.ink2, display: 'flex', flexDirection: 'column', gap: 4 }}>Busca<input value={f.busca} onChange={e => setF(x => ({ ...x, busca: e.target.value }))} placeholder="BR, cliente, pedido, consideração" style={{ ...inp, padding: '7px 8px', fontSize: 12.5 }} /></label>
+        </div>
+      </div>
+      <div style={{ ...caixa, overflow: 'auto', maxHeight: 'calc(100vh - 330px)', minHeight: 320 }}>
+        <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, fontSize: 12.5 }}>
+          <thead><tr>
+            <th style={thS('left')}>BR</th><th style={thS('left')}>Cliente / vendedor</th><th style={thS('left')}>Setor</th><th style={thS()}>Falta faturar</th>
+            <th style={thS()}>Previsão Sankhya</th><th style={thS()}>Estimativa PCP</th><th style={thS()}>Dif.</th><th style={thS()}>Data CP</th><th style={thS('left')}>Andamento</th><th style={thS('left')}>Considerações</th><th style={thS('center')}></th>
+          </tr></thead>
+          <tbody>
+            {vis.map(l => { const k = `${l.br_num}-${l.servico}`; const dif = l.divergencia_dias; const pausado = !!l.pausado_em || /paralis|paraliz|paus|cancel/i.test(l.consideracoes || '');
+              return (
+                <tr key={k} style={{ background: !l.tem_planejamento && l.em_carteira ? '#FFFBEB' : 'transparent' }}>
+                  <td style={{ ...td, textAlign: 'left' }}>
+                    <strong style={{ color: C.primary }}>{l.br}</strong>{l.servico && <span style={{ marginLeft: 4, fontSize: 10.5, fontWeight: 700, color: '#0D9488' }}>SERVIÇO</span>}
+                    <div style={{ fontSize: 10.5, color: C.ink3 }}>{l.pedidos_cliente ? `pedido ${l.pedidos_cliente}` : l.em_carteira ? '' : 'fora da carteira (faturado)'}{!l.tem_planejamento && l.em_carteira ? ' · NOVO, sem planejamento' : ''}</div>
+                    {pausado && <div style={{ fontSize: 10.5, fontWeight: 700, color: '#B42318' }}>⚠ pausado/paralisado</div>}
+                  </td>
+                  <td style={{ ...td, textAlign: 'left', whiteSpace: 'normal', minWidth: 170, maxWidth: 230 }}>{l.cliente}<div style={{ fontSize: 10.5, color: C.ink3 }}>{l.vendedor}</div></td>
+                  <td style={{ ...td, textAlign: 'left' }}>
+                    <select value={l.setor || ''} onChange={e => salvar(l, 'setor', e.target.value)} style={{ ...inp, width: 118 }}>
+                      <option value="">—</option>{[...new Set([...PLAN_SETORES, l.setor].filter(Boolean))].map(o => <option key={o} value={o}>{o}</option>)}
+                    </select></td>
+                  <td style={{ ...td, fontWeight: 700 }}>{l.em_carteira ? moeda(l.falta_faturar) : <span style={{ color: C.ink3 }}>—</span>}{l.parcial && <div style={{ fontSize: 10.5, color: C.warn, fontWeight: 600 }}>parcial</div>}</td>
+                  <td style={{ ...td, color: C.ink2 }}>{dt(l.prevista_sankhya)}</td>
+                  <td style={td}><input type="date" value={l.estimativa_pcp || ''} onChange={e => salvar(l, 'estimativa_pcp', e.target.value)} style={{ ...inp, width: 128 }} /></td>
+                  <td style={{ ...td, fontWeight: 700, color: !dif ? C.ink3 : dif > 0 ? C.loss : C.primary }} title="estimativa do PCP − previsão do Sankhya">{dif ? `${dif > 0 ? '+' : ''}${dif}d` : '—'}</td>
+                  <td style={td}><input type="date" value={l.data_cp || ''} onChange={e => salvar(l, 'data_cp', e.target.value)} style={{ ...inp, width: 128 }} /></td>
+                  <td style={{ ...td, textAlign: 'left' }}>
+                    <select value={l.andamento || ''} onChange={e => salvar(l, 'andamento', e.target.value)} style={{ ...inp, width: 122 }}>
+                      <option value="">—</option>{[...new Set([...PLAN_ANDAMENTOS, l.andamento].filter(Boolean))].map(o => <option key={o} value={o}>{o}</option>)}
+                    </select></td>
+                  <td style={{ ...td, textAlign: 'left' }}>
+                    <textarea defaultValue={l.consideracoes || ''} onBlur={e => { if ((e.target.value || '') !== (l.consideracoes || '')) salvar(l, 'consideracoes', e.target.value.trim()); }} rows={1}
+                      placeholder="considerações…" style={{ ...inp, width: 220, resize: 'vertical', minHeight: 28 }} /></td>
+                  <td style={{ ...td, textAlign: 'center' }}>
+                    {salvando && salvando.startsWith(k) ? <span style={{ fontSize: 11, color: C.ink3 }}>salvando…</span>
+                      : <button onClick={() => abrirHist(l)} title={l.atualizado_por ? `última alteração: ${l.atualizado_por}` : 'histórico'} style={{ fontFamily: 'inherit', fontSize: 11, padding: '3px 7px', borderRadius: 6, border: `1px solid ${C.line}`, background: C.surface, cursor: 'pointer', color: C.ink2 }}>histórico</button>}
+                  </td>
+                </tr>); })}
+            {!vis.length && <tr><td colSpan={11} style={{ padding: 24, textAlign: 'center', color: C.ink3 }}>Nenhum projeto nesse filtro.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+      <div style={{ fontSize: 11.5, color: C.ink3, lineHeight: 1.5 }}>
+        Falta faturar, previsão e pedidos vêm do Sankhya (atualizam sozinhos). Setor, estimativa do PCP, data do CP, andamento e considerações são do PCP: alterar aqui grava na hora, com histórico de quem mudou.
+        Dif. = estimativa do PCP − previsão do Sankhya (vermelho: o PCP prevê depois do Sankhya). Linhas em amarelo: pedidos novos ainda sem planejamento.
+      </div>
+      {hist && ReactDOM.createPortal(
+        <div onClick={() => setHist(null)} style={{ position: 'fixed', inset: 0, zIndex: 90, background: 'rgba(15,35,64,.35)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: C.surface, borderRadius: 12, width: 'min(620px, 100%)', maxHeight: '80vh', overflow: 'auto', padding: '16px 18px', fontFamily: FONT_BODY, color: C.ink }}>
+            <div style={{ fontSize: 15, fontWeight: 700 }}>Histórico do PCP · {hist.l.br}{hist.l.servico ? ' (serviço)' : ''}</div>
+            <div style={{ fontSize: 12, color: C.ink3, marginBottom: 10 }}>{hist.l.cliente}</div>
+            {!hist.itens.length ? <div style={{ fontSize: 12.5, color: C.ink3 }}>Nenhuma alteração registrada desde a importação da Planilha Mestra.</div> : (
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+                <tbody>{hist.itens.map(h => (
+                  <tr key={h.id} style={{ borderTop: `1px solid ${C.lineSoft}` }}>
+                    <td style={{ padding: '6px 4px', color: C.ink3, whiteSpace: 'nowrap' }}>{new Date(h.em).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' })}</td>
+                    <td style={{ padding: '6px 4px', fontWeight: 600 }}>{{ estimativa_pcp: 'Estimativa', andamento: 'Andamento', setor: 'Setor', data_cp: 'Data CP', consideracoes: 'Considerações' }[h.campo] || h.campo}</td>
+                    <td style={{ padding: '6px 4px' }}>{h.de || '—'} → <strong>{h.para || '—'}</strong></td>
+                    <td style={{ padding: '6px 4px', color: C.ink3 }}>{h.quem}</td>
+                  </tr>))}</tbody>
+              </table>)}
+            <div style={{ textAlign: 'right', marginTop: 12 }}><button onClick={() => setHist(null)} style={{ fontFamily: 'inherit', fontSize: 12.5, padding: '7px 12px', borderRadius: 8, border: `1px solid ${C.line}`, background: C.surface, cursor: 'pointer' }}>Fechar</button></div>
+          </div>
+        </div>, document.body)}
+    </div>
+  );
+}
+
 // CONFERÊNCIA DE OPs (Sankhya, OPs desde 2025): produto acabado a produzir (TPRIPA) × apontado; matéria-prima
 // requisitada (requisição, TIPMOV J) × consumida (apontamento, TIPMOV F), via TPRROPE -> TPRIATV. Carga a cada hora.
 const OPC_SIT = {
@@ -38881,6 +39164,7 @@ const TELAS_CATALOGO = [
   { id: 'orcamento_material', label: 'Matéria-prima em Orçamento' },
   { id: 'estoque_ocs', label: 'Estoque x OCs' },
   { id: 'conferencia_op', label: 'Conferência de OPs' },
+  { id: 'planejamento', label: 'Planejamento (PCP)' },
   { id: 'almoxarifado', label: 'Estoque' },
   { id: 'equipamentos', label: 'Equip. Terceiros' },
   { id: 'recebimento_terceiros', label: 'Validação de Recebimento' },
