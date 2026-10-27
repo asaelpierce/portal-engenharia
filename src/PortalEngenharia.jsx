@@ -28112,7 +28112,7 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
           </span>
         </div>
         <nav aria-label="Seções do CRM" style={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
-          {[['dashboard', 'Dashboard', LayoutGrid], ['funil', 'Funil', Workflow], ['tarefas', 'Tarefas', ClipboardList], ['calendario', 'Calendário', CalendarDays], ['servicos', 'Serviços', ClipboardCheck], ['empresas', 'Clientes', Building2]].map(([k, r, Ic]) => {
+          {[['dashboard', 'Dashboard', LayoutGrid], ['funil', 'Funil', Workflow], ['tarefas', 'Tarefas', ClipboardList], ['calendario', 'Calendário', CalendarDays], ['servicos', 'Serviços', ClipboardCheck], ['carteira', 'Minha carteira', DollarSign], ['empresas', 'Clientes', Building2]].map(([k, r, Ic]) => {
             const on = aba === k; const nT = k === 'tarefas' ? atividades.filter(a => !resp || a.responsavel === resp).length : k === 'servicos' ? servLib : 0;
             return (
               <button key={k} onClick={() => setAba(k)} aria-current={on ? 'page' : undefined}
@@ -28639,6 +28639,7 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
       )}
 
       {aba === 'servicos' && <CRMServicos resp={resp} negocios={negocios} onAbrirNegocio={setAbertoId} />}
+      {aba === 'carteira' && <CRMCarteira resp={resp} onAbrirNegocio={setAbertoId} />}
 
       {aba === 'calendario' && (
         <CRMCalendario resp={resp} negocios={negocios} atividades={atividades} onAbrirNegocio={setAbertoId}
@@ -29111,6 +29112,137 @@ function CRMRosca({ itens, centro, sub, fmt, aoClicar }) {
 
 // Aba Serviços do CRM (foco da Priscila): pedidos de serviço (TOP 3103) — o serviço só é faturado depois que o
 // material chega ao cliente. "Liberado" = material do BR todo faturado, falta faturar o serviço.
+// MINHA CARTEIRA (CRM): líquido que falta faturar por pedido de venda pendente (v_crm_carteira) = valor líquido do
+// pedido × parte dos itens ainda não entregue (item a item no Sankhya, a cada hora). Vendedor vê só a dele.
+function CRMCarteira({ resp, onAbrirNegocio }) {
+  const C = CRMC;
+  const [linhas, setLinhas] = useState(null);
+  const [fSit, setFSit] = useState('todos');
+  const [busca, setBusca] = useState('');
+  const [ordem, setOrdem] = useState({ c: 'falta', desc: true });
+  useEffect(() => { supabase.from('v_crm_carteira').select('*').then(({ data }) => setLinhas(data || [])); }, []);
+  if (!linhas) return <div style={{ padding: 40, textAlign: 'center', color: C.ink3 }}>Carregando a carteira…</div>;
+  const moeda = (v) => Number(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+  const dt = (d) => (d ? new Date(`${String(d).slice(0, 10)}T12:00:00`).toLocaleDateString('pt-BR') : '—');
+  const base = linhas.filter(l => !resp || (l.vendedor || '').toUpperCase() === String(resp).toUpperCase().trim());
+  const ativos = base.filter(l => !l.itens_encerrados);
+  const soma = (arr) => arr.reduce((t, l) => t + (Number(l.falta_liquido) || 0), 0);
+  const SIT = {
+    todos: ['Toda a carteira', () => true], atrasados: ['Previsão vencida', l => l.dias_atraso > 0], parciais: ['Faturamento parcial', l => l.parcial],
+    sem_entrega: ['Sem nenhuma entrega', l => !l.parcial && !l.servico], servicos: ['Serviços', l => l.servico],
+  };
+  const t = busca.trim().toLowerCase();
+  const vis = ativos.filter(l => SIT[fSit][1](l) && (!t || `${l.br || ''} ${l.cliente || ''} ${l.numnota} ${l.vendedor || ''}`.toLowerCase().includes(t)));
+  const ch = { falta: l => Number(l.falta_liquido) || 0, prev: l => l.prevista || '9999', br: l => l.br || '', cli: l => l.cliente || '', atraso: l => l.dias_atraso || 0 };
+  vis.sort((a, b) => { const x = ch[ordem.c](a), y = ch[ordem.c](b); return (x > y ? 1 : x < y ? -1 : 0) * (ordem.desc ? -1 : 1); });
+  const material = ativos.filter(l => !l.servico), servicos = ativos.filter(l => l.servico), parciais = ativos.filter(l => l.parcial), atrasados = ativos.filter(l => l.dias_atraso > 0);
+  // por mês de faturamento previsto (vencidos juntos)
+  const hojeMes = new Date().toISOString().slice(0, 7);
+  const porMes = {}; ativos.forEach(l => { const m = !l.prevista ? 'sem data' : l.prevista.slice(0, 7) < hojeMes || l.dias_atraso > 0 ? 'vencido' : l.prevista.slice(0, 7);
+    const x = porMes[m] || (porMes[m] = { m, n: 0, v: 0 }); x.n++; x.v += Number(l.falta_liquido) || 0; });
+  const MESES = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
+  const nomeMes = (m) => m === 'vencido' ? 'Previsão vencida' : m === 'sem data' ? 'Sem previsão' : `${MESES[Number(m.slice(5)) - 1]}/${m.slice(0, 4)}`;
+  const meses = Object.values(porMes).sort((a, b) => (a.m === 'vencido' ? -1 : b.m === 'vencido' ? 1 : a.m.localeCompare(b.m)));
+  const porVend = Object.values(ativos.reduce((acc, l) => { const k = l.vendedor || '—'; const x = acc[k] || (acc[k] = { k, n: 0, v: 0, atr: 0 }); x.n++; x.v += Number(l.falta_liquido) || 0; if (l.dias_atraso > 0) x.atr += Number(l.falta_liquido) || 0; return acc; }, {})).sort((a, b) => b.v - a.v);
+  const caixa = { background: C.surface, border: `1px solid ${C.line}`, borderRadius: 12 };
+  const kpi = (r, v, sub, cor, k) => (
+    <button onClick={k ? () => setFSit(fSit === k ? 'todos' : k) : undefined} style={{ ...caixa, textAlign: 'left', fontFamily: 'inherit', padding: '12px 15px', cursor: k ? 'pointer' : 'default', borderColor: k && fSit === k ? cor : C.line, borderLeft: `4px solid ${cor}` }}>
+      <div style={{ fontSize: 12, color: C.ink2, fontWeight: 600 }}>{r}</div>
+      <div style={{ fontSize: 21, fontWeight: 800, fontVariantNumeric: 'tabular-nums', color: C.ink }}>{v}</div>
+      <div style={{ fontSize: 11.5, color: C.ink3 }}>{sub}</div>
+    </button>);
+  const th = (r, c, al = 'right') => (
+    <th onClick={c ? () => setOrdem(o => ({ c, desc: o.c === c ? !o.desc : c === 'falta' || c === 'atraso' })) : undefined}
+      style={{ padding: '9px 10px', fontSize: 11.5, fontWeight: 600, color: C.ink2, textAlign: al, whiteSpace: 'nowrap', background: '#F1F4F8', borderBottom: `1px solid ${C.line}`, position: 'sticky', top: 0, zIndex: 1, cursor: c ? 'pointer' : 'default' }}>
+      {r}{c && ordem.c === c ? (ordem.desc ? ' ▼' : ' ▲') : ''}</th>);
+  const td = { padding: '8px 10px', textAlign: 'right', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap', borderBottom: `1px solid ${C.lineSoft}` };
+  const exportar = () => {
+    const l2 = ['BR;Cliente;Vendedor;Pedido;Tipo;Data do pedido;Previsão de faturamento;Dias de atraso;Valor líquido do pedido;% pendente;Falta faturar (líquido);Situação',
+      ...vis.map(l => [l.br || '', `"${l.cliente || ''}"`, l.vendedor || '', l.numnota, `"${l.descr_top || ''}"`, dt(l.data_pedido), dt(l.prevista), l.dias_atraso || 0,
+        String(l.liquido_pedido ?? '').replace('.', ','), l.pct_pendente != null ? String((Number(l.pct_pendente) * 100).toFixed(1)).replace('.', ',') : '', String(l.falta_liquido ?? '').replace('.', ','),
+        l.servico ? 'serviço' : l.parcial ? 'parcial' : 'sem entrega'].join(';'))];
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob(['\ufeff' + l2.join('\n')], { type: 'text/csv;charset=utf-8' })); a.download = 'minha_carteira.csv'; a.click();
+  };
+  const atual = linhas.map(l => l.saldo_em).filter(Boolean).sort().pop();
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14, fontFamily: FONT_BODY, color: C.ink }}>
+      <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))' }}>
+        {kpi('Carteira líquida a faturar', moeda(soma(ativos)), `${ativos.length} pedidos · ${new Set(ativos.map(l => l.br)).size} BRs`, C.primary, 'todos')}
+        {kpi('Material', moeda(soma(material)), `${material.length} pedidos`, '#0F2340')}
+        {kpi('Serviços', moeda(soma(servicos)), `${servicos.length} pedidos (faturam depois do material)`, '#0D9488', 'servicos')}
+        {kpi('Faturamento parcial', moeda(soma(parciais)), `${parciais.length} pedidos · só o que falta`, C.warn, 'parciais')}
+        {kpi('Previsão vencida', moeda(soma(atrasados)), `${atrasados.length} pedidos`, C.loss, 'atrasados')}
+      </div>
+      <div style={{ display: 'grid', gap: 14, gridTemplateColumns: !resp && porVend.length > 1 ? 'repeat(auto-fit, minmax(380px, 1fr))' : '1fr' }}>
+        <section style={{ ...caixa, overflow: 'hidden' }}>
+          <div style={{ padding: '11px 14px', fontWeight: 700, borderBottom: `1px solid ${C.line}` }}>Por mês de faturamento previsto</div>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+            <tbody>{meses.map(x => (
+              <tr key={x.m}>
+                <td style={{ ...td, textAlign: 'left', fontWeight: 600, color: x.m === 'vencido' ? C.loss : C.ink }}>{nomeMes(x.m)}</td>
+                <td style={{ ...td, color: C.ink3 }}>{x.n} pedido(s)</td>
+                <td style={{ ...td, fontWeight: 700, color: x.m === 'vencido' ? C.loss : C.ink }}>{moeda(x.v)}</td>
+              </tr>))}</tbody>
+          </table>
+        </section>
+        {!resp && porVend.length > 1 && (
+          <section style={{ ...caixa, overflow: 'hidden' }}>
+            <div style={{ padding: '11px 14px', fontWeight: 700, borderBottom: `1px solid ${C.line}` }}>Por vendedor</div>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+              <tbody>{porVend.map(x => (
+                <tr key={x.k}>
+                  <td style={{ ...td, textAlign: 'left', fontWeight: 600 }}>{x.k}</td>
+                  <td style={{ ...td, color: C.ink3 }}>{x.n} pedido(s)</td>
+                  <td style={{ ...td, color: x.atr ? C.loss : C.ink3 }}>{x.atr ? `${moeda(x.atr)} vencido` : '—'}</td>
+                  <td style={{ ...td, fontWeight: 700 }}>{moeda(x.v)}</td>
+                </tr>))}</tbody>
+            </table>
+          </section>
+        )}
+      </div>
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+        <div style={{ display: 'inline-flex', background: '#E7EBF1', borderRadius: 9, padding: 3, gap: 2 }}>
+          {Object.entries(SIT).map(([k, [r]]) => (
+            <button key={k} onClick={() => setFSit(k)} style={{ fontFamily: 'inherit', fontSize: 12.5, fontWeight: fSit === k ? 600 : 500, padding: '6px 11px', borderRadius: 7, border: 'none', cursor: 'pointer', background: fSit === k ? C.surface : 'transparent', color: fSit === k ? C.ink : C.ink2 }}>{r}</button>))}
+        </div>
+        <div style={{ position: 'relative' }}>
+          <Search size={14} aria-hidden="true" style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: C.ink3 }} />
+          <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="BR, cliente ou pedido" style={{ fontFamily: 'inherit', fontSize: 12.5, padding: '7px 10px 7px 30px', borderRadius: 8, border: `1px solid ${C.line}`, width: 230 }} />
+        </div>
+        <span style={{ flex: 1 }} />
+        <span style={{ fontSize: 12, color: C.ink3 }}>{vis.length} pedido(s) · {moeda(soma(vis))}{atual ? ` · atualizado ${new Date(atual).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}` : ''}</span>
+        <button onClick={exportar} style={{ fontFamily: 'inherit', fontSize: 12.5, padding: '7px 12px', borderRadius: 8, border: `1px solid ${C.line}`, background: C.surface, cursor: 'pointer' }}>Exportar CSV</button>
+      </div>
+      <div style={{ ...caixa, overflow: 'auto', maxHeight: 'calc(100vh - 380px)', minHeight: 300 }}>
+        <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, fontSize: 12.5 }}>
+          <thead><tr>{th('BR', 'br', 'left')}{th('Cliente', 'cli', 'left')}{th('Vendedor', null, 'left')}{th('Pedido', null, 'left')}{th('Previsão', 'prev')}{th('Líquido do pedido', null)}{th('% pendente', null)}{th('Falta faturar', 'falta')}{th('Situação', 'atraso', 'left')}</tr></thead>
+          <tbody>
+            {vis.map(l => (
+              <tr key={l.nunota} onClick={() => l.negocio_id && onAbrirNegocio(l.negocio_id)} style={{ cursor: l.negocio_id ? 'pointer' : 'default' }}
+                onMouseEnter={e => { e.currentTarget.style.background = '#F7F9FC'; }} onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}>
+                <td style={{ ...td, textAlign: 'left', fontWeight: 700, color: C.primary }}>{l.br || '—'}</td>
+                <td style={{ ...td, textAlign: 'left', whiteSpace: 'normal', maxWidth: 260 }}>{l.cliente}</td>
+                <td style={{ ...td, textAlign: 'left', color: C.ink2 }}>{l.vendedor}</td>
+                <td style={{ ...td, textAlign: 'left' }}>{l.numnota}<div style={{ fontSize: 10.5, color: C.ink3 }}>{dt(l.data_pedido)}{l.servico ? ' · serviço' : ''}</div></td>
+                <td style={{ ...td, color: l.dias_atraso > 0 ? C.loss : C.ink, fontWeight: l.dias_atraso > 0 ? 700 : 400 }}>{dt(l.prevista)}{l.dias_atraso > 0 && <div style={{ fontSize: 10.5 }}>{l.dias_atraso} dia(s) de atraso</div>}</td>
+                <td style={{ ...td, color: C.ink2 }}>{moeda(l.liquido_pedido)}</td>
+                <td style={{ ...td, color: C.ink2 }}>{l.pct_pendente != null ? `${(Number(l.pct_pendente) * 100).toFixed(0)}%` : '—'}</td>
+                <td style={{ ...td, fontWeight: 800 }}>{moeda(l.falta_liquido)}</td>
+                <td style={{ ...td, textAlign: 'left' }}>
+                  <span style={{ fontSize: 11.5, fontWeight: 700, color: l.servico ? '#0D9488' : l.parcial ? C.warn : C.ink2 }}>{l.servico ? 'Serviço' : l.parcial ? 'Parcial' : 'Sem entrega'}</span>
+                </td>
+              </tr>))}
+            {!vis.length && <tr><td colSpan={9} style={{ padding: 24, textAlign: 'center', color: C.ink3 }}>Nenhum pedido nesse filtro.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+      <div style={{ fontSize: 11.5, color: C.ink3, lineHeight: 1.5 }}>
+        Falta faturar = valor líquido do pedido (sem impostos, como no CRM e na Diretoria) × parte dos itens ainda não entregue, item a item no Sankhya (atualiza a cada hora). Em pedido parcial conta só o saldo. Clique na linha para abrir o negócio.
+      </div>
+    </div>
+  );
+}
+
 function CRMServicos({ resp, negocios, onAbrirNegocio }) {
   const C = CRMC;
   const [lista, setLista] = useState(null);
