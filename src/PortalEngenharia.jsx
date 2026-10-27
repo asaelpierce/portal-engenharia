@@ -27857,6 +27857,7 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
   const autor = currentUser?.nome || currentUser?.email || 'portal';
   const ehServicos = String(currentUser?.email || '').toLowerCase() === 'priscila.monara@kalenborn.com.br';
   const [aba, setAba] = useState(ehServicos ? 'servicos' : 'funil');
+  const [verTarefasAnteriores, setVerTarefasAnteriores] = useState(false);
   const [servLib, setServLib] = useState(0);   // serviços liberados para faturar (contador da aba)
   const [pipeline, setPipeline] = useState('vendas');
   const [visao, setVisao] = useState('quadro');
@@ -28076,7 +28077,12 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
   });
   const nomePipe = { leads: 'Leads', vendas: 'Vendas', posvendas: 'Pós-vendas' };
 
-  const atrasadasTot = atividades.filter(a => (!resp || a.responsavel === resp) && a.vencimento && new Date(a.vencimento) < new Date()).length;
+  // Tarefas contam a partir de 27/10/2026: as anteriores (importação e regras automáticas de set/out) ficam fora
+  // da contagem, do Dashboard e do Calendário; na aba Tarefas dá para ver também as anteriores.
+  const TAREFAS_DESDE = '2026-10-27';
+  const atividadesAtuais = atividades.filter(a => String(a.criado_em || '') >= TAREFAS_DESDE);
+  const atividadesTela = verTarefasAnteriores ? atividades : atividadesAtuais;
+  const atrasadasTot = atividadesAtuais.filter(a => (!resp || a.responsavel === resp) && a.vencimento && new Date(a.vencimento) < new Date()).length;
   return (
     <div className="crm-raiz" style={{ display: 'flex', flexDirection: 'column', background: CRMC.bg, color: CRMC.ink, fontFamily: FONT_BODY,
       fontFeatureSettings: '"cv11", "ss01"', WebkitFontSmoothing: 'antialiased', boxSizing: 'border-box',
@@ -28113,7 +28119,7 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
         </div>
         <nav aria-label="Seções do CRM" style={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
           {[['dashboard', 'Dashboard', LayoutGrid], ['funil', 'Funil', Workflow], ['tarefas', 'Tarefas', ClipboardList], ['calendario', 'Calendário', CalendarDays], ['servicos', 'Serviços', ClipboardCheck], ['carteira', 'Minha carteira', DollarSign], ['empresas', 'Clientes', Building2]].map(([k, r, Ic]) => {
-            const on = aba === k; const nT = k === 'tarefas' ? atividades.filter(a => !resp || a.responsavel === resp).length : k === 'servicos' ? servLib : 0;
+            const on = aba === k; const nT = k === 'tarefas' ? atividadesAtuais.filter(a => !resp || a.responsavel === resp).length : k === 'servicos' ? servLib : 0;
             return (
               <button key={k} onClick={() => setAba(k)} aria-current={on ? 'page' : undefined}
                 style={{ fontFamily: 'inherit', fontSize: 13, fontWeight: on ? 600 : 500, padding: '8px 12px', borderRadius: 8, border: 'none', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7,
@@ -28633,7 +28639,7 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
       )}
 
       {aba === 'dashboard' && (
-        <CRMDashboard negocios={negocios} empresas={empresas} atividades={atividades} etapas={etapas} devemFechar={devemFechar}
+        <CRMDashboard negocios={negocios} empresas={empresas} atividades={atividadesAtuais} etapas={etapas} devemFechar={devemFechar}
           resp={resp} onAbrirEmpresa={setEmpresaAberta} onAbrirNegocio={setAbertoId}
           irParaFunil={(p) => { setPipeline(p); setAba('funil'); }} />
       )}
@@ -28642,7 +28648,7 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
       {aba === 'carteira' && <CRMCarteira resp={resp} onAbrirNegocio={setAbertoId} />}
 
       {aba === 'calendario' && (
-        <CRMCalendario resp={resp} negocios={negocios} atividades={atividades} onAbrirNegocio={setAbertoId}
+        <CRMCalendario resp={resp} negocios={negocios} atividades={atividadesAtuais} onAbrirNegocio={setAbertoId}
           abertos={negocios.filter(n => n.pipeline_id === 'vendas' && etapaPorId[n.etapa_id]?.tipo === 'aberta')} />
       )}
 
@@ -28650,7 +28656,8 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
         const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
         const amanha = new Date(hoje); amanha.setDate(amanha.getDate() + 1);
         const semana = new Date(hoje); semana.setDate(semana.getDate() + 8);
-        const minhas = atividades.filter(a => !resp || a.responsavel === resp)
+        const anteriores = atividades.filter(a => String(a.criado_em || '') < TAREFAS_DESDE && (!resp || a.responsavel === resp)).length;
+        const minhas = atividadesTela.filter(a => !resp || a.responsavel === resp)
           .filter(a => { const n = negocios.find(x => x.id === a.negocio_id); return !termo || (n && casaBusca(n)) || a.titulo.toLowerCase().includes(termo); })
           .sort((a, b) => new Date(a.vencimento || '2999-01-01') - new Date(b.vencimento || '2999-01-01'));
         const grupos = [
@@ -28685,6 +28692,14 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
         };
         return (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', fontSize: 12.5, color: CRMC.ink2, background: CRMC.surface, border: `1px solid ${CRMC.line}`, borderRadius: 10, padding: '8px 12px' }}>
+              <span>{verTarefasAnteriores ? 'Mostrando todas as tarefas pendentes, inclusive as anteriores a 27/10/2026.' : 'Mostrando as tarefas criadas a partir de 27/10/2026.'}</span>
+              {anteriores > 0 && (
+                <button onClick={() => setVerTarefasAnteriores(v => !v)} style={{ fontFamily: 'inherit', fontSize: 12.5, fontWeight: 600, border: 'none', background: 'none', color: CRMC.primary, cursor: 'pointer', padding: 0 }}>
+                  {verTarefasAnteriores ? 'ocultar as anteriores' : `ver também as ${anteriores} anteriores`}
+                </button>)}
+            </div>
+            {!grupos.some(g => g[1].length) && <div style={{ padding: 24, textAlign: 'center', color: CRMC.ink3, background: CRMC.surface, border: `1px solid ${CRMC.line}`, borderRadius: 10 }}>Nenhuma tarefa pendente.</div>}
             {grupos.filter(g => g[1].length).map(([t, lista, cor]) => (
               <div key={t} style={{ background: CRMC.surface, border: `1px solid ${CRMC.line}`, borderRadius: 10, overflow: 'hidden' }}>
                 <div style={{ padding: '8px 12px', fontSize: 12.5, fontWeight: 700, color: cor, borderBottom: `1px solid ${CRMC.line}` }}>{t} · {lista.length}</div>
