@@ -23453,18 +23453,9 @@ function PlanComunicacoes() {
 function PlanComparativo() {
   const C = CRMC;
   const [linhas, setLinhas] = useState(null);
-  const [dup, setDup] = useState([]);
   const [fProb, setFProb] = useState(null);
   const [soProb, setSoProb] = useState(true);
-  useEffect(() => {
-    Promise.all([supabase.from('v_plan_comparativo').select('*'), supabase.from('plan_sankhya_pedido').select('br_num,br,numnota,codtipoper,vlrnota,falta_liquido,pendente,dtneg').eq('pendente', 'S')])
-      .then(([a, b]) => {
-        setLinhas(a.data || []);
-        const ps = b.data || []; const d = [];
-        ps.forEach(x => ps.forEach(y => { if (y.br_num === x.br_num && y.codtipoper === x.codtipoper && Number(y.vlrnota) === Number(x.vlrnota) && y.numnota > x.numnota && Number(x.vlrnota) > 0) d.push([x, y]); }));
-        setDup(d);
-      });
-  }, []);
+  useEffect(() => { supabase.from('v_plan_comparativo').select('*').then(({ data }) => setLinhas(data || [])); }, []);
   if (!linhas) return <div style={{ padding: 30, textAlign: 'center', color: C.ink3 }}>Carregando o comparativo…</div>;
   const moeda = (v) => (v == null ? '—' : Number(v).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 }));
   const probs = {}; linhas.forEach(l => (l.problemas || []).forEach(p => { probs[p] = (probs[p] || 0) + 1; }));
@@ -23473,20 +23464,16 @@ function PlanComparativo() {
   const sum = (k) => linhas.reduce((t, l) => t + Number(l[k] || 0), 0);
   const caixa = { background: C.surface, border: `1px solid ${C.line}`, borderRadius: 12 };
   const td = { padding: '7px 9px', textAlign: 'right', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap', borderBottom: `1px solid ${C.lineSoft}`, verticalAlign: 'top', fontSize: 12.5 };
-  const thS = (al = 'right') => ({ padding: '9px', fontSize: 11.5, fontWeight: 600, color: C.ink2, textAlign: al, whiteSpace: 'nowrap', background: '#F1F4F8', borderBottom: `1px solid ${C.line}`, position: 'sticky', top: 0 });
-  const dif = (a, b) => { const d = Number(a || 0) - Number(b || 0); return Math.abs(d) < 1 ? <span style={{ color: C.ink3 }}>—</span> : <span style={{ color: d > 0 ? C.loss : C.primary, fontWeight: 700 }}>{d > 0 ? '+' : ''}{moeda(d)}</span>; };
+  const thS = (al = 'right') => ({ padding: '9px', fontSize: 11.5, fontWeight: 600, color: C.ink2, textAlign: al, whiteSpace: 'normal', background: '#F1F4F8', borderBottom: `1px solid ${C.line}`, position: 'sticky', top: 0, verticalAlign: 'bottom' });
+  const dif = (a, b) => { const d = Number(a || 0) - Number(b || 0); return Math.abs(d) < 1 ? <span style={{ color: C.win }}>confere</span> : <span style={{ color: d > 0 ? C.loss : C.primary, fontWeight: 700 }}>{d > 0 ? '+' : ''}{moeda(d)}</span>; };
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       <div style={{ ...caixa, padding: '12px 16px', fontSize: 12.5, color: C.ink2, lineHeight: 1.55 }}>
-        <strong style={{ color: C.ink }}>O que a Planilha Mestra (26/10) e o OOH de outubro diziam × o Sankhya.</strong> Daqui para frente o Planejamento usa só os números do Sankhya; da planilha ficaram setor, datas, andamento e considerações.
-        Totais: a faturar na planilha <strong>{moeda(sum('a_faturar_planilha'))}</strong> × no Sankhya <strong>{moeda(sum('sk_a_faturar'))}</strong> (perto no total, mas com erros que se compensam linha a linha).
-        <div style={{ marginTop: 4 }}>Critérios: líquido = valor − impostos; no serviço, valor dos itens − impostos (o Sankhya já grava o pedido sem o ISS retido); pedido duplicado contado uma vez; faturado = notas de venda de qualquer ano; pedido de estoque (TOP 3109) fora.</div>
+        <strong style={{ color: C.ink }}>Planilha Mestra (26/10) e OOH de outubro × Sankhya, pedido a pedido.</strong> Cada linha da planilha é comparada com os pedidos do mesmo tipo (material ou serviço) do BR,
+        e cada pedido com as notas vinculadas a ele (Docs vinculados): líquido total, faturado, saldo e se foi faturamento parcial. O ponto principal é o <strong>a faturar (planilha) × saldo (Sankhya)</strong>.
+        Totais: a faturar na planilha <strong>{moeda(sum('a_faturar_planilha'))}</strong> × saldo no Sankhya <strong>{moeda(sum('sk_saldo'))}</strong>.
+        <div style={{ marginTop: 4, fontSize: 11.5, color: C.ink3 }}>Líquido = valor − impostos (serviço: valor dos itens − impostos). O relatório de faturamento do Sankhya não desconta o IBS/CBS de teste de 2026 e a tela da nota desconta: a comparação aceita os dois.</div>
       </div>
-      {dup.length > 0 && (
-        <div style={{ ...caixa, padding: '10px 14px', fontSize: 12.5, borderLeft: '4px solid #B42318' }}>
-          <strong style={{ color: '#B42318' }}>Pedidos duplicados pendentes no Sankhya</strong> (mesmo BR, mesma operação, mesmo valor): a carteira fica inflada até encerrar o antigo.
-          {dup.map(([a, b]) => <div key={`${a.numnota}-${b.numnota}`} style={{ marginTop: 4 }}>{a.br}: pedido {a.numnota} ({new Date(`${a.dtneg}T12:00:00`).toLocaleDateString('pt-BR')}) e {b.numnota} ({new Date(`${b.dtneg}T12:00:00`).toLocaleDateString('pt-BR')}) · {moeda(a.falta_liquido)} a mais na carteira</div>)}
-        </div>)}
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
         <label style={{ fontSize: 12.5, display: 'inline-flex', gap: 6, alignItems: 'center' }}><input type="checkbox" checked={soProb} onChange={e => setSoProb(e.target.checked)} /> só linhas com problema</label>
         <span style={{ width: 8 }} />
@@ -23496,29 +23483,31 @@ function PlanComparativo() {
       <div style={{ ...caixa, overflow: 'auto', maxHeight: 'calc(100vh - 360px)', minHeight: 300 }}>
         <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0 }}>
           <thead><tr>
-            <th style={thS('left')}>BR</th><th style={thS('left')}>Andamento (planilha)</th>
-            <th style={thS()}>Valor planilha</th><th style={thS()}>Líquido pedido (Sankhya)</th><th style={thS()}>Dif.</th>
-            <th style={thS()}>A faturar planilha</th><th style={thS()}>A faturar Sankhya</th><th style={thS()}>Dif.</th>
-            <th style={thS()}>Faturado (Sankhya)</th><th style={thS()}>OOH outubro</th><th style={thS('left')}>Problemas</th>
+            <th style={thS('left')}>BR · linha</th>
+            <th style={thS()}>Valor (planilha)</th><th style={thS('left')}>O valor da planilha é…</th>
+            <th style={thS()}>A faturar (planilha)</th><th style={thS()}>Saldo a faturar (Sankhya)</th><th style={thS()}>Diferença a faturar</th>
+            <th style={thS()}>Líquido TOTAL dos pedidos</th><th style={thS()}>Faturado (notas dos pedidos)</th><th style={thS()}>Faturado (planilha)</th>
+            <th style={thS('left')}>Pedidos e notas no Sankhya</th><th style={thS('left')}>Problemas</th>
           </tr></thead>
           <tbody>
             {vis.map(l => (
               <tr key={`${l.br_num}-${l.servico}`}>
-                <td style={{ ...td, textAlign: 'left' }}><strong style={{ color: C.primary }}>{l.br}</strong><div style={{ fontSize: 10.5, color: C.ink3 }}>{l.servico ? 'serviço' : 'material'} · {l.setor || '—'}{l.pedidos ? ` · pedido ${l.pedidos}` : ''}</div></td>
-                <td style={{ ...td, textAlign: 'left', color: C.ink2 }}>{l.andamento || '—'}</td>
-                <td style={td}>{moeda(l.valor_planilha)}</td><td style={{ ...td, fontWeight: 700 }}>{moeda(l.sk_liquido)}</td><td style={td}>{dif(l.valor_planilha, l.sk_liquido)}</td>
-                <td style={td}>{moeda(l.a_faturar_planilha)}</td><td style={{ ...td, fontWeight: 700 }}>{moeda(l.sk_a_faturar)}</td><td style={td}>{dif(l.a_faturar_planilha, l.sk_a_faturar)}</td>
-                <td style={{ ...td, color: C.ink2 }}>{moeda(l.sk_faturado_br)}</td><td style={{ ...td, color: C.ink2 }}>{moeda(l.valor_ooh)}</td>
-                <td style={{ ...td, textAlign: 'left', whiteSpace: 'normal', minWidth: 240, fontSize: 11.5 }}>
-                  <span style={{ color: '#B42318' }}>{(l.problemas || []).join(' · ') || <span style={{ color: C.win }}>confere</span>}</span>
-                  {l.duplicados && <div style={{ color: '#7A271A', marginTop: 2 }}>duplicado: {l.duplicados}</div>}
-                  {l.ultima_nota && <div style={{ color: C.ink3, marginTop: 2 }}>última NF {new Date(`${l.ultima_nota}T12:00:00`).toLocaleDateString('pt-BR')}{l.faturado_depois_planilha ? ' (depois da planilha de 26/10)' : ''}</div>}
+                <td style={{ ...td, textAlign: 'left' }}><strong style={{ color: C.primary }}>{l.br}</strong><div style={{ fontSize: 10.5, color: C.ink3 }}>{l.servico ? 'serviço' : 'material'} · {l.setor || '—'} · {l.andamento || '—'}</div></td>
+                <td style={td}>{moeda(l.valor_planilha)}</td>
+                <td style={{ ...td, textAlign: 'left', whiteSpace: 'normal', minWidth: 140, fontSize: 11.5, color: l.valor_planilha_e === 'total dos pedidos' ? C.win : C.warn }}>{l.valor_planilha_e || '—'}</td>
+                <td style={td}>{moeda(l.a_faturar_planilha)}</td><td style={{ ...td, fontWeight: 700 }}>{moeda(l.sk_saldo)}</td><td style={td}>{dif(l.a_faturar_planilha, l.sk_saldo)}</td>
+                <td style={{ ...td, color: C.ink2 }}>{moeda(l.sk_total)}</td>
+                <td style={{ ...td, color: C.ink2 }}>{moeda(l.sk_faturado)}{l.sk_faturado_relatorio && Math.abs(Number(l.sk_faturado_relatorio) - Number(l.sk_faturado)) >= 1 && <div style={{ fontSize: 10.5, color: C.ink3 }}>relatório {moeda(l.sk_faturado_relatorio)}</div>}</td>
+                <td style={{ ...td, color: C.ink2 }}>{moeda(l.faturado_planilha)}</td>
+                <td style={{ ...td, textAlign: 'left', whiteSpace: 'normal', minWidth: 300, fontSize: 11.5, color: C.ink2 }}>{(l.detalhe || '—').split(' | ').map((x, k) => <div key={k}>{x}</div>)}</td>
+                <td style={{ ...td, textAlign: 'left', whiteSpace: 'normal', minWidth: 220, fontSize: 11.5, color: '#B42318' }}>
+                  {(l.problemas || []).join(' · ') || <span style={{ color: C.win }}>confere</span>}
+                  {l.faturado_depois_planilha && <div style={{ color: C.ink3, marginTop: 2 }}>faturado depois da planilha de 26/10</div>}
                 </td>
               </tr>))}
           </tbody>
         </table>
       </div>
-      <div style={{ fontSize: 11.5, color: C.ink3 }}>Dif. = planilha − Sankhya (vermelho: a planilha tem mais que o Sankhya). Líquido = valor do pedido − impostos (mesmo critério do CRM). Pedido interno para a própria Kalenborn (TOP 3109) fica fora.</div>
     </div>
   );
 }
