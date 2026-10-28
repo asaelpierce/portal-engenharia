@@ -23177,11 +23177,11 @@ function PlanejamentoPCP() {
           <div style={{ fontSize: 12, color: C.ink3 }}>Programação do mês e lista mestra dos projetos, ligadas ao Sankhya (carteira e faturamento atualizados sozinhos). Os campos do PCP são editados aqui.</div>
         </div>
         <div style={{ display: 'inline-flex', background: '#E7EBF1', borderRadius: 9, padding: 3, gap: 2 }}>
-          {[['mes', 'Mês (OOH)'], ['mestra', 'Lista mestra']].map(([k, r]) => (
+          {[['mes', 'Mês (OOH)'], ['mestra', 'Lista mestra'], ['comunicacoes', 'Comunicações']].map(([k, r]) => (
             <button key={k} onClick={() => setAba(k)} style={{ fontFamily: 'inherit', fontSize: 13, fontWeight: aba === k ? 700 : 500, padding: '7px 14px', borderRadius: 7, border: 'none', cursor: 'pointer', background: aba === k ? C.surface : 'transparent', color: aba === k ? C.ink : C.ink2 }}>{r}</button>))}
         </div>
       </div>
-      {aba === 'mes' ? <PlanMes /> : <PlanMestra autor={autor} />}
+      {aba === 'mes' ? <PlanMes /> : aba === 'mestra' ? <PlanMestra autor={autor} /> : <PlanComunicacoes />}
     </div>
   );
 }
@@ -23309,13 +23309,157 @@ function PlanMes() {
   );
 }
 
+// Linha de comunicação: pausar / retomar / cancelar / reprogramar (fn_plan_registrar_evento) — muda CRM, carteira e PCP e avisa.
+const PLAN_EV = {
+  pausa: { r: 'Pausar', d: 'o negócio fica pausado no CRM e a carteira mostra risco alto até ser retomado', cor: '#B42318' },
+  retomada: { r: 'Retomar', d: 'tira a pausa no CRM e a ressalva da carteira', cor: '#1E8E4F' },
+  cancelamento: { r: 'Cancelar', d: 'carteira com risco alto até o comercial cancelar o pedido no Sankhya', cor: '#7A271A' },
+  reprogramacao: { r: 'Reprogramar', d: 'muda a estimativa do PCP e registra a nova data de faturamento no CRM', cor: '#B7791F' },
+};
+function PlanEventoModal({ linha: l, status, onFechar, onPronto }) {
+  const C = CRMC;
+  const [tipo, setTipo] = useState(status?.status === 'pausado' ? 'retomada' : 'pausa');
+  const [escopo, setEscopo] = useState('br');       // br = projeto todo · linha = só material/serviço desta linha
+  const [solic, setSolic] = useState('Cliente');
+  const [motivo, setMotivo] = useState('');
+  const [data, setData] = useState('');
+  const [enviando, setEnviando] = useState(false);
+  const [erro, setErro] = useState(null);
+  const [feito, setFeito] = useState(null);
+  const enviar = async () => {
+    setErro(null);
+    if (motivo.trim().length < 5) { setErro('Escreva o motivo (obrigatório).'); return; }
+    if (tipo === 'reprogramacao' && !data) { setErro('Informe a nova data de faturamento.'); return; }
+    setEnviando(true);
+    const { data: r, error } = await supabase.rpc('fn_plan_registrar_evento', { p_br_num: l.br_num, p_servico: escopo === 'linha' ? l.servico : null, p_tipo: tipo, p_motivo: motivo.trim(), p_solicitado: solic, p_nova_data: tipo === 'reprogramacao' ? data : null });
+    setEnviando(false);
+    if (error) { setErro(error.message); return; }
+    setFeito(r); onPronto && onPronto();
+  };
+  const inp = { fontFamily: 'inherit', fontSize: 13, padding: '8px 10px', borderRadius: 8, border: `1px solid ${C.line}`, width: '100%', boxSizing: 'border-box' };
+  return ReactDOM.createPortal(
+    <div onClick={onFechar} style={{ position: 'fixed', inset: 0, zIndex: 92, background: 'rgba(15,35,64,.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: C.surface, borderRadius: 12, width: 'min(560px, 100%)', maxHeight: '90vh', overflow: 'auto', padding: '18px 20px', fontFamily: FONT_BODY, color: C.ink, boxShadow: '0 20px 50px rgba(0,0,0,.3)' }}>
+        <div style={{ fontSize: 12, color: C.ink3 }}>Linha de comunicação · avisa o vendedor, o comercial e o PCP/engenharia</div>
+        <div style={{ fontSize: 16, fontWeight: 800 }}>{l.br} · {l.cliente}</div>
+        <div style={{ fontSize: 12.5, color: C.ink2, marginBottom: 12 }}>{l.vendedor} · falta faturar {Number(l.falta_faturar || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+          {status && status.status !== 'ativo' && <span style={{ color: '#B42318', fontWeight: 700 }}> · hoje: {status.status} desde {new Date(status.desde).toLocaleDateString('pt-BR')}</span>}</div>
+        {feito ? (
+          <div>
+            <div style={{ fontSize: 13.5, fontWeight: 700, color: C.win }}>✓ Registrado: {PLAN_EV[tipo].r.toLowerCase()} {l.br}.</div>
+            <div style={{ fontSize: 12.5, color: C.ink2, marginTop: 6 }}>{PLAN_EV[tipo].d}. Avisados: {(feito.avisados || '').split(',').filter(Boolean).join(', ') || 'ninguém (sem destinatários configurados)'}.</div>
+            <div style={{ textAlign: 'right', marginTop: 14 }}><button onClick={onFechar} style={{ fontFamily: 'inherit', fontSize: 13, fontWeight: 700, padding: '8px 14px', borderRadius: 8, border: 'none', background: C.primary, color: '#fff', cursor: 'pointer' }}>Fechar</button></div>
+          </div>
+        ) : (<>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 6, marginBottom: 6 }}>
+            {Object.entries(PLAN_EV).map(([k, e]) => (
+              <button key={k} onClick={() => setTipo(k)} style={{ fontFamily: 'inherit', fontSize: 12.5, fontWeight: 700, padding: '9px 6px', borderRadius: 8, cursor: 'pointer', border: `2px solid ${tipo === k ? e.cor : C.line}`, background: tipo === k ? `${e.cor}14` : C.surface, color: tipo === k ? e.cor : C.ink2 }}>{e.r}</button>))}
+          </div>
+          <div style={{ fontSize: 12, color: C.ink3, marginBottom: 12 }}>{PLAN_EV[tipo].d}.</div>
+          <div style={{ display: 'grid', gap: 10, gridTemplateColumns: '1fr 1fr', marginBottom: 10 }}>
+            <label style={{ fontSize: 12, fontWeight: 600, color: C.ink2, display: 'flex', flexDirection: 'column', gap: 4 }}>Vale para
+              <select value={escopo} onChange={e => setEscopo(e.target.value)} style={inp}>
+                <option value="br">o projeto todo ({l.br})</option>
+                <option value="linha">só {l.servico ? 'o serviço' : 'o material'}</option>
+              </select></label>
+            <label style={{ fontSize: 12, fontWeight: 600, color: C.ink2, display: 'flex', flexDirection: 'column', gap: 4 }}>Quem solicitou
+              <select value={solic} onChange={e => setSolic(e.target.value)} style={inp}>{['Cliente', 'Engenharia', 'Comercial', 'Produção / PCP', 'Diretoria', 'Outro'].map(o => <option key={o}>{o}</option>)}</select></label>
+          </div>
+          {tipo === 'reprogramacao' && (
+            <label style={{ fontSize: 12, fontWeight: 600, color: C.ink2, display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 10 }}>Nova data de faturamento
+              <input type="date" value={data} onChange={e => setData(e.target.value)} style={inp} /></label>)}
+          <label style={{ fontSize: 12, fontWeight: 600, color: C.ink2, display: 'flex', flexDirection: 'column', gap: 4 }}>Motivo (obrigatório)
+            <textarea value={motivo} onChange={e => setMotivo(e.target.value)} rows={3} placeholder="Ex.: cliente pediu para segurar a entrega até a parada de manutenção; e-mail de 03/09." style={{ ...inp, resize: 'vertical' }} /></label>
+          {erro && <div style={{ fontSize: 12.5, color: C.loss, marginTop: 8 }}>{erro}</div>}
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 14 }}>
+            <button onClick={onFechar} style={{ fontFamily: 'inherit', fontSize: 13, padding: '8px 12px', borderRadius: 8, border: `1px solid ${C.line}`, background: C.surface, cursor: 'pointer' }}>Cancelar</button>
+            <button disabled={enviando} onClick={enviar} style={{ fontFamily: 'inherit', fontSize: 13, fontWeight: 700, padding: '8px 16px', borderRadius: 8, border: 'none', background: PLAN_EV[tipo].cor, color: '#fff', cursor: 'pointer' }}>{enviando ? 'registrando…' : `${PLAN_EV[tipo].r} e avisar`}</button>
+          </div>
+        </>)}
+      </div>
+    </div>, document.body);
+}
+
+function PlanComunicacoes() {
+  const C = CRMC;
+  const [ev, setEv] = useState(null);
+  const [cli, setCli] = useState({});
+  const [fTipo, setFTipo] = useState(null);
+  const [busca, setBusca] = useState('');
+  const [comunicar, setComunicar] = useState(null);
+  const [status, setStatus] = useState([]);
+  const carregar = useCallback(async () => {
+    const [a, b2, c] = await Promise.all([supabase.from('plan_evento').select('*').order('criado_em', { ascending: false }).limit(500),
+      supabase.from('v_plan_mestra').select('br_num,br,cliente,vendedor,servico,falta_faturar,em_carteira,pausado_em,consideracoes'), supabase.from('v_plan_br_status').select('*')]);
+    setEv(a.data || []); setCli(Object.fromEntries((b2.data || []).map(x => [x.br_num, x]))); setStatus(c.data || []);
+  }, []);
+  useEffect(() => { carregar(); }, [carregar]);
+  if (!ev) return <div style={{ padding: 30, textAlign: 'center', color: C.ink3 }}>Carregando…</div>;
+  const moeda = (v) => Number(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 });
+  const t = busca.trim().toLowerCase();
+  const vis = ev.filter(e => (!fTipo || e.tipo === fTipo) && (!t || `${e.br} ${cli[e.br_num]?.cliente || ''} ${e.motivo} ${e.registrado_por}`.toLowerCase().includes(t)));
+  const pausados = status.filter(x => x.status === 'pausado'), cancelados = status.filter(x => x.status === 'cancelado' && cli[x.br_num]?.em_carteira);
+  const soConsid = Object.values(cli).filter(x => x.em_carteira && /paralis|paraliz|paus|cancel/i.test(x.consideracoes || '') && !status.find(s => s.br_num === x.br_num && s.status !== 'ativo') && !x.pausado_em);
+  const caixa = { background: C.surface, border: `1px solid ${C.line}`, borderRadius: 12 };
+  const td = { padding: '8px 10px', borderBottom: `1px solid ${C.lineSoft}`, verticalAlign: 'top', fontSize: 12.5 };
+  const card = (r, v, sub, cor) => (<div style={{ ...caixa, padding: '12px 15px', borderLeft: `4px solid ${cor}` }}><div style={{ fontSize: 12, color: C.ink2, fontWeight: 600 }}>{r}</div><div style={{ fontSize: 21, fontWeight: 800 }}>{v}</div><div style={{ fontSize: 11.5, color: C.ink3 }}>{sub}</div></div>);
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))' }}>
+        {card('Projetos pausados', pausados.length, `${moeda(pausados.reduce((x, p) => x + Number(cli[p.br_num]?.falta_faturar || 0), 0))} em carteira com ressalva`, '#B42318')}
+        {card('Cancelamentos a efetivar', cancelados.length, `${moeda(cancelados.reduce((x, p) => x + Number(cli[p.br_num]?.falta_faturar || 0), 0))} ainda na carteira: o comercial precisa cancelar o pedido no Sankhya`, '#7A271A')}
+        {card('Registros de comunicação', ev.length, 'pausas, retomadas, cancelamentos e reprogramações', C.primary)}
+      </div>
+      {soConsid.length > 0 && (
+        <div style={{ ...caixa, padding: '10px 14px', fontSize: 12.5, borderLeft: '4px solid #B7791F' }}>
+          <strong>{soConsid.length} projeto(s) aparecem como paralisados só nas considerações da planilha</strong> e ainda não foram registrados pela linha de comunicação (por isso o CRM e a carteira não sabem):
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
+            {soConsid.map(x => <button key={`${x.br_num}-${x.servico}`} onClick={() => setComunicar(x)} title={x.consideracoes} style={{ fontFamily: 'inherit', fontSize: 12, fontWeight: 600, padding: '4px 10px', borderRadius: 14, border: '1px solid #B7791F', background: '#FDF3E1', color: '#7A4B00', cursor: 'pointer' }}>{x.br} · registrar</button>)}
+          </div>
+        </div>)}
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+        <div style={{ display: 'inline-flex', background: '#E7EBF1', borderRadius: 9, padding: 3, gap: 2 }}>
+          {[[null, 'Todos'], ...Object.entries(PLAN_EV).map(([k, e]) => [k, e.r])].map(([k, r]) => (
+            <button key={r} onClick={() => setFTipo(k)} style={{ fontFamily: 'inherit', fontSize: 12.5, fontWeight: fTipo === k ? 700 : 500, padding: '6px 11px', borderRadius: 7, border: 'none', cursor: 'pointer', background: fTipo === k ? C.surface : 'transparent', color: fTipo === k ? C.ink : C.ink2 }}>{r}</button>))}
+        </div>
+        <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="BR, cliente, motivo ou quem registrou" style={{ fontFamily: 'inherit', fontSize: 12.5, padding: '7px 10px', borderRadius: 8, border: `1px solid ${C.line}`, width: 280 }} />
+      </div>
+      <div style={{ ...caixa, overflow: 'auto' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead><tr>{['Quando', 'Projeto', 'Ação', 'Motivo', 'Solicitado por', 'Valor na carteira', 'Registrado por'].map(h => <th key={h} style={{ padding: '9px 10px', fontSize: 11.5, fontWeight: 600, color: C.ink2, textAlign: 'left', background: '#F1F4F8', borderBottom: `1px solid ${C.line}`, whiteSpace: 'nowrap' }}>{h}</th>)}</tr></thead>
+          <tbody>
+            {!vis.length && <tr><td colSpan={7} style={{ padding: 24, textAlign: 'center', color: C.ink3 }}>Nenhuma comunicação registrada ainda. Use o botão "Comunicar" na lista mestra.</td></tr>}
+            {vis.map(e => { const k = PLAN_EV[e.tipo] || PLAN_EV.pausa;
+              return (
+                <tr key={e.id}>
+                  <td style={{ ...td, whiteSpace: 'nowrap', color: C.ink2 }}>{new Date(e.criado_em).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' })}</td>
+                  <td style={td}><strong style={{ color: C.primary }}>{e.br}</strong>{e.servico != null && <span style={{ fontSize: 10.5, color: C.ink3 }}> · {e.servico ? 'serviço' : 'material'}</span>}<div style={{ fontSize: 11, color: C.ink3 }}>{cli[e.br_num]?.cliente}</div></td>
+                  <td style={{ ...td, whiteSpace: 'nowrap' }}><span style={{ fontSize: 12, fontWeight: 700, color: k.cor }}>{k.r}</span>{e.nova_data && <div style={{ fontSize: 11, color: C.ink2 }}>para {new Date(`${e.nova_data}T12:00:00`).toLocaleDateString('pt-BR')}</div>}</td>
+                  <td style={{ ...td, maxWidth: 360 }}>{e.motivo}</td>
+                  <td style={{ ...td, color: C.ink2 }}>{e.solicitado_por || '—'}</td>
+                  <td style={{ ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{moeda(e.valor_impactado)}</td>
+                  <td style={{ ...td, color: C.ink2 }}>{e.registrado_por}</td>
+                </tr>); })}
+          </tbody>
+        </table>
+      </div>
+      {comunicar && <PlanEventoModal linha={comunicar} status={status.find(s => s.br_num === comunicar.br_num)} onFechar={() => setComunicar(null)} onPronto={carregar} />}
+    </div>
+  );
+}
+
 function PlanMestra({ autor }) {
   const C = CRMC;
   const [linhas, setLinhas] = useState(null);
   const [f, setF] = useState({ setor: [], andamento: [], vend: [], busca: '', so: 'carteira' });
   const [salvando, setSalvando] = useState(null);
   const [hist, setHist] = useState(null);
-  const carregar = useCallback(async () => { const { data } = await supabase.from('v_plan_mestra').select('*'); setLinhas(data || []); }, []);
+  const [status, setStatus] = useState({});     // br_num -> { status, desde, motivo }
+  const [comunicar, setComunicar] = useState(null);
+  const carregar = useCallback(async () => {
+    const [a, b2] = await Promise.all([supabase.from('v_plan_mestra').select('*'), supabase.from('v_plan_br_status').select('*')]);
+    setLinhas(a.data || []); setStatus(Object.fromEntries((b2.data || []).map(x => [x.br_num, x])));
+  }, []);
   useEffect(() => { carregar(); }, [carregar]);
   if (!linhas) return <div style={{ padding: 30, textAlign: 'center', color: C.ink3 }}>Carregando a lista mestra…</div>;
   const moeda = (v) => Number(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 });
@@ -23328,8 +23472,9 @@ function PlanMestra({ autor }) {
     setLinhas(ls => ls.map(x => x.br_num === l.br_num && x.servico === l.servico ? { ...x, [campo]: valor === '' ? null : valor, tem_planejamento: true, atualizado_por: autor, atualizado_em: new Date().toISOString() } : x));
   };
   const abrirHist = async (l) => { const { data } = await supabase.from('plan_projeto_hist').select('*').eq('br_num', l.br_num).eq('servico', l.servico).order('em', { ascending: false }); setHist({ l, itens: data || [] }); };
+  const parado = (l) => ['pausado', 'cancelado'].includes(status[l.br_num]?.status) || !!l.pausado_em || /paralis|paraliz|paus|cancel/i.test(l.consideracoes || '');
   const t = f.busca.trim().toLowerCase();
-  const vis = linhas.filter(l => (f.so === 'todos' || (f.so === 'carteira' ? l.em_carteira : f.so === 'sem_plan' ? l.em_carteira && !l.tem_planejamento : f.so === 'diverg' ? l.em_carteira && l.divergencia_dias && Math.abs(l.divergencia_dias) > 0 : f.so === 'pausado' ? !!l.pausado_em || /paralis|paraliz|paus|cancel/i.test(l.consideracoes || '') : true))
+  const vis = linhas.filter(l => (f.so === 'todos' || (f.so === 'carteira' ? l.em_carteira : f.so === 'sem_plan' ? l.em_carteira && !l.tem_planejamento : f.so === 'diverg' ? l.em_carteira && l.divergencia_dias && Math.abs(l.divergencia_dias) > 0 : f.so === 'pausado' ? parado(l) : true))
     && (!f.setor.length || f.setor.includes(l.setor || '—')) && (!f.andamento.length || f.andamento.includes(l.andamento || '—')) && (!f.vend.length || f.vend.includes(l.vendedor || '—'))
     && (!t || `${l.br} ${l.cliente || ''} ${l.pedidos_cliente || ''} ${l.consideracoes || ''}`.toLowerCase().includes(t)))
     .sort((a, b) => String(a.estimativa_pcp || a.prevista_sankhya || '9999').localeCompare(String(b.estimativa_pcp || b.prevista_sankhya || '9999')));
@@ -23346,7 +23491,7 @@ function PlanMestra({ autor }) {
     const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob(['\ufeff' + l2.join('\n')], { type: 'text/csv;charset=utf-8' })); a.download = 'lista_mestra_pcp.csv'; a.click();
   };
   const SO = [['carteira', `Em carteira · ${cart.length}`], ['sem_plan', `Sem planejamento · ${cart.filter(l => !l.tem_planejamento).length}`], ['diverg', `Data PCP ≠ Sankhya · ${cart.filter(l => l.divergencia_dias && Math.abs(l.divergencia_dias) > 0).length}`],
-    ['pausado', `Pausados / paralisados · ${linhas.filter(l => !!l.pausado_em || /paralis|paraliz|paus|cancel/i.test(l.consideracoes || '')).length}`], ['todos', `Todos · ${linhas.length}`]];
+    ['pausado', `Pausados / cancelados · ${linhas.filter(parado).length}`], ['todos', `Todos · ${linhas.length}`]];
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       <div style={{ ...caixa, padding: '10px 14px', display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -23372,13 +23517,15 @@ function PlanMestra({ autor }) {
             <th style={thS()}>Previsão Sankhya</th><th style={thS()}>Estimativa PCP</th><th style={thS()}>Dif.</th><th style={thS()}>Data CP</th><th style={thS('left')}>Andamento</th><th style={thS('left')}>Considerações</th><th style={thS('center')}></th>
           </tr></thead>
           <tbody>
-            {vis.map(l => { const k = `${l.br_num}-${l.servico}`; const dif = l.divergencia_dias; const pausado = !!l.pausado_em || /paralis|paraliz|paus|cancel/i.test(l.consideracoes || '');
+            {vis.map(l => { const k = `${l.br_num}-${l.servico}`; const dif = l.divergencia_dias; const st = status[l.br_num]; const pausado = parado(l);
               return (
                 <tr key={k} style={{ background: !l.tem_planejamento && l.em_carteira ? '#FFFBEB' : 'transparent' }}>
                   <td style={{ ...td, textAlign: 'left' }}>
                     <strong style={{ color: C.primary }}>{l.br}</strong>{l.servico && <span style={{ marginLeft: 4, fontSize: 10.5, fontWeight: 700, color: '#0D9488' }}>SERVIÇO</span>}
                     <div style={{ fontSize: 10.5, color: C.ink3 }}>{l.pedidos_cliente ? `pedido ${l.pedidos_cliente}` : l.em_carteira ? '' : 'fora da carteira (faturado)'}{!l.tem_planejamento && l.em_carteira ? ' · NOVO, sem planejamento' : ''}</div>
-                    {pausado && <div style={{ fontSize: 10.5, fontWeight: 700, color: '#B42318' }}>⚠ pausado/paralisado</div>}
+                    {st?.status === 'cancelado' ? <div style={{ fontSize: 10.5, fontWeight: 700, color: '#B42318' }} title={st.motivo}>✕ cancelamento solicitado {new Date(st.desde).toLocaleDateString('pt-BR')}</div>
+                      : st?.status === 'pausado' || l.pausado_em ? <div style={{ fontSize: 10.5, fontWeight: 700, color: '#B42318' }} title={st?.motivo || l.pausado_motivo}>⏸ pausado {new Date(st?.desde || l.pausado_em).toLocaleDateString('pt-BR')}</div>
+                      : pausado ? <div style={{ fontSize: 10.5, fontWeight: 700, color: '#B7791F' }} title="consta nas considerações, mas não foi registrado pela linha de comunicação">⚠ paralisado (só nas considerações)</div> : null}
                   </td>
                   <td style={{ ...td, textAlign: 'left', whiteSpace: 'normal', minWidth: 170, maxWidth: 230 }}>{l.cliente}<div style={{ fontSize: 10.5, color: C.ink3 }}>{l.vendedor}</div></td>
                   <td style={{ ...td, textAlign: 'left' }}>
@@ -23399,7 +23546,10 @@ function PlanMestra({ autor }) {
                       placeholder="considerações…" style={{ ...inp, width: 220, resize: 'vertical', minHeight: 28 }} /></td>
                   <td style={{ ...td, textAlign: 'center' }}>
                     {salvando && salvando.startsWith(k) ? <span style={{ fontSize: 11, color: C.ink3 }}>salvando…</span>
-                      : <button onClick={() => abrirHist(l)} title={l.atualizado_por ? `última alteração: ${l.atualizado_por}` : 'histórico'} style={{ fontFamily: 'inherit', fontSize: 11, padding: '3px 7px', borderRadius: 6, border: `1px solid ${C.line}`, background: C.surface, cursor: 'pointer', color: C.ink2 }}>histórico</button>}
+                      : <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                          <button onClick={() => setComunicar(l)} title="pausar, retomar, cancelar ou reprogramar (avisa comercial, engenharia e PCP)" style={{ fontFamily: 'inherit', fontSize: 11, fontWeight: 700, padding: '3px 7px', borderRadius: 6, border: 'none', background: C.primary, color: '#fff', cursor: 'pointer' }}>Comunicar</button>
+                          <button onClick={() => abrirHist(l)} title={l.atualizado_por ? `última alteração: ${l.atualizado_por}` : 'histórico'} style={{ fontFamily: 'inherit', fontSize: 11, padding: '3px 7px', borderRadius: 6, border: `1px solid ${C.line}`, background: C.surface, cursor: 'pointer', color: C.ink2 }}>histórico</button>
+                        </div>}
                   </td>
                 </tr>); })}
             {!vis.length && <tr><td colSpan={11} style={{ padding: 24, textAlign: 'center', color: C.ink3 }}>Nenhum projeto nesse filtro.</td></tr>}
@@ -23410,6 +23560,7 @@ function PlanMestra({ autor }) {
         Falta faturar, previsão e pedidos vêm do Sankhya (atualizam sozinhos). Setor, estimativa do PCP, data do CP, andamento e considerações são do PCP: alterar aqui grava na hora, com histórico de quem mudou.
         Dif. = estimativa do PCP − previsão do Sankhya (vermelho: o PCP prevê depois do Sankhya). Linhas em amarelo: pedidos novos ainda sem planejamento.
       </div>
+      {comunicar && <PlanEventoModal linha={comunicar} status={status[comunicar.br_num]} onFechar={() => setComunicar(null)} onPronto={carregar} />}
       {hist && ReactDOM.createPortal(
         <div onClick={() => setHist(null)} style={{ position: 'fixed', inset: 0, zIndex: 90, background: 'rgba(15,35,64,.35)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
           <div onClick={e => e.stopPropagation()} style={{ background: C.surface, borderRadius: 12, width: 'min(620px, 100%)', maxHeight: '80vh', overflow: 'auto', padding: '16px 18px', fontFamily: FONT_BODY, color: C.ink }}>
