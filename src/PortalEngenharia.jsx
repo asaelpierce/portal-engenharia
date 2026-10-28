@@ -23480,6 +23480,7 @@ function PlanComparativo() {
       <div style={{ ...caixa, padding: '12px 16px', fontSize: 12.5, color: C.ink2, lineHeight: 1.55 }}>
         <strong style={{ color: C.ink }}>O que a Planilha Mestra (26/10) e o OOH de outubro diziam × o Sankhya.</strong> Daqui para frente o Planejamento usa só os números do Sankhya; da planilha ficaram setor, datas, andamento e considerações.
         Totais: a faturar na planilha <strong>{moeda(sum('a_faturar_planilha'))}</strong> × no Sankhya <strong>{moeda(sum('sk_a_faturar'))}</strong> (perto no total, mas com erros que se compensam linha a linha).
+        <div style={{ marginTop: 4 }}>Critérios: líquido = valor − impostos; no serviço, valor dos itens − impostos (o Sankhya já grava o pedido sem o ISS retido); pedido duplicado contado uma vez; faturado = notas de venda de qualquer ano; pedido de estoque (TOP 3109) fora.</div>
       </div>
       {dup.length > 0 && (
         <div style={{ ...caixa, padding: '10px 14px', fontSize: 12.5, borderLeft: '4px solid #B42318' }}>
@@ -23508,7 +23509,11 @@ function PlanComparativo() {
                 <td style={td}>{moeda(l.valor_planilha)}</td><td style={{ ...td, fontWeight: 700 }}>{moeda(l.sk_liquido)}</td><td style={td}>{dif(l.valor_planilha, l.sk_liquido)}</td>
                 <td style={td}>{moeda(l.a_faturar_planilha)}</td><td style={{ ...td, fontWeight: 700 }}>{moeda(l.sk_a_faturar)}</td><td style={td}>{dif(l.a_faturar_planilha, l.sk_a_faturar)}</td>
                 <td style={{ ...td, color: C.ink2 }}>{moeda(l.sk_faturado_br)}</td><td style={{ ...td, color: C.ink2 }}>{moeda(l.valor_ooh)}</td>
-                <td style={{ ...td, textAlign: 'left', whiteSpace: 'normal', minWidth: 220, fontSize: 11.5, color: '#B42318' }}>{(l.problemas || []).join(' · ') || <span style={{ color: C.win }}>confere</span>}</td>
+                <td style={{ ...td, textAlign: 'left', whiteSpace: 'normal', minWidth: 240, fontSize: 11.5 }}>
+                  <span style={{ color: '#B42318' }}>{(l.problemas || []).join(' · ') || <span style={{ color: C.win }}>confere</span>}</span>
+                  {l.duplicados && <div style={{ color: '#7A271A', marginTop: 2 }}>duplicado: {l.duplicados}</div>}
+                  {l.ultima_nota && <div style={{ color: C.ink3, marginTop: 2 }}>última NF {new Date(`${l.ultima_nota}T12:00:00`).toLocaleDateString('pt-BR')}{l.faturado_depois_planilha ? ' (depois da planilha de 26/10)' : ''}</div>}
+                </td>
               </tr>))}
           </tbody>
         </table>
