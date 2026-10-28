@@ -23194,6 +23194,7 @@ function PlanMes() {
   const [fatTotal, setFatTotal] = useState(0);
   const [fSit, setFSit] = useState(null);
   const [fSetor, setFSetor] = useState(null);
+  const [fTipo, setFTipo] = useState('todos');   // todos | material | servico
   const [msg, setMsg] = useState(null);
   const carregarMeses = useCallback(async () => {
     const { data } = await supabase.from('plan_ooh').select('mes').order('mes', { ascending: false });
@@ -23223,7 +23224,7 @@ function PlanMes() {
   const td = { padding: '8px 10px', textAlign: 'right', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap', borderBottom: `1px solid ${C.lineSoft}` };
   const thS = (al = 'right') => ({ padding: '9px 10px', fontSize: 11.5, fontWeight: 600, color: C.ink2, textAlign: al, whiteSpace: 'nowrap', background: '#F1F4F8', borderBottom: `1px solid ${C.line}`, position: 'sticky', top: 0 });
   if (!meses.length) return <div style={{ ...caixa, padding: 30, textAlign: 'center', color: C.ink3 }}>Nenhuma programação mensal ainda. <button onClick={congelar} style={{ fontFamily: 'inherit', border: 'none', background: 'none', color: C.primary, cursor: 'pointer', fontWeight: 600 }}>Congelar a programação de um mês</button></div>;
-  const L = linhas || [];
+  const L = (linhas || []).filter(x => fTipo === 'todos' || (fTipo === 'servico' ? x.servico : !x.servico));
   const prev = L.reduce((t, x) => t + Number(x.previsto || 0), 0);
   const prevPlan = L.reduce((t, x) => t + Number(x.previsto_planilha || 0), 0);
   const fatProg = L.reduce((t, x) => t + Number(x.faturado_mes || 0), 0);
@@ -23244,7 +23245,11 @@ function PlanMes() {
         <select value={mes || ''} onChange={e => { setMes(e.target.value); setFSit(null); setFSetor(null); }} style={{ fontFamily: 'inherit', fontSize: 13, padding: '6px 10px', borderRadius: 8, border: `1px solid ${C.line}` }}>
           {meses.map(m => <option key={m} value={m}>{nomeMes(m)}</option>)}
         </select>
-        <span style={{ fontSize: 12, color: C.ink3 }}>projetos programados no início do mês · valores do Sankhya (pedidos − o que já tinha sido faturado) × o que o Sankhya faturou no mês</span>
+        <div style={{ display: 'inline-flex', background: '#E7EBF1', borderRadius: 9, padding: 3, gap: 2 }}>
+          {[['todos', 'Tudo'], ['material', 'Material'], ['servico', 'Serviço']].map(([k, r]) => (
+            <button key={k} onClick={() => setFTipo(k)} style={{ fontFamily: 'inherit', fontSize: 12.5, fontWeight: fTipo === k ? 700 : 500, padding: '5px 11px', borderRadius: 7, border: 'none', cursor: 'pointer', background: fTipo === k ? C.surface : 'transparent', color: fTipo === k ? C.ink : C.ink2 }}>{r}</button>))}
+        </div>
+        <span style={{ fontSize: 12, color: C.ink3 }}>material e serviço em linhas separadas · valores do Sankhya (pedidos − o que já tinha sido faturado) × o que o Sankhya faturou no mês</span>
         <span style={{ flex: 1 }} />
         <button onClick={congelar} style={{ fontFamily: 'inherit', fontSize: 12.5, padding: '7px 12px', borderRadius: 8, border: `1px solid ${C.line}`, background: C.surface, cursor: 'pointer' }}>Congelar a programação de um mês</button>
       </div>
@@ -23290,8 +23295,8 @@ function PlanMes() {
               <thead><tr>{['BR', 'Cliente', 'Vendedor', 'Setor', 'Previsto p/', 'Programado (Sankhya)', 'Faturado no mês', 'Falta agora', 'Estimativa atual (PCP)', 'Situação'].map((h, k) => <th key={h} style={thS([0, 1, 2, 3, 9].includes(k) ? 'left' : 'right')}>{h}</th>)}</tr></thead>
               <tbody>{vis.map(x => { const sx = PLAN_SIT[x.situacao] || PLAN_SIT.pendente; const mudou = x.estimativa_atual && x.data_prevista && x.estimativa_atual !== x.data_prevista;
                 return (
-                  <tr key={x.br_num}>
-                    <td style={{ ...td, textAlign: 'left', fontWeight: 700, color: C.primary }}>{x.br}</td>
+                  <tr key={`${x.br_num}-${x.servico}`}>
+                    <td style={{ ...td, textAlign: 'left', fontWeight: 700, color: C.primary }}>{x.br}{x.servico && <span style={{ marginLeft: 6, fontSize: 10.5, fontWeight: 700, color: '#0D9488', background: '#E6F6F4', borderRadius: 4, padding: '1px 5px' }}>SERVIÇO</span>}</td>
                     <td style={{ ...td, textAlign: 'left', whiteSpace: 'normal', maxWidth: 220 }}>{x.cliente}</td>
                     <td style={{ ...td, textAlign: 'left', color: C.ink2 }}>{x.vendedor}</td>
                     <td style={{ ...td, textAlign: 'left', color: C.ink2 }}>{x.setores}</td>
