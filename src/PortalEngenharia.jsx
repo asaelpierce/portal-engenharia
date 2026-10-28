@@ -23462,7 +23462,7 @@ function PlanMes({ onProgramar }) {
       {msg && <div style={{ ...caixa, padding: '8px 12px', fontSize: 12.5, color: msg.startsWith('Erro') ? C.loss : C.win }}>{msg}</div>}
       {!linhas ? <div style={{ padding: 30, textAlign: 'center', color: C.ink3 }}>Carregando…</div> : (<>
         <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(185px, 1fr))' }}>
-          {card('Programado (Sankhya)', moeda(prev), `${L.length} projetos de material · a planilha dizia ${moeda(prevPlan)} (${prev - prevPlan >= 0 ? '+' : ''}${moeda(prev - prevPlan)})`, C.primary)}
+          {card('Programado (Sankhya)', moeda(prev), `${L.length} projetos de material. A soma da planilha era ${moeda(prevPlan)}; a diferença de ${prev - prevPlan >= 0 ? '+' : ''}${moeda(prev - prevPlan)} são valores digitados errado na planilha, explicados linha a linha em "Planilha conferida com o Sankhya"`, C.primary)}
           {card('Faturado da programação', moeda(fatProg), `${prev ? Math.round(100 * fatProg / prev) : 0}% do programado · notas do Sankhya no mês`, '#1E8E4F', 'faturado')}
           {card('Pendente', moeda(soma('falta_agora', x => x.situacao === 'pendente' || x.situacao === 'parcial')), `${L.filter(x => x.situacao === 'pendente').length} pendentes + ${L.filter(x => x.situacao === 'parcial').length} parciais · ainda a faturar`, '#1D5FBF', 'pendente')}
           {card('Reprogramado', moeda(soma('previsto', x => x.situacao === 'reprogramado')), `${L.filter(x => x.situacao === 'reprogramado').length} projetos com estimativa do PCP depois do mês`, '#B42318', 'reprogramado')}
