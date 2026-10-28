@@ -23294,10 +23294,10 @@ function PlanMes() {
   const [meses, setMeses] = useState([]);
   const [mes, setMes] = useState(null);
   const [linhas, setLinhas] = useState(null);
-  const [fatTotal, setFatTotal] = useState(0);
+  const [fatTotal, setFatTotal] = useState({ material: 0, servico: 0 });
   const [fSit, setFSit] = useState(null);
   const [fSetor, setFSetor] = useState(null);
-  const [fTipo, setFTipo] = useState('todos');   // todos | material | servico
+  const [fTipo, setFTipo] = useState('material');   // material (programado) | servico (à parte, não entra no programado)
   const [detalhe, setDetalhe] = useState(null);
   const [msg, setMsg] = useState(null);
   const carregarMeses = useCallback(async () => {
@@ -23310,8 +23310,8 @@ function PlanMes() {
     setLinhas(null);
     Promise.all([
       supabase.from('v_plan_ooh_mes').select('*').eq('mes', mes),
-      supabase.from('v_plan_faturado_mes').select('faturado').eq('mes', mes),
-    ]).then(([a, b]) => { setLinhas(a.data || []); setFatTotal((b.data || []).reduce((t, x) => t + Number(x.faturado || 0), 0)); });
+      supabase.from('v_plan_faturado_tipo_mes').select('faturado,servico').eq('mes', mes),
+    ]).then(([a, b]) => { setLinhas(a.data || []); setFatTotal({ material: (b.data || []).filter(x => !x.servico).reduce((t, x) => t + Number(x.faturado || 0), 0), servico: (b.data || []).filter(x => x.servico).reduce((t, x) => t + Number(x.faturado || 0), 0) }); });
   }, [mes]);
   const moeda = (v) => Number(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 });
   const dt = (d) => (d ? new Date(`${String(d).slice(0, 10)}T12:00:00`).toLocaleDateString('pt-BR') : '—');
@@ -23328,7 +23328,8 @@ function PlanMes() {
   const td = { padding: '8px 10px', textAlign: 'right', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap', borderBottom: `1px solid ${C.lineSoft}` };
   const thS = (al = 'right') => ({ padding: '9px 10px', fontSize: 11.5, fontWeight: 600, color: C.ink2, textAlign: al, whiteSpace: 'nowrap', background: '#F1F4F8', borderBottom: `1px solid ${C.line}`, position: 'sticky', top: 0 });
   if (!meses.length) return <div style={{ ...caixa, padding: 30, textAlign: 'center', color: C.ink3 }}>Nenhuma programação mensal ainda. <button onClick={congelar} style={{ fontFamily: 'inherit', border: 'none', background: 'none', color: C.primary, cursor: 'pointer', fontWeight: 600 }}>Congelar a programação de um mês</button></div>;
-  const L = (linhas || []).filter(x => fTipo === 'todos' || (fTipo === 'servico' ? x.servico : !x.servico));
+  const L = (linhas || []).filter(x => (fTipo === 'servico' ? x.servico : !x.servico));
+  const fatT = fTipo === 'servico' ? fatTotal.servico : fatTotal.material;
   const prev = L.reduce((t, x) => t + Number(x.previsto || 0), 0);
   const prevPlan = L.reduce((t, x) => t + Number(x.previsto_planilha || 0), 0);
   const fatProg = L.reduce((t, x) => t + Number(x.faturado_mes || 0), 0);
@@ -23350,22 +23351,22 @@ function PlanMes() {
           {meses.map(m => <option key={m} value={m}>{nomeMes(m)}</option>)}
         </select>
         <div style={{ display: 'inline-flex', background: '#E7EBF1', borderRadius: 9, padding: 3, gap: 2 }}>
-          {[['todos', 'Tudo'], ['material', 'Material'], ['servico', 'Serviço']].map(([k, r]) => (
+          {[['material', 'Material (programado)'], ['servico', 'Serviço (à parte)']].map(([k, r]) => (
             <button key={k} onClick={() => setFTipo(k)} style={{ fontFamily: 'inherit', fontSize: 12.5, fontWeight: fTipo === k ? 700 : 500, padding: '5px 11px', borderRadius: 7, border: 'none', cursor: 'pointer', background: fTipo === k ? C.surface : 'transparent', color: fTipo === k ? C.ink : C.ink2 }}>{r}</button>))}
         </div>
-        <span style={{ fontSize: 12, color: C.ink3 }}>material e serviço em linhas separadas · valores do Sankhya (pedidos − o que já tinha sido faturado) × o que o Sankhya faturou no mês</span>
+        <span style={{ fontSize: 12, color: C.ink3 }}>{fTipo === 'servico' ? 'serviço NÃO entra no valor programado: aparece aqui só para acompanhamento' : 'programado = só material · valores do Sankhya (pedidos − o que já tinha sido faturado) × o que o Sankhya faturou no mês'}</span>
         <span style={{ flex: 1 }} />
         <button onClick={congelar} style={{ fontFamily: 'inherit', fontSize: 12.5, padding: '7px 12px', borderRadius: 8, border: `1px solid ${C.line}`, background: C.surface, cursor: 'pointer' }}>Congelar a programação de um mês</button>
       </div>
       {msg && <div style={{ ...caixa, padding: '8px 12px', fontSize: 12.5, color: msg.startsWith('Erro') ? C.loss : C.win }}>{msg}</div>}
       {!linhas ? <div style={{ padding: 30, textAlign: 'center', color: C.ink3 }}>Carregando…</div> : (<>
         <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(185px, 1fr))' }}>
-          {card('Programado (Sankhya)', moeda(prev), `${[L.filter(x => !x.servico).length ? `${L.filter(x => !x.servico).length} projetos de material` : null, L.filter(x => x.servico).length ? `${L.filter(x => x.servico).length} de serviço` : null].filter(Boolean).join(' + ')} · a planilha dizia ${moeda(prevPlan)} (${prev - prevPlan >= 0 ? '+' : ''}${moeda(prev - prevPlan)})`, C.primary)}
+          {card(fTipo === 'servico' ? 'Serviços do mês (fora do programado)' : 'Programado (Sankhya)', moeda(prev), `${L.length} ${fTipo === 'servico' ? 'serviços' : 'projetos'} · a planilha dizia ${moeda(prevPlan)} (${prev - prevPlan >= 0 ? '+' : ''}${moeda(prev - prevPlan)})`, C.primary)}
           {card('Faturado da programação', moeda(fatProg), `${prev ? Math.round(100 * fatProg / prev) : 0}% do programado · notas do Sankhya no mês`, '#1E8E4F', 'faturado')}
           {card('Pendente', moeda(soma('falta_agora', x => x.situacao === 'pendente' || x.situacao === 'parcial')), `${L.filter(x => x.situacao === 'pendente').length} pendentes + ${L.filter(x => x.situacao === 'parcial').length} parciais · ainda a faturar`, '#1D5FBF', 'pendente')}
           {card('Reprogramado', moeda(soma('previsto', x => x.situacao === 'reprogramado')), `${L.filter(x => x.situacao === 'reprogramado').length} projetos com estimativa do PCP depois do mês`, '#B42318', 'reprogramado')}
-          {card('Faturado fora da programação', moeda(Math.max(0, fatTotal - fatProg)), `faturado no mês em projetos que não estavam no OOH`, '#7C3AED')}
-          {card('Faturado total no mês', moeda(fatTotal), 'todas as notas de venda do mês (Sankhya)', '#0F2340')}
+          {card('Faturado fora da programação', moeda(Math.max(0, fatT - fatProg)), `faturado no mês (${fTipo === 'servico' ? 'serviço' : 'material'}) em projetos que não estavam no OOH`, '#7C3AED')}
+          {card('Faturado total no mês', moeda(fatT), `notas de venda de ${fTipo === 'servico' ? 'serviço' : 'material'} do mês (Sankhya)`, '#0F2340')}
         </div>
         <div style={{ display: 'grid', gap: 14, gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))' }}>
           <section style={{ ...caixa, overflow: 'hidden' }}>
