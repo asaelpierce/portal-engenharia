@@ -23177,11 +23177,11 @@ function PlanejamentoPCP() {
           <div style={{ fontSize: 12, color: C.ink3 }}>Programação do mês e lista mestra dos projetos, ligadas ao Sankhya (carteira e faturamento atualizados sozinhos). Os campos do PCP são editados aqui.</div>
         </div>
         <div style={{ display: 'inline-flex', background: '#E7EBF1', borderRadius: 9, padding: 3, gap: 2 }}>
-          {[['mes', 'Mês (OOH)'], ['mestra', 'Lista mestra'], ['comunicacoes', 'Comunicações'], ['comparativo', 'Planilha × Sankhya']].map(([k, r]) => (
+          {[['consulta', 'Consultar BR'], ['mes', 'Mês (OOH)'], ['mestra', 'Lista mestra'], ['comunicacoes', 'Comunicações'], ['comparativo', 'Planilha × Sankhya']].map(([k, r]) => (
             <button key={k} onClick={() => setAba(k)} style={{ fontFamily: 'inherit', fontSize: 13, fontWeight: aba === k ? 700 : 500, padding: '7px 14px', borderRadius: 7, border: 'none', cursor: 'pointer', background: aba === k ? C.surface : 'transparent', color: aba === k ? C.ink : C.ink2 }}>{r}</button>))}
         </div>
       </div>
-      {aba === 'mes' ? <PlanMes /> : aba === 'mestra' ? <PlanMestra autor={autor} /> : aba === 'comunicacoes' ? <PlanComunicacoes /> : <PlanComparativo />}
+      {aba === 'consulta' ? <PlanConsultaBR /> : aba === 'mes' ? <PlanMes /> : aba === 'mestra' ? <PlanMestra autor={autor} /> : aba === 'comunicacoes' ? <PlanComunicacoes /> : <PlanComparativo />}
     </div>
   );
 }
@@ -23205,9 +23205,15 @@ function PlanDetalheProjeto({ brNum, servico, onFechar }) {
         supabase.from('plan_projeto').select('*').eq('br_num', brNum),
         supabase.from('v_plan_mestra').select('br,cliente,vendedor,prevista_sankhya').eq('br_num', brNum).limit(1),
       ]);
+      const [cp, oo, ev] = await Promise.all([
+        supabase.from('v_plan_comparativo').select('*').eq('br_num', brNum),
+        supabase.from('v_plan_ooh_mes').select('*').eq('br_num', brNum).order('mes', { ascending: false }),
+        supabase.from('plan_evento').select('*').eq('br_num', brNum).order('criado_em', { ascending: false }),
+      ]);
       const notasIds = [...new Set((vi.data || []).map(v => v.nunota_nota))];
       const { data: notas } = notasIds.length ? await supabase.from('plan_sankhya_nota').select('*').in('nunota', notasIds) : { data: [] };
-      setDados({ peds: peds || [], itens: it.data || [], vinc: vi.data || [], notas: notas || [], pcli: pc.data || [], plan: (pl.data || []).filter(x => servico == null || x.servico === servico), cab: (mestra.data || [])[0] || {} });
+      setDados({ peds: peds || [], itens: it.data || [], vinc: vi.data || [], notas: notas || [], pcli: pc.data || [], plan: (pl.data || []).filter(x => servico == null || x.servico === servico), cab: (mestra.data || [])[0] || {},
+        comp: (cp.data || []).filter(x => servico == null || x.servico === servico), ooh: (oo.data || []).filter(x => servico == null || x.servico === servico), ev: ev.data || [] });
     })();
     const t = (e) => { if (e.key === 'Escape') fecharRef.current(); };
     window.addEventListener('keydown', t); return () => window.removeEventListener('keydown', t);
@@ -23239,6 +23245,34 @@ function PlanDetalheProjeto({ brNum, servico, onFechar }) {
                 <div key={r} style={{ ...caixa, padding: '10px 12px' }}><div style={{ fontSize: 11.5, color: C.ink3 }}>{r}</div><div style={{ fontSize: 17, fontWeight: 800, fontVariantNumeric: 'tabular-nums' }}>{v}</div></div>))}
             </div>
             {d.plan.some(p => p.consideracoes) && <div style={{ ...caixa, padding: '10px 14px', fontSize: 12.5 }}><strong>Considerações do PCP:</strong> {d.plan.map(p => p.consideracoes).filter(Boolean).join(' · ')}</div>}
+            {d.comp.length > 0 && (
+              <section style={{ ...caixa, overflow: 'hidden' }}>
+                <div style={{ padding: '10px 14px', fontWeight: 700, borderBottom: `1px solid ${C.line}` }}>Planilha Mestra (26/10) × Sankhya</div>
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                    <thead><tr>{['Linha', 'Valor (planilha)', 'O valor da planilha é…', 'A faturar (planilha)', 'Saldo (Sankhya)', 'Faturado (planilha)', 'Faturado (Sankhya)', 'Problemas'].map((h, k) => <th key={h} style={{ ...thD, textAlign: [0, 2, 7].includes(k) ? 'left' : 'right' }}>{h}</th>)}</tr></thead>
+                    <tbody>{d.comp.map(c => (
+                      <tr key={String(c.servico)}>
+                        <td style={{ ...tdD, textAlign: 'left', fontWeight: 700 }}>{c.servico ? 'Serviço' : 'Material'}</td>
+                        <td style={tdD}>{moeda(c.valor_planilha)}</td>
+                        <td style={{ ...tdD, textAlign: 'left', whiteSpace: 'normal', fontSize: 11.5, color: c.valor_planilha_e === 'total dos pedidos' ? C.win : C.warn }}>{c.valor_planilha_e || '—'}</td>
+                        <td style={tdD}>{moeda(c.a_faturar_planilha)}</td><td style={{ ...tdD, fontWeight: 700 }}>{moeda(c.sk_saldo)}</td>
+                        <td style={tdD}>{moeda(c.faturado_planilha)}</td><td style={tdD}>{moeda(c.sk_faturado)}</td>
+                        <td style={{ ...tdD, textAlign: 'left', whiteSpace: 'normal', fontSize: 11.5, color: (c.problemas || []).length ? '#B42318' : C.win }}>{(c.problemas || []).join(' · ') || 'confere'}</td>
+                      </tr>))}</tbody>
+                  </table>
+                </div>
+              </section>)}
+            {d.ooh.length > 0 && (
+              <section style={{ ...caixa, padding: '10px 14px', fontSize: 12.5 }}>
+                <strong>Programação mensal (OOH):</strong>{' '}
+                {d.ooh.map((o, k) => <span key={k} style={{ marginRight: 16 }}>{new Date(`${o.mes}T12:00:00`).toLocaleDateString('pt-BR', { month: 'short', year: 'numeric' })}{o.servico ? ' (serviço)' : ''}: programado {moeda(o.previsto)}{Math.abs(Number(o.dif_planilha || 0)) > 50 ? ` (planilha ${moeda(o.previsto_planilha)})` : ''} · faturado {moeda(o.faturado_mes)} · <strong>{(PLAN_SIT[o.situacao] || {}).r || o.situacao}</strong></span>)}
+              </section>)}
+            {d.ev.length > 0 && (
+              <section style={{ ...caixa, padding: '10px 14px', fontSize: 12.5 }}>
+                <strong>Comunicações registradas:</strong>
+                {d.ev.map(e => <div key={e.id} style={{ marginTop: 3 }}>{new Date(e.criado_em).toLocaleDateString('pt-BR')} · <strong>{(PLAN_EV[e.tipo] || {}).r || e.tipo}</strong>{e.nova_data ? ` para ${dt(e.nova_data)}` : ''} · {e.motivo} <span style={{ color: C.ink3 }}>({e.registrado_por})</span></div>)}
+              </section>)}
             {!d.peds.length && <div style={{ ...caixa, padding: 20, textAlign: 'center', color: C.ink3 }}>Nenhum pedido de venda deste tipo no Sankhya.</div>}
             {d.peds.map(p => {
               const itens = d.itens.filter(i => i.nunota === p.nunota);
@@ -23287,6 +23321,59 @@ function PlanDetalheProjeto({ brNum, servico, onFechar }) {
         )}
       </aside>
     </div>, document.body);
+}
+
+// Consultar BR: digita e já aparece; abre tudo do projeto (pedidos, itens, notas, PCP, planilha × Sankhya, OOH, comunicações).
+function PlanConsultaBR() {
+  const C = CRMC;
+  const [base, setBase] = useState(null);
+  const [termo, setTermo] = useState('');
+  const [aberto, setAberto] = useState(null);
+  useEffect(() => {
+    Promise.all([supabase.from('v_plan_mestra').select('br_num,servico,br,cliente,vendedor,setor,falta_faturar,em_carteira,andamento'),
+                 supabase.from('plan_sankhya_pedido').select('br_num,br')]).then(([a, b2]) => {
+      const m = {};
+      (a.data || []).forEach(x => { const o = m[x.br_num] || (m[x.br_num] = { br_num: x.br_num, br: x.br, cliente: x.cliente, vendedor: x.vendedor, setores: new Set(), falta: 0, servico: false, carteira: false, andamento: new Set() });
+        if (x.setor) o.setores.add(x.setor); o.falta += Number(x.falta_faturar || 0); o.servico = o.servico || x.servico; o.carteira = o.carteira || x.em_carteira; if (x.andamento) o.andamento.add(x.andamento); });
+      (b2.data || []).forEach(x => { if (!m[x.br_num]) m[x.br_num] = { br_num: x.br_num, br: x.br, cliente: '', vendedor: '', setores: new Set(), falta: 0, servico: false, carteira: false, andamento: new Set() }; });
+      setBase(Object.values(m));
+    });
+  }, []);
+  const moeda = (v) => Number(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 });
+  const t = termo.trim().toLowerCase().replace(/\s+/g, '');
+  const dig = t.replace(/\D/g, '');
+  const res = !base || !t ? [] : base.filter(x => `${x.br}${x.br_num}${(x.cliente || '').toLowerCase()}${(x.vendedor || '').toLowerCase()}`.toLowerCase().replace(/\s+/g, '').includes(t))
+    .sort((a, b) => ((dig && String(b.br_num).startsWith(dig) ? 1 : 0) - (dig && String(a.br_num).startsWith(dig) ? 1 : 0)) || b.br_num - a.br_num).slice(0, 40);
+  const caixa = { background: C.surface, border: `1px solid ${C.line}`, borderRadius: 12 };
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div style={{ ...caixa, padding: '14px 16px' }}>
+        <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6 }}>Consultar um projeto</div>
+        <div style={{ position: 'relative' }}>
+          <Search size={16} aria-hidden="true" style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: C.ink3 }} />
+          <input autoFocus value={termo} onChange={e => setTermo(e.target.value)} placeholder="digite o BR (ex.: 14326), o cliente ou o vendedor"
+            style={{ fontFamily: 'inherit', fontSize: 15, padding: '11px 12px 11px 38px', borderRadius: 10, border: `1px solid ${C.line}`, width: '100%', boxSizing: 'border-box' }} />
+        </div>
+        <div style={{ fontSize: 11.5, color: C.ink3, marginTop: 6 }}>Ao clicar, abre tudo do projeto: pedidos do Sankhya com produtos e quantidades (pedida, entregue, pendente), notas, campos do PCP, planilha × Sankhya, programação mensal e comunicações.</div>
+      </div>
+      {!base && <div style={{ padding: 20, textAlign: 'center', color: C.ink3 }}>Carregando…</div>}
+      {base && t && (
+        <div style={{ ...caixa, overflow: 'hidden' }}>
+          {!res.length && <div style={{ padding: 18, textAlign: 'center', color: C.ink3 }}>Nenhum projeto encontrado.</div>}
+          {res.map(x => (
+            <button key={x.br_num} onClick={() => setAberto(x.br_num)} style={{ display: 'grid', gridTemplateColumns: 'minmax(110px, 140px) 1fr auto', gap: 12, alignItems: 'center', width: '100%', textAlign: 'left', fontFamily: 'inherit', padding: '10px 14px', border: 'none', borderBottom: `1px solid ${C.lineSoft}`, background: 'transparent', cursor: 'pointer' }}
+              onMouseEnter={e => { e.currentTarget.style.background = '#F7F9FC'; }} onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}>
+              <strong style={{ color: C.primary, fontSize: 13.5 }}>{x.br}</strong>
+              <span style={{ fontSize: 12.5, minWidth: 0 }}>
+                <span style={{ color: C.ink }}>{x.cliente || '—'}</span>
+                <span style={{ color: C.ink3 }}> · {x.vendedor || '—'} · {[...x.setores].join(' + ') || 'sem setor'}{x.servico ? ' · tem serviço' : ''}{x.andamento.size ? ` · ${[...x.andamento].join(' / ')}` : ''}</span>
+              </span>
+              <span style={{ fontSize: 12.5, fontWeight: 700, color: x.carteira ? C.ink : C.ink3, whiteSpace: 'nowrap' }}>{x.carteira ? `falta ${moeda(x.falta)}` : 'fora da carteira'}</span>
+            </button>))}
+        </div>)}
+      {aberto && <PlanDetalheProjeto brNum={aberto} servico={null} onFechar={() => setAberto(null)} />}
+    </div>
+  );
 }
 
 function PlanMes() {
