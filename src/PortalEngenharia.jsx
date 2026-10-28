@@ -23186,6 +23186,109 @@ function PlanejamentoPCP() {
   );
 }
 
+// Detalhe de um projeto do Planejamento (BR + material/serviço): pedidos do Sankhya com os itens (produto, quantidade
+// pedida, entregue, pendente, valores), notas emitidas para cada pedido e os campos do PCP.
+function PlanDetalheProjeto({ brNum, servico, onFechar }) {
+  const C = CRMC;
+  const [dados, setDados] = useState(null);
+  const fecharRef = useRef(onFechar); fecharRef.current = onFechar;
+  useEffect(() => {
+    (async () => {
+      let q = supabase.from('v_plan_pedido').select('*').eq('br_num', brNum).neq('codtipoper', 3109);
+      if (servico != null) q = q.eq('servico', servico);
+      const { data: peds } = await q.order('dtneg');
+      const nus = (peds || []).map(p => p.nunota);
+      const [it, vi, pc, pl, mestra] = await Promise.all([
+        nus.length ? supabase.from('plan_sankhya_item').select('*').in('nunota', nus).order('sequencia') : { data: [] },
+        nus.length ? supabase.from('plan_sankhya_vinculo').select('*').in('nunota_pedido', nus) : { data: [] },
+        nus.length ? supabase.from('pedidos_itens').select('nunota,numero_pedido').in('nunota', nus) : { data: [] },
+        supabase.from('plan_projeto').select('*').eq('br_num', brNum),
+        supabase.from('v_plan_mestra').select('br,cliente,vendedor,prevista_sankhya').eq('br_num', brNum).limit(1),
+      ]);
+      const notasIds = [...new Set((vi.data || []).map(v => v.nunota_nota))];
+      const { data: notas } = notasIds.length ? await supabase.from('plan_sankhya_nota').select('*').in('nunota', notasIds) : { data: [] };
+      setDados({ peds: peds || [], itens: it.data || [], vinc: vi.data || [], notas: notas || [], pcli: pc.data || [], plan: (pl.data || []).filter(x => servico == null || x.servico === servico), cab: (mestra.data || [])[0] || {} });
+    })();
+    const t = (e) => { if (e.key === 'Escape') fecharRef.current(); };
+    window.addEventListener('keydown', t); return () => window.removeEventListener('keydown', t);
+  }, [brNum, servico]);
+  const moeda = (v) => (v == null ? '—' : Number(v).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }));
+  const q = (v) => (v == null ? '—' : Number(v).toLocaleString('pt-BR', { maximumFractionDigits: 3 }));
+  const dt = (d) => (d ? new Date(`${String(d).slice(0, 10)}T12:00:00`).toLocaleDateString('pt-BR') : '—');
+  const caixa = { background: C.surface, border: `1px solid ${C.line}`, borderRadius: 10 };
+  const thD = { padding: '7px 9px', fontSize: 11, fontWeight: 600, color: C.ink2, background: '#F1F4F8', borderBottom: `1px solid ${C.line}`, textAlign: 'right', whiteSpace: 'nowrap' };
+  const tdD = { padding: '7px 9px', textAlign: 'right', fontVariantNumeric: 'tabular-nums', borderBottom: `1px solid ${C.lineSoft}`, whiteSpace: 'nowrap', fontSize: 12.5, verticalAlign: 'top' };
+  const SIT_COR = { 'faturado total': C.win, 'faturado parcial · saldo pendente': C.warn, 'faturado parcial · saldo encerrado': '#7A271A', 'pendente (sem nota)': C.primary, 'encerrado sem nota': '#B42318' };
+  const d = dados;
+  const tot = d ? d.peds.reduce((a, p) => ({ total: a.total + Number(p.total_liquido || 0), fat: a.fat + Number(p.faturado || 0), saldo: a.saldo + Number(p.saldo || 0) }), { total: 0, fat: 0, saldo: 0 }) : null;
+  return ReactDOM.createPortal(
+    <div onClick={onFechar} style={{ position: 'fixed', inset: 0, zIndex: 88, background: 'rgba(15,35,64,.35)', overflowY: 'auto', overscrollBehavior: 'contain' }}>
+      <aside onClick={e => e.stopPropagation()} style={{ marginLeft: 'auto', width: 'min(1100px, 100%)', minHeight: '100%', background: '#F7F8FA', fontFamily: FONT_BODY, color: C.ink, boxShadow: '-10px 0 40px rgba(16,24,40,.25)' }}>
+        <div style={{ position: 'sticky', top: 0, zIndex: 3, background: '#0F2340', color: '#fff', padding: '16px 22px', display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 12, color: 'rgba(255,255,255,.7)' }}>{d?.cab?.vendedor || ''}{servico == null ? '' : servico ? ' · SERVIÇO' : ' · MATERIAL'}</div>
+            <div style={{ fontSize: 16.5, fontWeight: 700 }}>{d?.cab?.br || `BR${brNum}`} · {d?.cab?.cliente || ''}</div>
+          </div>
+          <button onClick={onFechar} style={{ fontFamily: 'inherit', fontSize: 12.5, fontWeight: 600, padding: '7px 12px', borderRadius: 8, border: '1px solid rgba(255,255,255,.3)', background: 'transparent', color: '#fff', cursor: 'pointer' }}>Fechar · Esc</button>
+        </div>
+        {!d ? <div style={{ padding: 40, textAlign: 'center', color: C.ink3 }}>Carregando os pedidos…</div> : (
+          <div style={{ padding: '16px 22px 40px', display: 'grid', gap: 16 }}>
+            <div style={{ display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))' }}>
+              {[['Líquido total dos pedidos', moeda(tot.total)], ['Faturado (notas)', moeda(tot.fat)], ['Saldo a faturar', moeda(tot.saldo)], ['Pedidos', String(d.peds.length)],
+                ['Estimativa do PCP', d.plan.map(p => dt(p.estimativa_pcp)).join(' / ') || '—'], ['Andamento (PCP)', d.plan.map(p => p.andamento || '—').join(' / ') || '—']].map(([r, v]) => (
+                <div key={r} style={{ ...caixa, padding: '10px 12px' }}><div style={{ fontSize: 11.5, color: C.ink3 }}>{r}</div><div style={{ fontSize: 17, fontWeight: 800, fontVariantNumeric: 'tabular-nums' }}>{v}</div></div>))}
+            </div>
+            {d.plan.some(p => p.consideracoes) && <div style={{ ...caixa, padding: '10px 14px', fontSize: 12.5 }}><strong>Considerações do PCP:</strong> {d.plan.map(p => p.consideracoes).filter(Boolean).join(' · ')}</div>}
+            {!d.peds.length && <div style={{ ...caixa, padding: 20, textAlign: 'center', color: C.ink3 }}>Nenhum pedido de venda deste tipo no Sankhya.</div>}
+            {d.peds.map(p => {
+              const itens = d.itens.filter(i => i.nunota === p.nunota);
+              const notas = d.vinc.filter(v => v.nunota_pedido === p.nunota).map(v => ({ ...v, n: d.notas.find(n => n.nunota === v.nunota_nota) }));
+              const pcli = [...new Set(d.pcli.filter(x => x.nunota === p.nunota && x.numero_pedido).map(x => x.numero_pedido))].join(', ');
+              return (
+                <section key={p.nunota} style={{ ...caixa, overflow: 'hidden' }}>
+                  <div style={{ padding: '10px 14px', borderBottom: `1px solid ${C.line}`, display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'baseline' }}>
+                    <strong style={{ fontSize: 14 }}>Pedido {p.numnota}</strong>
+                    {pcli && <span style={{ fontSize: 12.5 }}>pedido do cliente <strong>{pcli}</strong></span>}
+                    <span style={{ fontSize: 12, color: C.ink3 }}>{dt(p.dtneg)} · TOP {p.codtipoper}{p.servico ? ' · serviço' : ''} · nº único {p.nunota}</span>
+                    <span style={{ flex: 1 }} />
+                    <span style={{ fontSize: 12.5, fontWeight: 700, color: SIT_COR[p.situacao] || C.ink2 }}>{p.situacao}</span>
+                  </div>
+                  <div style={{ display: 'flex', gap: 22, flexWrap: 'wrap', padding: '8px 14px', fontSize: 12.5, borderBottom: `1px solid ${C.lineSoft}` }}>
+                    <span>Líquido total <strong>{moeda(p.total_liquido)}</strong></span><span>Faturado <strong>{moeda(p.faturado)}</strong></span><span>Saldo <strong>{moeda(p.saldo)}</strong></span>
+                  </div>
+                  <div style={{ overflowX: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                      <thead><tr>{['Código', 'Produto', 'Un.', 'Qtd pedida', 'Qtd entregue', 'Qtd pendente', '% entregue', 'Valor unit.', 'Valor total'].map((h, k) => <th key={h} style={{ ...thD, textAlign: k < 3 ? 'left' : 'right' }}>{h}</th>)}</tr></thead>
+                      <tbody>
+                        {!itens.length && <tr><td colSpan={9} style={{ padding: 12, textAlign: 'center', color: C.ink3 }}>Sem itens carregados.</td></tr>}
+                        {itens.map(i => { const pend = Math.max(0, Number(i.qtd_pedida || 0) - Number(i.qtd_entregue || 0)); const pct = Number(i.qtd_pedida) ? 100 * Number(i.qtd_entregue || 0) / Number(i.qtd_pedida) : 0;
+                          return (
+                            <tr key={i.sequencia}>
+                              <td style={{ ...tdD, textAlign: 'left', fontWeight: 700 }}>{i.codprod}</td>
+                              <td style={{ ...tdD, textAlign: 'left', whiteSpace: 'normal', maxWidth: 380 }}>{i.descricao}</td>
+                              <td style={{ ...tdD, textAlign: 'left', color: C.ink3 }}>{i.unidade}</td>
+                              <td style={tdD}>{q(i.qtd_pedida)}</td>
+                              <td style={{ ...tdD, fontWeight: 700, color: Number(i.qtd_entregue) ? C.win : C.ink3 }}>{q(i.qtd_entregue)}</td>
+                              <td style={{ ...tdD, color: pend > 0 && i.pendente === 'S' ? C.warn : C.ink3 }}>{pend > 0 ? q(pend) : '—'}{pend > 0 && i.pendente !== 'S' && <div style={{ fontSize: 10.5, color: '#7A271A' }}>encerrado</div>}</td>
+                              <td style={{ ...tdD, color: C.ink2 }}>{pct.toFixed(0)}%</td>
+                              <td style={{ ...tdD, color: C.ink2 }}>{moeda(i.valor_unit)}</td>
+                              <td style={tdD}>{moeda(i.valor_total)}</td>
+                            </tr>); })}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div style={{ padding: '8px 14px', fontSize: 12.5, borderTop: `1px solid ${C.lineSoft}` }}>
+                    <strong>Notas emitidas:</strong>{' '}
+                    {!notas.length ? <span style={{ color: C.ink3 }}>nenhuma</span>
+                      : notas.map((v, k) => <span key={k} style={{ marginRight: 14 }}>{v.n ? <>NF <strong>{v.n.numnota}</strong> de {dt(v.n.dtneg)} · {moeda(v.n.liquido)}</> : <>remessa (nº único {v.nunota_nota})</>} · qtd {q(v.qtd_atendida)}</span>)}
+                  </div>
+                </section>); })}
+          </div>
+        )}
+      </aside>
+    </div>, document.body);
+}
+
 function PlanMes() {
   const C = CRMC;
   const [meses, setMeses] = useState([]);
@@ -23195,6 +23298,7 @@ function PlanMes() {
   const [fSit, setFSit] = useState(null);
   const [fSetor, setFSetor] = useState(null);
   const [fTipo, setFTipo] = useState('todos');   // todos | material | servico
+  const [detalhe, setDetalhe] = useState(null);
   const [msg, setMsg] = useState(null);
   const carregarMeses = useCallback(async () => {
     const { data } = await supabase.from('plan_ooh').select('mes').order('mes', { ascending: false });
@@ -23295,7 +23399,8 @@ function PlanMes() {
               <thead><tr>{['BR', 'Cliente', 'Vendedor', 'Setor', 'Previsto p/', 'Programado (Sankhya)', 'Faturado no mês', 'Falta agora', 'Estimativa atual (PCP)', 'Situação'].map((h, k) => <th key={h} style={thS([0, 1, 2, 3, 9].includes(k) ? 'left' : 'right')}>{h}</th>)}</tr></thead>
               <tbody>{vis.map(x => { const sx = PLAN_SIT[x.situacao] || PLAN_SIT.pendente; const mudou = x.estimativa_atual && x.data_prevista && x.estimativa_atual !== x.data_prevista;
                 return (
-                  <tr key={`${x.br_num}-${x.servico}`}>
+                  <tr key={`${x.br_num}-${x.servico}`} onClick={() => setDetalhe(x)} style={{ cursor: 'pointer' }} title="clique para ver os pedidos, produtos e quantidades"
+                    onMouseEnter={e => { e.currentTarget.style.background = '#F7F9FC'; }} onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}>
                     <td style={{ ...td, textAlign: 'left', fontWeight: 700, color: C.primary }}>{x.br}{x.servico && <span style={{ marginLeft: 6, fontSize: 10.5, fontWeight: 700, color: '#0D9488', background: '#E6F6F4', borderRadius: 4, padding: '1px 5px' }}>SERVIÇO</span>}</td>
                     <td style={{ ...td, textAlign: 'left', whiteSpace: 'normal', maxWidth: 220 }}>{x.cliente}</td>
                     <td style={{ ...td, textAlign: 'left', color: C.ink2 }}>{x.vendedor}</td>
@@ -23311,6 +23416,7 @@ function PlanMes() {
           </div>
         </section>
       </>)}
+      {detalhe && <PlanDetalheProjeto brNum={detalhe.br_num} servico={detalhe.servico} onFechar={() => setDetalhe(null)} />}
     </div>
   );
 }
@@ -23525,6 +23631,7 @@ function PlanMestra({ autor }) {
   const [hist, setHist] = useState(null);
   const [status, setStatus] = useState({});     // br_num -> { status, desde, motivo }
   const [comunicar, setComunicar] = useState(null);
+  const [detalhe, setDetalhe] = useState(null);
   const carregar = useCallback(async () => {
     const [a, b2] = await Promise.all([supabase.from('v_plan_mestra').select('*'), supabase.from('v_plan_br_status').select('*')]);
     setLinhas(a.data || []); setStatus(Object.fromEntries((b2.data || []).map(x => [x.br_num, x])));
@@ -23590,7 +23697,7 @@ function PlanMestra({ autor }) {
               return (
                 <tr key={k} style={{ background: !l.tem_planejamento && l.em_carteira ? '#FFFBEB' : 'transparent' }}>
                   <td style={{ ...td, textAlign: 'left' }}>
-                    <strong style={{ color: C.primary }}>{l.br}</strong>{l.servico && <span style={{ marginLeft: 4, fontSize: 10.5, fontWeight: 700, color: '#0D9488' }}>SERVIÇO</span>}
+                    <button onClick={() => setDetalhe(l)} title="ver pedidos, produtos e quantidades" style={{ fontFamily: 'inherit', fontSize: 12.5, fontWeight: 700, color: C.primary, background: 'none', border: 'none', padding: 0, cursor: 'pointer', textDecoration: 'underline dotted' }}>{l.br}</button>{l.servico && <span style={{ marginLeft: 4, fontSize: 10.5, fontWeight: 700, color: '#0D9488' }}>SERVIÇO</span>}
                     <div style={{ fontSize: 10.5, color: C.ink3 }}>{l.pedidos_cliente ? `pedido ${l.pedidos_cliente}` : l.em_carteira ? '' : 'fora da carteira (faturado)'}{!l.tem_planejamento && l.em_carteira ? ' · NOVO, sem planejamento' : ''}</div>
                     {st?.status === 'cancelado' ? <div style={{ fontSize: 10.5, fontWeight: 700, color: '#B42318' }} title={st.motivo}>✕ cancelamento solicitado {new Date(st.desde).toLocaleDateString('pt-BR')}</div>
                       : st?.status === 'pausado' || l.pausado_em ? <div style={{ fontSize: 10.5, fontWeight: 700, color: '#B42318' }} title={st?.motivo || l.pausado_motivo}>⏸ pausado {new Date(st?.desde || l.pausado_em).toLocaleDateString('pt-BR')}</div>
@@ -23629,6 +23736,7 @@ function PlanMestra({ autor }) {
         Falta faturar, previsão e pedidos vêm do Sankhya (atualizam sozinhos). Setor, estimativa do PCP, data do CP, andamento e considerações são do PCP: alterar aqui grava na hora, com histórico de quem mudou.
         Dif. = estimativa do PCP − previsão do Sankhya (vermelho: o PCP prevê depois do Sankhya). Linhas em amarelo: pedidos novos ainda sem planejamento.
       </div>
+      {detalhe && <PlanDetalheProjeto brNum={detalhe.br_num} servico={detalhe.servico} onFechar={() => setDetalhe(null)} />}
       {comunicar && <PlanEventoModal linha={comunicar} status={status[comunicar.br_num]} onFechar={() => setComunicar(null)} onPronto={carregar} />}
       {hist && ReactDOM.createPortal(
         <div onClick={() => setHist(null)} style={{ position: 'fixed', inset: 0, zIndex: 90, background: 'rgba(15,35,64,.35)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
