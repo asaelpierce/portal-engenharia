@@ -23174,14 +23174,14 @@ function PlanejamentoPCP() {
       <div style={{ ...caixa, padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
         <div style={{ flex: 1, minWidth: 260 }}>
           <div style={{ fontSize: 16, fontWeight: 800 }}>Planejamento (PCP)</div>
-          <div style={{ fontSize: 12, color: C.ink3 }}>Programação do mês e lista mestra dos projetos, ligadas ao Sankhya (carteira e faturamento atualizados sozinhos). Os campos do PCP são editados aqui.</div>
+          <div style={{ fontSize: 12, color: C.ink3 }}>Programação do mês e lista mestra dos projetos, ligadas ao Sankhya. Os valores são sempre os do Sankhya (quantidade × valor unitário líquido); a planilha só diz o que o PCP programou.</div>
         </div>
         <div style={{ display: 'inline-flex', background: '#E7EBF1', borderRadius: 9, padding: 3, gap: 2 }}>
-          {[['consulta', 'Consultar BR'], ['mes', 'Mês (OOH)'], ['mestra', 'Lista mestra'], ['comunicacoes', 'Comunicações'], ['comparativo', 'Planilha × Sankhya']].map(([k, r]) => (
+          {[['consulta', 'Consultar BR'], ['mes', 'Mês (OOH)'], ['programar', 'Programar mês'], ['mestra', 'Lista mestra'], ['comunicacoes', 'Comunicações'], ['comparativo', 'Planilha × Sankhya']].map(([k, r]) => (
             <button key={k} onClick={() => setAba(k)} style={{ fontFamily: 'inherit', fontSize: 13, fontWeight: aba === k ? 700 : 500, padding: '7px 14px', borderRadius: 7, border: 'none', cursor: 'pointer', background: aba === k ? C.surface : 'transparent', color: aba === k ? C.ink : C.ink2 }}>{r}</button>))}
         </div>
       </div>
-      {aba === 'consulta' ? <PlanConsultaBR /> : aba === 'mes' ? <PlanMes /> : aba === 'mestra' ? <PlanMestra autor={autor} /> : aba === 'comunicacoes' ? <PlanComunicacoes /> : <PlanComparativo />}
+      {aba === 'consulta' ? <PlanConsultaBR /> : aba === 'mes' ? <PlanMes onProgramar={() => setAba('programar')} /> : aba === 'programar' ? <PlanProgramar /> : aba === 'mestra' ? <PlanMestra autor={autor} /> : aba === 'comunicacoes' ? <PlanComunicacoes /> : <PlanComparativo />}
     </div>
   );
 }
@@ -23376,9 +23376,13 @@ function PlanConsultaBR() {
   );
 }
 
-function PlanMes() {
+function PlanMes({ onProgramar }) {
   const C = CRMC;
   const [meses, setMeses] = useState([]);
+  const [cfg, setCfg] = useState({});
+  const [linhasConf, setLinhasConf] = useState([]);
+  const [conferir, setConferir] = useState(null);
+  const [verTodasConf, setVerTodasConf] = useState(false);
   const [mes, setMes] = useState(null);
   const [linhas, setLinhas] = useState(null);
   const [fatTotal, setFatTotal] = useState({ material: 0, servico: 0 });
@@ -23388,18 +23392,24 @@ function PlanMes() {
   const [detalhe, setDetalhe] = useState(null);
   const [msg, setMsg] = useState(null);
   const carregarMeses = useCallback(async () => {
-    const { data } = await supabase.from('plan_ooh').select('mes').order('mes', { ascending: false });
-    const ms = [...new Set((data || []).map(x => x.mes))]; setMeses(ms); setMes(m => m || ms[0] || null);
+    const [{ data }, { data: cf }] = await Promise.all([supabase.from('plan_ooh').select('mes').order('mes', { ascending: false }), supabase.from('plan_ooh_cfg').select('*')]);
+    const c = {}; (cf || []).forEach(x => { c[x.mes] = x; }); setCfg(c);
+    const ms = [...new Set((data || []).map(x => x.mes))]; setMeses(ms);
+    // abre no mês corrente congelado (o que está valendo); se não houver, no mais recente
+    const hoje = new Date(); const atual = `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, '0')}-01`;
+    setMes(m => m || (ms.includes(atual) ? atual : ms.find(x => c[x]?.congelado_em) || ms[0] || null));
   }, []);
   useEffect(() => { carregarMeses(); }, [carregarMeses]);
+  const [recarga, setRecarga] = useState(0);
   useEffect(() => {
     if (!mes) return;
     setLinhas(null);
     Promise.all([
       supabase.from('v_plan_ooh_mes').select('*').eq('mes', mes),
       supabase.from('v_plan_faturado_tipo_mes').select('faturado,servico').eq('mes', mes),
-    ]).then(([a, b]) => { setLinhas(a.data || []); setFatTotal({ material: (b.data || []).filter(x => !x.servico).reduce((t, x) => t + Number(x.faturado || 0), 0), servico: (b.data || []).filter(x => x.servico).reduce((t, x) => t + Number(x.faturado || 0), 0) }); });
-  }, [mes]);
+      supabase.from('v_plan_ooh_linha').select('*').eq('mes', mes),
+    ]).then(([a, b, c2]) => { setLinhas(a.data || []); setLinhasConf(c2.data || []); setFatTotal({ material: (b.data || []).filter(x => !x.servico).reduce((t, x) => t + Number(x.faturado || 0), 0), servico: (b.data || []).filter(x => x.servico).reduce((t, x) => t + Number(x.faturado || 0), 0) }); });
+  }, [mes, recarga]);
   const moeda = (v) => Number(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 });
   const dt = (d) => (d ? new Date(`${String(d).slice(0, 10)}T12:00:00`).toLocaleDateString('pt-BR') : '—');
   const nomeMes = (m) => m ? new Date(`${m}T12:00:00`).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' }) : '';
@@ -23414,7 +23424,7 @@ function PlanMes() {
   const caixa = { background: C.surface, border: `1px solid ${C.line}`, borderRadius: 12 };
   const td = { padding: '8px 10px', textAlign: 'right', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap', borderBottom: `1px solid ${C.lineSoft}` };
   const thS = (al = 'right') => ({ padding: '9px 10px', fontSize: 11.5, fontWeight: 600, color: C.ink2, textAlign: al, whiteSpace: 'nowrap', background: '#F1F4F8', borderBottom: `1px solid ${C.line}`, position: 'sticky', top: 0 });
-  if (!meses.length) return <div style={{ ...caixa, padding: 30, textAlign: 'center', color: C.ink3 }}>Nenhuma programação mensal ainda. <button onClick={congelar} style={{ fontFamily: 'inherit', border: 'none', background: 'none', color: C.primary, cursor: 'pointer', fontWeight: 600 }}>Congelar a programação de um mês</button></div>;
+  if (!meses.length) return <div style={{ ...caixa, padding: 30, textAlign: 'center', color: C.ink3 }}>Nenhuma programação mensal ainda. <button onClick={onProgramar} style={{ fontFamily: 'inherit', border: 'none', background: 'none', color: C.primary, cursor: 'pointer', fontWeight: 600 }}>Programar um mês</button></div>;
   // valores programados = SÓ MATERIAL; serviço aparece na lista, mas não soma
   const L = (linhas || []).filter(x => !x.servico);
   const LS = (linhas || []).filter(x => x.servico);
@@ -23438,7 +23448,7 @@ function PlanMes() {
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
         <strong>Programação de</strong>
         <select value={mes || ''} onChange={e => { setMes(e.target.value); setFSit(null); setFSetor(null); }} style={{ fontFamily: 'inherit', fontSize: 13, padding: '6px 10px', borderRadius: 8, border: `1px solid ${C.line}` }}>
-          {meses.map(m => <option key={m} value={m}>{nomeMes(m)}</option>)}
+          {meses.map(m => <option key={m} value={m}>{nomeMes(m)}{cfg[m]?.congelado_em ? '' : ' (em montagem)'}</option>)}
         </select>
         <div style={{ display: 'inline-flex', background: '#E7EBF1', borderRadius: 9, padding: 3, gap: 2 }}>
           {[['todos', 'Lista: tudo'], ['material', 'Só material'], ['servico', 'Só serviço']].map(([k, r]) => (
@@ -23446,7 +23456,8 @@ function PlanMes() {
         </div>
         <span style={{ fontSize: 12, color: C.ink3 }}>valor programado = só material · serviço aparece na lista para acompanhamento, mas não entra nos valores</span>
         <span style={{ flex: 1 }} />
-        <button onClick={congelar} style={{ fontFamily: 'inherit', fontSize: 12.5, padding: '7px 12px', borderRadius: 8, border: `1px solid ${C.line}`, background: C.surface, cursor: 'pointer' }}>Congelar a programação de um mês</button>
+        {mes && !cfg[mes]?.congelado_em && <span style={{ fontSize: 12, fontWeight: 600, color: C.warn }}>em montagem: ainda não congelada</span>}
+        <button onClick={onProgramar} style={{ fontFamily: 'inherit', fontSize: 12.5, padding: '7px 12px', borderRadius: 8, border: `1px solid ${C.line}`, background: C.surface, cursor: 'pointer' }}>Programar o próximo mês</button>
       </div>
       {msg && <div style={{ ...caixa, padding: '8px 12px', fontSize: 12.5, color: msg.startsWith('Erro') ? C.loss : C.win }}>{msg}</div>}
       {!linhas ? <div style={{ padding: 30, textAlign: 'center', color: C.ink3 }}>Carregando…</div> : (<>
@@ -23480,6 +23491,7 @@ function PlanMes() {
             </table>
           </section>
         </div>
+        <PlanConferenciaMes linhas={linhasConf} todas={verTodasConf} setTodas={setVerTodasConf} onConferir={setConferir} onAbrir={(l) => setDetalhe({ br_num: l.br_num, servico: l.servico })} />
         <section style={{ ...caixa, overflow: 'hidden' }}>
           <div style={{ padding: '10px 14px', borderBottom: `1px solid ${C.line}`, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
             <strong>Projetos programados</strong>
@@ -23499,8 +23511,10 @@ function PlanMes() {
                     <td style={{ ...td, textAlign: 'left', color: C.ink2 }}>{x.setores}</td>
                     <td style={td}>{dt(x.data_prevista)}</td>
                     <td style={{ ...td, color: x.servico ? C.ink3 : C.ink, fontStyle: x.servico ? 'italic' : 'normal' }} title={x.servico ? 'serviço: não entra no valor programado' : undefined}>{moeda(x.previsto)}
-                      {x.servico ? <div style={{ fontSize: 10.5, color: '#0D9488', fontStyle: 'normal' }}>não entra no programado</div>
-                        : Math.abs(Number(x.dif_planilha || 0)) > Math.max(50, 0.01 * Number(x.previsto || 0)) && <div style={{ fontSize: 10.5, color: C.warn, fontWeight: 600 }} title="valor que estava no OOH da planilha">planilha {moeda(x.previsto_planilha)}</div>}</td>
+                      {x.servico && <div style={{ fontSize: 10.5, color: '#0D9488', fontStyle: 'normal' }}>não entra no programado</div>}
+                      {x.conferencia && <div style={{ fontSize: 10.5, color: x.valor_confere ? C.ink3 : C.warn, fontWeight: x.valor_confere ? 400 : 600, fontStyle: 'normal', whiteSpace: 'normal', maxWidth: 230, marginLeft: 'auto' }}
+                        title={x.valor_confere ? 'a planilha bate com o Sankhya' : `a planilha dizia ${moeda(x.previsto_planilha)}`}>{x.conferencia}{!x.valor_confere ? ` · planilha ${moeda(x.previsto_planilha)}` : ''}</div>}
+                      {x.alerta && <div style={{ fontSize: 10.5, color: C.loss, fontWeight: 700, fontStyle: 'normal', whiteSpace: 'normal', maxWidth: 230, marginLeft: 'auto' }}>{x.alerta}</div>}</td>
                     <td style={{ ...td, fontWeight: 700, color: Number(x.faturado_mes) ? C.win : C.ink3 }}>{Number(x.faturado_mes) ? moeda(x.faturado_mes) : '—'}{x.nfs_mes && <div style={{ fontSize: 10.5, color: C.ink3, fontWeight: 400 }}>NF {x.nfs_mes}</div>}</td>
                     <td style={{ ...td, color: Number(x.falta_agora) ? C.ink : C.ink3 }}>{Number(x.falta_agora) ? moeda(x.falta_agora) : '—'}</td>
                     <td style={{ ...td, color: mudou ? C.loss : C.ink2, fontWeight: mudou ? 700 : 400 }}>{dt(x.estimativa_atual)}{mudou && <div style={{ fontSize: 10.5, fontWeight: 400 }}>era {dt(x.data_prevista)}</div>}</td>
@@ -23509,6 +23523,364 @@ function PlanMes() {
             </table>
           </div>
         </section>
+      </>)}
+      {detalhe && <PlanDetalheProjeto brNum={detalhe.br_num} servico={detalhe.servico} onFechar={() => setDetalhe(null)} />}
+      {conferir && <PlanEscolherPedidos linha={conferir} onFechar={() => setConferir(null)} onPronto={() => { setConferir(null); setRecarga(r => r + 1); }} />}
+    </div>
+  );
+}
+
+// Conferência da programação com o Sankhya, linha a linha: o que a planilha dizia × o que vale (Sankhya) e por quê.
+const PLAN_CONF_ORDEM = { nao_bate: 0, trocado: 1, bruto: 2, zerada: 3, qtd_parcial: 4, qtd_falta: 5, qtd_inteiro: 6, iss: 7, um_pedido: 8, sem_venda: 9, sem_pedido: 10, saldo: 11, inteiro_aprox: 12, inteiro: 13 };
+function PlanConferenciaMes({ linhas, todas, setTodas, onConferir, onAbrir }) {
+  const C = CRMC;
+  const moeda = (v) => (v == null ? '—' : Number(v).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 2 }));
+  const qf = (v) => (v == null ? '—' : Number(v).toLocaleString('pt-BR', { maximumFractionDigits: 3 }));
+  const dif = linhas.filter(l => !l.valor_confere || l.alerta);
+  const vis = (todas ? linhas : dif).slice().sort((a, b) => (!!b.alerta - !!a.alerta) || ((PLAN_CONF_ORDEM[a.tipo_conf] ?? 50) - (PLAN_CONF_ORDEM[b.tipo_conf] ?? 50)) || (a.br_num - b.br_num));
+  const ok = linhas.length - dif.length;
+  const caixa = { background: C.surface, border: `1px solid ${C.line}`, borderRadius: 12 };
+  const th = (al = 'right') => ({ padding: '8px 10px', fontSize: 11.5, fontWeight: 600, color: C.ink2, textAlign: al, whiteSpace: 'nowrap', background: '#F1F4F8', borderBottom: `1px solid ${C.line}` });
+  const td = { padding: '8px 10px', textAlign: 'right', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap', borderBottom: `1px solid ${C.lineSoft}`, fontSize: 12.5, verticalAlign: 'top' };
+  if (!linhas.length) return null;
+  return (
+    <section style={{ ...caixa, overflow: 'hidden' }}>
+      <div style={{ padding: '10px 14px', borderBottom: `1px solid ${C.line}`, display: 'flex', gap: 12, alignItems: 'baseline', flexWrap: 'wrap' }}>
+        <strong>Planilha conferida com o Sankhya</strong>
+        <span style={{ fontSize: 12.5, color: C.ink2 }}>{ok} de {linhas.length} linhas batem; {dif.length} com diferença ou pendência de conferência. O valor que vale é sempre o do Sankhya.</span>
+        <span style={{ flex: 1 }} />
+        <button onClick={() => setTodas(!todas)} style={{ fontFamily: 'inherit', fontSize: 12, border: 'none', background: 'none', color: C.primary, cursor: 'pointer', fontWeight: 600 }}>{todas ? 'Mostrar só as diferenças' : 'Mostrar todas as linhas'}</button>
+      </div>
+      {!vis.length ? <div style={{ padding: 16, fontSize: 12.5, color: C.win, textAlign: 'center' }}>Todas as linhas da programação batem com o Sankhya.</div> : (
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead><tr><th style={th('left')}>BR</th><th style={th('left')}>Setor</th><th style={th()}>Qtd programada</th><th style={th()}>Sankhya: entregue / pedida</th><th style={th()}>Planilha</th><th style={th()}>Vale (Sankhya)</th><th style={th('left')}>O que é</th><th style={th('left')} /></tr></thead>
+            <tbody>{vis.map(l => (
+              <tr key={l.id}>
+                <td style={{ ...td, textAlign: 'left' }}><button onClick={() => onAbrir(l)} style={{ fontFamily: 'inherit', fontSize: 12.5, fontWeight: 700, color: C.primary, border: 'none', background: 'none', padding: 0, cursor: 'pointer' }}>{l.br_planilha}</button>
+                  {l.servico && <span style={{ marginLeft: 6, fontSize: 10.5, fontWeight: 700, color: '#0D9488', background: '#E6F6F4', borderRadius: 4, padding: '1px 5px' }}>SERVIÇO</span>}
+                  <div style={{ fontSize: 11, color: C.ink3, whiteSpace: 'normal', maxWidth: 220 }}>{l.cliente}</div></td>
+                <td style={{ ...td, textAlign: 'left', color: C.ink2 }}>{l.setor}</td>
+                <td style={td}>{qf(l.qtd_plan)}{l.unidade_descricao ? ` ${l.unidade_descricao.toLowerCase()}` : ''}</td>
+                <td style={{ ...td, color: C.ink2 }}>{l.n_ped ? `${qf(l.qtd_entregue)} / ${qf(l.qtd)} ${String(l.unidade || '').toLowerCase()}` : '—'}{l.n_ped > 1 && <div style={{ fontSize: 10.5, color: C.ink3 }}>{l.n_ped} pedidos</div>}</td>
+                <td style={{ ...td, color: l.valor_confere ? C.ink2 : C.warn }}>{moeda(l.valor_planilha)}</td>
+                <td style={{ ...td, fontWeight: 700 }}>{moeda(l.valor_sankhya)}{Number(l.fat_mes) > 0 && <div style={{ fontSize: 10.5, color: C.win, fontWeight: 600 }}>faturado no mês {moeda(l.fat_mes)}</div>}</td>
+                <td style={{ ...td, textAlign: 'left', whiteSpace: 'normal', minWidth: 220, color: l.valor_confere ? C.ink2 : C.ink }}>{l.conferencia}
+                  {l.alerta && <div style={{ fontSize: 11.5, color: C.loss, fontWeight: 700 }}>{l.alerta}</div>}
+                  {l.nunotas && <div style={{ fontSize: 11, color: C.win }}>pedido(s) confirmado(s): {(l.pedidos || []).map(p => p.numnota).join(', ')}{l.obs_conferencia ? ` · ${l.obs_conferencia}` : ''}</div>}</td>
+                <td style={{ ...td, textAlign: 'left' }}>{l.n_ped > 1 && <button onClick={() => onConferir(l)} style={{ fontFamily: 'inherit', fontSize: 12, fontWeight: 600, padding: '5px 10px', borderRadius: 7, border: `1px solid ${l.alerta ? C.loss : C.line}`, background: C.surface, color: l.alerta ? C.loss : C.ink2, cursor: 'pointer' }}>{l.nunotas ? 'Trocar pedido' : 'Escolher pedido'}</button>}</td>
+              </tr>))}</tbody>
+          </table>
+        </div>)}
+    </section>
+  );
+}
+
+// Escolher quais pedidos do Sankhya entram numa linha da programação (quando o BR tem mais de um pedido do mesmo tipo).
+function PlanEscolherPedidos({ linha: l, onFechar, onPronto }) {
+  const C = CRMC;
+  const [peds, setPeds] = useState(null);
+  const [sel, setSel] = useState(new Set(l.nunotas || []));
+  const [obs, setObs] = useState(l.obs_conferencia || '');
+  const [salvando, setSalvando] = useState(false);
+  useEffect(() => { supabase.from('v_plan_ped_real').select('*').eq('br_num', l.br_num).eq('servico', l.servico).order('numnota').then(({ data }) => setPeds(data || [])); }, [l.br_num, l.servico]);
+  const moeda = (v) => Number(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+  const salvar = async (limpar) => {
+    setSalvando(true);
+    const { data, error } = await supabase.rpc('fn_plan_prog_alterar', { p_id: l.id, p_nunotas: limpar ? null : [...sel], p_obs: obs.trim() || null, p_limpar_nunotas: !!limpar });
+    setSalvando(false);
+    if (error || !data?.ok) { alert(error?.message || data?.erro); return; }
+    onPronto();
+  };
+  return ReactDOM.createPortal(
+    <div onClick={onFechar} style={{ position: 'fixed', inset: 0, zIndex: 90, background: 'rgba(15,35,64,.35)', display: 'grid', placeItems: 'center', padding: 16 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: C.surface, borderRadius: 12, width: 'min(620px, 100%)', maxHeight: '90vh', overflowY: 'auto', fontFamily: FONT_BODY, color: C.ink }}>
+        <div style={{ padding: '14px 18px', borderBottom: `1px solid ${C.line}` }}>
+          <div style={{ fontSize: 15, fontWeight: 800 }}>{l.br_planilha} · qual pedido entra nesta linha?</div>
+          <div style={{ fontSize: 12.5, color: C.ink2, marginTop: 4 }}>A planilha programou {l.valor_planilha != null ? moeda(l.valor_planilha) : 'sem valor'}{l.qtd_plan ? ` (quantidade ${Number(l.qtd_plan).toLocaleString('pt-BR')})` : ''}. Marque os pedidos do Sankhya que fazem parte desta entrega; o valor passa a ser o deles.</div>
+        </div>
+        <div style={{ padding: '10px 18px', display: 'grid', gap: 8 }}>
+          {!peds ? <div style={{ color: C.ink3 }}>Carregando…</div> : peds.map(p => (
+            <label key={p.nunota} style={{ display: 'flex', gap: 10, alignItems: 'flex-start', padding: '9px 11px', border: `1px solid ${sel.has(p.nunota) ? C.primary : C.line}`, borderRadius: 9, cursor: 'pointer', background: sel.has(p.nunota) ? C.primarySoft : C.surface }}>
+              <input type="checkbox" checked={sel.has(p.nunota)} onChange={() => { const n = new Set(sel); n.has(p.nunota) ? n.delete(p.nunota) : n.add(p.nunota); setSel(n); }} style={{ marginTop: 3 }} />
+              <span style={{ fontSize: 12.5 }}>
+                <strong>Pedido {p.numnota}</strong> de {new Date(`${p.dtneg}T12:00:00`).toLocaleDateString('pt-BR')} · TOP {p.codtipoper}<br />
+                líquido {moeda(p.liquido)} · faturado {moeda(p.fat)} · saldo {moeda(p.saldo_real)}{p.nfs ? ` · NF ${p.nfs}` : ''}<br />
+                <span style={{ color: C.ink3 }}>{Number(p.qtd_entregue).toLocaleString('pt-BR')} de {Number(p.qtd).toLocaleString('pt-BR')} {String(p.unidade || '').toLowerCase()} entregues</span>
+              </span>
+            </label>))}
+          <textarea value={obs} onChange={e => setObs(e.target.value)} placeholder="observação (opcional): por exemplo, confirmado com o PCP que em outubro sai só a primeira caixa" rows={2}
+            style={{ fontFamily: 'inherit', fontSize: 12.5, padding: 8, borderRadius: 8, border: `1px solid ${C.line}`, resize: 'vertical' }} />
+        </div>
+        <div style={{ padding: '12px 18px', borderTop: `1px solid ${C.line}`, display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+          {l.nunotas && <button onClick={() => salvar(true)} disabled={salvando} style={{ fontFamily: 'inherit', fontSize: 12.5, padding: '8px 12px', borderRadius: 8, border: `1px solid ${C.line}`, background: C.surface, cursor: 'pointer', marginRight: 'auto' }}>Voltar a considerar todos os pedidos</button>}
+          <button onClick={onFechar} style={{ fontFamily: 'inherit', fontSize: 12.5, padding: '8px 12px', borderRadius: 8, border: `1px solid ${C.line}`, background: C.surface, cursor: 'pointer' }}>Cancelar</button>
+          <button onClick={() => salvar(false)} disabled={salvando || !sel.size} style={{ fontFamily: 'inherit', fontSize: 12.5, fontWeight: 700, padding: '8px 14px', borderRadius: 8, border: 'none', background: sel.size ? C.primary : '#98A2B3', color: '#fff', cursor: sel.size ? 'pointer' : 'default' }}>{salvando ? 'Salvando…' : 'Confirmar pedido'}</button>
+        </div>
+      </div>
+    </div>, document.body);
+}
+
+// ============================================================================
+// PROGRAMAR MÊS — o PCP monta a programação do próximo mês aqui, do mesmo jeito da OOH (abas KALIMPACT, REVESTIMENTO,
+// PG1 e SERVIÇOS), mas a partir da carteira do Sankhya: quantidade pendente × valor unitário líquido real. Enquanto o mês
+// está "em montagem" dá para incluir, mudar quantidade/data e tirar linhas; ao congelar, vira a programação original
+// do mês (aba Mês) e só a conferência (qual pedido) muda. Exporta no mesmo layout da planilha deles.
+// ============================================================================
+const PLAN_ABAS = ['KALIMPACT', 'REVESTIMENTO', 'PG1', 'SERVIÇOS'];
+const planAba = (setor, servico) => (servico ? 'SERVIÇOS' : setor === 'KALIMPACT' ? 'KALIMPACT' : (setor === 'PG1' || setor === 'PG2') ? 'PG1' : 'REVESTIMENTO');
+const PLAN_MES_NOME = ['JANEIRO', 'FEVEREIRO', 'MARÇO', 'ABRIL', 'MAIO', 'JUNHO', 'JULHO', 'AGOSTO', 'SETEMBRO', 'OUTUBRO', 'NOVEMBRO', 'DEZEMBRO'];
+const planSemana = (iso) => { if (!iso) return null; const d = new Date(`${String(iso).slice(0, 10)}T12:00:00`); const t = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate())); const dia = t.getUTCDay() || 7; t.setUTCDate(t.getUTCDate() + 4 - dia); const a = new Date(Date.UTC(t.getUTCFullYear(), 0, 1)); return Math.ceil(((t - a) / 86400000 + 1) / 7); };
+
+async function planExportarOOH(mes, linhas) {
+  const brs = [...new Set(linhas.map(l => l.br_num))];
+  const [{ data: proj }, { data: peds }] = await Promise.all([
+    brs.length ? supabase.from('plan_projeto').select('br_num,servico,definicao,status_pcp,estimativa_pcp,andamento,data_cp').in('br_num', brs) : { data: [] },
+    brs.length ? supabase.from('v_plan_ped_real').select('br_num,servico,nunota,dtneg,codprod,n_prod').in('br_num', brs) : { data: [] },
+  ]);
+  const pj = (l) => (proj || []).find(x => x.br_num === l.br_num && x.servico === l.servico) || {};
+  const pd = (l) => (peds || []).filter(x => x.br_num === l.br_num && x.servico === l.servico && (!l.nunotas || l.nunotas.includes(x.nunota)));
+  const dt = (d) => (d ? new Date(`${String(d).slice(0, 10)}T12:00:00`) : null);
+  const nomeMes = (d) => (d ? PLAN_MES_NOME[new Date(`${String(d).slice(0, 10)}T12:00:00`).getMonth()] : '');
+  const H = {
+    KALIMPACT: ['BR', 'CLIENTE', 'STATUS OP', 'DEFINIÇÃO', 'VENDEDOR', 'EMISSÃO', 'DESCRIÇÃO DE \nREFERENCIA', 'PRODUTO ACABADO', 'QUANTIDADE\nPEÇAS', 'ESCOPO2', 'ESTIMATIVA FATURAMENTO PCP - PRODUÇÃO', 'ANDAMENTO', 'DATA DE ENTREGA CP', 'MÊS ', 'SEMANA', 'VALOR\n LÍQUIDO TOTAL'],
+    REVESTIMENTO: ['BR', 'CLIENTE', 'STATUS OP', 'VENDEDOR', 'EMISSÃO', 'DESCRIÇÃO DE \nREFERENCIA', 'QUANTIDADE\nPEÇAS', 'ESCOPO2', 'STATUS', 'ESTIMATIVA FATURAMENTO PCP - PRODUÇÃO', 'ANDAMENTO', 'DATA DE ENTREGA CP', 'MÊS ', 'SEMANA', 'VALOR\n LÍQUIDO TOTAL'],
+    SERVIÇOS: ['BR', 'CLIENTE', 'STATUS OP', 'VENDEDOR', 'EMISSÃO', 'QUANTIDADE DE PROJETOS', 'DESCRIÇÃO DE \nREFERENCIA', 'QUANTIDADE\nPEÇAS', 'ESCOPO2', 'ESTIMATIVA FATURAMENTO PCP - PRODUÇÃO', 'ANDAMENTO', 'DATA DE ENTREGA CP', 'MÊS ', 'SEMANA', 'VALOR\n LÍQUIDO TOTAL'],
+  };
+  H.PG1 = H.REVESTIMENTO;
+  const valorCampo = (l, h) => {
+    const P = pj(l); const ps = pd(l); const prev = l.data_prevista;
+    switch (h) {
+      case 'BR': return l.br_planilha;
+      case 'CLIENTE': return l.cliente;
+      case 'STATUS OP': return '';
+      case 'DEFINIÇÃO': return P.definicao || '';
+      case 'VENDEDOR': return l.vendedor;
+      case 'EMISSÃO': return dt(ps.map(x => x.dtneg).sort()[0]);
+      case 'DESCRIÇÃO DE \nREFERENCIA': return l.descricao || '';
+      case 'PRODUTO ACABADO': return ps.length === 1 && ps[0].n_prod === 1 ? ps[0].codprod : '';
+      case 'QUANTIDADE\nPEÇAS': return l.qtd_plan != null ? Number(l.qtd_plan) : '';
+      case 'QUANTIDADE DE PROJETOS': return l.br_planilha;
+      case 'ESCOPO2': return l.servico ? 'SERVIÇO' : (l.setor || '');
+      case 'STATUS': return P.status_pcp || '';
+      case 'ESTIMATIVA FATURAMENTO PCP - PRODUÇÃO': return dt(prev);
+      case 'ANDAMENTO': return P.andamento || l.andamento_original || '';
+      case 'DATA DE ENTREGA CP': return dt(l.data_cp || P.data_cp);
+      case 'MÊS ': return nomeMes(prev);
+      case 'SEMANA': return l.semana || planSemana(prev);
+      case 'VALOR\n LÍQUIDO TOTAL': return Number(l.valor_sankhya || 0);
+      default: return '';
+    }
+  };
+  const { default: ExcelJS } = await import('exceljs');
+  const wb = new ExcelJS.Workbook();
+  PLAN_ABAS.forEach(aba => {
+    const hs = H[aba]; const ls = linhas.filter(l => planAba(l.setor, l.servico) === aba).sort((a, b) => String(a.data_prevista || '').localeCompare(String(b.data_prevista || '')) || a.br_num - b.br_num);
+    const ws = wb.addWorksheet(aba === 'REVESTIMENTO' ? 'REVESTIMENTO ' : aba, { views: [{ state: 'frozen', ySplit: 1 }] });
+    ws.addRow(hs);
+    ls.forEach(l => ws.addRow(hs.map(h => valorCampo(l, h))));
+    const tot = ws.addRow(hs.map((h, k) => (k === 0 ? ls.length : h === 'VALOR\n LÍQUIDO TOTAL' ? ls.reduce((t, l) => t + Number(l.valor_sankhya || 0), 0) : '')));
+    tot.font = { bold: true };
+    const cab = ws.getRow(1); cab.font = { bold: true, color: { argb: 'FFFFFFFF' } }; cab.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F4E79' } }; cab.alignment = { wrapText: true, vertical: 'middle' }; cab.height = 32;
+    hs.forEach((h, k) => { const c = ws.getColumn(k + 1); c.width = h.startsWith('DESCRI') ? 60 : h === 'CLIENTE' ? 34 : h.startsWith('ESTIMATIVA') ? 16 : 14;
+      if (['EMISSÃO', 'ESTIMATIVA FATURAMENTO PCP - PRODUÇÃO', 'DATA DE ENTREGA CP'].includes(h)) c.numFmt = 'dd/mm/yyyy';
+      if (h === 'VALOR\n LÍQUIDO TOTAL') c.numFmt = '#,##0.00'; });
+    ws.getColumn(hs.indexOf('DESCRIÇÃO DE \nREFERENCIA') + 1).alignment = { wrapText: true, vertical: 'top' };
+  });
+  const cf = wb.addWorksheet('Conferência Sankhya', { views: [{ state: 'frozen', ySplit: 1 }] });
+  cf.addRow(['BR', 'Tipo', 'Setor', 'Qtd programada', 'Qtd entregue (Sankhya)', 'Qtd pedida (Sankhya)', 'Unidade', 'Valor na planilha', 'Valor que vale (Sankhya)', 'Diferença', 'O que é', 'Alerta', 'Faturado no mês']);
+  linhas.slice().sort((a, b) => a.br_num - b.br_num).forEach(l => cf.addRow([l.br_planilha, l.servico ? 'Serviço' : 'Material', l.setor, l.qtd_plan != null ? Number(l.qtd_plan) : null, l.qtd_entregue != null ? Number(l.qtd_entregue) : null, l.qtd != null ? Number(l.qtd) : null, l.unidade,
+    Number(l.valor_planilha || 0), Number(l.valor_sankhya || 0), Number(l.dif_planilha || 0), l.conferencia, l.alerta || '', Number(l.fat_mes || 0)]));
+  const c1 = cf.getRow(1); c1.font = { bold: true, color: { argb: 'FFFFFFFF' } }; c1.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F4E79' } };
+  [8, 9, 10, 13].forEach(i => { cf.getColumn(i).numFmt = '#,##0.00'; cf.getColumn(i).width = 16; }); cf.getColumn(1).width = 14; cf.getColumn(11).width = 55; cf.getColumn(12).width = 40;
+  const info = wb.addWorksheet('Regra');
+  info.addRow(['Valores do Sankhya: quantidade programada × valor unitário líquido (valor do pedido − impostos; quando o pedido já teve nota, no imposto real da nota). Serviço aparece na aba SERVIÇOS, mas não entra no valor programado.']);
+  info.addRow([`Gerado pelo Portal de Engenharia em ${new Date().toLocaleString('pt-BR')}.`]); info.getColumn(1).width = 140;
+  const buf = await wb.xlsx.writeBuffer();
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+  const d = new Date(`${mes}T12:00:00`);
+  a.download = `${String(d.getMonth() + 1).padStart(2, '0')} - OOH ${PLAN_MES_NOME[d.getMonth()]} - ${d.getFullYear()} (portal).xlsx`;
+  document.body.appendChild(a); a.click(); a.remove();
+}
+
+function PlanProgramar() {
+  const C = CRMC;
+  const hoje = new Date();
+  const mesIso = (y, m) => `${y}-${String(m + 1).padStart(2, '0')}-01`;
+  const opcoes = [0, 1, 2, 3, 4].map(k => { const d = new Date(hoje.getFullYear(), hoje.getMonth() + k, 1); return mesIso(d.getFullYear(), d.getMonth()); });
+  const [mes, setMes] = useState(opcoes[1]);
+  const [cfg, setCfg] = useState(null);
+  const [linhas, setLinhas] = useState(null);
+  const [carteira, setCarteira] = useState(null);
+  const [busca, setBusca] = useState('');
+  const [fSetor, setFSetor] = useState('');
+  const [soDoMes, setSoDoMes] = useState(false);
+  const [form, setForm] = useState(null);       // { c: linha da carteira, qtd, data }
+  const [msg, setMsg] = useState(null);
+  const [ocupado, setOcupado] = useState(false);
+  const [detalhe, setDetalhe] = useState(null);
+  const [rec, setRec] = useState(0);
+  const recarregar = () => setRec(r => r + 1);
+  useEffect(() => {
+    setLinhas(null);
+    Promise.all([
+      supabase.from('v_plan_ooh_linha').select('*').eq('mes', mes),
+      supabase.from('plan_ooh_cfg').select('*').eq('mes', mes),
+      supabase.from('v_plan_carteira_ped').select('*'),
+    ]).then(([a, b, c]) => { setLinhas(a.data || []); setCfg((b.data || [])[0] || null); setCarteira(c.data || []); });
+  }, [mes, rec]);
+  const congelado = !!cfg?.congelado_em;
+  const fimMes = (() => { const [y, m] = mes.split('-').map(Number); return `${mes.slice(0, 8)}${String(new Date(y, m, 0).getDate()).padStart(2, '0')}`; })();
+  const noMes = (iso) => iso && String(iso).slice(0, 7) === mes.slice(0, 7);
+  const moeda = (v) => Number(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 });
+  const moeda2 = (v) => Number(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+  const qf = (v) => (v == null ? '—' : Number(v).toLocaleString('pt-BR', { maximumFractionDigits: 3 }));
+  const dt = (d) => (d ? new Date(`${String(d).slice(0, 10)}T12:00:00`).toLocaleDateString('pt-BR') : '—');
+  const nomeMes = (m) => new Date(`${m}T12:00:00`).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+  const rpc = async (fn, args, ok) => {
+    setOcupado(true); const { data, error } = await supabase.rpc(fn, args); setOcupado(false);
+    if (error || data?.ok === false) { setMsg({ erro: true, t: error?.message || data?.erro }); return null; }
+    if (ok) setMsg({ t: ok(data) }); recarregar(); return data;
+  };
+  const trazer = () => rpc('fn_plan_prog_trazer_mestra', { p_mes: mes }, d => (d.adicionados ? `${d.adicionados} projeto(s) da lista mestra com estimativa do PCP em ${nomeMes(mes)} foram incluídos. Confira a quantidade de cada um.` : `Nenhum projeto novo: os que têm estimativa do PCP em ${nomeMes(mes)} já estão na programação.`));
+  const congelar = () => { if (!window.confirm(`Congelar a programação de ${nomeMes(mes)}? Depois disso ela vira a programação original do mês: quantidade, data e valor não mudam mais (só a conferência de qual pedido entra).`)) return;
+    rpc('fn_plan_prog_congelar', { p_mes: mes }, d => `Programação de ${nomeMes(mes)} congelada com ${d.linhas} linha(s). Ela aparece na aba Mês (OOH).`); };
+  const adicionar = () => {
+    const c = form.c; const umProd = c.n_prod === 1;
+    const q = umProd ? Number(String(form.qtd).replace(/\./g, '').replace(',', '.')) : null;
+    if (umProd && (!q || q <= 0)) { setMsg({ erro: true, t: 'Informe a quantidade programada.' }); return; }
+    if (umProd && q > Number(c.qtd_pendente) + 0.0001) { setMsg({ erro: true, t: `A quantidade passa do que falta entregar no Sankhya (${qf(c.qtd_pendente)} ${String(c.unidade || '').toLowerCase()}).` }); return; }
+    rpc('fn_plan_prog_adicionar', { p_mes: mes, p_br: c.br_num, p_servico: c.servico, p_nunotas: [c.nunota], p_qtd: q, p_data: form.data || null }, d => `${c.br} programado em ${nomeMes(mes)}: ${moeda2(d.valor)} (Sankhya).`)
+      .then(r => { if (r) setForm(null); });
+  };
+  const L = linhas || [];
+  const progNunotas = new Set(L.flatMap(l => (l.pedidos || []).map(p => p.nunota)));
+  const progBrSemPedido = new Set(L.filter(l => !l.nunotas).map(l => `${l.br_num}-${l.servico}`));
+  const t = busca.trim().toLowerCase();
+  const cart = (carteira || []).filter(c => (!t || `${c.br} ${c.br_num} ${c.cliente || ''} ${c.vendedor || ''} ${c.numnota}`.toLowerCase().includes(t))
+      && (!fSetor || planAba(c.setor, c.servico) === fSetor) && (!soDoMes || noMes(c.estimativa_pcp)))
+    .map(c => ({ ...c, jaNoMes: progNunotas.has(c.nunota) || progBrSemPedido.has(`${c.br_num}-${c.servico}`) }))
+    .sort((a, b) => (a.jaNoMes - b.jaNoMes) || ((noMes(b.estimativa_pcp) ? 1 : 0) - (noMes(a.estimativa_pcp) ? 1 : 0)) || String(a.estimativa_pcp || '9').localeCompare(String(b.estimativa_pcp || '9')) || a.br_num - b.br_num);
+  const totMat = L.filter(l => !l.servico).reduce((s2, l) => s2 + Number(l.valor_sankhya || 0), 0);
+  const totServ = L.filter(l => l.servico).reduce((s2, l) => s2 + Number(l.valor_sankhya || 0), 0);
+  const caixa = { background: C.surface, border: `1px solid ${C.line}`, borderRadius: 12 };
+  const th = (al = 'right') => ({ padding: '8px 10px', fontSize: 11.5, fontWeight: 600, color: C.ink2, textAlign: al, whiteSpace: 'nowrap', background: '#F1F4F8', borderBottom: `1px solid ${C.line}` });
+  const td = { padding: '8px 10px', textAlign: 'right', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap', borderBottom: `1px solid ${C.lineSoft}`, fontSize: 12.5, verticalAlign: 'top' };
+  const inp = { fontFamily: 'inherit', fontSize: 12.5, padding: '5px 7px', borderRadius: 7, border: `1px solid ${C.line}`, boxSizing: 'border-box' };
+  const btn = (prim) => ({ fontFamily: 'inherit', fontSize: 12.5, fontWeight: prim ? 700 : 500, padding: '7px 12px', borderRadius: 8, border: prim ? 'none' : `1px solid ${C.line}`, background: prim ? C.primary : C.surface, color: prim ? '#fff' : C.ink, cursor: ocupado ? 'wait' : 'pointer' });
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <div style={{ ...caixa, padding: '12px 16px', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+        <strong>Programar</strong>
+        <select value={mes} onChange={e => { setMes(e.target.value); setForm(null); setMsg(null); }} style={{ ...inp, fontSize: 13, padding: '6px 10px' }}>
+          {opcoes.map(m => <option key={m} value={m}>{nomeMes(m)}</option>)}
+        </select>
+        <span style={{ fontSize: 12.5, fontWeight: 700, color: congelado ? C.win : C.warn }}>{congelado ? `congelada em ${dt(cfg.congelado_em)}: é a programação original do mês` : L.length ? 'em montagem' : 'ainda sem programação'}</span>
+        <span style={{ flex: 1 }} />
+        {!congelado && <button onClick={trazer} disabled={ocupado} style={btn(false)} title="inclui os projetos com estimativa do PCP neste mês e saldo no Sankhya">Trazer da lista mestra</button>}
+        <button onClick={() => planExportarOOH(mes, L)} disabled={!L.length} style={btn(false)}>Exportar no formato da OOH</button>
+        {!congelado && <button onClick={congelar} disabled={ocupado || !L.length} style={btn(true)}>Congelar programação</button>}
+      </div>
+      {msg && <div style={{ ...caixa, padding: '8px 12px', fontSize: 12.5, color: msg.erro ? C.loss : C.win, display: 'flex', gap: 10 }}><span style={{ flex: 1 }}>{msg.t}</span><button onClick={() => setMsg(null)} style={{ border: 'none', background: 'none', cursor: 'pointer', color: C.ink3, fontFamily: 'inherit' }}>fechar</button></div>}
+      {!linhas ? <div style={{ padding: 30, textAlign: 'center', color: C.ink3 }}>Carregando…</div> : (<>
+        <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))' }}>
+          {[['Programado (material)', moeda(totMat), `${L.filter(l => !l.servico).length} linha(s) · valores do Sankhya`, C.primary],
+            ...PLAN_ABAS.filter(a => a !== 'SERVIÇOS').map(a => { const ls = L.filter(l => planAba(l.setor, l.servico) === a); return [a.charAt(0) + a.slice(1).toLowerCase(), moeda(ls.reduce((s2, l) => s2 + Number(l.valor_sankhya || 0), 0)), `${ls.length} linha(s)`, '#475467']; }),
+            ['Serviços (fora do valor)', moeda(totServ), `${L.filter(l => l.servico).length} linha(s) · só acompanhamento`, '#0D9488']].map(([r, v, sub, cor]) => (
+            <div key={r} style={{ ...caixa, padding: '11px 14px', borderLeft: `4px solid ${cor}` }}>
+              <div style={{ fontSize: 12, color: C.ink2, fontWeight: 600 }}>{r}</div>
+              <div style={{ fontSize: 20, fontWeight: 800, fontVariantNumeric: 'tabular-nums' }}>{v}</div>
+              <div style={{ fontSize: 11.5, color: C.ink3 }}>{sub}</div>
+            </div>))}
+        </div>
+
+        {PLAN_ABAS.map(aba => { const ls = L.filter(l => planAba(l.setor, l.servico) === aba).sort((a, b) => String(a.data_prevista || '').localeCompare(String(b.data_prevista || '')) || a.br_num - b.br_num);
+          if (!ls.length) return null;
+          return (
+            <section key={aba} style={{ ...caixa, overflow: 'hidden' }}>
+              <div style={{ padding: '10px 14px', borderBottom: `1px solid ${C.line}`, display: 'flex', gap: 10, alignItems: 'baseline' }}>
+                <strong>{aba}</strong><span style={{ fontSize: 12, color: C.ink3 }}>{ls.length} linha(s){aba === 'SERVIÇOS' ? ' · não entra no valor programado' : ''}</span>
+                <span style={{ flex: 1 }} /><strong style={{ fontVariantNumeric: 'tabular-nums', color: aba === 'SERVIÇOS' ? C.ink3 : C.ink }}>{moeda(ls.reduce((s2, l) => s2 + Number(l.valor_sankhya || 0), 0))}</strong>
+              </div>
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead><tr><th style={th('left')}>BR</th><th style={th('left')}>O que sai</th><th style={th()}>Quantidade</th><th style={th()}>Previsto para</th><th style={th()}>Semana</th><th style={th()}>Valor (Sankhya)</th><th style={th('left')}>Conferência</th>{!congelado && <th style={th('left')} />}</tr></thead>
+                  <tbody>{ls.map(l => { const umProd = l.n_ped >= 1 && l.unit_liq != null && !l.unidade_descricao;
+                    return (
+                      <tr key={l.id}>
+                        <td style={{ ...td, textAlign: 'left' }}><button onClick={() => setDetalhe(l)} style={{ fontFamily: 'inherit', fontSize: 12.5, fontWeight: 700, color: C.primary, border: 'none', background: 'none', padding: 0, cursor: 'pointer' }}>{l.br_planilha}</button>
+                          <div style={{ fontSize: 11, color: C.ink3, whiteSpace: 'normal', maxWidth: 200 }}>{l.cliente}</div></td>
+                        <td style={{ ...td, textAlign: 'left', whiteSpace: 'normal', minWidth: 240, maxWidth: 420, fontSize: 12 }}>{String(l.descricao || '').slice(0, 220)}{String(l.descricao || '').length > 220 ? '…' : ''}</td>
+                        <td style={td}>{!congelado && umProd
+                          ? <input defaultValue={l.qtd_plan != null ? String(l.qtd_plan).replace('.', ',') : ''} onBlur={e => { const v = Number(e.target.value.replace(/\./g, '').replace(',', '.')); if (v > 0 && v !== Number(l.qtd_plan)) rpc('fn_plan_prog_alterar', { p_id: l.id, p_qtd: v }); }}
+                              style={{ ...inp, width: 80, textAlign: 'right' }} aria-label={`quantidade de ${l.br_planilha}`} />
+                          : qf(l.qtd_plan)}
+                          <div style={{ fontSize: 10.5, color: C.ink3 }}>de {qf(l.qtd)} {String(l.unidade || '').toLowerCase()}{Number(l.qtd_entregue) ? ` · ${qf(l.qtd_entregue)} entregue` : ''}</div></td>
+                        <td style={td}>{!congelado
+                          ? <input type="date" defaultValue={l.data_prevista || ''} onChange={e => e.target.value && rpc('fn_plan_prog_alterar', { p_id: l.id, p_data: e.target.value })} style={{ ...inp, width: 140 }} aria-label={`data prevista de ${l.br_planilha}`} />
+                          : dt(l.data_prevista)}</td>
+                        <td style={{ ...td, color: C.ink2 }}>{l.semana || '—'}</td>
+                        <td style={{ ...td, fontWeight: 700, color: l.servico ? C.ink3 : C.ink }}>{moeda2(l.valor_sankhya)}{l.unit_liq != null && <div style={{ fontSize: 10.5, color: C.ink3, fontWeight: 400 }}>{moeda2(l.unit_liq)} / {String(l.unidade || '').toLowerCase()}</div>}</td>
+                        <td style={{ ...td, textAlign: 'left', whiteSpace: 'normal', minWidth: 180, fontSize: 12, color: l.valor_confere ? C.ink2 : C.warn }}>{l.conferencia}{!l.valor_confere && l.origem !== 'portal' ? ` · planilha ${moeda(l.valor_planilha)}` : ''}
+                          {l.alerta && <div style={{ color: C.loss, fontWeight: 700 }}>{l.alerta}</div>}</td>
+                        {!congelado && <td style={{ ...td, textAlign: 'left' }}><button onClick={() => { if (window.confirm(`Tirar ${l.br_planilha} da programação de ${nomeMes(mes)}?`)) rpc('fn_plan_prog_remover', { p_id: l.id }); }} style={{ fontFamily: 'inherit', fontSize: 12, border: `1px solid ${C.line}`, background: C.surface, borderRadius: 7, padding: '4px 9px', cursor: 'pointer', color: C.loss }}>Tirar</button></td>}
+                      </tr>); })}</tbody>
+                </table>
+              </div>
+            </section>); })}
+        {!L.length && <div style={{ ...caixa, padding: 22, textAlign: 'center', color: C.ink2, fontSize: 13 }}>Nenhuma linha programada em {nomeMes(mes)} ainda. Comece por <strong>Trazer da lista mestra</strong> (projetos com estimativa do PCP no mês) ou programe direto da carteira abaixo.</div>}
+
+        {!congelado && (
+          <section style={{ ...caixa, overflow: 'hidden' }}>
+            <div style={{ padding: '10px 14px', borderBottom: `1px solid ${C.line}`, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+              <strong>Carteira com saldo no Sankhya</strong>
+              <span style={{ fontSize: 12, color: C.ink3 }}>escolha o que entra em {nomeMes(mes)}; o valor é quantidade × valor unitário líquido do pedido</span>
+              <span style={{ flex: 1 }} />
+              <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="BR, cliente, vendedor ou pedido" style={{ ...inp, width: 230 }} />
+              <select value={fSetor} onChange={e => setFSetor(e.target.value)} style={inp}><option value="">Todos os setores</option>{PLAN_ABAS.map(a => <option key={a} value={a}>{a}</option>)}</select>
+              <label style={{ fontSize: 12.5, display: 'inline-flex', gap: 5, alignItems: 'center' }}><input type="checkbox" checked={soDoMes} onChange={e => setSoDoMes(e.target.checked)} />só com estimativa do PCP no mês</label>
+            </div>
+            <div style={{ overflowX: 'auto', maxHeight: 620, overflowY: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead style={{ position: 'sticky', top: 0, zIndex: 1 }}><tr><th style={th('left')}>BR</th><th style={th('left')}>Setor</th><th style={th('left')}>Itens pendentes</th><th style={th()}>Falta entregar</th><th style={th()}>Saldo (Sankhya)</th><th style={th()}>Estimativa PCP</th><th style={th('left')} /></tr></thead>
+                <tbody>
+                  {!cart.length && <tr><td colSpan={7} style={{ padding: 16, textAlign: 'center', color: C.ink3, fontSize: 12.5 }}>Nenhum pedido com saldo neste filtro.</td></tr>}
+                  {cart.map(c => { const aberto = form?.c?.nunota === c.nunota; const umProd = c.n_prod === 1;
+                    const qn = umProd && form && aberto ? Number(String(form.qtd).replace(/\./g, '').replace(',', '.')) || 0 : null;
+                    return (
+                      <React.Fragment key={c.nunota}>
+                        <tr style={{ background: aberto ? C.primarySoft : c.jaNoMes ? '#F7F8FA' : 'transparent' }}>
+                          <td style={{ ...td, textAlign: 'left' }}><strong style={{ color: C.ink }}>{c.br}</strong>{c.servico && <span style={{ marginLeft: 6, fontSize: 10.5, fontWeight: 700, color: '#0D9488', background: '#E6F6F4', borderRadius: 4, padding: '1px 5px' }}>SERVIÇO</span>}
+                            <div style={{ fontSize: 11, color: C.ink3, whiteSpace: 'normal', maxWidth: 220 }}>{c.cliente} · pedido {c.numnota}</div></td>
+                          <td style={{ ...td, textAlign: 'left', color: C.ink2 }}>{c.setor || '—'}</td>
+                          <td style={{ ...td, textAlign: 'left', whiteSpace: 'normal', minWidth: 240, maxWidth: 440, fontSize: 12 }}>{String(c.itens_pendentes || '').slice(0, 200)}{String(c.itens_pendentes || '').length > 200 ? '…' : ''}</td>
+                          <td style={td}>{umProd ? `${qf(c.qtd_pendente)} de ${qf(c.qtd)} ${String(c.unidade || '').toLowerCase()}` : `${c.n_prod} itens`}{Number(c.faturado) > 0 && <div style={{ fontSize: 10.5, color: C.ink3 }}>já faturado {moeda(c.faturado)}</div>}</td>
+                          <td style={{ ...td, fontWeight: 700 }}>{moeda2(c.saldo_real)}{c.unit_liq != null && <div style={{ fontSize: 10.5, color: C.ink3, fontWeight: 400 }}>{moeda2(c.unit_liq)} / {String(c.unidade || '').toLowerCase()}</div>}</td>
+                          <td style={{ ...td, color: noMes(c.estimativa_pcp) ? C.primary : C.ink2, fontWeight: noMes(c.estimativa_pcp) ? 700 : 400 }}>{dt(c.estimativa_pcp)}{(c.meses_programados || []).length > 0 && <div style={{ fontSize: 10.5, color: C.ink3, fontWeight: 400 }}>programado: {(c.meses_programados || []).map(m => new Date(`${m}T12:00:00`).toLocaleDateString('pt-BR', { month: 'short', year: '2-digit' })).join(', ')}</div>}</td>
+                          <td style={{ ...td, textAlign: 'left' }}>{c.jaNoMes ? <span style={{ fontSize: 12, color: C.win, fontWeight: 600 }}>já no mês</span>
+                            : <button onClick={() => setForm(aberto ? null : { c, qtd: umProd ? String(c.qtd_pendente).replace('.', ',') : '', data: noMes(c.estimativa_pcp) ? c.estimativa_pcp : fimMes })} style={btn(!aberto)}>{aberto ? 'Fechar' : 'Programar'}</button>}</td>
+                        </tr>
+                        {aberto && (
+                          <tr style={{ background: C.primarySoft }}><td colSpan={7} style={{ padding: '10px 14px', borderBottom: `1px solid ${C.line}` }}>
+                            <div style={{ display: 'flex', gap: 14, alignItems: 'flex-end', flexWrap: 'wrap', fontSize: 12.5 }}>
+                              {umProd ? (
+                                <label style={{ display: 'grid', gap: 3 }}>Quantidade a entregar no mês ({String(c.unidade || '').toLowerCase()})
+                                  <input autoFocus value={form.qtd} onChange={e => setForm({ ...form, qtd: e.target.value })} style={{ ...inp, width: 120, textAlign: 'right' }} /></label>)
+                                : <span style={{ maxWidth: 320, color: C.ink2 }}>Pedido com vários itens: entra o saldo todo do pedido. Para programar só parte, combine com o PCP e use a observação.</span>}
+                              <label style={{ display: 'grid', gap: 3 }}>Previsto para
+                                <input type="date" value={form.data || ''} onChange={e => setForm({ ...form, data: e.target.value })} style={{ ...inp, width: 150 }} /></label>
+                              <span style={{ display: 'grid', gap: 3 }}>Valor (Sankhya)
+                                <strong style={{ fontSize: 15, fontVariantNumeric: 'tabular-nums' }}>{moeda2(umProd ? Math.min(qn * Number(c.unit_liq || 0), Number(c.saldo_real)) : c.saldo_real)}</strong></span>
+                              <span style={{ flex: 1 }} />
+                              <button onClick={adicionar} disabled={ocupado} style={btn(true)}>Incluir em {nomeMes(mes)}</button>
+                            </div>
+                          </td></tr>)}
+                      </React.Fragment>); })}
+                </tbody>
+              </table>
+            </div>
+          </section>)}
       </>)}
       {detalhe && <PlanDetalheProjeto brNum={detalhe.br_num} servico={detalhe.servico} onFechar={() => setDetalhe(null)} />}
     </div>
