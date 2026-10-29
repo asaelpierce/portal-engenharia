@@ -30327,6 +30327,193 @@ function CRMRosca({ itens, centro, sub, fmt, aoClicar }) {
 // pedido × parte dos itens ainda não entregue (item a item no Sankhya, a cada hora). Vendedor vê só a dele.
 function CRMCarteira({ resp, onAbrirNegocio }) {
   const C = CRMC;
+  const [visao, setVisao] = useState('hoje');
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12, fontFamily: FONT_BODY, color: C.ink }}>
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+        {[['hoje', 'Carteira hoje'], ['alteracoes', 'Alterações nos pedidos'], ['foto', 'Carteira em uma data']].map(([k, r]) => (
+          <button key={k} onClick={() => setVisao(k)} style={{ fontFamily: 'inherit', fontSize: 13, fontWeight: visao === k ? 700 : 500, padding: '7px 14px', borderRadius: 8, cursor: 'pointer',
+            border: `1px solid ${visao === k ? C.primary : C.line}`, background: visao === k ? C.primarySoft : C.surface, color: visao === k ? C.primary : C.ink2 }}>{r}</button>))}
+      </div>
+      {visao === 'hoje' ? <CRMCarteiraHoje resp={resp} onAbrirNegocio={onAbrirNegocio} /> : visao === 'alteracoes' ? <CRMCarteiraAlteracoes resp={resp} /> : <CRMCarteiraFoto resp={resp} />}
+    </div>
+  );
+}
+
+// Registro de tudo o que mudou nos pedidos da carteira (crm_pedido_evento): detectado de hora em hora comparando com a hora
+// anterior; motivo e usuário que alterou vêm do Sankhya (TGFCAB.CODUSU / DTALTER).
+const CRM_EVENTO = {
+  novo: ['Pedido novo', '#1E8E4F'], faturado: ['Faturado', '#2563EB'], faturado_parcial: ['Faturamento parcial', '#2563EB'],
+  pendencia_retirada: ['Pendência retirada (correção)', '#B42318'], faturado_e_retirado: ['Faturou parte e retirou a pendência', '#B42318'],
+  saldo_reduzido: ['Saldo reduzido sem faturar', '#B54708'], saldo_aumentado: ['Saldo aumentado', '#1E8E4F'], valor_alterado: ['Valor do pedido alterado', '#B54708'],
+  previsao_alterada: ['Previsão alterada', '#475467'], vendedor_alterado: ['Vendedor alterado', '#475467'], excluido: ['Pedido excluído', '#B42318'], saiu_da_carteira: ['Saiu da carteira', '#B42318'],
+};
+function CRMCarteiraAlteracoes({ resp }) {
+  const C = CRMC;
+  const [ev, setEv] = useState(null);
+  const F0 = { tipo: [], usu: [], vend: [], dIni: '', dFim: '', busca: '' };
+  const [f, setF] = useState(F0);
+  useEffect(() => { supabase.from('crm_pedido_evento').select('*').order('detectado_em', { ascending: false }).limit(3000).then(({ data }) => setEv(data || [])); }, []);
+  if (!ev) return <div style={{ padding: 40, textAlign: 'center', color: C.ink3 }}>Carregando as alterações…</div>;
+  const moeda = (v) => Number(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+  const quando = (x) => x.alterado_em_sankhya || x.detectado_em;
+  const dh = (d) => (d ? new Date(d).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—');
+  const nomeT = (t) => (CRM_EVENTO[t] || [t])[0];
+  const base = ev.filter(x => !resp || (x.vendedor || '').toUpperCase() === String(resp).toUpperCase().trim());
+  const b = f.busca.trim().toLowerCase();
+  const vis = base.filter(x => (!f.tipo.length || f.tipo.includes(nomeT(x.tipo))) && (!f.usu.length || f.usu.includes(x.usuario_sankhya || '—'))
+    && (!f.vend.length || f.vend.includes(x.vendedor || '—'))
+    && (!f.dIni || String(quando(x)).slice(0, 10) >= f.dIni) && (!f.dFim || String(quando(x)).slice(0, 10) <= f.dFim)
+    && (!b || `${x.br || ''} ${x.cliente || ''} ${x.numnota || ''} ${x.descricao || ''} ${x.nfs || ''}`.toLowerCase().includes(b)))
+    .sort((a, c) => String(quando(c)).localeCompare(String(quando(a))));
+  const soma = (arr) => arr.reduce((t, x) => t + Number(x.impacto || 0), 0);
+  const entrou = vis.filter(x => Number(x.impacto) > 0), fat = vis.filter(x => ['faturado', 'faturado_parcial'].includes(x.tipo)),
+    corr = vis.filter(x => ['pendencia_retirada', 'faturado_e_retirado', 'saldo_reduzido', 'excluido', 'saiu_da_carteira'].includes(x.tipo));
+  const opc = (fn) => [...new Set(base.map(fn))].sort().map(v => ({ v, r: v }));
+  const caixa = { background: C.surface, border: `1px solid ${C.line}`, borderRadius: 12 };
+  const th = (al = 'right') => ({ padding: '8px 10px', fontSize: 11.5, fontWeight: 600, color: C.ink2, textAlign: al, whiteSpace: 'nowrap', background: '#F1F4F8', borderBottom: `1px solid ${C.line}`, position: 'sticky', top: 0, zIndex: 1 });
+  const td = { padding: '8px 10px', textAlign: 'right', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap', borderBottom: `1px solid ${C.lineSoft}`, fontSize: 12.5, verticalAlign: 'top' };
+  const inp = { fontFamily: 'inherit', fontSize: 12.5, padding: '6px 8px', borderRadius: 8, border: `1px solid ${C.line}`, boxSizing: 'border-box' };
+  const exportar = () => {
+    const l2 = ['Quando;BR;Cliente;Vendedor;Pedido;O que mudou;Detalhe;Antes;Depois;Impacto na carteira;Usuário (Sankhya);Notas;Origem',
+      ...vis.map(x => [dh(quando(x)), x.br || '', `"${x.cliente || ''}"`, x.vendedor || '', x.numnota || '', nomeT(x.tipo), `"${x.descricao || ''}"`,
+        String(x.falta_antes ?? '').replace('.', ','), String(x.falta_depois ?? '').replace('.', ','), String(x.impacto ?? '').replace('.', ','), x.usuario_sankhya || '', x.nfs || '', x.origem].join(';'))];
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob(['\ufeff' + l2.join('\n')], { type: 'text/csv;charset=utf-8' })); a.download = 'alteracoes_carteira.csv'; a.click();
+  };
+  const card = (r, v, sub, cor) => (
+    <div style={{ ...caixa, padding: '11px 14px', borderLeft: `4px solid ${cor}` }}>
+      <div style={{ fontSize: 12, color: C.ink2, fontWeight: 600 }}>{r}</div>
+      <div style={{ fontSize: 20, fontWeight: 800, fontVariantNumeric: 'tabular-nums' }}>{v}</div>
+      <div style={{ fontSize: 11.5, color: C.ink3 }}>{sub}</div>
+    </div>);
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div style={{ fontSize: 12.5, color: C.ink2 }}>Tudo o que muda nos pedidos da carteira fica registrado aqui: o portal compara a carteira de hora em hora e busca no Sankhya o motivo e quem alterou. Registro desde 29/10/2026 (as correções de outubro foram incluídas a partir do Sankhya).</div>
+      <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))' }}>
+        {card('Entrou na carteira', moeda(soma(entrou)), `${entrou.length} registro(s)`, '#1E8E4F')}
+        {card('Saiu por faturamento', moeda(-soma(fat)), `${fat.length} registro(s)`, '#2563EB')}
+        {card('Saiu por correção', moeda(-soma(corr)), `${corr.length} registro(s): pendência retirada, saldo reduzido, exclusão`, '#B42318')}
+        {card('Variação na carteira', moeda(soma(vis)), `${vis.length} alteração(ões) na seleção`, C.primary)}
+      </div>
+      <div style={{ ...caixa, padding: '10px 14px', display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+        <input value={f.busca} onChange={e => setF({ ...f, busca: e.target.value })} placeholder="BR, cliente, pedido ou nota" style={{ ...inp, width: 230 }} />
+        <label style={{ fontSize: 11.5, color: C.ink2, display: 'grid', gap: 3 }}>de<input type="date" value={f.dIni} onChange={e => setF({ ...f, dIni: e.target.value })} style={inp} /></label>
+        <label style={{ fontSize: 11.5, color: C.ink2, display: 'grid', gap: 3 }}>até<input type="date" value={f.dFim} onChange={e => setF({ ...f, dFim: e.target.value })} style={inp} /></label>
+        <div style={{ width: 210 }}><div style={{ fontSize: 11.5, color: C.ink2 }}>O que mudou</div><FiltroMulti valor={f.tipo} onChange={v => setF({ ...f, tipo: v })} opcoes={opc(x => nomeT(x.tipo))} /></div>
+        <div style={{ width: 170 }}><div style={{ fontSize: 11.5, color: C.ink2 }}>Usuário (Sankhya)</div><FiltroMulti valor={f.usu} onChange={v => setF({ ...f, usu: v })} opcoes={opc(x => x.usuario_sankhya || '—')} /></div>
+        <div style={{ width: 170 }}><div style={{ fontSize: 11.5, color: C.ink2 }}>Vendedor</div><FiltroMulti valor={f.vend} onChange={v => setF({ ...f, vend: v })} opcoes={opc(x => x.vendedor || '—')} /></div>
+        {JSON.stringify(f) !== JSON.stringify(F0) && <button onClick={() => setF(F0)} style={{ fontFamily: 'inherit', fontSize: 12, border: 'none', background: 'none', color: C.primary, cursor: 'pointer' }}>limpar filtros</button>}
+        <span style={{ flex: 1 }} />
+        <button onClick={exportar} disabled={!vis.length} style={{ fontFamily: 'inherit', fontSize: 12.5, padding: '7px 12px', borderRadius: 8, border: `1px solid ${C.line}`, background: C.surface, cursor: 'pointer' }}>Exportar (CSV)</button>
+      </div>
+      <section style={{ ...caixa, overflow: 'hidden' }}>
+        <div style={{ overflow: 'auto', maxHeight: 640 }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead><tr><th style={th('left')}>Quando</th><th style={th('left')}>BR</th><th style={th('left')}>Cliente</th><th style={th()}>Pedido</th><th style={th('left')}>O que mudou</th><th style={th()}>Antes</th><th style={th()}>Depois</th><th style={th()}>Impacto na carteira</th><th style={th('left')}>Quem alterou (Sankhya)</th></tr></thead>
+            <tbody>
+              {!vis.length && <tr><td colSpan={9} style={{ padding: 18, textAlign: 'center', color: C.ink3, fontSize: 12.5 }}>Nenhuma alteração registrada nesta seleção ainda.</td></tr>}
+              {vis.map(x => { const [nome, cor] = CRM_EVENTO[x.tipo] || [x.tipo, C.ink2];
+                return (
+                  <tr key={x.id}>
+                    <td style={{ ...td, textAlign: 'left', color: C.ink2 }}>{dh(quando(x))}{x.origem !== 'automático' && <div style={{ fontSize: 10.5, color: C.ink3 }}>{x.origem}</div>}</td>
+                    <td style={{ ...td, textAlign: 'left', fontWeight: 700 }}>{x.br || '—'}{x.servico && <span style={{ marginLeft: 6, fontSize: 10.5, fontWeight: 700, color: '#0D9488', background: '#E6F6F4', borderRadius: 4, padding: '1px 5px' }}>SERVIÇO</span>}</td>
+                    <td style={{ ...td, textAlign: 'left', whiteSpace: 'normal', maxWidth: 220 }}>{x.cliente}<div style={{ fontSize: 11, color: C.ink3 }}>{x.vendedor}</div></td>
+                    <td style={td}>{x.numnota}</td>
+                    <td style={{ ...td, textAlign: 'left', whiteSpace: 'normal', minWidth: 230 }}><span style={{ fontWeight: 700, color: cor }}>{nome}</span><div style={{ fontSize: 11.5, color: C.ink2 }}>{x.descricao}</div></td>
+                    <td style={{ ...td, color: C.ink2 }}>{x.falta_antes != null ? moeda(x.falta_antes) : '—'}</td>
+                    <td style={{ ...td, color: C.ink2 }}>{x.falta_depois != null ? moeda(x.falta_depois) : '—'}</td>
+                    <td style={{ ...td, fontWeight: 700, color: Number(x.impacto) < 0 ? '#B42318' : Number(x.impacto) > 0 ? '#1E8E4F' : C.ink3 }}>{Number(x.impacto) ? `${Number(x.impacto) > 0 ? '+' : ''}${moeda(x.impacto)}` : '—'}</td>
+                    <td style={{ ...td, textAlign: 'left' }}>{x.usuario_sankhya || '—'}</td>
+                  </tr>); })}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+// Carteira numa data passada: foto do fim de cada dia (crm_carteira_foto); dias anteriores ao início das fotos podem vir
+// reconstruídos do Sankhya (origem "reconstruída").
+function CRMCarteiraFoto({ resp }) {
+  const C = CRMC;
+  const [dias, setDias] = useState(null);
+  const [dia, setDia] = useState(null);
+  const [linhas, setLinhas] = useState(null);
+  const [busca, setBusca] = useState('');
+  useEffect(() => {
+    supabase.from('crm_carteira_foto').select('dia,origem').order('dia', { ascending: false }).limit(20000).then(({ data }) => {
+      const m = new Map(); (data || []).forEach(x => { if (!m.has(x.dia)) m.set(x.dia, x.origem); });
+      const ds = [...m.entries()].map(([d, o]) => ({ d, o })); setDias(ds); setDia(x => x || ds[0]?.d || null);
+    });
+  }, []);
+  useEffect(() => { if (!dia) return; setLinhas(null); supabase.from('crm_carteira_foto').select('*').eq('dia', dia).then(({ data }) => setLinhas(data || [])); }, [dia]);
+  if (!dias) return <div style={{ padding: 40, textAlign: 'center', color: C.ink3 }}>Carregando…</div>;
+  if (!dias.length) return <div style={{ padding: 30, textAlign: 'center', color: C.ink3 }}>Ainda não há fotos da carteira.</div>;
+  const moeda = (v) => Number(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+  const dt = (d) => new Date(`${d}T12:00:00`).toLocaleDateString('pt-BR');
+  const b = busca.trim().toLowerCase();
+  const L = (linhas || []).filter(x => (!resp || (x.vendedor || '').toUpperCase() === String(resp).toUpperCase().trim())
+    && (!b || `${x.br || ''} ${x.cliente || ''} ${x.numnota} ${x.vendedor || ''}`.toLowerCase().includes(b))).sort((a, c) => Number(c.falta_liquido) - Number(a.falta_liquido));
+  const soma = (arr) => arr.reduce((t, x) => t + Number(x.falta_liquido || 0), 0);
+  const mat = L.filter(x => !x.servico), serv = L.filter(x => x.servico);
+  const origem = dias.find(x => x.d === dia)?.o;
+  const caixa = { background: C.surface, border: `1px solid ${C.line}`, borderRadius: 12 };
+  const th = (al = 'right') => ({ padding: '8px 10px', fontSize: 11.5, fontWeight: 600, color: C.ink2, textAlign: al, whiteSpace: 'nowrap', background: '#F1F4F8', borderBottom: `1px solid ${C.line}`, position: 'sticky', top: 0, zIndex: 1 });
+  const td = { padding: '8px 10px', textAlign: 'right', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap', borderBottom: `1px solid ${C.lineSoft}`, fontSize: 12.5 };
+  const exportar = () => {
+    const l2 = ['BR;Cliente;Vendedor;Pedido;Tipo;Valor líquido do pedido;Carteira na data (líquido)',
+      ...L.map(x => [x.br || '', `"${x.cliente || ''}"`, x.vendedor || '', x.numnota, x.servico ? 'Serviço' : 'Material', String(x.liquido_pedido ?? '').replace('.', ','), String(x.falta_liquido ?? '').replace('.', ',')].join(';'))];
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob(['\ufeff' + l2.join('\n')], { type: 'text/csv;charset=utf-8' })); a.download = `carteira_${dia}.csv`; a.click();
+  };
+  const card = (r, v, sub, cor) => (
+    <div style={{ ...caixa, padding: '11px 14px', borderLeft: `4px solid ${cor}` }}>
+      <div style={{ fontSize: 12, color: C.ink2, fontWeight: 600 }}>{r}</div>
+      <div style={{ fontSize: 20, fontWeight: 800, fontVariantNumeric: 'tabular-nums' }}>{v}</div>
+      <div style={{ fontSize: 11.5, color: C.ink3 }}>{sub}</div>
+    </div>);
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div style={{ ...caixa, padding: '10px 14px', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+        <strong>Carteira em</strong>
+        <select value={dia || ''} onChange={e => setDia(e.target.value)} style={{ fontFamily: 'inherit', fontSize: 13, padding: '6px 10px', borderRadius: 8, border: `1px solid ${C.line}` }}>
+          {dias.map(x => <option key={x.d} value={x.d}>{dt(x.d)}{x.o !== 'foto diária' ? ` (${x.o})` : ''}</option>)}
+        </select>
+        <span style={{ fontSize: 12, color: C.ink3 }}>{origem === 'foto diária' ? 'foto tirada no fim do dia' : 'reconstruída no Sankhya: pedidos emitidos até a data, sem o que já estava faturado e sem as correções (pendência retirada)'}</span>
+        <span style={{ flex: 1 }} />
+        <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="BR, cliente, pedido ou vendedor" style={{ fontFamily: 'inherit', fontSize: 12.5, padding: '6px 8px', borderRadius: 8, border: `1px solid ${C.line}`, width: 230 }} />
+        <button onClick={exportar} disabled={!L.length} style={{ fontFamily: 'inherit', fontSize: 12.5, padding: '7px 12px', borderRadius: 8, border: `1px solid ${C.line}`, background: C.surface, cursor: 'pointer' }}>Exportar (CSV)</button>
+      </div>
+      {!linhas ? <div style={{ padding: 30, textAlign: 'center', color: C.ink3 }}>Carregando…</div> : (<>
+        <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))' }}>
+          {card('Material', moeda(soma(mat)), `${mat.length} pedido(s)`, C.primary)}
+          {card('Serviço', moeda(soma(serv)), `${serv.length} pedido(s)`, '#0D9488')}
+          {card('Total', moeda(soma(L)), `${new Set(L.map(x => x.br)).size} projeto(s)`, '#475467')}
+        </div>
+        <section style={{ ...caixa, overflow: 'hidden' }}>
+          <div style={{ overflow: 'auto', maxHeight: 620 }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead><tr><th style={th('left')}>BR</th><th style={th('left')}>Cliente</th><th style={th('left')}>Vendedor</th><th style={th()}>Pedido</th><th style={th('left')}>Tipo</th><th style={th()}>Valor líquido do pedido</th><th style={th()}>Carteira na data</th></tr></thead>
+              <tbody>{L.map(x => (
+                <tr key={x.id}>
+                  <td style={{ ...td, textAlign: 'left', fontWeight: 700 }}>{x.br}</td>
+                  <td style={{ ...td, textAlign: 'left', whiteSpace: 'normal', maxWidth: 260 }}>{x.cliente}</td>
+                  <td style={{ ...td, textAlign: 'left', color: C.ink2 }}>{x.vendedor}</td>
+                  <td style={td}>{x.numnota}</td>
+                  <td style={{ ...td, textAlign: 'left', color: x.servico ? '#0D9488' : C.ink2 }}>{x.servico ? 'Serviço' : 'Material'}</td>
+                  <td style={{ ...td, color: C.ink2 }}>{moeda(x.liquido_pedido)}</td>
+                  <td style={{ ...td, fontWeight: 700 }}>{moeda(x.falta_liquido)}</td>
+                </tr>))}</tbody>
+            </table>
+          </div>
+        </section>
+      </>)}
+    </div>
+  );
+}
+
+function CRMCarteiraHoje({ resp, onAbrirNegocio }) {
+  const C = CRMC;
   const [linhas, setLinhas] = useState(null);
   const [fSit, setFSit] = useState('todos');           // atalho pelos cartões
   const F0 = { top: [], cli: [], vend: [], sit: [], risco: [], meses: [], dIni: '', dFim: '', vMin: '', vMax: '', busca: '' };
