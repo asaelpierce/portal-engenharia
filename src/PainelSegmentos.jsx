@@ -534,10 +534,9 @@ export default function PainelSegmentos({ supabase, chave }) {
             {titulo(t.gTab)}
             <div style={{ overflowX: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                <thead><tr>{th('', null)}{anos.map(a => <React.Fragment key={a}>{th(rotAno(a), null, 'right')}</React.Fragment>)}{th(`Δ ${anos[anos.length - 2]}/${anos[anos.length - 3]}`, null, 'right')}{th(`Δ ${ultimoAno} ${t.ytd}`, null, 'right')}</tr></thead>
+                <thead><tr>{th('', null)}{anos.map(a => <React.Fragment key={a}>{th(rotAno(a), null, 'right')}</React.Fragment>)}{th(`Δ ${ultimoAno} ${t.ytd} vs ${ultimoAno - 1}`, null, 'right')}</tr></thead>
                 <tbody>
                   {SEGS.map(s => {
-                    const ult = V.anoSeg[anos[anos.length - 2]]?.[s] || 0, pen = V.anoSeg[anos[anos.length - 3]]?.[s] || 0;
                     return (
                       <tr key={s} style={{ opacity: segSel && segSel !== s ? 0.45 : 1 }}>
                         <td onClick={() => alt('seg', s)} style={{ ...td, fontWeight: 800, cursor: 'pointer', whiteSpace: 'nowrap' }}>
@@ -551,15 +550,11 @@ export default function PainelSegmentos({ supabase, chave }) {
                             </td>
                           );
                         })}
-                        <td style={{ ...td, textAlign: 'right', fontWeight: 700, color: pen ? (ult >= pen ? '#2E7D32' : '#C62828') : CINZA }}>
-                          {pen ? `${ult >= pen ? '▲' : '▼'} ${fmt.pct(Math.abs(ult / pen - 1))}` : '—'}
-                          <div style={{ fontSize: 10.5, color: CINZA, fontWeight: 500 }}>{anos[anos.length - 2]} vs {anos[anos.length - 3]}</div>
-                        </td>
                         {(() => { const at = V.anoSeg[ultimoAno]?.[s] || 0, an = V.ytdAnt[s] || 0;
                           return (
                             <td style={{ ...td, textAlign: 'right', fontWeight: 700, color: an ? (at >= an ? '#2E7D32' : '#C62828') : CINZA }}>
                               {an ? `${at >= an ? '▲' : '▼'} ${fmt.pct(Math.abs(at / an - 1))}` : '—'}
-                              <div style={{ fontSize: 10.5, color: CINZA, fontWeight: 500 }}>vs {ultimoAno - 1} {t.meses[0]}–{t.meses[ultimoMes - 1]}: {fmt.curto(an)}</div>
+                              <div style={{ fontSize: 10.5, color: CINZA, fontWeight: 500 }}>{ultimoAno - 1} {t.meses[0]}–{t.meses[ultimoMes - 1]} ({t.mesmoPer}): {fmt.curto(an)}</div>
                             </td>); })()}
                       </tr>
                     );
@@ -568,11 +563,11 @@ export default function PainelSegmentos({ supabase, chave }) {
                     <td style={{ ...td, fontWeight: 800, background: '#E8EEF5' }}>Σ {t.total}</td>
                     {anos.map(a => <td key={a} style={{ ...td, textAlign: 'right', fontWeight: 800, background: '#E8EEF5' }}>{fmt.curto(SEGS.reduce((x, k) => x + V.anoSeg[a][k], 0))}</td>)}
                     {(() => { const tot = (a) => SEGS.reduce((x, k) => x + (V.anoSeg[a]?.[k] || 0), 0);
-                      const u = tot(anos[anos.length - 2]), p = tot(anos[anos.length - 3]), at = tot(ultimoAno), an = SEGS.reduce((x, k) => x + V.ytdAnt[k], 0);
+                      const at = tot(ultimoAno), an = SEGS.reduce((x, k) => x + V.ytdAnt[k], 0);
                       const cel = (x, y, sub) => (
                         <td style={{ ...td, textAlign: 'right', fontWeight: 800, background: '#E8EEF5', color: y ? (x >= y ? '#2E7D32' : '#C62828') : CINZA }}>
                           {y ? `${x >= y ? '▲' : '▼'} ${fmt.pct(Math.abs(x / y - 1))}` : '—'}<div style={{ fontSize: 10.5, color: CINZA, fontWeight: 500 }}>{sub}</div></td>);
-                      return <>{cel(u, p, `${anos[anos.length - 2]} vs ${anos[anos.length - 3]}`)}{cel(at, an, `vs ${ultimoAno - 1} ${t.meses[0]}–${t.meses[ultimoMes - 1]}: ${fmt.curto(an)}`)}</>; })()}
+                      return cel(at, an, `${ultimoAno - 1} ${t.meses[0]}–${t.meses[ultimoMes - 1]} (${t.mesmoPer}): ${fmt.curto(an)}`); })()}
                   </tr>
                 </tbody>
               </table>
