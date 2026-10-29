@@ -23389,6 +23389,9 @@ function PlanMes({ onProgramar }) {
   const [fSit, setFSit] = useState(null);
   const [fSetor, setFSetor] = useState(null);
   const [fTipo, setFTipo] = useState('todos');   // filtro só da LISTA: todos | material | servico (totais são sempre só material)
+  const FCOL0 = { br: '', cli: [], vend: [], setor: [], prev: [], conf: [], fat: [], falta: '', est: [], sit: [] };
+  const [fCol, setFCol] = useState(FCOL0);
+  const setFc = (k, v) => setFCol(f => ({ ...f, [k]: v }));
   const [detalhe, setDetalhe] = useState(null);
   const [msg, setMsg] = useState(null);
   const carregarMeses = useCallback(async () => {
@@ -23435,7 +23438,16 @@ function PlanMes({ onProgramar }) {
   const soma = (k, f) => L.filter(f).reduce((t, x) => t + Number(x[k] || 0), 0);
   const porSetor = {}; L.forEach(x => { const k = x.setores || '—'; const o = porSetor[k] || (porSetor[k] = { k, n: 0, prev: 0, fat: 0, falta: 0 }); o.n++; o.prev += Number(x.previsto || 0); o.fat += Number(x.faturado_mes || 0); o.falta += x.situacao === 'pendente' || x.situacao === 'parcial' ? Number(x.falta_agora || 0) : 0; });
   const porSemana = {}; L.forEach(x => { const k = x.semana || '—'; const o = porSemana[k] || (porSemana[k] = { k, n: 0, prev: 0, fat: 0 }); o.n++; o.prev += Number(x.previsto || 0); o.fat += Number(x.faturado_mes || 0); });
-  const vis = (linhas || []).filter(x => (fTipo === 'todos' || (fTipo === 'servico' ? x.servico : !x.servico)) && (!fSit || x.situacao === fSit) && (!fSetor || (x.setores || '—') === fSetor))
+  const confDe = (x) => (x.servico ? 'serviço (fora do valor)' : x.alerta ? 'com alerta para o PCP' : x.valor_confere ? 'bate com a planilha' : 'diferente da planilha');
+  const fatDe = (x) => (Number(x.faturado_mes) > 0 ? 'com faturamento no mês' : 'sem faturamento no mês');
+  const estDe = (x) => (x.estimativa_atual && x.data_prevista && x.estimativa_atual !== x.data_prevista ? 'data mudou' : 'data mantida');
+  const prevDe = (x) => (x.data_prevista ? new Date(`${x.data_prevista}T12:00:00`).toLocaleDateString('pt-BR') : '—');
+  const faltaMin = Number(String(fCol.falta || '').replace(/\./g, '').replace(',', '.')) || 0;
+  const tem = (arr, v) => !arr.length || arr.includes(v);
+  const vis = (linhas || []).filter(x => (fTipo === 'todos' || (fTipo === 'servico' ? x.servico : !x.servico)) && (!fSit || x.situacao === fSit) && (!fSetor || (x.setores || '—') === fSetor)
+      && (!fCol.br.trim() || String(x.br || '').toLowerCase().includes(fCol.br.trim().toLowerCase())) && tem(fCol.cli, x.cliente || '—') && tem(fCol.vend, x.vendedor || '—')
+      && tem(fCol.setor, x.setores || '—') && tem(fCol.prev, prevDe(x)) && tem(fCol.conf, confDe(x)) && tem(fCol.fat, fatDe(x))
+      && (!faltaMin || Number(x.falta_agora || 0) >= faltaMin) && tem(fCol.est, estDe(x)) && tem(fCol.sit, x.situacao))
     .sort((a, b) => String(a.data_prevista || '').localeCompare(String(b.data_prevista || '')) || (a.br_num - b.br_num) || (a.servico ? 1 : -1));
   const card = (r, v, sub, cor, k) => (
     <button onClick={k ? () => setFSit(fSit === k ? null : k) : undefined} style={{ ...caixa, textAlign: 'left', fontFamily: 'inherit', padding: '12px 15px', cursor: k ? 'pointer' : 'default', borderLeft: `4px solid ${cor}`, borderColor: k && fSit === k ? cor : C.line }}>
@@ -23495,13 +23507,32 @@ function PlanMes({ onProgramar }) {
         <section style={{ ...caixa, overflow: 'hidden' }}>
           <div style={{ padding: '10px 14px', borderBottom: `1px solid ${C.line}`, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
             <strong>Projetos programados</strong>
-            {(fSit || fSetor) && <button onClick={() => { setFSit(null); setFSetor(null); }} style={{ fontFamily: 'inherit', fontSize: 12, border: 'none', background: 'none', color: C.primary, cursor: 'pointer' }}>limpar filtro</button>}
-            <span style={{ flex: 1 }} /><span style={{ fontSize: 12, color: C.ink3 }}>{vis.length} de {(linhas || []).length} ({L.length} material + {LS.length} serviço)</span>
+            {(fSit || fSetor || JSON.stringify(fCol) !== JSON.stringify(FCOL0)) && <button onClick={() => { setFSit(null); setFSetor(null); setFCol(FCOL0); }} style={{ fontFamily: 'inherit', fontSize: 12, border: 'none', background: 'none', color: C.primary, cursor: 'pointer' }}>limpar filtros</button>}
+            <span style={{ flex: 1 }} /><span style={{ fontSize: 12, color: C.ink3 }}>{vis.length} de {(linhas || []).length} ({L.length} material + {LS.length} serviço){vis.length < (linhas || []).length ? ` · na tela: ${moeda(vis.filter(x => !x.servico).reduce((t, x) => t + Number(x.previsto || 0), 0))} programado, ${moeda(vis.filter(x => !x.servico).reduce((t, x) => t + Number(x.faturado_mes || 0), 0))} faturado` : ''}</span>
           </div>
           <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
-              <thead><tr>{['BR', 'Cliente', 'Vendedor', 'Setor', 'Previsto p/', 'Programado (Sankhya)', 'Faturado no mês', 'Falta agora', 'Estimativa atual (PCP)', 'Situação'].map((h, k) => <th key={h} style={thS([0, 1, 2, 3, 9].includes(k) ? 'left' : 'right')}>{h}</th>)}</tr></thead>
-              <tbody>{vis.map(x => { const sx = PLAN_SIT[x.situacao] || PLAN_SIT.pendente; const mudou = x.estimativa_atual && x.data_prevista && x.estimativa_atual !== x.data_prevista;
+              <thead><tr>{['BR', 'Cliente', 'Vendedor', 'Setor', 'Previsto p/', 'Programado (Sankhya)', 'Faturado no mês', 'Falta agora', 'Estimativa atual (PCP)', 'Situação'].map((h, k) => <th key={h} style={thS([0, 1, 2, 3, 9].includes(k) ? 'left' : 'right')}>{h}</th>)}</tr>
+                {(() => { const base = linhas || []; const op = (f) => [...new Set(base.map(f))].sort().map(v => ({ v, r: v }));
+                  const fth = { padding: '4px 6px', background: C.surface, borderBottom: `1px solid ${C.line}`, fontWeight: 400, minWidth: 90 };
+                  const inpF = (k, ph, al) => <input value={fCol[k]} onChange={e => setFc(k, e.target.value)} placeholder={ph} inputMode={al ? 'decimal' : undefined}
+                    style={{ fontFamily: 'inherit', fontSize: 11, padding: '3px 6px', width: '100%', boxSizing: 'border-box', borderRadius: 4, border: `1px solid ${fCol[k] ? C.primary : C.line}`, textAlign: al ? 'right' : 'left' }} />;
+                  return (
+                    <tr>
+                      <th style={fth}>{inpF('br', 'buscar BR')}</th>
+                      <th style={fth}><FiltroMulti valor={fCol.cli} onChange={v => setFc('cli', v)} opcoes={op(x => x.cliente || '—')} /></th>
+                      <th style={fth}><FiltroMulti valor={fCol.vend} onChange={v => setFc('vend', v)} opcoes={op(x => x.vendedor || '—')} /></th>
+                      <th style={fth}><FiltroMulti valor={fCol.setor} onChange={v => setFc('setor', v)} opcoes={op(x => x.setores || '—')} /></th>
+                      <th style={fth}><FiltroMulti valor={fCol.prev} onChange={v => setFc('prev', v)} opcoes={[...new Set(base.map(x => x.data_prevista || ''))].sort().map(d => { const r = prevDe({ data_prevista: d || null }); return { v: r, r }; })} todosRotulo="todas" /></th>
+                      <th style={fth}><FiltroMulti valor={fCol.conf} onChange={v => setFc('conf', v)} opcoes={['bate com a planilha', 'diferente da planilha', 'com alerta para o PCP', 'serviço (fora do valor)'].map(v => ({ v, r: v }))} /></th>
+                      <th style={fth}><FiltroMulti valor={fCol.fat} onChange={v => setFc('fat', v)} opcoes={['com faturamento no mês', 'sem faturamento no mês'].map(v => ({ v, r: v }))} /></th>
+                      <th style={fth}>{inpF('falta', 'valor mín.', true)}</th>
+                      <th style={fth}><FiltroMulti valor={fCol.est} onChange={v => setFc('est', v)} opcoes={['data mudou', 'data mantida'].map(v => ({ v, r: v }))} todosRotulo="todas" /></th>
+                      <th style={fth}><FiltroMulti valor={fCol.sit} onChange={v => setFc('sit', v)} opcoes={[...new Set(base.map(x => x.situacao))].map(v => ({ v, r: (PLAN_SIT[v] || PLAN_SIT.pendente).r }))} todosRotulo="todas" /></th>
+                    </tr>); })()}
+              </thead>
+              <tbody>{!vis.length && <tr><td colSpan={10} style={{ padding: 16, textAlign: 'center', color: C.ink3, fontSize: 12.5 }}>Nenhum projeto com esses filtros.</td></tr>}
+                {vis.map(x => { const sx = PLAN_SIT[x.situacao] || PLAN_SIT.pendente; const mudou = x.estimativa_atual && x.data_prevista && x.estimativa_atual !== x.data_prevista;
                 return (
                   <tr key={`${x.br_num}-${x.servico}`} onClick={() => setDetalhe(x)} style={{ cursor: 'pointer' }} title="clique para ver os pedidos, produtos e quantidades"
                     onMouseEnter={e => { e.currentTarget.style.background = '#F7F9FC'; }} onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}>
@@ -23534,10 +23565,16 @@ function PlanMes({ onProgramar }) {
 const PLAN_CONF_ORDEM = { nao_bate: 0, trocado: 1, bruto: 2, zerada: 3, qtd_parcial: 4, qtd_falta: 5, qtd_inteiro: 6, iss: 7, um_pedido: 8, sem_venda: 9, sem_pedido: 10, saldo: 11, inteiro_aprox: 12, inteiro: 13 };
 function PlanConferenciaMes({ linhas, todas, setTodas, onConferir, onAbrir }) {
   const C = CRMC;
+  const FC0 = { br: '', setor: [], tipo: [], oque: [], al: [] };
+  const [fc, setFc] = useState(FC0);
   const moeda = (v) => (v == null ? '—' : Number(v).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 2 }));
   const qf = (v) => (v == null ? '—' : Number(v).toLocaleString('pt-BR', { maximumFractionDigits: 3 }));
   const dif = linhas.filter(l => !l.valor_confere || l.alerta);
-  const vis = (todas ? linhas : dif).slice().sort((a, b) => (!!b.alerta - !!a.alerta) || ((PLAN_CONF_ORDEM[a.tipo_conf] ?? 50) - (PLAN_CONF_ORDEM[b.tipo_conf] ?? 50)) || (a.br_num - b.br_num));
+  const alDe = (l) => (l.alerta ? 'com alerta' : l.nunotas ? 'pedido confirmado' : 'sem alerta');
+  const oqueDe = (l) => String(l.conferencia || '').replace(/\s*\(.*$/, '').replace(/:.*$/, '');
+  const tem = (arr, v) => !arr.length || arr.includes(v);
+  const vis = (todas ? linhas : dif).filter(l => (!fc.br.trim() || String(l.br_planilha || '').toLowerCase().includes(fc.br.trim().toLowerCase()))
+      && tem(fc.setor, l.setor || '—') && tem(fc.tipo, l.servico ? 'Serviço' : 'Material') && tem(fc.oque, oqueDe(l)) && tem(fc.al, alDe(l))).sort((a, b) => (!!b.alerta - !!a.alerta) || ((PLAN_CONF_ORDEM[a.tipo_conf] ?? 50) - (PLAN_CONF_ORDEM[b.tipo_conf] ?? 50)) || (a.br_num - b.br_num));
   const ok = linhas.length - dif.length;
   const caixa = { background: C.surface, border: `1px solid ${C.line}`, borderRadius: 12 };
   const th = (al = 'right') => ({ padding: '8px 10px', fontSize: 11.5, fontWeight: 600, color: C.ink2, textAlign: al, whiteSpace: 'nowrap', background: '#F1F4F8', borderBottom: `1px solid ${C.line}` });
@@ -23549,13 +23586,28 @@ function PlanConferenciaMes({ linhas, todas, setTodas, onConferir, onAbrir }) {
         <strong>Planilha conferida com o Sankhya</strong>
         <span style={{ fontSize: 12.5, color: C.ink2 }}>{ok} de {linhas.length} linhas batem; {dif.length} com diferença ou pendência de conferência. O valor que vale é sempre o do Sankhya.</span>
         <span style={{ flex: 1 }} />
+        {JSON.stringify(fc) !== JSON.stringify(FC0) && <button onClick={() => setFc(FC0)} style={{ fontFamily: 'inherit', fontSize: 12, border: 'none', background: 'none', color: C.primary, cursor: 'pointer' }}>limpar filtros</button>}
         <button onClick={() => setTodas(!todas)} style={{ fontFamily: 'inherit', fontSize: 12, border: 'none', background: 'none', color: C.primary, cursor: 'pointer', fontWeight: 600 }}>{todas ? 'Mostrar só as diferenças' : 'Mostrar todas as linhas'}</button>
       </div>
-      {!vis.length ? <div style={{ padding: 16, fontSize: 12.5, color: C.win, textAlign: 'center' }}>Todas as linhas da programação batem com o Sankhya.</div> : (
+      {!(todas ? linhas : dif).length ? <div style={{ padding: 16, fontSize: 12.5, color: C.win, textAlign: 'center' }}>Todas as linhas da programação batem com o Sankhya.</div> : (
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead><tr><th style={th('left')}>BR</th><th style={th('left')}>Setor</th><th style={th()}>Qtd programada</th><th style={th()}>Sankhya: entregue / pedida</th><th style={th()}>Planilha</th><th style={th()}>Vale (Sankhya)</th><th style={th('left')}>O que é</th><th style={th('left')} /></tr></thead>
-            <tbody>{vis.map(l => (
+            <thead><tr><th style={th('left')}>BR</th><th style={th('left')}>Setor</th><th style={th()}>Qtd programada</th><th style={th()}>Sankhya: entregue / pedida</th><th style={th()}>Planilha</th><th style={th()}>Vale (Sankhya)</th><th style={th('left')}>O que é</th><th style={th('left')} /></tr>
+              {(() => { const base = todas ? linhas : dif; const op = (f) => [...new Set(base.map(f))].sort().map(v => ({ v, r: v }));
+                const fth = { padding: '4px 6px', background: C.surface, borderBottom: `1px solid ${C.line}`, fontWeight: 400, minWidth: 90 };
+                return (
+                  <tr>
+                    <th style={fth}><input value={fc.br} onChange={e => setFc(f => ({ ...f, br: e.target.value }))} placeholder="buscar BR"
+                      style={{ fontFamily: 'inherit', fontSize: 11, padding: '3px 6px', width: '100%', boxSizing: 'border-box', borderRadius: 4, border: `1px solid ${fc.br ? C.primary : C.line}` }} /></th>
+                    <th style={fth}><FiltroMulti valor={fc.setor} onChange={v => setFc(f => ({ ...f, setor: v }))} opcoes={op(l => l.setor || '—')} /></th>
+                    <th style={fth} colSpan={2}><FiltroMulti valor={fc.tipo} onChange={v => setFc(f => ({ ...f, tipo: v }))} opcoes={['Material', 'Serviço'].map(v => ({ v, r: v }))} todosRotulo="material e serviço" /></th>
+                    <th style={fth} colSpan={2} />
+                    <th style={fth}><FiltroMulti valor={fc.oque} onChange={v => setFc(f => ({ ...f, oque: v }))} opcoes={op(oqueDe)} /></th>
+                    <th style={fth}><FiltroMulti valor={fc.al} onChange={v => setFc(f => ({ ...f, al: v }))} opcoes={op(alDe)} /></th>
+                  </tr>); })()}
+            </thead>
+            <tbody>{!vis.length && <tr><td colSpan={8} style={{ padding: 16, textAlign: 'center', color: C.ink3, fontSize: 12.5 }}>Nenhuma linha com esses filtros.</td></tr>}
+              {vis.map(l => (
               <tr key={l.id}>
                 <td style={{ ...td, textAlign: 'left' }}><button onClick={() => onAbrir(l)} style={{ fontFamily: 'inherit', fontSize: 12.5, fontWeight: 700, color: C.primary, border: 'none', background: 'none', padding: 0, cursor: 'pointer' }}>{l.br_planilha}</button>
                   {l.servico && <span style={{ marginLeft: 6, fontSize: 10.5, fontWeight: 700, color: '#0D9488', background: '#E6F6F4', borderRadius: 4, padding: '1px 5px' }}>SERVIÇO</span>}
