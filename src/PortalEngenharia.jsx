@@ -23286,6 +23286,7 @@ function PlanDetalheProjeto({ brNum, servico, onFechar }) {
                     <span style={{ fontSize: 12, color: C.ink3 }}>{dt(p.dtneg)} · TOP {p.codtipoper}{p.servico ? ' · serviço' : ''} · nº único {p.nunota}</span>
                     <span style={{ flex: 1 }} />
                     <span style={{ fontSize: 12.5, fontWeight: 700, color: SIT_COR[p.situacao] || C.ink2 }}>{p.situacao}</span>
+                    {![3105, 3109].includes(Number(p.codtipoper)) && <BotaoSolicitacaoNF nunota={p.nunota} numnota={p.numnota} />}
                   </div>
                   <div style={{ display: 'flex', gap: 22, flexWrap: 'wrap', padding: '8px 14px', fontSize: 12.5, borderBottom: `1px solid ${C.lineSoft}` }}>
                     <span>Líquido total <strong>{moeda(p.total_liquido)}</strong></span><span>Faturado <strong>{moeda(p.faturado)}</strong></span><span>Saldo <strong>{moeda(p.saldo)}</strong></span>
@@ -23321,6 +23322,56 @@ function PlanDetalheProjeto({ brNum, servico, onFechar }) {
         )}
       </aside>
     </div>, document.body);
+}
+
+// ============================================================================
+// SOLICITAÇÃO DE FATURAMENTO — gera no Sankhya o relatório "Solicitar NF (Excel)" (nuRfe 224) do pedido e baixa o .xls,
+// o mesmo arquivo que o PCP tirava do Sankhya para mandar ao fiscal. Edge sankhya-solicitacao-faturamento (exige login);
+// cada download fica registrado em plan_solicitacao_fat (quem e quando).
+// ============================================================================
+async function baixarSolicitacaoNF(nunota) {
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session) throw new Error('Entre no portal de novo para gerar a solicitação.');
+  const r = await fetch(`${SUPABASE_URL}/functions/v1/sankhya-solicitacao-faturamento`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}`, apikey: SUPABASE_ANON_KEY },
+    body: JSON.stringify({ nunota }),
+  });
+  if (!r.ok) { let m = `erro ${r.status}`; try { m = (await r.json()).erro || m; } catch { /* sem corpo */ } throw new Error(m); }
+  const nome = decodeURIComponent(r.headers.get('x-arquivo') || '') || `Solicitar NF - ${nunota}.xls`;
+  const blob = await r.blob();
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = nome;
+  document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  return nome;
+}
+function BotaoSolicitacaoNF({ nunota, numnota, ultima, compacto = false }) {
+  const C = CRMC;
+  const [estado, setEstado] = useState(null);   // null | 'gerando' | { erro } | { ok }
+  const [ult, setUlt] = useState(ultima);
+  useEffect(() => {
+    if (ultima !== undefined) { setUlt(ultima); return; }
+    supabase.from('plan_solicitacao_fat').select('usuario,gerado_em').eq('nunota', nunota).eq('ok', true).order('gerado_em', { ascending: false }).limit(1)
+      .then(({ data }) => setUlt((data || [])[0] || null));
+  }, [nunota, ultima]);
+  const gerar = async (e) => {
+    e?.stopPropagation?.();
+    setEstado('gerando');
+    try { await baixarSolicitacaoNF(nunota); setEstado({ ok: true }); setUlt({ usuario: 'você', gerado_em: new Date().toISOString() }); }
+    catch (err) { setEstado({ erro: String(err?.message || err) }); }
+  };
+  const quem = (u) => (u ? String(u).split('@')[0] : '');
+  const quando = (d) => new Date(d).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+  const titulo = `Gera no Sankhya a planilha "Solicitar NF" do pedido ${numnota || nunota} (a mesma que vai para o fiscal) e baixa o arquivo`;
+  return (
+    <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: compacto ? 'flex-start' : 'flex-end', gap: 2 }}>
+      <button onClick={gerar} disabled={estado === 'gerando'} title={titulo}
+        style={{ fontFamily: 'inherit', fontSize: compacto ? 11.5 : 12, fontWeight: 600, padding: compacto ? '4px 8px' : '5px 10px', borderRadius: 7, whiteSpace: 'nowrap',
+          border: `1px solid ${C.primary}`, background: estado === 'gerando' ? C.primarySoft : C.surface, color: C.primary, cursor: estado === 'gerando' ? 'wait' : 'pointer' }}>
+        {estado === 'gerando' ? 'Gerando no Sankhya…' : compacto ? 'Solicitar NF' : 'Solicitação de faturamento (.xls)'}
+      </button>
+      {estado?.erro ? <span style={{ fontSize: 10.5, color: C.loss, maxWidth: 260, whiteSpace: 'normal', textAlign: compacto ? 'left' : 'right' }}>{estado.erro}</span>
+        : ult ? <span style={{ fontSize: 10.5, color: C.ink3, whiteSpace: 'nowrap' }}>gerada {quando(ult.gerado_em)}{ult.usuario ? ` · ${quem(ult.usuario)}` : ''}</span> : null}
+    </span>
+  );
 }
 
 // Consultar BR: digita e já aparece; abre tudo do projeto (pedidos, itens, notas, PCP, planilha × Sankhya, OOH, comunicações).
@@ -23773,7 +23824,12 @@ function PlanProgramar() {
   const [ocupado, setOcupado] = useState(false);
   const [detalhe, setDetalhe] = useState(null);
   const [rec, setRec] = useState(0);
+  const [ultSol, setUltSol] = useState({});
   const recarregar = () => setRec(r => r + 1);
+  useEffect(() => {
+    supabase.from('plan_solicitacao_fat').select('nunota,usuario,gerado_em').eq('ok', true).order('gerado_em', { ascending: false }).limit(2000)
+      .then(({ data }) => { const m = {}; (data || []).forEach(x => { if (!m[x.nunota]) m[x.nunota] = x; }); setUltSol(m); });
+  }, []);
   useEffect(() => {
     setLinhas(null);
     Promise.all([
@@ -23862,7 +23918,10 @@ function PlanProgramar() {
                     return (
                       <tr key={l.id}>
                         <td style={{ ...td, textAlign: 'left' }}><button onClick={() => setDetalhe(l)} style={{ fontFamily: 'inherit', fontSize: 12.5, fontWeight: 700, color: C.primary, border: 'none', background: 'none', padding: 0, cursor: 'pointer' }}>{l.br_planilha}</button>
-                          <div style={{ fontSize: 11, color: C.ink3, whiteSpace: 'normal', maxWidth: 200 }}>{l.cliente}</div></td>
+                          <div style={{ fontSize: 11, color: C.ink3, whiteSpace: 'normal', maxWidth: 200 }}>{l.cliente}</div>
+                          {(l.pedidos || []).filter(p => p.pendente === 'S').map(p => (
+                            <div key={p.nunota} style={{ marginTop: 5 }}>{(l.pedidos || []).length > 1 && <div style={{ fontSize: 10.5, color: C.ink3 }}>pedido {p.numnota}</div>}
+                              <BotaoSolicitacaoNF nunota={p.nunota} numnota={p.numnota} ultima={ultSol[p.nunota] || null} compacto /></div>))}</td>
                         <td style={{ ...td, textAlign: 'left', whiteSpace: 'normal', minWidth: 240, maxWidth: 420, fontSize: 12 }}>{String(l.descricao || '').slice(0, 220)}{String(l.descricao || '').length > 220 ? '…' : ''}</td>
                         <td style={td}>{!congelado && umProd
                           ? <input defaultValue={l.qtd_plan != null ? String(l.qtd_plan).replace('.', ',') : ''} onBlur={e => { const v = Number(e.target.value.replace(/\./g, '').replace(',', '.')); if (v > 0 && v !== Number(l.qtd_plan)) rpc('fn_plan_prog_alterar', { p_id: l.id, p_qtd: v }); }}
@@ -23910,8 +23969,11 @@ function PlanProgramar() {
                           <td style={td}>{umProd ? `${qf(c.qtd_pendente)} de ${qf(c.qtd)} ${String(c.unidade || '').toLowerCase()}` : `${c.n_prod} itens`}{Number(c.faturado) > 0 && <div style={{ fontSize: 10.5, color: C.ink3 }}>já faturado {moeda(c.faturado)}</div>}</td>
                           <td style={{ ...td, fontWeight: 700 }}>{moeda2(c.saldo_real)}{c.unit_liq != null && <div style={{ fontSize: 10.5, color: C.ink3, fontWeight: 400 }}>{moeda2(c.unit_liq)} / {String(c.unidade || '').toLowerCase()}</div>}</td>
                           <td style={{ ...td, color: noMes(c.estimativa_pcp) ? C.primary : C.ink2, fontWeight: noMes(c.estimativa_pcp) ? 700 : 400 }}>{dt(c.estimativa_pcp)}{(c.meses_programados || []).length > 0 && <div style={{ fontSize: 10.5, color: C.ink3, fontWeight: 400 }}>programado: {(c.meses_programados || []).map(m => new Date(`${m}T12:00:00`).toLocaleDateString('pt-BR', { month: 'short', year: '2-digit' })).join(', ')}</div>}</td>
-                          <td style={{ ...td, textAlign: 'left' }}>{c.jaNoMes ? <span style={{ fontSize: 12, color: C.win, fontWeight: 600 }}>já no mês</span>
-                            : <button onClick={() => setForm(aberto ? null : { c, qtd: umProd ? String(c.qtd_pendente).replace('.', ',') : '', data: noMes(c.estimativa_pcp) ? c.estimativa_pcp : fimMes })} style={btn(!aberto)}>{aberto ? 'Fechar' : 'Programar'}</button>}</td>
+                          <td style={{ ...td, textAlign: 'left' }}><div style={{ display: 'flex', flexDirection: 'column', gap: 5, alignItems: 'flex-start' }}>
+                            {c.jaNoMes ? <span style={{ fontSize: 12, color: C.win, fontWeight: 600 }}>já no mês</span>
+                              : <button onClick={() => setForm(aberto ? null : { c, qtd: umProd ? String(c.qtd_pendente).replace('.', ',') : '', data: noMes(c.estimativa_pcp) ? c.estimativa_pcp : fimMes })} style={btn(!aberto)}>{aberto ? 'Fechar' : 'Programar'}</button>}
+                            <BotaoSolicitacaoNF nunota={c.nunota} numnota={c.numnota} ultima={ultSol[c.nunota] || null} compacto />
+                          </div></td>
                         </tr>
                         {aberto && (
                           <tr style={{ background: C.primarySoft }}><td colSpan={7} style={{ padding: '10px 14px', borderBottom: `1px solid ${C.line}` }}>
