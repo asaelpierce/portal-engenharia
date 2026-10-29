@@ -29,7 +29,7 @@ const TXT = {
     dica: 'Clique em qualquer barra, fatia, linha ou cliente para filtrar. A tela inteira se recalcula.',
     kTotal: 'Faturado', kNotas: 'Notas fiscais', kClientes: 'Clientes', kProjetos: 'Projetos (BR)', kTicket: 'Ticket médio por nota',
     vsAnt: 'vs. mesmo período do ano anterior', semComp: 'sem comparação',
-    gAnos: 'Evolução por ano', gMes: 'Mês a mês', gMix: 'Mix por produto', gTab: 'Produto × ano',
+    gAnos: 'Evolução por ano', gMes: 'Mês a mês', gMix: 'Mix por produto', gTab: 'Produto × ano', mixSoma: 'soma de todos os anos', mixAte: 'até', mesmoPer: 'mesmo período',
     rCli: 'Ranking de clientes', rProd: 'Ranking de itens', rBr: 'Ranking de projetos (BR)', agrupar: 'Agrupar por grupo econômico',
     kal: 'Kalimpact em todas as linhas (PG1, PG2, PG3)', kPG2: 'em PG2', kPG1: 'em PG1', kPG3: 'em projetos PG3', kTot: 'Kalimpact total', kPct: '% do faturado',
     notas: 'Notas fiscais', buscar: 'buscar NF, BR, cliente ou produto', exportar: 'Exportar CSV', nf: 'NF', data: 'Mês', valor: 'Valor',
@@ -55,7 +55,7 @@ const TXT = {
     dica: 'Click any bar, slice, row or customer to filter. The whole page recalculates.',
     kTotal: 'Invoiced', kNotas: 'Invoices', kClientes: 'Customers', kProjetos: 'Projects (BR)', kTicket: 'Average per invoice',
     vsAnt: 'vs. same period last year', semComp: 'no comparison',
-    gAnos: 'Evolution by year', gMes: 'Month by month', gMix: 'Product mix', gTab: 'Product × year',
+    gAnos: 'Evolution by year', gMes: 'Month by month', gMix: 'Product mix', gTab: 'Product × year', mixSoma: 'sum of all years', mixAte: 'through', mesmoPer: 'same period',
     rCli: 'Customer ranking', rProd: 'Item ranking', rBr: 'Project ranking (BR)', agrupar: 'Group by corporate group',
     kal: 'Kalimpact across all lines (PG1, PG2, PG3)', kPG2: 'in PG2', kPG1: 'in PG1', kPG3: 'in PG3 projects', kTot: 'Kalimpact total', kPct: '% of invoiced sales',
     notas: 'Invoices', buscar: 'search invoice, BR, customer or product', exportar: 'Export CSV', nf: 'Invoice', data: 'Month', valor: 'Value',
@@ -327,6 +327,9 @@ export default function PainelSegmentos({ supabase, chave }) {
     const ls1 = linhas.filter(l => passa(l, ['ano', 'seg', 'mes']));
     const anoSeg = Object.fromEntries(anos.map(a => [a, Object.fromEntries(SEGS.map(s => [s, 0]))]));
     ls1.forEach(l => { anoSeg[l.a][l.s] += l.v; });
+    // ano anterior só até o mesmo mês do ano corrente (para o Δ YTD × YTD)
+    const ytdAnt = Object.fromEntries(SEGS.map(s => [s, 0]));
+    ls1.forEach(l => { if (l.a === ultimoAno - 1 && l.m <= ultimoMes) ytdAnt[l.s] += l.v; });
     // mês a mês (ignora o filtro de mês; mostra o ano escolhido ou todos)
     const ls2 = linhas.filter(l => passa(l, ['mes', 'seg']));
     const mesesK = [...new Set(linhas.filter(l => f.ano == null || l.a === f.ano).map(l => l.chM))].sort();
@@ -361,7 +364,7 @@ export default function PainelSegmentos({ supabase, chave }) {
       const k = `${l.a}-${l.nf}`; const it = mNF.get(k) || { k, nf: l.nf, a: l.a, m: l.m, chM: l.chM, cli: nomeCli(l.c), brs: new Set(), segs: {}, itens: [], v: 0 };
       it.v += l.v; if (l.br) it.brs.add(l.br); it.segs[l.s] = (it.segs[l.s] || 0) + l.v; it.itens.push(l); mNF.set(k, it);
     });
-    return { total, nNF: nfs.size, nCli: clis.size, nBr: brs.size, comp, anoSeg, mesesK, mesSeg, mix, rCli, rProd, rBr, rMerc, mercAno, kal, nfs: [...mNF.values()] };
+    return { total, nNF: nfs.size, nCli: clis.size, nBr: brs.size, comp, anoSeg, ytdAnt, mesesK, mesSeg, mix, rCli, rProd, rBr, rMerc, mercAno, kal, nfs: [...mNF.values()] };
   }, [base, passa, f, chaveCli, agrupar, nomeCli, mercCli, rotMerc, dados]);
 
   const pagina = { minHeight: '100vh', background: '#EEF1F5', fontFamily: '"Segoe UI", Inter, Arial, sans-serif', color: '#1E2A36' };
@@ -522,7 +525,8 @@ export default function PainelSegmentos({ supabase, chave }) {
         {/* ---------------- mix + segmento × ano ---------------- */}
         <div style={{ display: 'grid', gap: 18, gridTemplateColumns: 'repeat(auto-fit, minmax(620px, 1fr))' }}>
           <div style={cartao}>
-            {titulo(`${t.gMix}${f.ano != null ? ` · ${rotAno(f.ano)}` : ''}`)}
+            {titulo(f.ano != null ? `${t.gMix} · ${rotAno(f.ano)}` : `${t.gMix} · ${anos[0]}–${ultimoAno} ${t.ytd}`)}
+            {f.ano == null && <div style={{ fontSize: 12.5, color: CINZA, marginTop: -6, marginBottom: 10 }}>{t.mixSoma}: {anos.map(rotAno).join(' + ')} ({t.mixAte} {t.meses[ultimoMes - 1]}/{ultimoAno})</div>}
             <Rosca partes={SEGS.map(s => ({ chave: s, nome: t.seg[s], cor: COR[s], valor: V.mix[s] }))} total={Object.values(V.mix).reduce((a, x) => a + x, 0)}
               fmt={fmt} onClick={s => alt('seg', s)} sel={segSel} dica={dica} t={t} />
           </div>
@@ -530,7 +534,7 @@ export default function PainelSegmentos({ supabase, chave }) {
             {titulo(t.gTab)}
             <div style={{ overflowX: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                <thead><tr>{th('', null)}{anos.map(a => <React.Fragment key={a}>{th(rotAno(a), null, 'right')}</React.Fragment>)}{th('Δ', null, 'right')}</tr></thead>
+                <thead><tr>{th('', null)}{anos.map(a => <React.Fragment key={a}>{th(rotAno(a), null, 'right')}</React.Fragment>)}{th(`Δ ${anos[anos.length - 2]}/${anos[anos.length - 3]}`, null, 'right')}{th(`Δ ${ultimoAno} ${t.ytd}`, null, 'right')}</tr></thead>
                 <tbody>
                   {SEGS.map(s => {
                     const ult = V.anoSeg[anos[anos.length - 2]]?.[s] || 0, pen = V.anoSeg[anos[anos.length - 3]]?.[s] || 0;
@@ -551,13 +555,24 @@ export default function PainelSegmentos({ supabase, chave }) {
                           {pen ? `${ult >= pen ? '▲' : '▼'} ${fmt.pct(Math.abs(ult / pen - 1))}` : '—'}
                           <div style={{ fontSize: 10.5, color: CINZA, fontWeight: 500 }}>{anos[anos.length - 2]} vs {anos[anos.length - 3]}</div>
                         </td>
+                        {(() => { const at = V.anoSeg[ultimoAno]?.[s] || 0, an = V.ytdAnt[s] || 0;
+                          return (
+                            <td style={{ ...td, textAlign: 'right', fontWeight: 700, color: an ? (at >= an ? '#2E7D32' : '#C62828') : CINZA }}>
+                              {an ? `${at >= an ? '▲' : '▼'} ${fmt.pct(Math.abs(at / an - 1))}` : '—'}
+                              <div style={{ fontSize: 10.5, color: CINZA, fontWeight: 500 }}>vs {ultimoAno - 1} {t.meses[0]}–{t.meses[ultimoMes - 1]}: {fmt.curto(an)}</div>
+                            </td>); })()}
                       </tr>
                     );
                   })}
                   <tr>
                     <td style={{ ...td, fontWeight: 800, background: '#E8EEF5' }}>Σ {t.total}</td>
                     {anos.map(a => <td key={a} style={{ ...td, textAlign: 'right', fontWeight: 800, background: '#E8EEF5' }}>{fmt.curto(SEGS.reduce((x, k) => x + V.anoSeg[a][k], 0))}</td>)}
-                    <td style={{ ...td, background: '#E8EEF5' }} />
+                    {(() => { const tot = (a) => SEGS.reduce((x, k) => x + (V.anoSeg[a]?.[k] || 0), 0);
+                      const u = tot(anos[anos.length - 2]), p = tot(anos[anos.length - 3]), at = tot(ultimoAno), an = SEGS.reduce((x, k) => x + V.ytdAnt[k], 0);
+                      const cel = (x, y, sub) => (
+                        <td style={{ ...td, textAlign: 'right', fontWeight: 800, background: '#E8EEF5', color: y ? (x >= y ? '#2E7D32' : '#C62828') : CINZA }}>
+                          {y ? `${x >= y ? '▲' : '▼'} ${fmt.pct(Math.abs(x / y - 1))}` : '—'}<div style={{ fontSize: 10.5, color: CINZA, fontWeight: 500 }}>{sub}</div></td>);
+                      return <>{cel(u, p, `${anos[anos.length - 2]} vs ${anos[anos.length - 3]}`)}{cel(at, an, `vs ${ultimoAno - 1} ${t.meses[0]}–${t.meses[ultimoMes - 1]}: ${fmt.curto(an)}`)}</>; })()}
                   </tr>
                 </tbody>
               </table>
