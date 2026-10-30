@@ -4010,8 +4010,8 @@ const TXT = {
     cicloTitulo: 'Propostas e fechamento, mês a mês',
     diasAtePedido: 'Do BR à proposta', diasAteFaturar: 'Do CP ao faturamento',
     spotMedia: 'spot (média)', contratoAbrev: 'contrato', semVale: 'sem Vale', mediana: 'mediana', primNf: '1ª NF', notasDoAno: 'notas do ano',
-    explicaPrazoBr: 'Da abertura do BR (a data mais antiga entre o projeto no Sankhya, o Criar BR e a solicitação no portal) até a 1ª proposta emitida no Sankhya, ou o conhecimento de pedido se vier antes. Conta as propostas/CPs emitidos em {ano}, sem a Vale e sem projeto estoque. SPOT: {sn} BRs, média {sm} dias, mediana {sd}. CONTRATO: {cn} BRs, média {cm} dias, mediana {cd}.',
-    explicaPrazoFat: 'Do conhecimento de pedido (CP) até a nota fiscal de material. Conta todas as notas emitidas em {ano}, inclusive de BRs de anos anteriores (sem projeto estoque). Até a 1ª NF: {n} BRs, média {m} dias, mediana {d}. Até a última NF (pedido entregue por completo): média {u} dias. SPOT {s} dias · CONTRATO {c} dias. Sem CP registrado, vale a data do pedido no Sankhya.',
+    explicaPrazoBr: 'Da abertura do BR (a data mais antiga entre o projeto no Sankhya, o Criar BR e a solicitação no portal) até a 1ª proposta emitida no Sankhya, ou o conhecimento de pedido se vier antes. Só BRs de {ano}, sem a Vale e sem projeto estoque. SPOT: {sn} BRs, média {sm} dias, mediana {sd}. CONTRATO: {cn} BRs, média {cm} dias, mediana {cd}.',
+    explicaPrazoFat: 'Do conhecimento de pedido (CP) até a nota fiscal de material. Só BRs de {ano} que já tiveram nota (sem projeto estoque). Até a 1ª NF: {n} BRs, média {m} dias, mediana {d}. Até a última NF (pedido entregue por completo): média {u} dias. SPOT {s} dias · CONTRATO {c} dias. Sem CP registrado, vale a data do pedido no Sankhya.',
     explicaPrazoTipo: 'BRs de 2026, sem a Vale Contrato e sem projeto estoque. Dias da PRIMEIRA proposta (a mais antiga de todas as revisões) até o pedido de venda no Sankhya. SPOT: {sn} BRs, média {sm} dias, mediana {sd}, {s1} em até 1 dia; da criação do BR ao pedido: {sb} dias. CONTRATO: {cn} BRs, média {cm} dias, {c1} em até 1 dia; da criação do BR ao pedido: {cb} dias. Tipo vem do Painel KdB.',
     convMedia: 'Média mensal (valor)',
     convDecididos: 'Ganho × perdido (valor)',
@@ -4225,8 +4225,8 @@ const TXT = {
     cicloTitulo: 'Proposals and closings, month by month',
     diasAtePedido: 'BR to proposal', diasAteFaturar: 'Order acknowledgment to invoice',
     spotMedia: 'spot (avg)', contratoAbrev: 'contract', semVale: 'excl. Vale', mediana: 'median', primNf: '1st invoice', notasDoAno: 'invoices of the year',
-    explicaPrazoBr: 'From BR opening (earliest of Sankhya project, portal Create BR and portal request) to the first proposal issued in Sankhya, or the order acknowledgment if earlier. Counts proposals/acknowledgments issued in {ano}, excluding Vale and stock projects. SPOT: {sn} BRs, avg {sm} days, median {sd}. CONTRACT: {cn} BRs, avg {cm} days, median {cd}.',
-    explicaPrazoFat: 'From order acknowledgment (CP) to the material invoice. Counts all invoices issued in {ano}, including BRs from previous years (excluding stock projects). To 1st invoice: {n} BRs, avg {m} days, median {d}. To last invoice (order fully delivered): avg {u} days. SPOT {s} days · CONTRACT {c} days. Without a recorded CP, the Sankhya order date is used.',
+    explicaPrazoBr: 'From BR opening (earliest of Sankhya project, portal Create BR and portal request) to the first proposal issued in Sankhya, or the order acknowledgment if earlier. {ano} BRs only, excluding Vale and stock projects. SPOT: {sn} BRs, avg {sm} days, median {sd}. CONTRACT: {cn} BRs, avg {cm} days, median {cd}.',
+    explicaPrazoFat: 'From order acknowledgment (CP) to the material invoice. {ano} BRs that already have an invoice (excluding stock projects). To 1st invoice: {n} BRs, avg {m} days, median {d}. To last invoice (order fully delivered): avg {u} days. SPOT {s} days · CONTRACT {c} days. Without a recorded CP, the Sankhya order date is used.',
     explicaPrazoTipo: '2026 BRs, excluding Vale Contract and stock projects. Days from the FIRST proposal (oldest of all revisions) to the sales order in Sankhya. SPOT: {sn} BRs, avg {sm} days, median {sd}, {s1} within 1 day; BR creation to order: {sb} days. CONTRACT: {cn} BRs, avg {cm} days, {c1} within 1 day; BR creation to order: {cb} days. Type comes from the KdB panel.',
     convMedia: 'Monthly average (value)',
     convDecididos: 'Won × lost (value)',
@@ -5772,7 +5772,7 @@ function PainelDiretoria() {
   // prazos da Diretoria (Asael, 29/10/2026): BR aberto -> proposta/CP; CP -> NF. Conta pelo ano do evento final.
   const [prazos, setPrazos] = useState([]);
   useEffect(() => { supabase.from('v_comercial_prazo_br').select('br,tipo,eh_vale,eh_estoque,fim_proposta,dias_br_ate_proposta,data_primeira_nf,dias_cp_ate_nf,data_ultima_nf,dias_cp_ate_ultima_nf')
-    .or(`fim_proposta.gte.${new Date().getFullYear()}-01-01,data_primeira_nf.gte.${new Date().getFullYear()}-01-01,data_ultima_nf.gte.${new Date().getFullYear()}-01-01`).limit(5000).then(r => setPrazos(r.data || [])); }, []);
+    .like('br', `%/${String(new Date().getFullYear()).slice(2)}`).limit(5000).then(r => setPrazos(r.data || [])); }, []);
   const [fatOrigemTodos, setFatOrigem] = useState([]);
   const [fatDetTodos, setFatDet] = useState([]);
   const fatOrigem = useMemo(() => fatOrigemTodos.filter(f => noPer(f.competencia)), [fatOrigemTodos, perDe, perAte]);  // eslint-disable-line
@@ -6095,12 +6095,13 @@ function PainelDiretoria() {
   const estat = (arr) => { const d = arr.map(Number).filter(x => x >= 0).sort((a, b) => a - b); if (!d.length) return null;
     const med = d.length % 2 ? d[(d.length - 1) / 2] : (d[d.length / 2 - 1] + d[d.length / 2]) / 2;
     return { n: d.length, media: Math.round(d.reduce((a, b) => a + b, 0) / d.length), mediana: Math.round(med) }; };
-  const prProp = (tp) => estat(prazos.filter(c => c.tipo === tp && !c.eh_vale && !c.eh_estoque && String(c.fim_proposta || '').startsWith(anoAtual) && c.dias_br_ate_proposta != null).map(c => c.dias_br_ate_proposta));
+  // só BRs do ano (Asael, 29/10/2026): a consulta já vem filtrada por BR…/AA
+  const prProp = (tp) => estat(prazos.filter(c => c.tipo === tp && !c.eh_vale && !c.eh_estoque && c.dias_br_ate_proposta != null).map(c => c.dias_br_ate_proposta));
   const pbSpot = prProp('SPOT'), pbContr = prProp('CONTRATO');
-  const comNf = prazos.filter(c => !c.eh_estoque && String(c.data_primeira_nf || '').startsWith(anoAtual) && c.dias_cp_ate_nf != null);
+  const comNf = prazos.filter(c => !c.eh_estoque && c.dias_cp_ate_nf != null);
   const pfTodos = estat(comNf.map(c => c.dias_cp_ate_nf)), pfSpot = estat(comNf.filter(c => c.tipo === 'SPOT').map(c => c.dias_cp_ate_nf)),
     pfContr = estat(comNf.filter(c => c.tipo === 'CONTRATO').map(c => c.dias_cp_ate_nf)),
-    pfUlt = estat(prazos.filter(c => !c.eh_estoque && String(c.data_ultima_nf || '').startsWith(anoAtual) && c.dias_cp_ate_ultima_nf != null).map(c => c.dias_cp_ate_ultima_nf));
+    pfUlt = estat(prazos.filter(c => !c.eh_estoque && c.dias_cp_ate_ultima_nf != null).map(c => c.dias_cp_ate_ultima_nf));
   const diasFat = ciclo.length ? Math.round(ciclo.reduce((s, c) => s + (Number(c.dias_ate_faturar) || 0), 0) / ciclo.length) : null;
 
   // ---- LEITURAS DE DIRETORIA ----
@@ -7168,7 +7169,7 @@ IMPORTANTE: Responda SOMENTE com base nos dados acima. Se a pergunta pede algo q
             ajuda: pbSpot ? t.explicaPrazoBr.replace('{ano}', anoAtual).replace('{sn}', pbSpot.n).replace('{sm}', pbSpot.media).replace('{sd}', pbSpot.mediana)
               .replace('{cn}', pbContr?.n ?? 0).replace('{cm}', pbContr?.media ?? '—').replace('{cd}', pbContr?.mediana ?? '—') : undefined },
           { t: t.diasAteFaturar, txt: pfTodos ? `${pfTodos.media} ${t.dias}` : '—',
-            n: pfTodos ? `${t.primNf} · ${t.notasDoAno} · ${t.mediana} ${pfTodos.mediana}` : t.medio, p: G.rosa,
+            n: pfTodos ? `${t.primNf} · BRs ${anoAtual} · ${t.mediana} ${pfTodos.mediana}` : t.medio, p: G.rosa,
             ajuda: pfTodos ? t.explicaPrazoFat.replace('{ano}', anoAtual).replace('{n}', pfTodos.n).replace('{m}', pfTodos.media).replace('{d}', pfTodos.mediana)
               .replace('{u}', pfUlt?.media ?? '—').replace('{s}', pfSpot?.media ?? '—').replace('{c}', pfContr?.media ?? '—') : undefined },
         ].map((k, i) => (
