@@ -7,7 +7,7 @@ import PainelSegmentos from './PainelSegmentos.jsx';
 import PainelVendedor from './PainelVendedor.jsx';
 import {
   LayoutGrid, FileStack, ClipboardCheck, Gauge, SlidersHorizontal, Workflow,
-  Plus, Search, UploadCloud, AlertTriangle, Clock3, Check, X, LogOut,
+  Plus, Search, UploadCloud, AlertTriangle, Clock3, XCircle, Check, X, LogOut,
   ChevronRight, ChevronDown, Building2, CalendarDays, Link2, DownloadCloud,
   Filter, FileWarning, Stamp, ArrowUpRight, ArrowDownRight, Minus, Zap,
   CircleDot, ShieldCheck, MessageSquareWarning, ListFilter, Webhook, Users,
@@ -2218,6 +2218,205 @@ function Metricas({ propostas: propostasTodas }) {
 }
 
 /* ============================================================================
+   CICLO COMERCIAL — ANÁLISE INTELIGENTE (Asael, 30/10/2026)
+   Um BR por linha (v_ciclo_analise_br): proposta (data real de criação no Sankhya) → pedido (Sankhya, líquido) →
+   nota (Net Offer Value). Situação: faturado | faturando | pedido | perdido (CRM) | parado (> 60 dias sem pedido e sem
+   perda registrada) | em aberto. Todo número abre a lista dos BRs que o compõem.
+============================================================================ */
+const CICLO_SIT = {
+  faturado: { r: 'Faturado', c: T.oliveText, bg: T.oliveSoft },
+  faturando: { r: 'Faturando (parcial)', c: T.oliveText, bg: T.oliveSoft },
+  pedido: { r: 'Virou pedido', c: T.blueText, bg: T.blueSoft },
+  em_aberto: { r: 'Em aberto', c: T.amberText, bg: T.amberSoft },
+  parado: { r: 'Parado > 60 dias', c: T.rustText, bg: T.rustSoft },
+  perdido: { r: 'Perdido', c: T.inkDim, bg: T.panelAlt },
+};
+const cicloGanho = (l) => ['faturado', 'faturando', 'pedido'].includes(l.situacao);
+const cicloMediana = (arr) => { const d = arr.filter(x => x != null && !Number.isNaN(Number(x))).map(Number).sort((a, b) => a - b); if (!d.length) return null; const m = Math.floor(d.length / 2); return d.length % 2 ? d[m] : (d[m - 1] + d[m]) / 2; };
+
+function CicloDrill({ drill, onFechar }) {
+  const [ord, setOrd] = useState(drill.ordem || 'valor');
+  if (!drill) return null;
+  const L = [...drill.linhas].sort((a, b) => ord === 'valor' ? Number(b.valor_proposta || 0) - Number(a.valor_proposta || 0)
+    : ord === 'data' ? String(b.data_proposta || '').localeCompare(String(a.data_proposta || ''))
+    : ord === 'idade' ? Number(b.idade_dias || 0) - Number(a.idade_dias || 0)
+    : ord === 'fat' ? Number(b._extra ?? b.faturado ?? 0) - Number(a._extra ?? a.faturado ?? 0) : 0);
+  const soma = (k) => L.reduce((t, l) => t + Number(l[k] || 0), 0);
+  const exportar = () => {
+    const cab = ['BR', 'Cliente', 'Vendedor', 'Segmento', 'Data proposta', 'Valor proposta', 'Data pedido', 'Pedido(s)', 'Valor pedido (líquido)', 'Faturado (líquido)', '1ª NF', 'Situação', 'Dias até o pedido', 'Idade (dias)', 'CRM', 'Motivo da perda'];
+    const lin = L.map(l => [l.br, `"${l.cliente || ''}"`, l.vendedor || '', l.segmento, l.data_proposta || '', String(l.valor_proposta ?? '').replace('.', ','), l.data_pedido || '', l.nums_pedido || '',
+      String(l.valor_pedido ?? '').replace('.', ','), String(l.faturado ?? '').replace('.', ','), l.data_1a_nf || '', CICLO_SIT[l.situacao]?.r || l.situacao, l.dias_ate_pedido ?? '', l.idade_dias ?? '', l.crm_etapa || '', `"${l.motivo_perda || ''}"`].join(';'));
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob(['\ufeff' + [cab.join(';'), ...lin].join('\n')], { type: 'text/csv;charset=utf-8' }));
+    a.download = `ciclo_${String(drill.titulo).replace(/[^\w]+/g, '_').slice(0, 40)}.csv`; a.click();
+  };
+  const th = { padding: '8px 10px', textAlign: 'left', fontSize: 10.5, fontWeight: 600, color: T.inkFaint, textTransform: 'uppercase', whiteSpace: 'nowrap', background: T.panelAlt, position: 'sticky', top: 0, zIndex: 1 };
+  const td = { padding: '8px 10px', fontSize: 12.5, borderBottom: `1px solid ${T.lineSoft}`, verticalAlign: 'top' };
+  return ReactDOM.createPortal(
+    <div onClick={onFechar} style={{ position: 'fixed', inset: 0, zIndex: 80, background: 'rgba(20,20,20,.35)', overflowY: 'auto' }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: T.panel, maxWidth: 1250, margin: '32px auto', borderRadius: 12, boxShadow: SHADOW_LG, fontFamily: FONT_BODY }}>
+        <div style={{ position: 'sticky', top: 0, zIndex: 2, background: T.panel, borderBottom: `1px solid ${T.line}`, padding: '14px 18px', borderRadius: '12px 12px 0 0', display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+          <div style={{ flex: 1, minWidth: 260 }}>
+            <div style={{ fontSize: 16, fontWeight: 700, color: T.ink }}>{drill.titulo}</div>
+            <div style={{ fontSize: 12.5, color: T.inkDim, marginTop: 2 }}>{L.length} BR{L.length !== 1 ? 's' : ''} · proposto {fmtMoeda(soma('valor_proposta'))}{soma('valor_pedido') ? ` · pedido ${fmtMoeda(soma('valor_pedido'))}` : ''}{drill.extraRotulo ? ` · ${drill.extraRotulo} ${fmtMoeda(soma('_extra'))}` : soma('faturado') ? ` · faturado ${fmtMoeda(soma('faturado'))}` : ''}</div>
+            {drill.explica && <div style={{ fontSize: 12, color: T.inkFaint, marginTop: 4, maxWidth: 820 }}>{drill.explica}</div>}
+          </div>
+          <select value={ord} onChange={e => setOrd(e.target.value)} style={{ background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 6, padding: '7px 10px', fontSize: 12.5 }}>
+            <option value="valor">maior valor proposto</option><option value="data">proposta mais recente</option><option value="idade">mais antigo</option><option value="fat">maior faturado</option>
+          </select>
+          <button onClick={exportar} style={{ padding: '7px 12px', fontSize: 12.5, borderRadius: 6, border: `1px solid ${T.line}`, background: T.panel, cursor: 'pointer' }}>Exportar (CSV)</button>
+          <button onClick={onFechar} aria-label="fechar" style={{ padding: '7px 12px', fontSize: 12.5, fontWeight: 600, borderRadius: 6, border: 'none', background: T.ink, color: '#fff', cursor: 'pointer' }}>Fechar</button>
+        </div>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead><tr>{['BR', 'Cliente / vendedor', 'Proposta', 'Pedido (líquido)', drill.extraRotulo || 'Faturado (líquido)', 'Situação', 'Prazos'].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
+            <tbody>{!L.length ? <tr><td colSpan={7} style={{ ...td, textAlign: 'center', color: T.inkFaint, padding: 20 }}>Nenhum BR.</td></tr> : L.map(l => { const s = CICLO_SIT[l.situacao] || {}; return (
+              <tr key={l.num}>
+                <td style={{ ...td, fontWeight: 700, fontFamily: FONT_DISPLAY, whiteSpace: 'nowrap' }}>{l.br}<div style={{ fontSize: 10.5, color: T.inkFaint, fontWeight: 400 }}>{l.segmento}</div></td>
+                <td style={{ ...td, maxWidth: 260 }}>{l.cliente}<div style={{ fontSize: 11, color: T.inkFaint }}>{l.vendedor || '—'}</div></td>
+                <td style={{ ...td, whiteSpace: 'nowrap' }}>{fmtMoeda(l.valor_proposta)}<div style={{ fontSize: 11, color: T.inkFaint }} title={l.data_corrigida ? `data de emissão digitada: ${l.data_digitada}` : ''}>{fmtData(l.data_proposta)}{l.data_corrigida ? ' *' : ''}{Number(l.revisoes) > 1 ? ` · ${l.revisoes} revisões` : ''}</div></td>
+                <td style={{ ...td, whiteSpace: 'nowrap' }}>{l.valor_pedido != null ? <>{fmtMoeda(l.valor_pedido)}<div style={{ fontSize: 11, color: T.inkFaint }}>{fmtData(l.data_pedido)} · nº {l.nums_pedido}{l.dif_pedido_proposta_pct != null ? ` · ${l.dif_pedido_proposta_pct > 0 ? '+' : ''}${String(l.dif_pedido_proposta_pct).replace('.', ',')}% vs proposta` : ''}</div></> : '—'}</td>
+                <td style={{ ...td, whiteSpace: 'nowrap', color: T.oliveText }}>{drill.extraRotulo ? fmtMoeda(l._extra) : l.faturado != null ? <>{fmtMoeda(l.faturado)}<div style={{ fontSize: 11, color: T.inkFaint }}>{l.notas} nota{l.notas > 1 ? 's' : ''} · 1ª {fmtData(l.data_1a_nf)}</div></> : '—'}</td>
+                <td style={td}><span style={{ fontSize: 11, fontWeight: 700, color: s.c, background: s.bg, borderRadius: 4, padding: '3px 8px', whiteSpace: 'nowrap' }}>{s.r || l.situacao}</span>
+                  {l.situacao === 'perdido' && <div style={{ fontSize: 11, color: T.inkFaint, marginTop: 3 }}>{l.motivo_perda || 'sem motivo no CRM'}</div>}
+                  {['em_aberto', 'parado'].includes(l.situacao) && l.crm_etapa && <div style={{ fontSize: 11, color: T.inkFaint, marginTop: 3 }}>CRM: {l.crm_etapa}</div>}</td>
+                <td style={{ ...td, whiteSpace: 'nowrap', fontSize: 12 }}>{l.dias_ate_pedido != null ? <div>até o pedido: <strong>{l.dias_ate_pedido} d</strong></div> : <div>há <strong>{l.idade_dias} d</strong> sem pedido</div>}
+                  {l.dias_pedido_ate_nf != null && <div style={{ color: T.inkFaint }}>pedido → nota: {l.dias_pedido_ate_nf} d</div>}</td>
+              </tr>); })}</tbody>
+          </table>
+        </div>
+        <div style={{ padding: '10px 18px', fontSize: 11, color: T.inkFaint }}>* data da proposta corrigida: é o dia em que ela foi criada no Sankhya (pelo número do registro); a data de emissão digitada aparece ao passar o mouse.</div>
+      </div>
+    </div>, document.body);
+}
+
+function CicloAnalise({ mesIni, mesFim, onDrill }) {
+  const [rows, setRows] = useState(null);
+  const [seg, setSeg] = useState('todos');
+  const [vend, setVend] = useState('todos');
+  const [busca, setBusca] = useState('');
+  useEffect(() => { (async () => {
+    let todas = [];
+    for (let de = 0; ; de += 1000) {
+      const { data, error } = await supabase.from('v_ciclo_analise_br').select('*').order('num').range(de, de + 999);
+      if (error) { console.error(error.message); break; }
+      todas = todas.concat(data || []); if (!data || data.length < 1000) break;
+    }
+    setRows(todas.filter(r => !r.eh_estoque));
+  })(); }, []);
+  if (!rows) return <div style={{ padding: 30, textAlign: 'center', color: T.inkFaint }}>Carregando a análise…</div>;
+  const iIni = MESES_ORDEM.indexOf(mesIni), iFim = MESES_ORDEM.indexOf(mesFim); const [lo, hi] = iIni <= iFim ? [iIni, iFim] : [iFim, iIni];
+  const mesIdx = (l) => (l.data_proposta ? Number(String(l.data_proposta).slice(5, 7)) - 1 : -1);
+  const b = busca.trim().toLowerCase();
+  const vendedores = [...new Set(rows.map(r => r.vendedor).filter(Boolean))].sort();
+  const R = rows.filter(l => Number(String(l.data_proposta || '').slice(0, 4)) === ANO_OPERACIONAL && mesIdx(l) >= lo && mesIdx(l) <= hi
+    && (seg === 'todos' || l.segmento === seg) && (vend === 'todos' || l.vendedor === vend)
+    && (!b || `${l.br} ${l.cliente} ${l.vendedor} ${l.nums_pedido || ''}`.toLowerCase().includes(b)));
+  const soma = (arr, k) => arr.reduce((t, l) => t + Number(l[k] || 0), 0);
+  const grupo = (f) => R.filter(f);
+  const G = { todos: R, ganhos: grupo(cicloGanho), faturados: grupo(l => Number(l.faturado) > 0), perdidos: grupo(l => l.situacao === 'perdido'), parados: grupo(l => l.situacao === 'parado'), abertos: grupo(l => l.situacao === 'em_aberto') };
+  const pct = (a, t) => (t ? `${Math.round(100 * a / t)}%` : '—');
+  const abrir = (titulo, linhas, explica, ordem) => onDrill({ titulo, linhas, explica, ordem });
+  const mm = (v) => (v == null ? '—' : fmtMoedaCompacta(v));
+
+  // ---- pontos de atenção (análise automática) ----
+  const decididos = G.ganhos.length + G.perdidos.length;
+  const difs = G.ganhos.filter(l => l.dif_pedido_proposta_pct != null);
+  const cederam = difs.filter(l => Number(l.dif_pedido_proposta_pct) <= -10);
+  const medGanhoSpot = cicloMediana(G.ganhos.filter(l => l.segmento === 'SPOT').map(l => l.dias_ate_pedido));
+  const medGanhoContr = cicloMediana(G.ganhos.filter(l => l.segmento === 'CONTRATO').map(l => l.dias_ate_pedido));
+  const lentos = G.ganhos.filter(l => Number(l.dias_ate_pedido) > 60);
+  const semMotivo = G.perdidos.filter(l => !l.motivo_perda);
+  const porValor = {}; R.filter(l => Number(l.valor_proposta) > 50000).forEach(l => { const k = Number(l.valor_proposta).toFixed(2); (porValor[k] = porValor[k] || []).push(l); });
+  const concorr = Object.values(porValor).filter(a => new Set(a.map(l => l.cliente)).size > 1).flat();
+  const topAbertos = [...G.parados, ...G.abertos].sort((a, b2) => Number(b2.valor_proposta) - Number(a.valor_proposta)).slice(0, 10);
+  const pontos = [
+    G.parados.length && { cor: T.rustText, t: `${G.parados.length} propostas paradas há mais de 60 dias somam ${mm(soma(G.parados, 'valor_proposta'))}`, d: 'Sem pedido e sem perda registrada no CRM: ou o cliente precisa ser cobrado, ou a perda precisa ser registrada (senão a conversão fica distorcida).', l: G.parados, o: 'valor' },
+    topAbertos.length && { cor: T.amberText, t: `As 10 maiores propostas ainda sem pedido somam ${mm(soma(topAbertos, 'valor_proposta'))}`, d: 'É onde está o maior potencial de faturamento a buscar.', l: topAbertos, o: 'valor' },
+    decididos && { cor: T.blueText, t: `Taxa de ganho nas propostas já decididas: ${pct(G.ganhos.length, decididos)} (${G.ganhos.length} ganhas × ${G.perdidos.length} perdidas)`, d: `Em valor: ${mm(soma(G.ganhos, 'valor_proposta'))} ganhos × ${mm(soma(G.perdidos, 'valor_proposta'))} perdidos. As paradas e em aberto ficam fora desta conta.`, l: [...G.ganhos, ...G.perdidos], o: 'valor' },
+    cederam.length && { cor: T.amberText, t: `${cederam.length} BRs fecharam com o pedido 10% ou mais abaixo da proposta`, d: `Mediana da diferença pedido × proposta em todos os ganhos: ${String(cicloMediana(difs.map(l => l.dif_pedido_proposta_pct)) ?? '—').replace('.', ',')}%. Pode ser desconto, corte de escopo ou parte que ficou para outro pedido.`, l: cederam, o: 'valor' },
+    (medGanhoSpot != null || medGanhoContr != null) && { cor: T.inkDim, t: `Da proposta ao pedido: mediana de ${medGanhoSpot ?? '—'} dias no spot e ${medGanhoContr ?? '—'} no contrato`, d: `${lentos.length} BRs levaram mais de 60 dias para virar pedido.`, l: lentos, o: 'idade' },
+    semMotivo.length && { cor: T.inkDim, t: `${semMotivo.length} de ${G.perdidos.length} perdas estão sem motivo no CRM`, d: 'Sem o motivo, não dá para saber se perdemos por preço, prazo ou especificação.', l: semMotivo, o: 'valor' },
+    concorr.length && { cor: T.inkDim, t: `${concorr.length} propostas com o mesmo valor para clientes diferentes`, d: 'Provavelmente o mesmo projeto cotado para construtoras concorrentes: o valor aparece somado mais de uma vez no total proposto.', l: concorr, o: 'valor' },
+  ].filter(Boolean);
+
+  // ---- por mês e por vendedor ----
+  const meses = MESES_ORDEM.map((m, i) => ({ m, i, L: R.filter(l => mesIdx(l) === i) })).filter(x => x.L.length);
+  const vends = [...new Set(R.map(l => l.vendedor || '—'))].map(v => ({ v, L: R.filter(l => (l.vendedor || '—') === v) })).sort((a, b2) => soma(b2.L, 'valor_proposta') - soma(a.L, 'valor_proposta'));
+  const cel = { padding: '9px 10px', fontSize: 12.5, fontFamily: FONT_DISPLAY, borderBottom: `1px solid ${T.lineSoft}`, whiteSpace: 'nowrap' };
+  const btn = (conteudo, titulo, linhas, cor, explica, ordem) => (
+    <button onClick={() => abrir(titulo, linhas, explica, ordem)} disabled={!linhas.length} title={linhas.length ? 'clique para ver os BRs' : ''}
+      style={{ background: 'none', border: 'none', padding: 0, font: 'inherit', color: cor || T.ink, cursor: linhas.length ? 'pointer' : 'default', textDecoration: linhas.length ? 'underline dotted' : 'none', textUnderlineOffset: 3 }}>{conteudo}</button>);
+  const linhaTab = (rot, L, chave, tituloBase) => {
+    const gn = L.filter(cicloGanho), pd = L.filter(l => l.situacao === 'perdido'), pr = L.filter(l => l.situacao === 'parado'), ab = L.filter(l => l.situacao === 'em_aberto'), ft = L.filter(l => Number(l.faturado) > 0);
+    return (
+      <tr key={chave}>
+        <td style={{ ...cel, fontWeight: 700 }}>{rot}</td>
+        <td style={cel}>{btn(L.length, `${tituloBase}: todas as propostas`, L)}</td>
+        <td style={cel}>{btn(fmtMoeda(soma(L, 'valor_proposta')), `${tituloBase}: todas as propostas`, L, T.inkDim)}</td>
+        <td style={cel}>{btn(<>{gn.length} <span style={{ color: T.inkFaint, fontSize: 11 }}>({pct(gn.length, L.length)})</span></>, `${tituloBase}: viraram pedido`, gn, T.blueText)}</td>
+        <td style={cel}>{btn(fmtMoeda(soma(gn, 'valor_pedido')), `${tituloBase}: viraram pedido`, gn, T.blueText)}</td>
+        <td style={cel}>{btn(fmtMoeda(soma(ft, 'faturado')), `${tituloBase}: já faturado`, ft, T.oliveText, null, 'fat')}</td>
+        <td style={cel}>{btn(pd.length, `${tituloBase}: perdidas`, pd, T.inkDim)}</td>
+        <td style={cel}>{btn(pr.length, `${tituloBase}: paradas há mais de 60 dias`, pr, T.rustText, null, 'valor')}</td>
+        <td style={cel}>{btn(ab.length, `${tituloBase}: em aberto`, ab, T.amberText)}</td>
+      </tr>);
+  };
+  const thc = { padding: '8px 10px', textAlign: 'left', fontSize: 10.5, fontWeight: 600, color: T.inkFaint, textTransform: 'uppercase', whiteSpace: 'nowrap' };
+  const cab = <tr style={{ borderBottom: `1px solid ${T.line}` }}>{['', 'BRs', 'Proposto', 'Viraram pedido', 'Valor do pedido', 'Faturado (líquido)', 'Perdidas', 'Paradas > 60 d', 'Em aberto'].map((h, k) => <th key={k} style={thc}>{h}</th>)}</tr>;
+  const inp = { background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 6, padding: '7px 10px', fontSize: 12.5 };
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+        {['todos', 'SPOT', 'CONTRATO', 'VALE', 'SEM CLASSIFICAÇÃO'].map(s => (
+          <button key={s} onClick={() => setSeg(s)} style={{ padding: '6px 12px', fontSize: 12.5, borderRadius: 16, cursor: 'pointer', border: `1px solid ${seg === s ? T.ink : T.line}`, background: seg === s ? T.ink : T.panel, color: seg === s ? '#fff' : T.inkDim, fontWeight: seg === s ? 700 : 500 }}>{s === 'todos' ? 'Todos' : s.charAt(0) + s.slice(1).toLowerCase()}</button>))}
+        <select value={vend} onChange={e => setVend(e.target.value)} style={inp}><option value="todos">Todos os vendedores</option>{vendedores.map(v => <option key={v} value={v}>{v}</option>)}</select>
+        <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="BR, cliente, pedido…" style={{ ...inp, width: 200 }} />
+        <span style={{ fontSize: 11.5, color: T.inkFaint }}>um BR por linha · propostas de {MESES_LABEL[MESES_ORDEM[lo]]} a {MESES_LABEL[MESES_ORDEM[hi]]}/{ANO_OPERACIONAL} · data real de criação da proposta no Sankhya</span>
+      </div>
+
+      <div className="grid-kpis-7">
+        <Kpi label="Propostas (BRs)" value={`${G.todos.length}`} sub={fmtMoeda(soma(G.todos, 'valor_proposta'))} icon={FileStack} onClick={() => abrir('Todas as propostas', G.todos)} />
+        <Kpi label="Viraram pedido" value={`${G.ganhos.length} · ${pct(G.ganhos.length, G.todos.length)}`} sub={`${fmtMoeda(soma(G.ganhos, 'valor_pedido'))} em pedidos (líquido)`} icon={TrendingUp} tone="blue" onClick={() => abrir('Viraram pedido', G.ganhos)} />
+        <Kpi label="Já faturado dessas propostas" value={mm(soma(G.faturados, 'faturado'))} sub={`${G.faturados.length} BRs · Net Offer Value`} icon={CheckCircle2} tone="olive" onClick={() => abrir('Já faturado', G.faturados, null, 'fat')} />
+        <Kpi label="Paradas > 60 dias" value={`${G.parados.length}`} sub={`${fmtMoeda(soma(G.parados, 'valor_proposta'))} sem pedido e sem perda registrada`} icon={AlertTriangle} tone="rust" onClick={() => abrir('Paradas há mais de 60 dias', G.parados, 'Sem pedido de venda e sem perda registrada no CRM.', 'valor')} />
+        <Kpi label="Em aberto" value={`${G.abertos.length}`} sub={`${fmtMoeda(soma(G.abertos, 'valor_proposta'))} · até 60 dias`} icon={Clock3} tone="amber" onClick={() => abrir('Em aberto (até 60 dias)', G.abertos)} />
+        <Kpi label="Perdidas" value={`${G.perdidos.length}`} sub={`${fmtMoeda(soma(G.perdidos, 'valor_proposta'))} · registradas no CRM`} icon={XCircle} onClick={() => abrir('Perdidas', G.perdidos)} />
+      </div>
+
+      <Panel title="Pontos de atenção" subtitle="Gerados a partir dos números do período e dos filtros acima. Clique para ver os BRs.">
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
+          {!pontos.length ? <div style={{ fontSize: 13, color: T.inkFaint }}>Nada a destacar neste filtro.</div> : pontos.map((p, k) => (
+            <button key={k} onClick={() => abrir(p.t, p.l, p.d, p.o)} style={{ textAlign: 'left', display: 'flex', gap: 10, alignItems: 'flex-start', padding: '10px 12px', borderRadius: 8, border: `1px solid ${T.line}`, background: T.panel, cursor: 'pointer', font: 'inherit' }}>
+              <span style={{ width: 8, height: 8, borderRadius: 4, background: p.cor, marginTop: 6, flex: 'none' }} />
+              <span><span style={{ fontSize: 13.5, fontWeight: 700, color: T.ink }}>{p.t}</span><span style={{ display: 'block', fontSize: 12.5, color: T.inkDim, marginTop: 2 }}>{p.d}</span></span>
+              <span style={{ marginLeft: 'auto', fontSize: 12, color: T.blueText, whiteSpace: 'nowrap', alignSelf: 'center' }}>ver {p.l.length} BR{p.l.length !== 1 ? 's' : ''} →</span>
+            </button>))}
+        </div>
+      </Panel>
+
+      <Panel title="Por mês da proposta" subtitle="Cada número é clicável. O faturado é tudo o que essas propostas já faturaram até hoje, em qualquer mês.">
+        <div style={{ overflowX: 'auto', marginTop: 8 }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead>{cab}</thead>
+            <tbody>{meses.map(x => linhaTab(MESES_LABEL[x.m], x.L, x.m, `${MESES_LABEL[x.m]}/${ANO_OPERACIONAL}`))}
+              {meses.length > 1 && linhaTab('Total', R, 'total', `${MESES_LABEL[MESES_ORDEM[lo]]} a ${MESES_LABEL[MESES_ORDEM[hi]]}`)}</tbody>
+          </table>
+        </div>
+      </Panel>
+
+      <Panel title="Por vendedor" subtitle="Mesmas colunas, por vendedor. Clique para ver os BRs.">
+        <div style={{ overflowX: 'auto', marginTop: 8 }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead>{cab}</thead>
+            <tbody>{vends.map(x => linhaTab(x.v, x.L, x.v, x.v))}</tbody>
+          </table>
+        </div>
+      </Panel>
+    </div>
+  );
+}
+
+/* ============================================================================
    CICLO COMERCIAL — proposta → pedido → faturamento
    Usa a view v_ciclo_comercial_proposta (join propostas + pedidos_itens + nota_venda_itens por BR)
    Responde: fizemos a proposta em X, virou pedido quando? foi faturado quando?
@@ -2235,6 +2434,7 @@ function CicloComercial() {
   const [syncMsg, setSyncMsg] = useState(null);
 
   const [notasFiscais, setNotasFiscais] = useState([]); // linhas reais de faturamento_resumo (tipmov='V'), não agregadas por proposta
+  const [drill, setDrill] = useState(null);             // lista de BRs aberta por clique (CicloDrill)
 
   // lê em páginas de 1000 (o Supabase corta em 1000 linhas por consulta; a view já passou disso)
   const lerPaginado = async (montar) => {
@@ -2252,7 +2452,7 @@ function CicloComercial() {
     Promise.all([
       lerPaginado(() => supabase.from('v_ciclo_comercial_proposta').select('*').order('data_abertura', { ascending: false }).order('id')),
       // só notas de venda válidas (STATUSNOTA L) do ano da tela — mesma base da tela Faturamento (Sankhya)
-      lerPaginado(() => supabase.from('faturamento_resumo').select('br,data_faturamento,valor_nota,net_offer_value,status_nota').eq('tipmov', 'V')
+      lerPaginado(() => supabase.from('faturamento_resumo').select('br,data_faturamento,valor_nota,net_offer_value,status_nota,cliente_nome,numero_nota').eq('tipmov', 'V')
         .gte('data_faturamento', `${ANO_OPERACIONAL}-01-01`).lte('data_faturamento', `${ANO_OPERACIONAL}-12-31`).order('nunota')),
     ]).then(([data, nfs]) => {
       setDados((data || []).filter(d => !ehPropostaTemplateAutomacao(d)));
@@ -2372,6 +2572,13 @@ function CicloComercial() {
     });
   }, [notasFiscais, mesIni, mesFim]);
 
+  const origemPorBr = useMemo(() => {
+    const m = {}, d0 = {};
+    dados.forEach(d => { if (!d.br) return; const dt = d.data_abertura;
+      if (!d0[d.br] || (dt && dt < d0[d.br])) { d0[d.br] = dt; m[d.br] = dt && Number(String(dt).slice(0, 4)) === ANO_OPERACIONAL ? d.mes_proposta : `antes de ${ANO_OPERACIONAL}`; } });
+    return m;
+  }, [dados]);
+  const faturamentoPorMesOrigem = (br) => origemPorBr[br] || 'BR sem proposta no portal';
   const faturamentoPorMes = useMemo(() => {
     // mês de origem de cada BR: quando o BR tem mais de uma proposta (revisões),
     // usa a mais antiga (primeira vez que esse BR apareceu) — explícito por
@@ -2480,53 +2687,8 @@ function CicloComercial() {
         }}>Ano todo</button>
       </div>
 
-      {/* KPIs de valor por etapa */}
-      <div className="grid-kpis-7">
-        <Kpi label="Valor total em propostas" value={fmtMoeda(totais.valorTotal)} icon={FileStack} />
-        <Kpi label="Net Value (pedido, líquido)" value={fmtMoeda(totais.netValue)} icon={TrendingUp} tone="blue" />
-        <Kpi label="Faturamento bruto (Vlr Nota)" value={fmtMoeda(faturamentoTotalPeriodo.bruto)} icon={CheckCircle2} tone="olive"
-          info={`Total real de Vlr Nota (bruto) faturado de ${MESES_LABEL[mesIni]} a ${MESES_LABEL[mesFim]}/${ANO_OPERACIONAL} — todas as notas fiscais do período (${faturamentoTotalPeriodo.count}), tenham ou não uma proposta cadastrada no Portal. Filtra pela data da própria Nota Fiscal, não pelo mês de origem da proposta.`} />
-        <Kpi label="Faturamento líquido (Net Offer Value)" value={fmtMoeda(faturamentoTotalPeriodo.liquido)} icon={DollarSign} tone="olive"
-          info={`Mesmo critério do card de bruto: Net Offer Value real de todas as notas fiscais de ${MESES_LABEL[mesIni]} a ${MESES_LABEL[mesFim]}/${ANO_OPERACIONAL}, filtrado pela data da Nota Fiscal.`} />
-        <Kpi label="Pedido confirmado, aguarda fatura" value={fmtMoeda(totais.valorPedidoSemFatura)} icon={Clock3} tone="amber" />
-      </div>
-      <p style={{ fontSize: 11.5, color: T.inkFaint, margin: '-14px 0 0' }}>
-        Bruto = Vlr Nota (CAB.VLRNOTA) · Líquido = Net Offer Value (Vlr Nota − ICMS − IPI − PIS − COFINS) · TOPs 3200/3201/3209/3214/3216/3220/3227/3229 · só notas com STATUSNOTA = 'L'
-      </p>
-      <p style={{ fontSize: 11.5, color: T.inkFaint, margin: '-8px 0 0' }}>
-        Desse total, {fmtMoeda(totais.valorFaturado)} bruto / {fmtMoeda(totais.faturamentoLiquido)} líquido está vinculado a BRs com <strong>proposta cadastrada no Portal</strong> — o restante são notas de BRs antigos (2023-2025) sem orçamento sincronizado aqui.
-      </p>
-
-      <Panel title="Proposta → Pedido → Faturamento, por mês de ORIGEM DA PROPOSTA" subtitle="Fat. bruto/líquido aqui = de tudo que foi PROPOSTO nesse mês, quanto já foi faturado até hoje (não importa em que mês saiu a nota) — por isso não bate com o gráfico 'Faturamento por mês' abaixo, que agrupa pelo mês da NOTA FISCAL, não da proposta">
-        <div style={{ overflowX: 'auto', marginTop: 10 }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-            <thead>
-              <tr style={{ borderBottom: `1px solid ${T.line}` }}>
-                {['Mês da proposta', 'Propostas', 'Viraram pedido', 'Faturadas', 'Valor total', 'Net Value', 'Fat. bruto (dessas propostas)', 'Fat. líquido (dessas propostas)'].map(h => (
-                  <th key={h} style={{ padding: '8px 12px', textAlign: 'left', fontSize: 10.5, fontWeight: 600, color: T.inkFaint, textTransform: 'uppercase' }}>{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {porMes.map(m => (
-                <tr key={m.mes} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
-                  <td style={{ padding: '10px 12px', fontWeight: 600, fontFamily: FONT_DISPLAY }}>{MESES_LABEL[m.mes]}</td>
-                  <td style={{ padding: '10px 12px', fontFamily: FONT_DISPLAY }}>{m.propostas}</td>
-                  <td style={{ padding: '10px 12px', fontFamily: FONT_DISPLAY, color: T.blueText }}>{m.viraramPedido} <span style={{ color: T.inkFaint, fontSize: 11 }}>({m.propostas ? Math.round(m.viraramPedido/m.propostas*100) : 0}%)</span></td>
-                  <td style={{ padding: '10px 12px', fontFamily: FONT_DISPLAY, color: T.oliveText }}>{m.faturadas} <span style={{ color: T.inkFaint, fontSize: 11 }}>({m.propostas ? Math.round(m.faturadas/m.propostas*100) : 0}%)</span></td>
-                  <td style={{ padding: '10px 12px', fontFamily: FONT_DISPLAY, color: T.inkDim }}>{fmtMoeda(m.valorTotal)}</td>
-                  <td style={{ padding: '10px 12px', fontFamily: FONT_DISPLAY, color: T.blueText, fontWeight: 600 }}>{fmtMoeda(m.netValue)}</td>
-                  <td style={{ padding: '10px 12px', fontFamily: FONT_DISPLAY, color: T.oliveText, fontWeight: 600 }}>{fmtMoeda(m.valorFaturado)}</td>
-                  <td style={{ padding: '10px 12px', fontFamily: FONT_DISPLAY, color: T.oliveText }}>{fmtMoeda(m.faturamentoLiquido)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        <p style={{ fontSize: 11, color: T.inkFaint, marginTop: 10, marginBottom: 0 }}>
-          <strong>Por que os totais desta tabela não batem com o gráfico "Faturamento por mês" logo abaixo:</strong> aqui, "Fat. bruto/líquido" de um mês é a soma de tudo que já foi faturado das propostas <em>nascidas</em> naquele mês — não importa quando a nota saiu (pode ter sido faturada meses depois). Já o gráfico abaixo agrupa pelo mês em que a <em>nota fiscal</em> foi emitida, não importa de quando é a proposta. É o mesmo dinheiro, só que organizado por dois calendários diferentes (data da proposta × data da nota).
-        </p>
-      </Panel>
+      {/* Análise inteligente: um BR por linha, tudo clicável */}
+      <CicloAnalise mesIni={mesIni} mesFim={mesFim} onDrill={setDrill} />
 
       {/* Faturamento por mês (real, pela data da Nota Fiscal) — bruto vs líquido */}
       <Panel title="Faturamento por mês" subtitle="Agrupado pelo mês em que a NOTA FISCAL saiu (não pelo mês da proposta) — bruto (Vlr Nota) vs líquido (Net Offer Value)">
@@ -2558,6 +2720,7 @@ function CicloComercial() {
         </div>
       </Panel>
 
+      {drill && <CicloDrill drill={drill} onFechar={() => setDrill(null)} />}
       {/* Cross-tab: faturamento real por mês x mês de origem da proposta */}
       <Panel title="Faturamento por mês × mês de origem da proposta" subtitle="Valores líquidos (Net Offer Value). Ex.: do que foi faturado em junho, quanto era proposta de abril, maio, etc. Clique num mês para abrir">
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 10 }}>
@@ -2591,11 +2754,21 @@ function CicloComercial() {
                       </thead>
                       <tbody>
                         {f.origem.map(o => (
-                          <tr key={o.mesOrigem} style={{ borderTop: `1px solid ${T.lineSoft}` }}>
+                          <tr key={o.mesOrigem} style={{ borderTop: `1px solid ${T.lineSoft}`, cursor: 'pointer' }} title="clique para ver os BRs"
+                            onClick={() => {
+                              const porBr = {};
+                              notasFiscaisFiltradas.filter(nf => nf.br && nf.data_faturamento && nf.data_faturamento.slice(0, 7) === f.key).forEach(nf => {
+                                const orig = faturamentoPorMesOrigem(nf.br);
+                                if (orig !== o.mesOrigem) return;
+                                const x = porBr[nf.br] = porBr[nf.br] || { num: nf.br, br: nf.br, cliente: nf.cliente_nome, segmento: '', situacao: 'faturado', _extra: 0, notas: 0, data_1a_nf: nf.data_faturamento, nfs: [] };
+                                x._extra += Number(nf.net_offer_value) || 0; x.notas++; if (nf.data_faturamento < x.data_1a_nf) x.data_1a_nf = nf.data_faturamento; x.nfs.push(nf.numero_nota);
+                              });
+                              setDrill({ titulo: `Faturado em ${monthLabel(f.key)} · origem ${MESES_LABEL[o.mesOrigem] || o.mesOrigem}`, linhas: Object.values(porBr), extraRotulo: 'Faturado no mês (líquido)', ordem: 'fat' });
+                            }}>
                             <td style={{ padding: '6px 10px', fontWeight: 600 }}>{MESES_LABEL[o.mesOrigem] || o.mesOrigem}</td>
                             <td style={{ padding: '6px 10px', fontFamily: FONT_DISPLAY }}>{o.count}</td>
                             <td style={{ padding: '6px 10px', color: T.inkFaint }}>{f.count ? Math.round(o.count / f.count * 100) : 0}%</td>
-                            <td style={{ padding: '6px 10px', fontFamily: FONT_DISPLAY, color: T.oliveText }}>{fmtMoeda(o.valor)}</td>
+                            <td style={{ padding: '6px 10px', fontFamily: FONT_DISPLAY, color: T.oliveText, textDecoration: 'underline dotted', textUnderlineOffset: 3 }}>{fmtMoeda(o.valor)}</td>
                           </tr>
                         ))}
                       </tbody>
