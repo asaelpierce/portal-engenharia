@@ -2450,6 +2450,20 @@ function CicloComercial() {
           <RefreshCw size={13} className={syncing ? 'spin' : ''} /> {syncing ? 'Sincronizando…' : 'Sincronizar faturamento (bruto + Net Offer Value)'}
         </button>
         {syncMsg && <span style={{ fontSize: 12, color: syncMsg.startsWith('✓') ? T.oliveText : T.rustText }}>{syncMsg}</span>}
+        <span style={{ flex: 1 }} />
+        {/* período dos KPIs (antes ficava na tabela "Detalhe por BR", removida a pedido do Asael em 30/10/2026) */}
+        <span style={{ fontSize: 12.5, color: T.inkDim }}>Período:</span>
+        <select value={mesIni} onChange={e => setMesIni(e.target.value)} className="focus-ring"
+          style={{ background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 6, padding: '7px 10px', fontSize: 12.5 }}>
+          {MESES_ORDEM.map(m => <option key={m} value={m}>De {MESES_LABEL[m]}</option>)}
+        </select>
+        <select value={mesFim} onChange={e => setMesFim(e.target.value)} className="focus-ring"
+          style={{ background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 6, padding: '7px 10px', fontSize: 12.5 }}>
+          {MESES_ORDEM.map(m => <option key={m} value={m}>a {MESES_LABEL[m]}</option>)}
+        </select>
+        <button onClick={() => { setMesIni('JANEIRO'); setMesFim(MESES_ORDEM[MESES_ORDEM.length - 1]); }} style={{
+          padding: '7px 12px', fontSize: 12.5, fontWeight: 600, borderRadius: 6, border: 'none', cursor: 'pointer', background: T.panelAlt, color: T.inkDim,
+        }}>Ano todo</button>
       </div>
 
       {/* KPIs de valor por etapa */}
@@ -2580,80 +2594,6 @@ function CicloComercial() {
         </div>
       </Panel>
 
-      <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, overflow: 'hidden' }}>
-        <div style={{ padding: '15px 18px', borderBottom: `1px solid ${T.line}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
-          <h3 style={{ fontSize: 14, fontWeight: 600, margin: 0, color: T.ink }}>Detalhe por BR <span style={{ color: T.inkFaint, fontWeight: 400 }}>({filtrados.length})</span></h3>
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Buscar BR ou cliente…" className="focus-ring"
-              style={{ background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 6, padding: '7px 12px', fontSize: 12.5, width: 200 }} />
-            <div style={{ position: 'relative' }}>
-              <select value={mesIni} onChange={e => setMesIni(e.target.value)} className="focus-ring"
-                style={{ background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 6, padding: '7px 10px', fontSize: 12.5 }}>
-                {MESES_ORDEM.map(m => <option key={m} value={m}>De {MESES_LABEL[m]}</option>)}
-              </select>
-            </div>
-            <div style={{ position: 'relative' }}>
-              <select value={mesFim} onChange={e => setMesFim(e.target.value)} className="focus-ring"
-                style={{ background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 6, padding: '7px 10px', fontSize: 12.5 }}>
-                {MESES_ORDEM.map(m => <option key={m} value={m}>a {MESES_LABEL[m]}</option>)}
-              </select>
-            </div>
-            <button onClick={() => { setMesIni('JANEIRO'); setMesFim(MESES_ORDEM[MESES_ORDEM.length - 1]); }} style={{
-              padding: '7px 12px', fontSize: 12.5, fontWeight: 600, borderRadius: 6, border: 'none', cursor: 'pointer',
-              background: T.panelAlt, color: T.inkDim,
-            }}>Ano todo</button>
-            <select value={filtroEtapa} onChange={e => setFiltroEtapa(e.target.value)} className="focus-ring"
-              style={{ background: T.panelAlt, border: `1px solid ${T.line}`, borderRadius: 6, padding: '7px 10px', fontSize: 12.5 }}>
-              <option value="todas">Todas as etapas</option>
-              {Object.entries(ETAPA_META).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
-            </select>
-          </div>
-        </div>
-        <div style={{ padding: '0 18px 12px', fontSize: 11.5, color: T.inkFaint }}>
-          {dadosFiltrados.length} propostas de {MESES_LABEL[mesIni]} a {MESES_LABEL[mesFim]} de {ANO_OPERACIONAL} (KPIs e tabela acima já respeitam esse intervalo)
-          {' · '}<AlertTriangle size={11} color={T.rust} style={{ verticalAlign: -1 }} /> na coluna "Proposta em" = BR antigo (2025 ou antes) sem a revisão original sincronizada; a data mostrada não é confiável, não afirmamos nada sobre ela
-        </div>
-        <div style={{ overflowX: 'auto', maxHeight: 500, overflowY: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-            <thead>
-              <tr style={{ borderBottom: `1px solid ${T.line}` }}>
-                {['BR', 'Cliente', 'Proposta em', 'Virou pedido em', 'Faturado em', 'Valor proposta', 'Net Value', 'Valor faturado', 'Etapa'].map(h => (
-                  <th key={h} style={{ padding: '10px 16px', textAlign: 'left', fontSize: 10.5, fontWeight: 600, color: T.inkFaint, textTransform: 'uppercase', position: 'sticky', top: 0, background: T.panel }}>{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {filtrados.slice(0, 300).map(d => {
-                const meta = ETAPA_META[d.etapa_atual];
-                const dataInconsistente = d.data_pedido && d.data_abertura && d.data_pedido < d.data_abertura;
-                return (
-                  <tr key={d.id} style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
-                    <td style={{ padding: '10px 16px', fontWeight: 600, fontFamily: FONT_DISPLAY }}>{d.br}</td>
-                    <td style={{ padding: '10px 16px', color: T.inkDim, maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.cliente}</td>
-                    <td style={{ padding: '10px 16px', fontSize: 12.5 }}>
-                      {fmtData(d.data_abertura)}
-                      {dataInconsistente && (
-                        <span title="Esse BR só tem 1 registro de orçamento sincronizado (provavelmente uma revisão/reemissão tardia) — a proposta original é de antes do início do sync (jan/2026) e não temos a data real. Não confie nessa data pra esse BR." style={{ marginLeft: 5, cursor: 'help' }}>
-                          <AlertTriangle size={11} color={T.rust} style={{ verticalAlign: -1 }} />
-                        </span>
-                      )}
-                    </td>
-                    <td style={{ padding: '10px 16px', fontSize: 12.5 }}>{d.data_pedido ? fmtData(d.data_pedido) : '—'}</td>
-                    <td style={{ padding: '10px 16px', fontSize: 12.5 }}>{d.data_faturamento ? fmtData(d.data_faturamento) : '—'}</td>
-                    <td style={{ padding: '10px 16px', fontSize: 12.5, fontFamily: FONT_DISPLAY, color: T.inkDim }}>{fmtMoeda(d.valor_liquido)}</td>
-                    <td style={{ padding: '10px 16px', fontSize: 12.5, fontFamily: FONT_DISPLAY, color: T.blueText }}>{d.net_value ? fmtMoeda(d.net_value) : '—'}</td>
-                    <td style={{ padding: '10px 16px', fontSize: 12.5, fontFamily: FONT_DISPLAY, color: T.oliveText }}>{d.valor_faturado ? fmtMoeda(d.valor_faturado) : '—'}</td>
-                    <td style={{ padding: '10px 16px' }}>
-                      <span style={{ background: meta.bg, color: meta.color, fontSize: 11, fontWeight: 600, padding: '4px 9px', borderRadius: 4, whiteSpace: 'nowrap' }}>{meta.label}</span>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-          {filtrados.length > 300 && <div style={{ padding: 12, textAlign: 'center', fontSize: 12, color: T.inkFaint }}>Mostrando 300 de {filtrados.length} — refine a busca ou o filtro de mês.</div>}
-        </div>
-      </div>
     </div>
   );
 }
