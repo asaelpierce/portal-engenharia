@@ -29086,6 +29086,7 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
   const [relCli, setRelCli] = useState({});
   const [fatPrev, setFatPrev] = useState({});
   const [sitBr, setSitBr] = useState({});        // BR -> v_crm_br_situacao
+  const [fatAno, setFatAno] = useState([]);       // v_crm_faturado_ano: tudo o que saiu em nota no ano, por BR (mesma base da tela Faturamento)
   const [pont, setPont] = useState([]);          // crm_pontualidade (carteira de clientes)
   const [filtroGanho, setFiltroGanho] = useState(null);   // carteira | parcial | pausado | faturado | sem
   const [analise, setAnalise] = useState(null);           // chave da análise inteligente ou 'custom'
@@ -29145,6 +29146,7 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
         lerTudo('v_crm_br_situacao'),   // passa de 1.000 BRs: lê em páginas (antes cortava e caía em "sem pedido")
       ]);
       setSitBr(Object.fromEntries((sb || []).map(x => [x.br, x])));
+      lerTudo('v_crm_faturado_ano').then(r => setFatAno(r || [])).catch(() => setFatAno([]));
       supabase.from('v_crm_servico_pendente').select('nunota,situacao,vendedor').then(({ data }) => setServLib((data || []).filter(x => x.situacao === 'liberado').length));
       try { setPont(await lerTudo('crm_pontualidade')); } catch { setPont([]); }
       const ajPed = Object.fromEntries((aj || []).map(a => [String(a.nunota_pedido), a]));
@@ -29603,10 +29605,18 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
                   return subs.filter(([k, , , f]) => k !== 'sem' || doPipe.some(n => n.etapa_id === e0.id && f(n)))
                     .map(([k, nome, cor, f]) => ({ ...e0, chave: `${e0.id}:${k}`, nome, corCol: cor, filtroCol: f }));
                 }).map(et => {
-                  const cards = et.virtual ? pedFechados : doPipe.filter(n => n.etapa_id === et.id && (!et.filtroCol || et.filtroCol(n))).sort((a, b) => valorDe(b) - valorDe(a));
-                  // Faturado: soma o que saiu nas notas (líquido), não o valor do BR
                   const subK = et.filtroCol ? et.chave.split(':')[1] : null;
-                  const totEt = subK === 'faturado' ? cards.reduce((x, n) => x + (Number(n.br && sitBr[n.br]?.faturado) || 0), 0) : cards.reduce((x, n) => x + valorDe(n), 0);
+                  // Faturado (Asael, 30/10/2026): tudo o que saiu em nota no ano, por BR, Net Offer Value — mesma base da tela
+                  // Faturamento (Sankhya). BR sem negócio no CRM entra como cartão "sem negócio".
+                  const fatMap = Object.fromEntries(fatAno.map(f => [f.br, f]));
+                  const cards = et.virtual ? pedFechados
+                    : subK === 'faturado' ? fatAno.map(f => {
+                        const ng = negocios.find(n => n.pipeline_id === 'vendas' && n.br === f.br);
+                        return ng ? { ...ng, _fat: f } : { id: `fat:${f.br}`, br: f.br, titulo: `${f.br} · ${f.cliente || ''}`, responsavel: f.vendedor || null, pipeline_id: 'vendas', etapa_id: et.id, _fat: f, _semNegocio: true };
+                      }).filter(n => (!resp || (n.responsavel || '').toUpperCase().trim() === String(resp).toUpperCase().trim()) && casaBusca(n))
+                        .sort((a, b) => Number(b._fat.faturado) - Number(a._fat.faturado))
+                    : doPipe.filter(n => n.etapa_id === et.id && (!et.filtroCol || et.filtroCol(n))).sort((a, b) => valorDe(b) - valorDe(a));
+                  const totEt = subK === 'faturado' ? cards.reduce((x, n) => x + (Number(n._fat?.faturado) || 0), 0) : cards.reduce((x, n) => x + valorDe(n), 0);
                   const sobre = dragSobre === et.chave && arrastando && arrastando.etapa_id !== et.id;
                   const corEt = et.corCol || CRM_COR_ETAPA[et.codigo] || et.cor || CRMC.ink3;
                   const totPipe = doPipe.filter(n => etapaPorId[n.etapa_id]?.tipo === 'aberta').reduce((x, n) => x + valorDe(n), 0) || 1;
@@ -29627,7 +29637,7 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
                           <span style={{ fontSize: 18, fontWeight: 700, fontVariantNumeric: 'tabular-nums', letterSpacing: -0.3 }}>{moeda(totEt)}</span>
                           {et.probabilidade != null && !et.filtroCol && <span style={{ fontSize: 11.5, color: CRMC.ink3 }}>{et.probabilidade}% de chance</span>}
                           {et.filtroCol && <span style={{ fontSize: 11.5, color: CRMC.ink3 }}>
-                            {subK === 'faturado' ? 'faturado nas notas (líquido) · BRs abertos em 2026, 100% faturados' : `ganho · ${CRM_SIT_GANHO[subK]?.d || 'faturamento com a data vencida'}`}</span>}
+                            {subK === 'faturado' ? `notas de ${new Date().getFullYear()} (Net Offer Value) · todos os BRs faturados no ano · mesma base da tela Faturamento` : `ganho · ${CRM_SIT_GANHO[subK]?.d || 'faturamento com a data vencida'}`}</span>}
                         </div>
                         {et.tipo === 'aberta' && (
                           <div title={`${Math.round(100 * totEt / totPipe)}% do pipeline aberto`} style={{ height: 4, borderRadius: 2, background: CRMC.lineSoft, marginTop: 8, overflow: 'hidden' }}>
@@ -29652,9 +29662,9 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
                           const selo = !aberta ? null : r.atrasada ? ['Tarefa atrasada', CRMC.loss, CRMC.lossSoft] : r.prevV ? ['Previsão vencida', CRMC.loss, CRMC.lossSoft] : null;
                           const corP = crmCorPessoa(n.responsavel);
                           return (
-                            <article key={n.id} draggable={!et.virtual} tabIndex={0} aria-label={`${n.br || n.titulo} — ${empresa}`}
+                            <article key={n.id} draggable={!et.virtual && !n._fat} tabIndex={0} aria-label={`${n.br || n.titulo} — ${empresa}`}
                               onDragStart={() => setArrastando(n)} onDragEnd={() => { setArrastando(null); setDragSobre(null); }}
-                              onClick={() => setAbertoId(n.id)} onKeyDown={e => { if (e.key === 'Enter') setAbertoId(n.id); }}
+                              onClick={() => { if (!n._semNegocio) setAbertoId(n.id); }} onKeyDown={e => { if (e.key === 'Enter' && !n._semNegocio) setAbertoId(n.id); }}
                               onMouseEnter={e => { e.currentTarget.style.borderColor = '#C9D3E0'; e.currentTarget.style.boxShadow = '0 2px 8px rgba(16,24,40,.07)'; }}
                               onMouseLeave={e => { e.currentTarget.style.borderColor = CRMC.line; e.currentTarget.style.boxShadow = '0 1px 1px rgba(16,24,40,.03)'; }}
                               style={{ background: CRMC.surface, borderRadius: 10, border: `1px solid ${CRMC.line}`, padding: '12px 13px', cursor: 'grab', outlineColor: CRMC.primary,
@@ -29669,8 +29679,10 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
                               <div style={{ fontSize: 13.5, fontWeight: 600, marginTop: 5, lineHeight: 1.3, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }} title={empresa}>{empresa}</div>
                               {!n.br && n.titulo && <div style={{ fontSize: 12, color: CRMC.ink2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={n.titulo}>{n.titulo}</div>}
                               <div style={{ display: 'flex', alignItems: 'center', gap: '4px 8px', marginTop: 6, flexWrap: 'wrap', minWidth: 0 }}>
-                                <span style={{ fontSize: 17, fontWeight: 700, fontVariantNumeric: 'tabular-nums', letterSpacing: -0.3 }}>{valorDe(n) ? moeda(valorDe(n)) : '—'}</span>
-                                {(() => { const sg = sitDe(n); if (!sg) return prob != null ? <span style={{ fontSize: 11.5, color: CRMC.ink3 }}>{prob}%</span> : null;
+                                <span style={{ fontSize: 17, fontWeight: 700, fontVariantNumeric: 'tabular-nums', letterSpacing: -0.3 }}>{n._fat ? moeda(n._fat.faturado) : valorDe(n) ? moeda(valorDe(n)) : '—'}</span>
+                                {n._fat && <span title={`NF ${n._fat.nfs || ''}`} style={{ fontSize: 11, fontWeight: 600, color: n._semNegocio ? CRMC.ink3 : CRM_SIT_GANHO.faturado.cor, background: n._semNegocio ? CRMC.lineSoft : CRM_SIT_GANHO.faturado.bg, padding: '2px 8px', borderRadius: 10, whiteSpace: 'nowrap' }}>
+                                  {n._fat.notas} nota{n._fat.notas > 1 ? 's' : ''} no ano{n._semNegocio ? ' · sem negócio no CRM' : sitDe(n) && sitDe(n) !== 'faturado' ? ` · ${CRM_SIT_GANHO[sitDe(n)]?.r || ''}` : ''}</span>}
+                                {!n._fat && (() => { const sg = sitDe(n); if (!sg) return prob != null ? <span style={{ fontSize: 11.5, color: CRMC.ink3 }}>{prob}%</span> : null;
                                   const c = CRM_SIT_GANHO[sg]; const x = n.br ? sitBr[n.br] : null;
                                   return <span title={`${c.r}: ${c.d}${x?.faturado ? ` · faturado ${moeda(x.faturado)}` : ''}`} style={{ fontSize: 11, fontWeight: 600, color: c.cor, background: c.bg, padding: '2px 8px', borderRadius: 10,
                                     whiteSpace: 'nowrap', maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis' }}>
@@ -29689,7 +29701,12 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
                                     <CalendarDays size={13} aria-hidden="true" />{n.previsao_fechamento || 'sem previsão'}
                                   </span>
                                 )}
-                                {et.tipo === 'ganho' && sitDe(n) === 'faturado' && n.br && sitBr[n.br]?.ultima_nota && (
+                                {n._fat && (
+                                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap', color: CRMC.win }} title="Data da última nota de venda no ano">
+                                    <CheckCircle2 size={13} aria-hidden="true" />NF {new Date(`${n._fat.ultima_nota}T12:00:00`).toLocaleDateString('pt-BR')}
+                                  </span>
+                                )}
+                                {!n._fat && et.tipo === 'ganho' && sitDe(n) === 'faturado' && n.br && sitBr[n.br]?.ultima_nota && (
                                   <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap', color: CRMC.win }} title="Data da última nota de venda">
                                     <CheckCircle2 size={13} aria-hidden="true" />NF {new Date(`${sitBr[n.br].ultima_nota}T12:00:00`).toLocaleDateString('pt-BR')}
                                   </span>
@@ -29697,7 +29714,7 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
                                 {n.pipeline_id === 'leads' && n.fonte && <span style={{ whiteSpace: 'nowrap', color: CRMC.ink3 }}>{n.fonte}</span>}
                               </div>
                               {(() => {
-                                const dGanho = et.tipo === 'ganho' && n.br && sitDe(n) !== 'faturado' ? fatPrev[n.br]?.data : null;
+                                const dGanho = !n._fat && et.tipo === 'ganho' && n.br && sitDe(n) !== 'faturado' ? fatPrev[n.br]?.data : null;
                                 const dOpo = aberta ? n.previsao_faturamento : null;
                                 const d = dGanho || dOpo; if (!d) return null;
                                 const atras = d < new Date().toISOString().slice(0, 10);
