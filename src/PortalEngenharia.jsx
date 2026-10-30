@@ -957,7 +957,6 @@ function PortalConteudo({ currentUser, session }) {
           {renderTab('dashboard', <Dashboard stats={stats} propostas={propostasMes} todasPropostas={propostas} mesFiltro={mesFiltro} setMesFiltro={setMesFiltro} onNovaProposta={() => setModal('nova')} onNavigate={setView} />)}
           {renderTab('pendencias', <PropostasTable propostas={pendencias} titulo="Aguardando sua ação" empty="Nenhuma pendência — tudo em dia." onRowClick={p => { setSelected(p); setModal('detalhe'); }} />)}
           {renderTab('comercial', <TabErrorBoundary tab="Painel Comercial"><PainelComercial currentUser={currentUser} /></TabErrorBoundary>)}
-          {renderTab('metricas', <Metricas propostas={propostas} />)}
           {renderTab('ciclo_comercial', <TabErrorBoundary tab="Ciclo Comercial"><CicloComercial /></TabErrorBoundary>)}
           {renderTab('produtividade', <Produtividade propostas={propostas} mesFiltro={mesFiltro} currentUser={currentUser} />)}
           {renderTab('faturamento', <Faturamento />)}
@@ -1018,7 +1017,6 @@ function Sidebar({ view, setView, pendCount, papel, telasPermitidas }) {
   const todosItems = [
     { id: 'dashboard',    label: 'Visão geral',           icon: LayoutGrid },
     { id: 'pendencias',   label: 'Minhas pendências',      icon: ClipboardCheck, badge: pendCount },
-    { id: 'metricas',     label: 'Métricas',               icon: BarChart2 },
     { id: 'ciclo_comercial', label: 'Ciclo Comercial',     icon: Workflow },
     { id: 'produtividade',label: 'Produtividade',          icon: Gauge },
     { id: 'comercial',    label: 'Painel Comercial',       icon: TrendingUp },
@@ -40310,7 +40308,6 @@ function FluxoMini({ steps }) {
 const TELAS_CATALOGO = [
   { id: 'dashboard',    label: 'Visão geral' },
   { id: 'pendencias',   label: 'Minhas pendências' },
-  { id: 'metricas',     label: 'Métricas' },
   { id: 'produtividade',label: 'Produtividade' },
   { id: 'comercial',    label: 'Painel Comercial' },
   { id: 'crm',          label: 'CRM (só o CRM — vendedor entra direto nele)' },
