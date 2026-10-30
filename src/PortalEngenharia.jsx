@@ -2236,18 +2236,29 @@ function CicloComercial() {
 
   const [notasFiscais, setNotasFiscais] = useState([]); // linhas reais de faturamento_resumo (tipmov='V'), não agregadas por proposta
 
+  // lê em páginas de 1000 (o Supabase corta em 1000 linhas por consulta; a view já passou disso)
+  const lerPaginado = async (montar) => {
+    let todas = [];
+    for (let de = 0; ; de += 1000) {
+      const { data, error } = await montar().range(de, de + 999);
+      if (error) throw error;
+      todas = todas.concat(data || []);
+      if (!data || data.length < 1000 || todas.length > 40000) break;
+    }
+    return todas;
+  };
   const carregar = useCallback(() => {
     setLoading(true);
     Promise.all([
-      supabase.from('v_ciclo_comercial_proposta').select('*').order('data_abertura', { ascending: false }),
-      supabase.from('faturamento_resumo').select('br,data_faturamento,valor_nota,net_offer_value').eq('tipmov', 'V'),
-    ]).then(([{ data, error }, { data: nfs, error: errNfs }]) => {
-      if (error) console.error('Erro ao carregar ciclo comercial:', error.message);
-      if (errNfs) console.error('Erro ao carregar notas fiscais:', errNfs.message);
+      lerPaginado(() => supabase.from('v_ciclo_comercial_proposta').select('*').order('data_abertura', { ascending: false }).order('id')),
+      // só notas de venda válidas (STATUSNOTA L) do ano da tela — mesma base da tela Faturamento (Sankhya)
+      lerPaginado(() => supabase.from('faturamento_resumo').select('br,data_faturamento,valor_nota,net_offer_value,status_nota').eq('tipmov', 'V')
+        .gte('data_faturamento', `${ANO_OPERACIONAL}-01-01`).lte('data_faturamento', `${ANO_OPERACIONAL}-12-31`).order('nunota')),
+    ]).then(([data, nfs]) => {
       setDados((data || []).filter(d => !ehPropostaTemplateAutomacao(d)));
-      setNotasFiscais(nfs || []);
+      setNotasFiscais((nfs || []).filter(n => (n.status_nota || 'L') === 'L'));
       setLoading(false);
-    });
+    }).catch(e => { console.error('Erro ao carregar ciclo comercial:', e?.message || e); setLoading(false); });
   }, []);
 
   useEffect(() => { carregar(); }, [carregar]);
@@ -2378,7 +2389,7 @@ function CicloComercial() {
       if (!nf.data_faturamento || !nf.br) return;
       const key = nf.data_faturamento.slice(0, 7); // YYYY-MM
       if (!map[key]) map[key] = { key, count: 0, valor: 0, origem: {} };
-      const v = Number(nf.valor_nota) || 0;
+      const v = Number(nf.net_offer_value) || 0;   // líquido (Net Offer Value), não o bruto
       map[key].count++;
       map[key].valor += v;
       const origKey = mesOrigemPorBr[nf.br] || '—';
@@ -2545,7 +2556,7 @@ function CicloComercial() {
       </Panel>
 
       {/* Cross-tab: faturamento real por mês x mês de origem da proposta */}
-      <Panel title="Faturamento por mês × mês de origem da proposta" subtitle="Ex.: do que foi faturado em junho, quanto era proposta de abril, maio, etc. Clique num mês para abrir">
+      <Panel title="Faturamento por mês × mês de origem da proposta" subtitle="Valores líquidos (Net Offer Value). Ex.: do que foi faturado em junho, quanto era proposta de abril, maio, etc. Clique num mês para abrir">
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 10 }}>
           {faturamentoPorMes.length === 0 ? (
             <p style={{ fontSize: 13, color: T.inkFaint }}>Nenhuma nota de faturamento encontrada ainda.</p>
