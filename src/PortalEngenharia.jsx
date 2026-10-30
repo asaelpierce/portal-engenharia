@@ -39461,6 +39461,7 @@ function ConferenciaConhecimentoPedido({ currentUser }) {
     return {
       n: filtradas.length,
       semPedido: filtradas.filter(l => !l.tem_pedido_venda).length,
+      semNada: filtradas.filter(l => !l.tem_pedido_venda && !l.data_proposta).length,
       medPropSol: med('dias_proposta_ate_solicitacao'), medSolPed: med('dias_solicitacao_ate_pedido_venda'),
       proposta: comValor.reduce((s, l) => s + Number(l.valor_proposta), 0),
       pedido: comValor.reduce((s, l) => s + Number(l.valor_pedido_venda_liquido), 0), nComValor: comValor.length,
@@ -39500,7 +39501,8 @@ function ConferenciaConhecimentoPedido({ currentUser }) {
       )}
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 14 }}>
         {card('Solicitações de abertura', resumo.n, null)}
-        {card('Sem pedido de venda', resumo.semPedido, resumo.semPedido ? 'abertura pedida e pedido ainda não lançado no Sankhya' : 'todas já têm pedido de venda', resumo.semPedido ? T.rustText : T.oliveText)}
+        {card('Sem proposta e sem pedido', resumo.semNada, resumo.semNada ? 'nem proposta nem pedido de venda no Sankhya (linhas vermelhas)' : 'nenhuma', resumo.semNada ? T.rustText : T.oliveText)}
+        {card('Sem pedido de venda', resumo.semPedido - resumo.semNada, resumo.semPedido - resumo.semNada ? 'tem proposta, falta lançar o pedido (linhas amarelas)' : 'nenhuma', resumo.semPedido - resumo.semNada ? T.amberText : T.oliveText)}
         {card('Proposta → solicitação', dias(resumo.medPropSol), 'mediana')}
         {card('Solicitação → pedido de venda', dias(resumo.medSolPed), 'mediana')}
         {card('Proposta × pedido (líquido)', resumo.nComValor ? fmtMoeda(dif) : '—',
@@ -39526,6 +39528,11 @@ function ConferenciaConhecimentoPedido({ currentUser }) {
         </div>
       ) : (
         <div style={{ overflowX: 'auto', border: `1px solid ${T.line}`, borderRadius: 8 }}>
+          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', padding: '8px 12px', fontSize: 12, color: T.inkDim, borderBottom: `1px solid ${T.line}` }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><span style={{ width: 12, height: 12, borderRadius: 3, background: T.rustSoft, border: `1px solid ${T.rust}` }} />sem proposta e sem pedido de venda</span>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><span style={{ width: 12, height: 12, borderRadius: 3, background: T.amberSoft, border: `1px solid ${T.amberText}` }} />tem proposta, sem pedido de venda</span>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><span style={{ width: 12, height: 12, borderRadius: 3, background: 'transparent', border: `1px solid ${T.line}` }} />proposta e pedido lançados</span>
+          </div>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead><tr>
               <th style={th}>Solicitou a abertura</th><th style={th}>BR</th><th style={th}>Cliente / vendedor</th>
@@ -39535,10 +39542,11 @@ function ConferenciaConhecimentoPedido({ currentUser }) {
             <tbody>
               {filtradas.map(l => {
                 const semPedido = !l.tem_pedido_venda;
+                const semNada = semPedido && !l.data_proposta;   // vermelho: sem proposta e sem pedido; amarelo: só sem pedido
                 const d = l.diferenca_valor == null ? null : Number(l.diferenca_valor);
                 return (
                   <React.Fragment key={l.id}>
-                    <tr style={{ background: !l.br || semPedido ? T.rustSoft : 'transparent' }}>
+                    <tr style={{ background: !l.br || semNada ? T.rustSoft : semPedido ? T.amberSoft : 'transparent' }}>
                       <td style={{ ...td, whiteSpace: 'nowrap' }}>{dataHora(l.data_solicitacao)}
                         {l.numero_pedido_cliente && <div style={sub}>OC {l.numero_pedido_cliente}{l.data_emissao_pedido ? ` · ${dataCurta(l.data_emissao_pedido)}` : ''}</div>}</td>
                       <td style={{ ...td, whiteSpace: 'nowrap' }}>
@@ -39553,7 +39561,8 @@ function ConferenciaConhecimentoPedido({ currentUser }) {
                             <strong>{l.br || 'sem BR'}</strong>{' '}
                             <button onClick={() => setEditando(x => ({ ...x, [l.id]: l.br || '' }))} title="corrigir o BR"
                               style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.inkFaint, fontSize: 11, textDecoration: 'underline', padding: 0 }}>corrigir</button>
-                            {l.br_origem === 'manual' && <div style={sub}>corrigido na tela</div>}
+                            {String(l.br_origem || '').startsWith('manual') && <div style={sub}>corrigido na tela</div>}
+                            {String(l.br_origem || '').includes('o e-mail dizia') && <div style={{ ...sub, color: T.amberText }}>{l.br_origem.replace(/^.*\((.*)\)$/, '$1')}</div>}
                           </span>
                         )}
                       </td>
@@ -39561,7 +39570,7 @@ function ConferenciaConhecimentoPedido({ currentUser }) {
                       <td style={{ ...td, whiteSpace: 'nowrap' }}>{l.data_proposta ? <>{dataCurta(l.data_proposta)}<div style={sub}>1ª proposta{Number(l.revisoes) > 1 ? ` · ${l.revisoes} revisões` : ''} · {fmtMoeda(l.valor_proposta)}</div>{l.data_criacao_br && <div style={sub}>BR criado {dataCurta(l.data_criacao_br)}</div>}</> : <span style={{ ...sub, color: T.amberText, fontWeight: 700 }}>sem proposta</span>}</td>
                       <td style={{ ...td, whiteSpace: 'nowrap' }}>
                         {semPedido ? (
-                          <span style={{ display: 'inline-block', background: T.rust, color: '#fff', fontWeight: 700, fontSize: 11.5, borderRadius: 6, padding: '3px 8px' }}>
+                          <span style={{ display: 'inline-block', background: semNada ? T.rust : (T.amber || T.amberText), color: '#fff', fontWeight: 700, fontSize: 11.5, borderRadius: 6, padding: '3px 8px' }}>
                             NÃO LANÇADO{l.dias_sem_pedido_venda != null ? ` · há ${dias(l.dias_sem_pedido_venda)}` : ''}
                           </span>
                         ) : (
