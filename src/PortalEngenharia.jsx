@@ -17077,6 +17077,7 @@ function MonitoramentoOP({ currentUser }) {
     }
   }, [drillBR?.br]);
 
+  const [foraSemCp, setForaSemCp] = useState([]);   // BRs com pedido mas CP ainda não pronto no Planner (fora da cobrança de OP)
   const carregar = useCallback(async () => {
     setLoading(true);
     setErro(null);
@@ -17094,7 +17095,17 @@ function MonitoramentoOP({ currentUser }) {
       pagina += 1;
       if (pagina > 50) break;
     }
-    setLinhas(todas);
+    // Só cobra OP de BR cujo CP já ficou pronto: o card tem que ter chegado em "Engenharia - Conhecimento Pronto"
+    // no Planner (Asael, 30/10/2026). Pedido de BR que ainda está no comercial gerando o CP fica fora. O registro
+    // dessa passagem começou em 24/08/2026: pedidos anteriores continuam aparecendo como antes.
+    const { data: cp } = await supabase.from('v_br_cp_pronto').select('br_num').limit(5000);
+    const comCp = new Set((cp || []).map(x => x.br_num));
+    const numBr = (br) => (String(br || '').match(/(\d{4,6})/) || [])[1];
+    const INICIO_REGISTRO_CP = '2026-08-24';
+    const valeCobrar = (l) => !l.br || comCp.has(numBr(l.br)) || String(l.data_pedido || '') < INICIO_REGISTRO_CP;
+    const fora = todas.filter(l => !valeCobrar(l));
+    setForaSemCp([...new Set(fora.map(l => l.br))]);
+    setLinhas(todas.filter(valeCobrar));
     if (todas.length) setUltimoSync(todas[0].sincronizado_em);
     setLoading(false);
   }, []);
@@ -18192,7 +18203,8 @@ function MonitoramentoOP({ currentUser }) {
           etc.) nunca passam por produção interna — ficam numa categoria própria, fora dessa análise. Um
           projeto entra como <strong>"Sem OP"</strong> se pelo menos um item (não-serviço) dele não tiver
           nada disso — clique num projeto pra ver quais itens específicos estão pendentes. Cobre os
-          últimos 180 dias.
+          últimos 180 dias. Só entram BRs cujo card já chegou em <strong>"Engenharia - Conhecimento Pronto"</strong> no Planner
+          {foraSemCp.length > 0 && <> — <span title={foraSemCp.join(', ')} style={{ textDecoration: 'underline dotted', cursor: 'help' }}>{foraSemCp.length} BR{foraSemCp.length > 1 ? 's' : ''} com pedido mas CP ainda não pronto ficam fora</span></>}.
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-end', flexShrink: 0 }}>
           <button onClick={handleAtualizar} disabled={syncing} style={{
