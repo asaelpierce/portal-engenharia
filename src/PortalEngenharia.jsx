@@ -39443,14 +39443,17 @@ function ConferenciaConhecimentoPedido({ currentUser }) {
   };
 
   const vendedores = useMemo(() => ['Todos', ...[...new Set(linhas.map(l => l.vendedor).filter(Boolean))].sort()], [linhas]);
-  const filtradas = useMemo(() => {
+  // cor da linha: vermelho = sem proposta e sem pedido de venda (ou sem BR); amarelo = tem proposta, falta o pedido; ok = completa
+  const corDe = (l) => (!l.br || (!l.tem_pedido_venda && !l.data_proposta) ? 'vermelho' : !l.tem_pedido_venda ? 'amarelo' : 'ok');
+  const [corFiltro, setCorFiltro] = useState('');   // '' | 'sem_pedido' | 'vermelho' | 'amarelo' | 'ok'
+  const baseCor = useMemo(() => {
     const b = busca.trim().toLowerCase();
     return linhas.filter(l =>
       (!desde || String(l.data_solicitacao).slice(0, 10) >= desde) &&
       (vendedor === 'Todos' || l.vendedor === vendedor) &&
-      (!soSemPedido || !l.tem_pedido_venda) &&
       (!b || [l.br, l.cliente, l.numero_pedido_cliente, l.nunota_pedido_venda, l.assunto].some(x => String(x || '').toLowerCase().includes(b))));
-  }, [linhas, desde, vendedor, busca, soSemPedido]);
+  }, [linhas, desde, vendedor, busca]);
+  const filtradas = useMemo(() => baseCor.filter(l => !corFiltro || (corFiltro === 'sem_pedido' ? corDe(l) !== 'ok' : corDe(l) === corFiltro)), [baseCor, corFiltro]);
 
   const resumo = useMemo(() => {
     const med = (campo) => {
@@ -39515,9 +39518,19 @@ function ConferenciaConhecimentoPedido({ currentUser }) {
           {vendedores.map(v => <option key={v} value={v}>{v}</option>)}
         </select>
         <input placeholder="buscar BR, cliente, OC, nº do pedido…" value={busca} onChange={e => setBusca(e.target.value)} style={{ ...inputStyle(), width: 250, padding: '6px 8px' }} />
-        <label style={{ fontSize: 12.5, color: T.inkDim, display: 'inline-flex', gap: 6, alignItems: 'center', cursor: 'pointer' }}>
-          <input type="checkbox" checked={soSemPedido} onChange={e => setSoSemPedido(e.target.checked)} /> só sem pedido de venda
-        </label>
+        <span style={{ display: 'inline-flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }} role="group" aria-label="filtrar por cor">
+          {[['', 'Todas', null, null], ['sem_pedido', 'Sem pedido de venda', T.rust, T.amberSoft], ['vermelho', 'Vermelhas', T.rust, T.rustSoft], ['amarelo', 'Amarelas', T.amberText, T.amberSoft], ['ok', 'Completas', T.line, 'transparent']].map(([k, r, borda, fundo]) => {
+            const n = k === '' ? baseCor.length : k === 'sem_pedido' ? baseCor.filter(l => corDe(l) !== 'ok').length : baseCor.filter(l => corDe(l) === k).length;
+            const ativo = corFiltro === k;
+            return (
+              <button key={k || 'todas'} onClick={() => setCorFiltro(k)} aria-pressed={ativo}
+                style={{ fontFamily: 'inherit', fontSize: 12, fontWeight: ativo ? 700 : 500, padding: '5px 10px', borderRadius: 16, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6,
+                  border: `1px solid ${ativo ? T.ink : T.line}`, background: ativo ? T.panelAlt : T.panel, color: T.ink }}>
+                {borda && <span style={{ width: 11, height: 11, borderRadius: 3, background: k === 'sem_pedido' ? `linear-gradient(90deg, ${T.rustSoft} 50%, ${T.amberSoft} 50%)` : fundo, border: `1px solid ${borda}` }} />}
+                {r} <span style={{ color: T.inkFaint }}>{n}</span>
+              </button>);
+          })}
+        </span>
       </div>
       {erro && <div style={{ color: T.rustText, fontSize: 13, marginBottom: 10 }}>Erro: {erro}</div>}
       {carregando ? (
@@ -39529,9 +39542,10 @@ function ConferenciaConhecimentoPedido({ currentUser }) {
       ) : (
         <div style={{ overflowX: 'auto', border: `1px solid ${T.line}`, borderRadius: 8 }}>
           <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', padding: '8px 12px', fontSize: 12, color: T.inkDim, borderBottom: `1px solid ${T.line}` }}>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><span style={{ width: 12, height: 12, borderRadius: 3, background: T.rustSoft, border: `1px solid ${T.rust}` }} />sem proposta e sem pedido de venda</span>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><span style={{ width: 12, height: 12, borderRadius: 3, background: T.amberSoft, border: `1px solid ${T.amberText}` }} />tem proposta, sem pedido de venda</span>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><span style={{ width: 12, height: 12, borderRadius: 3, background: 'transparent', border: `1px solid ${T.line}` }} />proposta e pedido lançados</span>
+            {[['vermelho', 'sem proposta e sem pedido de venda', T.rustSoft, T.rust], ['amarelo', 'tem proposta, sem pedido de venda', T.amberSoft, T.amberText], ['ok', 'proposta e pedido lançados', 'transparent', T.line]].map(([k, r, fundo, borda]) => (
+              <button key={k} onClick={() => setCorFiltro(corFiltro === k ? '' : k)} title={corFiltro === k ? 'mostrar todas' : 'mostrar só estas'}
+                style={{ fontFamily: 'inherit', fontSize: 12, color: T.inkDim, background: 'none', border: 'none', padding: 0, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, fontWeight: corFiltro === k ? 700 : 400, textDecoration: corFiltro === k ? 'underline' : 'none' }}>
+                <span style={{ width: 12, height: 12, borderRadius: 3, background: fundo, border: `1px solid ${borda}` }} />{r}</button>))}
           </div>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead><tr>
