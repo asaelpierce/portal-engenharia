@@ -2285,7 +2285,10 @@ function CicloComercial() {
     const idxIni = MESES_ORDEM.indexOf(mesIni);
     const idxFim = MESES_ORDEM.indexOf(mesFim);
     const [lo, hi] = idxIni <= idxFim ? [idxIni, idxFim] : [idxFim, idxIni];
+    // só propostas do ano da tela: o mês vem só com o nome ("SETEMBRO"), então sem olhar o ano as propostas de anos
+    // anteriores caíam junto (setembro mostrava 182 = 83 de 2026 + 99 antigas)
     return dados.filter(d => {
+      if (!d.data_abertura || Number(String(d.data_abertura).slice(0, 4)) !== ANO_OPERACIONAL) return false;
       const idx = MESES_ORDEM.indexOf(d.mes_proposta);
       return idx >= lo && idx <= hi;
     });
@@ -2380,7 +2383,7 @@ function CicloComercial() {
       const dt = d.data_abertura;
       if (!dataOrigemPorBr[d.br] || (dt && dt < dataOrigemPorBr[d.br])) {
         dataOrigemPorBr[d.br] = dt;
-        mesOrigemPorBr[d.br] = d.mes_proposta;
+        mesOrigemPorBr[d.br] = dt && Number(String(dt).slice(0, 4)) === ANO_OPERACIONAL ? d.mes_proposta : `antes de ${ANO_OPERACIONAL}`;
       }
     });
 
@@ -2392,7 +2395,7 @@ function CicloComercial() {
       const v = Number(nf.net_offer_value) || 0;   // líquido (Net Offer Value), não o bruto
       map[key].count++;
       map[key].valor += v;
-      const origKey = mesOrigemPorBr[nf.br] || '—';
+      const origKey = mesOrigemPorBr[nf.br] || 'BR sem proposta no portal';
       if (!map[key].origem[origKey]) map[key].origem[origKey] = { count: 0, valor: 0 };
       map[key].origem[origKey].count++;
       map[key].origem[origKey].valor += v;
