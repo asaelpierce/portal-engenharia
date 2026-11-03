@@ -24216,10 +24216,9 @@ function PlanBrAguia({ brNum }) {
         {s.itens_faltando > 0 && chip(`${s.itens_faltando} material(is) ainda não baixado(s)`, C.warn, '#FDF3E1')}
         {s.sem_estoque > 0 && chip(`${s.sem_estoque} sem saldo suficiente`, C.loss, '#FBE9E7')}
         {s.compras_atrasadas > 0 && chip(`${s.compras_atrasadas} compra(s) com previsão vencida`, C.loss, '#FBE9E7')}
-        {s.sem_info > 0 && chip(`${s.sem_info} sem informação de estoque`, C.ink3, '#F1F3F6')}
       </div>
       {d.ops.map(o => { const its = d.itens.filter(i => i.idiproc === o.idiproc); const aberta = opAberta === o.idiproc;
-        const alertas = its.filter(i => (!i.sem_info_estoque && Number(i.disponivel) < Math.max(Number(i.qtd_falta), 0.0001)) || i.oc_situacao === 'atrasada').length;
+        const alertas = its.filter(i => (Number(i.qtd_falta) > 0 && Number(i.disponivel) < Number(i.qtd_falta)) || i.oc_situacao === 'atrasada').length;
         return (
           <div key={o.idiproc} style={{ border: `1px solid ${C.line}`, borderRadius: 8, background: C.surface }}>
             <button onClick={() => setOpAberta(aberta ? null : o.idiproc)} style={{ width: '100%', textAlign: 'left', display: 'flex', gap: 10, alignItems: 'center', padding: '8px 10px', border: 'none', background: 'none', cursor: 'pointer', font: 'inherit' }}>
@@ -24234,15 +24233,17 @@ function PlanBrAguia({ brNum }) {
                 {!its.length ? <div style={{ padding: 10, fontSize: 12, color: C.ink3 }}>Sem materiais registrados nesta OP.</div> : (
                   <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                     <thead><tr><th style={th}>Material</th><th style={{ ...th, textAlign: 'right' }}>Necessário</th><th style={{ ...th, textAlign: 'right' }}>Já baixado</th><th style={{ ...th, textAlign: 'right' }}>Estoque disponível</th><th style={th}>Compra</th></tr></thead>
-                    <tbody>{its.map(i => { const falta = Number(i.qtd_falta || 0); const semSaldo = !i.sem_info_estoque && Number(i.disponivel) < Math.max(falta, 0.0001);
+                    <tbody>{its.map(i => { const falta = Number(i.qtd_falta || 0); const semSaldo = falta > 0 ? Number(i.disponivel) < falta : Number(i.disponivel) < 0;
+                      const outros = [['almox.', i.estoque_almoxarifado], ['intermed.', i.estoque_intermediarios], ['PA', i.estoque_pa], ['outros', i.estoque_outros]].filter(([, v]) => Number(v) !== 0);
                       return (
                         <tr key={`${i.idiproc}-${i.codprod}`}>
                           <td style={{ ...td, maxWidth: 340 }}>{i.descr}<div style={{ fontSize: 10.5, color: C.ink3 }}>cód. {i.codprod} · {i.origem}</div></td>
                           <td style={{ ...td, textAlign: 'right', whiteSpace: 'nowrap' }}>{planQtd(i.qtd_necessaria)} {String(i.unidade || '').toLowerCase()}</td>
                           <td style={{ ...td, textAlign: 'right', whiteSpace: 'nowrap', color: falta > 0 ? C.warn : C.win }}>{planQtd(i.qtd_baixada)}{falta > 0 ? <div style={{ fontSize: 10.5 }}>falta {planQtd(falta)}</div> : null}</td>
-                          <td style={{ ...td, textAlign: 'right', whiteSpace: 'nowrap', color: i.sem_info_estoque ? C.ink3 : semSaldo ? C.loss : C.ink, fontWeight: semSaldo ? 700 : 400 }}>
-                            {i.sem_info_estoque ? <span title="Este item não está na tabela de estoque (só cobre matéria-prima). Ausência de informação, não zero.">sem informação</span>
-                              : <>{planQtd(i.disponivel)}<div style={{ fontSize: 10.5, color: C.ink3, fontWeight: 400 }}>MP {planQtd(i.estoque_mp)} · proc. {planQtd(i.estoque_processamento)} · reserv. {planQtd(i.reservado)}</div></>}</td>
+                          <td style={{ ...td, textAlign: 'right', whiteSpace: 'nowrap', color: semSaldo ? C.loss : C.ink, fontWeight: semSaldo ? 700 : 400 }}>
+                            {i.sem_saldo_nenhum_local ? <span title="Sem saldo em nenhum local do Sankhya">0 <div style={{ fontSize: 10.5, color: C.ink3, fontWeight: 400 }}>sem saldo em nenhum local</div></span>
+                              : <>{planQtd(i.disponivel)}<div style={{ fontSize: 10.5, color: C.ink3, fontWeight: 400 }}>MP {planQtd(i.estoque_mp)} · proc. {planQtd(i.estoque_processamento)} · reserv. {planQtd(i.reservado)}</div>
+                                {outros.length > 0 && <div style={{ fontSize: 10.5, color: '#2563EB', fontWeight: 600 }}>{outros.map(([r, v]) => `${r} ${planQtd(v)}`).join(' · ')}</div>}</>}</td>
                           <td style={{ ...td, whiteSpace: 'nowrap' }}>{!i.pedido_oc ? <span style={{ color: C.ink3 }}>nenhuma OC aberta</span> : (
                             <span title="A OC liga ao produto, não ao BR: pode ser compra de outro projeto que usa o mesmo material.">
                               OC {i.pedido_oc} · {planQtd(i.oc_qtd)}<div style={{ fontSize: 10.5, color: C.ink3 }}>{i.fornecedor}</div>
@@ -24251,7 +24252,7 @@ function PlanBrAguia({ brNum }) {
                   </table>)}
               </div>)}
           </div>); })}
-      <div style={{ fontSize: 11, color: C.ink3 }}>Estoque só existe para matéria-prima (cerca de 127 produtos); "sem informação" não é zero. A OC é ligada pelo produto, não pelo BR, e o Sankhya ainda não informa se ela chegou (só a previsão).</div>
+      <div style={{ fontSize: 11, color: C.ink3 }}>Estoque do Sankhya, atualizado a cada hora: disponível = matéria-prima + em processamento − reservado; em azul, o que está em outros locais (almoxarifado, intermediários, produto acabado). A OC é ligada pelo produto, não pelo BR, e o Sankhya ainda não informa se ela chegou (só a previsão).</div>
     </div>
   );
 }
