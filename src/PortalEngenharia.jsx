@@ -23611,11 +23611,11 @@ function PlanejamentoPCP() {
           <div style={{ fontSize: 12, color: C.ink3 }}>Programação do mês e lista mestra dos projetos, ligadas ao Sankhya. Os valores são sempre os do Sankhya (quantidade × valor unitário líquido); a planilha só diz o que o PCP programou.</div>
         </div>
         <div style={{ display: 'inline-flex', background: '#E7EBF1', borderRadius: 9, padding: 3, gap: 2 }}>
-          {[['consulta', 'Consultar BR'], ['mes', 'Mês (OOH)'], ['programar', 'Programar mês'], ['mestra', 'Lista mestra'], ['comunicacoes', 'Comunicações'], ['comparativo', 'Planilha × Sankhya']].map(([k, r]) => (
+          {[['consulta', 'Consultar BR'], ['mes', 'Mês (OOH)'], ['programar', 'Montar mês'], ['mestra', 'Lista mestra'], ['comunicacoes', 'Comunicações'], ['comparativo', 'Planilha × Sankhya']].map(([k, r]) => (
             <button key={k} onClick={() => setAba(k)} style={{ fontFamily: 'inherit', fontSize: 13, fontWeight: aba === k ? 700 : 500, padding: '7px 14px', borderRadius: 7, border: 'none', cursor: 'pointer', background: aba === k ? C.surface : 'transparent', color: aba === k ? C.ink : C.ink2 }}>{r}</button>))}
         </div>
       </div>
-      {aba === 'consulta' ? <PlanConsultaBR /> : aba === 'mes' ? <PlanMes onProgramar={() => setAba('programar')} /> : aba === 'programar' ? <PlanProgramar /> : aba === 'mestra' ? <PlanMestra autor={autor} /> : aba === 'comunicacoes' ? <PlanComunicacoes /> : <PlanComparativo />}
+      {aba === 'consulta' ? <PlanConsultaBR /> : aba === 'mes' ? <PlanMes onProgramar={() => setAba('programar')} /> : aba === 'programar' ? <PlanMontarMes /> : aba === 'mestra' ? <PlanMestra autor={autor} /> : aba === 'comunicacoes' ? <PlanComunicacoes /> : <PlanComparativo />}
     </div>
   );
 }
@@ -24178,6 +24178,281 @@ function PlanEscolherPedidos({ linha: l, onFechar, onPronto }) {
 // PG1 e SERVIÇOS), mas a partir da carteira do Sankhya: quantidade pendente × valor unitário líquido real. Enquanto o mês
 // está "em montagem" dá para incluir, mudar quantidade/data e tirar linhas; ao congelar, vira a programação original
 // do mês (aba Mês) e só a conferência (qual pedido) muda. Exporta no mesmo layout da planilha deles.
+/* ============================================================================
+   MONTAR MÊS (Planejamento, 03/11/2026) — abre no mês que está sendo montado, com o valor total à vista; lista por BR
+   pela DATA DE FATURAMENTO do pedido (Sankhya CAB.DTPREVENT), com selo de atraso; o plano é por ITEM (o PCP digita
+   a quantidade, o valor sai de qtd × valor unitário líquido); dá para puxar BRs de outro mês (antecipar); alerta quando
+   a data prevista pelo PCP passa da data de faturamento; ao abrir um BR, a visão completa: OPs, materiais, estoque e
+   compras. Base: v_plan_carteira_fat(_item), plan_mes(_item), v_plan_mes_br, v_br_op, v_op_item_completo, v_br_situacao.
+============================================================================ */
+const planMesIso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
+const planMesNome = (iso) => new Date(`${iso}T12:00:00`).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+const planMoeda = (v) => Number(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 });
+const planMoeda2 = (v) => Number(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+const planQtd = (v) => (v == null ? '—' : Number(v).toLocaleString('pt-BR', { maximumFractionDigits: 3 }));
+const planData = (d) => (d ? new Date(`${String(d).slice(0, 10)}T12:00:00`).toLocaleDateString('pt-BR') : '—');
+
+function PlanBrAguia({ brNum }) {
+  const C = CRMC;
+  const [d, setD] = useState(null);
+  const [opAberta, setOpAberta] = useState(null);
+  useEffect(() => {
+    Promise.all([
+      supabase.from('v_br_situacao').select('*').eq('br_num', brNum).maybeSingle(),
+      supabase.from('v_br_op').select('*').eq('br_num', brNum).order('idiproc'),
+      supabase.from('v_op_item_completo').select('*').eq('br_num', brNum).order('descr'),
+    ]).then(([s, o, i]) => setD({ sit: s.data, ops: o.data || [], itens: i.data || [] }));
+  }, [brNum]);
+  if (!d) return <div style={{ padding: 12, fontSize: 12.5, color: C.ink3 }}>Carregando OPs, materiais e compras…</div>;
+  if (!d.ops.length) return <div style={{ padding: 12, fontSize: 12.5, color: C.ink3 }}>Nenhuma OP ligada a este BR no Sankhya.</div>;
+  const s = d.sit || {};
+  const chip = (t, cor, bg) => <span style={{ fontSize: 11.5, fontWeight: 700, color: cor, background: bg, borderRadius: 12, padding: '3px 9px', whiteSpace: 'nowrap' }}>{t}</span>;
+  const th = { padding: '6px 8px', textAlign: 'left', fontSize: 10.5, fontWeight: 600, color: C.ink3, textTransform: 'uppercase', whiteSpace: 'nowrap', borderBottom: `1px solid ${C.line}` };
+  const td = { padding: '6px 8px', fontSize: 12, borderBottom: `1px solid ${C.lineSoft}`, verticalAlign: 'top' };
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+        {chip(`${s.ops || 0} OP${s.ops === 1 ? '' : 's'} · ${s.ops_abertas || 0} aberta${s.ops_abertas === 1 ? '' : 's'}`, C.ink2, '#EEF1F5')}
+        {s.itens_faltando > 0 && chip(`${s.itens_faltando} material(is) ainda não baixado(s)`, C.warn, '#FDF3E1')}
+        {s.sem_estoque > 0 && chip(`${s.sem_estoque} sem saldo suficiente`, C.loss, '#FBE9E7')}
+        {s.compras_atrasadas > 0 && chip(`${s.compras_atrasadas} compra(s) com previsão vencida`, C.loss, '#FBE9E7')}
+        {s.sem_info > 0 && chip(`${s.sem_info} sem informação de estoque`, C.ink3, '#F1F3F6')}
+      </div>
+      {d.ops.map(o => { const its = d.itens.filter(i => i.idiproc === o.idiproc); const aberta = opAberta === o.idiproc;
+        const alertas = its.filter(i => (!i.sem_info_estoque && Number(i.disponivel) < Math.max(Number(i.qtd_falta), 0.0001)) || i.oc_situacao === 'atrasada').length;
+        return (
+          <div key={o.idiproc} style={{ border: `1px solid ${C.line}`, borderRadius: 8, background: C.surface }}>
+            <button onClick={() => setOpAberta(aberta ? null : o.idiproc)} style={{ width: '100%', textAlign: 'left', display: 'flex', gap: 10, alignItems: 'center', padding: '8px 10px', border: 'none', background: 'none', cursor: 'pointer', font: 'inherit' }}>
+              <span style={{ fontWeight: 700, fontSize: 13 }}>OP {o.idiproc}</span>
+              <span style={{ fontSize: 12, color: C.ink2, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{o.produto || '—'}{o.qtd_produzir ? ` · ${planQtd(o.qtd_produzir)} a produzir` : ''}{o.lote ? ` · lote ${o.lote}` : ''}</span>
+              {o.concluida ? chip('concluída', C.win, '#E7F4EC') : chip(`aberta${o.aberta_em ? ` desde ${planData(o.aberta_em)}` : ''}`, C.ink2, '#EEF1F5')}
+              {alertas > 0 && chip(`${alertas} alerta(s)`, C.loss, '#FBE9E7')}
+              <span style={{ fontSize: 12, color: C.primary }}>{aberta ? 'fechar' : `${its.length} materiais`}</span>
+            </button>
+            {aberta && (
+              <div style={{ overflowX: 'auto', borderTop: `1px solid ${C.line}` }}>
+                {!its.length ? <div style={{ padding: 10, fontSize: 12, color: C.ink3 }}>Sem materiais registrados nesta OP.</div> : (
+                  <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                    <thead><tr><th style={th}>Material</th><th style={{ ...th, textAlign: 'right' }}>Necessário</th><th style={{ ...th, textAlign: 'right' }}>Já baixado</th><th style={{ ...th, textAlign: 'right' }}>Estoque disponível</th><th style={th}>Compra</th></tr></thead>
+                    <tbody>{its.map(i => { const falta = Number(i.qtd_falta || 0); const semSaldo = !i.sem_info_estoque && Number(i.disponivel) < Math.max(falta, 0.0001);
+                      return (
+                        <tr key={`${i.idiproc}-${i.codprod}`}>
+                          <td style={{ ...td, maxWidth: 340 }}>{i.descr}<div style={{ fontSize: 10.5, color: C.ink3 }}>cód. {i.codprod} · {i.origem}</div></td>
+                          <td style={{ ...td, textAlign: 'right', whiteSpace: 'nowrap' }}>{planQtd(i.qtd_necessaria)} {String(i.unidade || '').toLowerCase()}</td>
+                          <td style={{ ...td, textAlign: 'right', whiteSpace: 'nowrap', color: falta > 0 ? C.warn : C.win }}>{planQtd(i.qtd_baixada)}{falta > 0 ? <div style={{ fontSize: 10.5 }}>falta {planQtd(falta)}</div> : null}</td>
+                          <td style={{ ...td, textAlign: 'right', whiteSpace: 'nowrap', color: i.sem_info_estoque ? C.ink3 : semSaldo ? C.loss : C.ink, fontWeight: semSaldo ? 700 : 400 }}>
+                            {i.sem_info_estoque ? <span title="Este item não está na tabela de estoque (só cobre matéria-prima). Ausência de informação, não zero.">sem informação</span>
+                              : <>{planQtd(i.disponivel)}<div style={{ fontSize: 10.5, color: C.ink3, fontWeight: 400 }}>MP {planQtd(i.estoque_mp)} · proc. {planQtd(i.estoque_processamento)} · reserv. {planQtd(i.reservado)}</div></>}</td>
+                          <td style={{ ...td, whiteSpace: 'nowrap' }}>{!i.pedido_oc ? <span style={{ color: C.ink3 }}>nenhuma OC aberta</span> : (
+                            <span title="A OC liga ao produto, não ao BR: pode ser compra de outro projeto que usa o mesmo material.">
+                              OC {i.pedido_oc} · {planQtd(i.oc_qtd)}<div style={{ fontSize: 10.5, color: C.ink3 }}>{i.fornecedor}</div>
+                              <div style={{ fontSize: 11, fontWeight: 700, color: i.oc_situacao === 'atrasada' ? C.loss : C.win }}>{i.oc_situacao === 'atrasada' ? `atrasada há ${i.oc_dias_atraso} dias, chegada não confirmada` : `a caminho · previsão ${planData(i.oc_previsao)}`}</div></span>)}</td>
+                        </tr>); })}</tbody>
+                  </table>)}
+              </div>)}
+          </div>); })}
+      <div style={{ fontSize: 11, color: C.ink3 }}>Estoque só existe para matéria-prima (cerca de 127 produtos); "sem informação" não é zero. A OC é ligada pelo produto, não pelo BR, e o Sankhya ainda não informa se ela chegou (só a previsão).</div>
+    </div>
+  );
+}
+
+function PlanBrItens({ mes, brNum, plano, onSalvo }) {
+  const C = CRMC;
+  const [itens, setItens] = useState(null);
+  const [qtd, setQtd] = useState({});
+  const [data, setData] = useState(plano?.data_prevista || '');
+  const [salvando, setSalvando] = useState(false);
+  const [msg, setMsg] = useState(null);
+  useEffect(() => {
+    Promise.all([
+      supabase.from('v_plan_carteira_fat_item').select('*').eq('br_num', brNum).order('nunota').order('sequencia'),
+      supabase.from('plan_mes_item').select('*').eq('mes', mes).eq('br_num', brNum),
+    ]).then(([a, b]) => {
+      setItens(a.data || []);
+      const q = {}; (b.data || []).forEach(x => { q[`${x.nunota}-${x.sequencia}`] = String(x.qtd_planejada).replace('.', ','); }); setQtd(q);
+    });
+  }, [mes, brNum]);
+  if (!itens) return <div style={{ padding: 12, fontSize: 12.5, color: C.ink3 }}>Carregando itens…</div>;
+  const num = (v) => Number(String(v || '').replace(/\./g, '').replace(',', '.')) || 0;
+  const mat = itens.filter(i => !i.servico), serv = itens.filter(i => i.servico);
+  const total = mat.reduce((t, i) => t + Math.min(num(qtd[`${i.nunota}-${i.sequencia}`]), Number(i.qtd_falta)) * Number(i.valor_unit || 0), 0);
+  const setTudo = (on) => { const q = {}; if (on) mat.forEach(i => { q[`${i.nunota}-${i.sequencia}`] = String(i.qtd_falta).replace('.', ','); }); setQtd(q); };
+  const salvar = async () => {
+    setSalvando(true); setMsg(null);
+    const payload = mat.map(i => ({ nunota: i.nunota, sequencia: i.sequencia, qtd: num(qtd[`${i.nunota}-${i.sequencia}`]) })).filter(x => x.qtd > 0);
+    const { data: r, error } = await supabase.rpc('fn_plan_mes_salvar_br', { p_mes: mes, p_br_num: brNum, p_itens: payload, p_data_prevista: data || null });
+    setSalvando(false);
+    if (error || r?.ok === false) { setMsg({ erro: true, t: error?.message || r?.erro }); return; }
+    setMsg({ t: r.removido ? 'Tirado do mês.' : `Salvo: ${planMoeda2(r.valor)} (${r.entrega}).` }); onSalvo();
+  };
+  const th = { padding: '6px 8px', textAlign: 'left', fontSize: 10.5, fontWeight: 600, color: C.ink3, textTransform: 'uppercase', whiteSpace: 'nowrap', borderBottom: `1px solid ${C.line}` };
+  const td = { padding: '6px 8px', fontSize: 12.5, borderBottom: `1px solid ${C.lineSoft}`, verticalAlign: 'top' };
+  const inp = { fontFamily: 'inherit', fontSize: 12.5, padding: '5px 7px', borderRadius: 6, border: `1px solid ${C.line}`, boxSizing: 'border-box' };
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div style={{ overflowX: 'auto' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead><tr><th style={th}>Pedido</th><th style={th}>Item</th><th style={{ ...th, textAlign: 'right' }}>Falta entregar</th><th style={{ ...th, textAlign: 'right' }}>Valor unit. (líquido)</th><th style={{ ...th, textAlign: 'right' }}>Entregar no mês</th><th style={{ ...th, textAlign: 'right' }}>Valor</th></tr></thead>
+          <tbody>{mat.map(i => { const k = `${i.nunota}-${i.sequencia}`; const q = Math.min(num(qtd[k]), Number(i.qtd_falta));
+            return (
+              <tr key={k}>
+                <td style={{ ...td, whiteSpace: 'nowrap', color: C.ink2 }}>{i.numnota || i.nunota}<div style={{ fontSize: 10.5, color: C.ink3 }}>fat. {planData(i.data_faturamento)}</div></td>
+                <td style={{ ...td, maxWidth: 380 }}>{i.descricao}</td>
+                <td style={{ ...td, textAlign: 'right', whiteSpace: 'nowrap' }}>{planQtd(i.qtd_falta)} {String(i.unidade || '').toLowerCase()}<div style={{ fontSize: 10.5, color: C.ink3 }}>de {planQtd(i.quantidade)}</div></td>
+                <td style={{ ...td, textAlign: 'right', whiteSpace: 'nowrap' }}>{planMoeda2(i.valor_unit)}</td>
+                <td style={{ ...td, textAlign: 'right' }}><input value={qtd[k] || ''} onChange={e => setQtd({ ...qtd, [k]: e.target.value })} inputMode="decimal" placeholder="0" style={{ ...inp, width: 90, textAlign: 'right' }} aria-label={`quantidade de ${i.descricao}`} />
+                  <button onClick={() => setQtd({ ...qtd, [k]: String(i.qtd_falta).replace('.', ',') })} style={{ marginLeft: 4, fontSize: 11, border: 'none', background: 'none', color: C.primary, cursor: 'pointer' }}>tudo</button></td>
+                <td style={{ ...td, textAlign: 'right', fontWeight: 700, whiteSpace: 'nowrap' }}>{q > 0 ? planMoeda2(q * Number(i.valor_unit || 0)) : '—'}</td>
+              </tr>); })}
+            {serv.map(i => (
+              <tr key={`${i.nunota}-${i.sequencia}`} style={{ color: C.ink3 }}>
+                <td style={td}>{i.numnota || i.nunota}</td><td style={td}>{i.descricao} <span style={{ fontSize: 10.5, fontWeight: 700, color: '#0D9488' }}>SERVIÇO · fora do valor programado</span></td>
+                <td style={{ ...td, textAlign: 'right' }}>{planQtd(i.qtd_falta)}</td><td style={{ ...td, textAlign: 'right' }}>{planMoeda2(i.valor_unit)}</td><td style={td} /><td style={{ ...td, textAlign: 'right' }}>{planMoeda2(i.valor_falta)}</td>
+              </tr>))}</tbody>
+        </table>
+      </div>
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', fontSize: 12.5 }}>
+        <button onClick={() => setTudo(true)} style={{ ...inp, cursor: 'pointer', background: C.surface }}>Tudo o que falta</button>
+        <button onClick={() => setTudo(false)} style={{ ...inp, cursor: 'pointer', background: C.surface }}>Limpar</button>
+        <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>Previsão de entrega do PCP <input type="date" value={data || ''} onChange={e => setData(e.target.value)} style={inp} /></label>
+        <span style={{ flex: 1 }} />
+        <strong style={{ fontSize: 14 }}>{planMoeda2(total)}</strong>
+        <button onClick={salvar} disabled={salvando} style={{ fontFamily: 'inherit', fontSize: 12.5, fontWeight: 700, padding: '7px 14px', borderRadius: 8, border: 'none', background: C.primary, color: '#fff', cursor: 'pointer' }}>{salvando ? 'Salvando…' : `Salvar em ${planMesNome(mes)}`}</button>
+      </div>
+      {msg && <div style={{ fontSize: 12.5, color: msg.erro ? C.loss : C.win }}>{msg.t}</div>}
+    </div>
+  );
+}
+
+function PlanMontarMes() {
+  const C = CRMC;
+  const hoje = new Date();
+  const opcoes = [0, 1, 2, 3].map(k => planMesIso(new Date(hoje.getFullYear(), hoje.getMonth() + k, 1)));
+  const [mes, setMes] = useState(opcoes[0]);
+  const [mesPuxar, setMesPuxar] = useState(opcoes[1]);
+  const [cart, setCart] = useState(null);
+  const [plano, setPlano] = useState([]);
+  const [aberto, setAberto] = useState(null);     // { br, aba: 'itens' | 'aguia' }
+  const [busca, setBusca] = useState('');
+  const [rec, setRec] = useState(0);
+  const [ocupado, setOcupado] = useState(null);
+  useEffect(() => {
+    Promise.all([
+      supabase.from('v_plan_carteira_fat').select('*').order('data_faturamento'),
+      supabase.from('v_plan_mes_br').select('*').eq('mes', mes),
+    ]).then(([a, b]) => { setCart(a.data || []); setPlano(b.data || []); });
+  }, [mes, rec]);
+  if (!cart) return <div style={{ padding: 30, textAlign: 'center', color: C.ink3 }}>Carregando a carteira…</div>;
+  const mesYm = mes.slice(0, 7);
+  const planoPor = Object.fromEntries(plano.map(p => [p.br_num, p]));
+  const b = busca.trim().toLowerCase();
+  const casa = (x) => !b || `${x.br} ${x.cliente || ''} ${x.vendedor || ''}`.toLowerCase().includes(b);
+  const noMes = cart.filter(x => x.mes_faturamento === mesYm && x.valor_falta > 0);
+  // atrasados: data de faturamento já passou (hoje) e é de mês anterior ao que está sendo montado — "escorregaram"
+  const atrasados = cart.filter(x => x.atrasado && x.mes_faturamento < mesYm && x.valor_falta > 0);
+  const aPlanejar = [...atrasados, ...noMes].filter(x => !planoPor[x.br_num] && casa(x));
+  const outroMes = cart.filter(x => x.mes_faturamento === mesPuxar.slice(0, 7) && x.valor_falta > 0 && !planoPor[x.br_num] && casa(x));
+  const soma = (arr, k) => arr.reduce((t, x) => t + Number(x[k] || 0), 0);
+  const totPlan = soma(plano, 'valor_planejado');
+  const planejarTudo = async (x) => {
+    setOcupado(x.br_num);
+    const { data: its } = await supabase.from('v_plan_carteira_fat_item').select('nunota,sequencia,qtd_falta,servico').eq('br_num', x.br_num);
+    const payload = (its || []).filter(i => !i.servico).map(i => ({ nunota: i.nunota, sequencia: i.sequencia, qtd: Number(i.qtd_falta) }));
+    await supabase.rpc('fn_plan_mes_salvar_br', { p_mes: mes, p_br_num: x.br_num, p_itens: payload, p_data_prevista: null });
+    setOcupado(null); setRec(r => r + 1);
+  };
+  const tirar = async (x) => { if (!window.confirm(`Tirar ${x.br} de ${planMesNome(mes)}?`)) return; await supabase.rpc('fn_plan_mes_remover', { p_mes: mes, p_br_num: x.br_num }); setRec(r => r + 1); };
+  const mudarData = async (x, v) => { await supabase.rpc('fn_plan_mes_data', { p_mes: mes, p_br_num: x.br_num, p_data: v || null }); setRec(r => r + 1); };
+  const caixa = { background: C.surface, border: `1px solid ${C.line}`, borderRadius: 12 };
+  const card = (r, v, sub, cor) => (
+    <div style={{ ...caixa, padding: '12px 16px', borderLeft: `4px solid ${cor}` }}>
+      <div style={{ fontSize: 12, color: C.ink2, fontWeight: 600 }}>{r}</div>
+      <div style={{ fontSize: 22, fontWeight: 800, fontVariantNumeric: 'tabular-nums' }}>{v}</div>
+      <div style={{ fontSize: 11.5, color: C.ink3 }}>{sub}</div>
+    </div>);
+  const linha = (x, tipo) => {
+    const p = planoPor[x.br_num]; const ab = aberto?.br === x.br_num;
+    const sel = (t, cor, bg) => <span style={{ fontSize: 11, fontWeight: 700, color: cor, background: bg, borderRadius: 4, padding: '2px 7px', whiteSpace: 'nowrap' }}>{t}</span>;
+    return (
+      <div key={`${tipo}-${x.br_num}`} style={{ borderBottom: `1px solid ${C.lineSoft}` }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(220px, 2.2fr) minmax(120px, 1fr) minmax(110px, 0.9fr) minmax(130px, 1fr) minmax(220px, 1.6fr)', gap: 10, alignItems: 'center', padding: '10px 14px' }}>
+          <div style={{ minWidth: 0 }}>
+            <button onClick={() => setAberto(ab ? null : { br: x.br_num, aba: 'itens' })} style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer', font: 'inherit', fontWeight: 700, fontSize: 13.5, color: C.primary }}>{x.br}</button>
+            <div style={{ fontSize: 11.5, color: C.ink3, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{x.cliente}{x.vendedor ? ` · ${x.vendedor}` : ''}</div>
+          </div>
+          <div style={{ fontSize: 12.5 }}>{planData(x.data_faturamento)}
+            <div style={{ marginTop: 2 }}>{x.atrasado ? sel(`atrasado ${x.dias_atraso} d`, C.loss, '#FBE9E7') : p?.procedencia === 'antecipado' || tipo === 'puxar' ? sel('antecipar', '#2563EB', '#E8F0FD') : null}</div></div>
+          <div style={{ fontSize: 12, color: C.ink2 }}>{x.itens} ite{x.itens === 1 ? 'm' : 'ns'}{x.valor_servico > 0 ? <div style={{ fontSize: 10.5, color: '#0D9488' }}>+ serviço {planMoeda(x.valor_servico)}</div> : null}</div>
+          <div style={{ textAlign: 'right' }}>
+            {p ? <><div style={{ fontWeight: 800, fontSize: 14, fontVariantNumeric: 'tabular-nums' }}>{planMoeda(p.valor_planejado)}</div><div style={{ fontSize: 11, color: C.ink3 }}>{p.entrega === 'parcial' ? `parcial · de ${planMoeda(x.valor_falta)}` : 'inteiro'}</div></>
+              : <><div style={{ fontWeight: 700, fontSize: 13.5, fontVariantNumeric: 'tabular-nums' }}>{planMoeda(x.valor_falta)}</div><div style={{ fontSize: 11, color: C.ink3 }}>a faturar</div></>}
+          </div>
+          <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', flexWrap: 'wrap', alignItems: 'center' }}>
+            {p ? <>
+              <input type="date" value={p.data_prevista || ''} onChange={e => mudarData(x, e.target.value)} title="previsão de entrega informada pelo PCP" style={{ fontFamily: 'inherit', fontSize: 12, padding: '4px 6px', borderRadius: 6, border: `1px solid ${p.alerta_data ? C.loss : C.line}` }} />
+              <button onClick={() => tirar(x)} style={{ fontSize: 12, border: `1px solid ${C.line}`, background: C.surface, borderRadius: 6, padding: '4px 8px', cursor: 'pointer', color: C.loss }}>Tirar</button>
+            </> : <button onClick={() => planejarTudo(x)} disabled={ocupado === x.br_num} style={{ fontSize: 12, fontWeight: 700, border: 'none', background: C.primary, color: '#fff', borderRadius: 6, padding: '5px 10px', cursor: 'pointer' }}>{ocupado === x.br_num ? '…' : tipo === 'puxar' ? `Puxar inteiro para ${planMesNome(mes).split(' ')[0]}` : 'Planejar inteiro'}</button>}
+            <button onClick={() => setAberto(ab && aberto.aba === 'itens' ? null : { br: x.br_num, aba: 'itens' })} style={{ fontSize: 12, border: `1px solid ${C.line}`, background: ab && aberto.aba === 'itens' ? C.primarySoft : C.surface, borderRadius: 6, padding: '4px 8px', cursor: 'pointer' }}>Itens / parcial</button>
+            <button onClick={() => setAberto(ab && aberto.aba === 'aguia' ? null : { br: x.br_num, aba: 'aguia' })} style={{ fontSize: 12, border: `1px solid ${C.line}`, background: ab && aberto.aba === 'aguia' ? C.primarySoft : C.surface, borderRadius: 6, padding: '4px 8px', cursor: 'pointer' }}>OPs e materiais</button>
+          </div>
+        </div>
+        {p?.alerta_data && <div style={{ margin: '-4px 14px 8px', fontSize: 12, fontWeight: 700, color: C.loss }}>Alerta: o PCP prevê entregar em {planData(p.data_prevista)}, {p.dias_alem_faturamento} dias depois da data de faturamento do pedido ({planData(x.data_faturamento)}).</div>}
+        {ab && <div style={{ padding: '4px 14px 14px', background: '#FAFBFC' }}>{aberto.aba === 'itens' ? <PlanBrItens mes={mes} brNum={x.br_num} plano={p} onSalvo={() => setRec(r => r + 1)} /> : <PlanBrAguia brNum={x.br_num} />}</div>}
+      </div>);
+  };
+  const cab = (
+    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(220px, 2.2fr) minmax(120px, 1fr) minmax(110px, 0.9fr) minmax(130px, 1fr) minmax(220px, 1.6fr)', gap: 10, padding: '7px 14px', fontSize: 10.5, fontWeight: 600, color: C.ink3, textTransform: 'uppercase', background: '#F1F4F8', borderBottom: `1px solid ${C.line}` }}>
+      <span>BR / cliente</span><span>Faturamento do pedido</span><span>Itens</span><span style={{ textAlign: 'right' }}>Valor (líquido)</span><span />
+    </div>);
+  const planList = cart.filter(x => planoPor[x.br_num] && casa(x));
+  const planSemCarteira = plano.filter(p => !cart.some(x => x.br_num === p.br_num));
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <div style={{ ...caixa, padding: '12px 16px', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+        <strong>Montando</strong>
+        <select value={mes} onChange={e => { setMes(e.target.value); setAberto(null); }} style={{ fontFamily: 'inherit', fontSize: 14, fontWeight: 700, padding: '6px 10px', borderRadius: 8, border: `1px solid ${C.line}` }}>
+          {opcoes.map(m => <option key={m} value={m}>{planMesNome(m)}</option>)}
+        </select>
+        <span style={{ fontSize: 12, color: C.ink3 }}>data de faturamento = previsão de entrega do pedido no Sankhya · valores líquidos, só material (serviço fica fora)</span>
+        <span style={{ flex: 1 }} />
+        <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="buscar BR, cliente ou vendedor" style={{ fontFamily: 'inherit', fontSize: 12.5, padding: '6px 9px', borderRadius: 8, border: `1px solid ${C.line}`, width: 230 }} />
+      </div>
+      <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))' }}>
+        {card(`Planejado para ${planMesNome(mes)}`, planMoeda(totPlan), `${plano.length} BR${plano.length === 1 ? '' : 's'}${plano.filter(p => p.entrega === 'parcial').length ? ` · ${plano.filter(p => p.entrega === 'parcial').length} parcial(is)` : ''}`, C.primary)}
+        {card(`Carteira com faturamento em ${planMesNome(mes).split(' ')[0]}`, planMoeda(soma(noMes, 'valor_falta')), `${noMes.length} BRs · ${noMes.filter(x => planoPor[x.br_num]).length} já no plano`, '#475467')}
+        {card('Atrasados (data já passou)', planMoeda(soma(atrasados, 'valor_falta')), `${atrasados.length} BRs · ${atrasados.filter(x => planoPor[x.br_num]).length} já no plano`, C.loss)}
+        {card('Alertas de data', String(plano.filter(p => p.alerta_data).length), 'previsão do PCP depois da data de faturamento', C.warn)}
+      </div>
+
+      <section style={{ ...caixa, overflow: 'hidden' }}>
+        <div style={{ padding: '10px 14px', borderBottom: `1px solid ${C.line}`, display: 'flex', gap: 10, alignItems: 'baseline' }}>
+          <strong>No plano de {planMesNome(mes)}</strong><span style={{ fontSize: 12, color: C.ink3 }}>{plano.length} BRs</span><span style={{ flex: 1 }} /><strong style={{ fontVariantNumeric: 'tabular-nums' }}>{planMoeda(totPlan)}</strong>
+        </div>
+        {!plano.length ? <div style={{ padding: 16, fontSize: 12.5, color: C.ink3, textAlign: 'center' }}>Nada planejado ainda. Comece pela carteira do mês abaixo.</div> : <>{cab}{planList.map(x => linha(x, 'plano'))}
+          {planSemCarteira.map(p => <div key={p.br_num} style={{ padding: '8px 14px', fontSize: 12.5, color: C.ink3 }}>{p.br} · {planMoeda(p.valor_planejado)} — sem saldo em carteira hoje (faturado ou encerrado){Number(p.faturado_no_mes) > 0 ? ` · faturado no mês ${planMoeda(p.faturado_no_mes)}` : ''}</div>)}</>}
+      </section>
+
+      <section style={{ ...caixa, overflow: 'hidden' }}>
+        <div style={{ padding: '10px 14px', borderBottom: `1px solid ${C.line}`, display: 'flex', gap: 10, alignItems: 'baseline' }}>
+          <strong>A planejar: atrasados e carteira de {planMesNome(mes).split(' ')[0]}</strong><span style={{ fontSize: 12, color: C.ink3 }}>{aPlanejar.length} BRs fora do plano</span><span style={{ flex: 1 }} /><span style={{ fontVariantNumeric: 'tabular-nums', color: C.ink2 }}>{planMoeda(soma(aPlanejar, 'valor_falta'))}</span>
+        </div>
+        {!aPlanejar.length ? <div style={{ padding: 16, fontSize: 12.5, color: C.win, textAlign: 'center' }}>Toda a carteira do mês e os atrasados já estão no plano.</div> : <>{cab}{aPlanejar.map(x => linha(x, 'carteira'))}</>}
+      </section>
+
+      <section style={{ ...caixa, overflow: 'hidden' }}>
+        <div style={{ padding: '10px 14px', borderBottom: `1px solid ${C.line}`, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          <strong>Puxar de outro mês</strong>
+          <select value={mesPuxar} onChange={e => setMesPuxar(e.target.value)} style={{ fontFamily: 'inherit', fontSize: 12.5, padding: '5px 8px', borderRadius: 6, border: `1px solid ${C.line}` }}>
+            {[1, 2, 3, 4].map(k => planMesIso(new Date(Number(mes.slice(0, 4)), Number(mes.slice(5, 7)) - 1 + k, 1))).map(m => <option key={m} value={m}>carteira de {planMesNome(m)}</option>)}
+          </select>
+          <span style={{ fontSize: 12, color: C.ink3 }}>{outroMes.length} BRs · {planMoeda(soma(outroMes, 'valor_falta'))} — se o número do mês não satisfaz, antecipe daqui</span>
+        </div>
+        {!outroMes.length ? <div style={{ padding: 16, fontSize: 12.5, color: C.ink3, textAlign: 'center' }}>Nada nesse mês.</div> : <>{cab}{outroMes.map(x => linha(x, 'puxar'))}</>}
+      </section>
+    </div>
+  );
+}
+
 // ============================================================================
 const PLAN_ABAS = ['KALIMPACT', 'REVESTIMENTO', 'PG1', 'SERVIÇOS'];
 const planAba = (setor, servico) => (servico ? 'SERVIÇOS' : setor === 'KALIMPACT' ? 'KALIMPACT' : (setor === 'PG1' || setor === 'PG2') ? 'PG1' : 'REVESTIMENTO');
