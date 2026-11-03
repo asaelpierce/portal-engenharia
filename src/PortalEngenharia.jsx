@@ -2378,7 +2378,7 @@ function CustoHoraSetor({ currentUser }) {
         <strong style={{ fontSize: 15 }}>Custo da hora por setor (mão de obra)</strong>
         <div style={{ overflowX: 'auto', marginTop: 12 }}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead><tr><th style={{ ...th, textAlign: 'left' }}>Setor</th><th style={th}>Pessoas</th><th style={th}>Folha do setor (salário + encargos, por mês)</th><th style={{ ...th, color: T.ink }}>Custo da hora</th><th style={th}>Horas apontadas/mês (média)</th></tr></thead>
+            <thead><tr><th style={{ ...th, textAlign: 'left' }}>Setor</th><th style={th}>Pessoas</th><th style={th}>Folha do setor (salário + encargos, por mês)</th><th style={{ ...th, color: T.ink }}>Custo da hora</th></tr></thead>
             <tbody>{setores.map(s => { const r0 = rows.find(r => r.setor === s.setor) || {}; const hs = validos.filter(r => r.setor === s.setor).map(r => Number(r.horas_setor || 0));
               return (
                 <tr key={s.setor}>
@@ -2386,7 +2386,6 @@ function CustoHoraSetor({ currentUser }) {
                   <td style={{ ...td, color: T.inkDim }}>{r0.pessoas}</td>
                   <td style={{ ...td, color: T.inkDim }}>{moeda(r0.folha_setor)}</td>
                   <td style={{ ...td, fontWeight: 800, fontSize: 15 }}>{moeda(r0.mo_hora)}</td>
-                  <td style={{ ...td, color: T.inkDim }}>{hs.length ? Math.round(hs.reduce((a, b) => a + b, 0) / hs.length).toLocaleString('pt-BR') : '—'}</td>
                 </tr>); })}</tbody>
           </table>
         </div>
