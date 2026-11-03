@@ -2307,7 +2307,7 @@ function CustoHoraSetor({ currentUser }) {
     const t = setTimeout(async () => {
       const [c, p, o] = await Promise.all([
         supabase.from('v_br_cliente').select('*').eq('br_num', num).maybeSingle(),
-        supabase.from('sankhya_pedido_venda').select('numnota,dtneg,codtipoper').eq('br_num', num).neq('codtipoper', 3109).order('dtneg'),
+        supabase.from('sankhya_pedido_venda').select('nunota,numnota,dtneg,codtipoper,pendente').eq('br_num', num).neq('codtipoper', 3109).order('dtneg'),
         supabase.from('v_br_ops_horas').select('*').eq('br_num', num).order('op'),
       ]);
       if (!c.data && !(p.data || []).length) { setInfoBr({ nao: true, num }); return; }
@@ -2398,7 +2398,7 @@ function CustoHoraSetor({ currentUser }) {
           ? <div style={{ marginTop: 10, fontSize: 12.5, color: T.rustText }}>Não achei o BR{infoBr.num} no Sankhya (sem cliente, pedido ou nota). Confira o número.</div>
           : <div style={{ marginTop: 10, padding: '10px 12px', borderRadius: 8, background: T.panelAlt, border: `1px solid ${T.line}`, fontSize: 12.5 }}>
               <div><strong style={{ fontSize: 14 }}>{infoBr.br}</strong> · <strong>{infoBr.cliente || 'cliente não encontrado'}</strong>{infoBr.vendedor ? <span style={{ color: T.inkDim }}> · vendedor {infoBr.vendedor}</span> : null}</div>
-              <div style={{ color: T.inkDim, marginTop: 3 }}>Pedido{infoBr.pedidos.length > 1 ? 's' : ''}: {infoBr.pedidos.length ? infoBr.pedidos.map(p => `${p.numnota} (${new Date(`${p.dtneg}T12:00:00`).toLocaleDateString('pt-BR')})`).join(', ') : 'nenhum no Sankhya'}</div>
+              <div style={{ color: T.inkDim, marginTop: 3 }}>Pedido de venda no Sankhya: {infoBr.pedidos.length ? infoBr.pedidos.map(p => `nº ${p.numnota} (nº único ${p.nunota}) de ${new Date(`${p.dtneg}T12:00:00`).toLocaleDateString('pt-BR')}${p.pendente === 'N' ? ' · sem pendência' : ' · pendente'}`).join(' | ') : 'nenhum'}</div>
               {infoBr.ops.length > 0 && <div style={{ marginTop: 6 }}><span style={{ color: T.inkDim }}>OPs com horas apontadas (clique para usar):</span>
                 <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>{infoBr.ops.map(o => (
                   <button key={o.op} onClick={() => setOp(o.op)} title={o.produto || ''} style={{ fontSize: 12, padding: '4px 9px', borderRadius: 14, cursor: 'pointer', border: `1px solid ${op === o.op ? T.ink : T.line}`, background: op === o.op ? T.ink : T.panel, color: op === o.op ? '#fff' : T.ink }}>
