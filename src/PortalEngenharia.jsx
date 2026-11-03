@@ -2242,7 +2242,9 @@ function textoCustoExtra(r) {
     r.cliente ? `Cliente: ${r.cliente}` : null,
     r.motivo ? `Motivo: ${r.motivo}` : null,
     '',
-    ...ls.map(l => `${l.setor_nome}: ${String(l.horas).replace('.', ',')} h × ${custoExtraMoeda(Number(l.custo_hora) + Number(l.adicional_hora || 0))}${l.hora_extra_pct ? ` (hora extra +${l.hora_extra_pct}%)` : ''} = ${custoExtraMoeda(l.valor)}`),
+    (() => { const cs = [...new Set(ls.map(l => l.colaborador_nome).filter(Boolean))]; return cs.length ? `Colaboradores: ${cs.length} (${cs.join(', ')})` : null; })(),
+    '',
+    ...ls.map(l => `${l.colaborador_nome ? `${l.colaborador_nome} — ` : ''}${l.setor_nome}: ${String(l.horas).replace('.', ',')} h × ${custoExtraMoeda(Number(l.custo_hora) + Number(l.adicional_hora || 0))}${l.hora_extra_pct ? ` (hora extra +${l.hora_extra_pct}%)` : ''} = ${custoExtraMoeda(l.valor)}`),
     '',
     `Total: ${custoExtraMoeda(r.valor_total)} (${String(r.horas_total).replace('.', ',')} h, custo de mão de obra do setor)`,
     r.descricao ? `\n${r.descricao}` : null,
@@ -2255,29 +2257,30 @@ async function excelCustoExtra(r) {
   const wb = new ExcelJS.Workbook();
   const ws = wb.addWorksheet('Custo extra', { views: [{ showGridLines: false }] });
   const F = { name: 'Arial', size: 10 };
-  ws.columns = [{ width: 26 }, { width: 12 }, { width: 24 }, { width: 16 }, { width: 18 }];
-  ws.mergeCells('A1:E1'); ws.getCell('A1').value = 'Custo extra de produção'; ws.getCell('A1').font = { ...F, size: 14, bold: true, color: { argb: 'FF1F4E79' } };
-  const info = [['BR', r.br], ['Cliente', r.cliente || '—'], ['OP', r.op || '—'], ['Motivo', r.motivo || '—'], ['Data', new Date(r.criado_em || Date.now())], ['Responsável', r.criado_por || '—']];
-  info.forEach(([k, v], i) => { const row = ws.getRow(3 + i); row.getCell(1).value = k; row.getCell(1).font = { ...F, bold: true }; ws.mergeCells(3 + i, 2, 3 + i, 5); row.getCell(2).value = v; row.getCell(2).font = F; if (v instanceof Date) row.getCell(2).numFmt = 'dd/mm/yyyy'; row.getCell(2).alignment = { horizontal: 'left' }; });
+  ws.columns = [{ width: 22 }, { width: 22 }, { width: 10 }, { width: 22 }, { width: 15 }, { width: 16 }];
+  ws.mergeCells('A1:F1'); ws.getCell('A1').value = 'Custo extra de produção'; ws.getCell('A1').font = { ...F, size: 14, bold: true, color: { argb: 'FF1F4E79' } };
+  const colabs = [...new Set((r.linhas || []).map(l => l.colaborador_nome).filter(Boolean))];
+  const info = [['BR', r.br], ['Cliente', r.cliente || '—'], ['OP', r.op || '—'], ['Motivo', r.motivo || '—'], ['Colaboradores', colabs.length ? `${colabs.length}: ${colabs.join(', ')}` : '—'], ['Data', new Date(r.criado_em || Date.now())], ['Responsável', r.criado_por || '—']];
+  info.forEach(([k, v], i) => { const row = ws.getRow(3 + i); row.getCell(1).value = k; row.getCell(1).font = { ...F, bold: true }; ws.mergeCells(3 + i, 2, 3 + i, 6); row.getCell(2).value = v; row.getCell(2).font = F; if (v instanceof Date) row.getCell(2).numFmt = 'dd/mm/yyyy'; row.getCell(2).alignment = { horizontal: 'left' }; });
   const h0 = 3 + info.length + 1;
-  const cab = ws.getRow(h0); ['Setor', 'Horas', 'Tipo de hora', 'Custo da hora', 'Valor'].forEach((t, i) => { const c = cab.getCell(i + 1); c.value = t; c.font = { ...F, bold: true, color: { argb: 'FFFFFFFF' } }; c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F4E79' } }; c.alignment = { horizontal: i ? 'right' : 'left' }; });
+  const cab = ws.getRow(h0); ['Colaborador', 'Setor', 'Horas', 'Tipo de hora', 'Custo da hora', 'Valor'].forEach((t, i) => { const c = cab.getCell(i + 1); c.value = t; c.font = { ...F, bold: true, color: { argb: 'FFFFFFFF' } }; c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F4E79' } }; c.alignment = { horizontal: i > 1 ? 'right' : 'left' }; });
   const ls = r.linhas || [];
   ls.forEach((l, i) => {
     const row = ws.getRow(h0 + 1 + i);
-    row.getCell(1).value = l.setor_nome; row.getCell(2).value = Number(l.horas);
-    row.getCell(3).value = l.hora_extra_pct ? `hora extra +${l.hora_extra_pct}%` : 'normal';
-    row.getCell(4).value = Number((Number(l.custo_hora) + Number(l.adicional_hora || 0)).toFixed(2));
-    row.getCell(5).value = { formula: `B${h0 + 1 + i}*D${h0 + 1 + i}`, result: Number(l.valor) };
-    [1, 2, 3, 4, 5].forEach(k => { row.getCell(k).font = F; row.getCell(k).border = { bottom: { style: 'thin', color: { argb: 'FFD0D5DD' } } }; });
-    row.getCell(2).numFmt = '#,##0.00'; row.getCell(4).numFmt = '"R$" #,##0.00'; row.getCell(5).numFmt = '"R$" #,##0.00'; row.getCell(3).alignment = { horizontal: 'right' };
+    row.getCell(1).value = l.colaborador_nome || '—'; row.getCell(2).value = l.setor_nome; row.getCell(3).value = Number(l.horas);
+    row.getCell(4).value = l.hora_extra_pct ? `hora extra +${l.hora_extra_pct}%` : 'normal';
+    row.getCell(5).value = Number((Number(l.custo_hora) + Number(l.adicional_hora || 0)).toFixed(2));
+    row.getCell(6).value = { formula: `C${h0 + 1 + i}*E${h0 + 1 + i}`, result: Number(l.valor) };
+    [1, 2, 3, 4, 5, 6].forEach(k => { row.getCell(k).font = F; row.getCell(k).border = { bottom: { style: 'thin', color: { argb: 'FFD0D5DD' } } }; });
+    row.getCell(3).numFmt = '#,##0.00'; row.getCell(5).numFmt = '"R$" #,##0.00'; row.getCell(6).numFmt = '"R$" #,##0.00'; row.getCell(4).alignment = { horizontal: 'right' };
   });
   const tr = ws.getRow(h0 + 1 + ls.length);
-  tr.getCell(1).value = 'Total'; tr.getCell(2).value = { formula: `SUM(B${h0 + 1}:B${h0 + ls.length})`, result: Number(r.horas_total) };
-  tr.getCell(5).value = { formula: `SUM(E${h0 + 1}:E${h0 + ls.length})`, result: Number(r.valor_total) };
-  [1, 2, 5].forEach(k => { tr.getCell(k).font = { ...F, bold: true }; }); tr.getCell(2).numFmt = '#,##0.00'; tr.getCell(5).numFmt = '"R$" #,##0.00';
+  tr.getCell(1).value = `Total · ${colabs.length} colaborador${colabs.length !== 1 ? 'es' : ''}`; tr.getCell(3).value = { formula: `SUM(C${h0 + 1}:C${h0 + ls.length})`, result: Number(r.horas_total) };
+  tr.getCell(6).value = { formula: `SUM(F${h0 + 1}:F${h0 + ls.length})`, result: Number(r.valor_total) };
+  [1, 3, 6].forEach(k => { tr.getCell(k).font = { ...F, bold: true }; }); tr.getCell(3).numFmt = '#,##0.00'; tr.getCell(6).numFmt = '"R$" #,##0.00';
   let n = h0 + ls.length + 3;
-  if (r.descricao) { ws.mergeCells(n, 1, n, 5); ws.getCell(n, 1).value = r.descricao; ws.getCell(n, 1).font = F; ws.getCell(n, 1).alignment = { wrapText: true, vertical: 'top' }; ws.getRow(n).height = 45; n += 2; }
-  ws.mergeCells(n, 1, n, 5);
+  if (r.descricao) { ws.mergeCells(n, 1, n, 6); ws.getCell(n, 1).value = r.descricao; ws.getCell(n, 1).font = F; ws.getCell(n, 1).alignment = { wrapText: true, vertical: 'top' }; ws.getRow(n).height = 45; n += 2; }
+  ws.mergeCells(n, 1, n, 6);
   ws.getCell(n, 1).value = 'Custo da hora = mão de obra do setor: folha do centro de custo no custeio (salário + encargos) ÷ (pessoas × 220 h pagas por mês). Hora extra: adicional de 65% ou 100% sobre a hora.';
   ws.getCell(n, 1).font = { ...F, size: 9, italic: true, color: { argb: 'FF667085' } }; ws.getCell(n, 1).alignment = { wrapText: true }; ws.getRow(n).height = 30;
   const buf = await wb.xlsx.writeBuffer();
@@ -2295,7 +2298,8 @@ function CustoHoraSetor({ currentUser }) {
   const [op, setOp] = useState('');
   const [motivo, setMotivo] = useState('');
   const [descricao, setDescricao] = useState('');
-  const [linhas, setLinhas] = useState([{ setor: '', horas: '', extra: 0 }]);
+  const [linhas, setLinhas] = useState([{ setor: '', colab: '', horas: '', extra: 0 }]);
+  const [colabs, setColabs] = useState([]);   // v_colaborador_producao
   const [historico, setHistorico] = useState([]);
   const [msg, setMsg] = useState(null);
   const [salvando, setSalvando] = useState(false);
@@ -2311,13 +2315,15 @@ function CustoHoraSetor({ currentUser }) {
         supabase.from('v_br_ops_horas').select('*').eq('br_num', num).order('op'),
       ]);
       if (!c.data && !(p.data || []).length) { setInfoBr({ nao: true, num }); return; }
+      const { data: pes } = await supabase.from('custeio_apontamento_hora').select('cod_usuario').like('br', `%${num}%`).limit(2000);
       const ops = {}; (o.data || []).forEach(x => { const k = String(x.op); (ops[k] = ops[k] || { op: k, produto: x.produto, setores: [] }).setores.push(`${x.setor_nome} ${String(x.horas).replace('.', ',')} h`); });
-      setInfoBr({ br: c.data?.br || `BR${num}`, cliente: c.data?.cliente || null, vendedor: c.data?.vendedor || null, pedidos: p.data || [], ops: Object.values(ops) });
+      setInfoBr({ br: c.data?.br || `BR${num}`, cliente: c.data?.cliente || null, vendedor: c.data?.vendedor || null, pedidos: p.data || [], ops: Object.values(ops), pessoas: [...new Set((pes || []).map(x => x.cod_usuario))] });
     }, 350);
     return () => clearTimeout(t);
   }, [br]);
   const carregarHist = () => supabase.from('producao_custo_extra').select('*').order('criado_em', { ascending: false }).limit(200).then(({ data }) => setHistorico(data || []));
   useEffect(() => {
+    supabase.from('v_colaborador_producao').select('*').order('nome').then(({ data }) => setColabs(data || []));
     supabase.from('v_custo_hora_setor_mes').select('*').order('competencia').then(({ data }) => setRows(data || []));
     carregarHist();
   }, []);
@@ -2340,7 +2346,9 @@ function CustoHoraSetor({ currentUser }) {
   const moeda = (v) => (v == null ? '—' : Number(v).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }));
   const salvar = async (enviar) => {
     if (!br.trim()) { setMsg({ erro: true, t: 'Informe o BR do projeto.' }); return; }
-    const ls = linhas.filter(l => l.setor && num(l.horas) > 0).map(l => ({ setor: Number(l.setor), setor_nome: setores.find(s => s.setor === Number(l.setor))?.nome, horas: num(l.horas),
+    if (linhas.some(l => l.setor && num(l.horas) > 0 && !l.colab)) { setMsg({ erro: true, t: 'Informe o colaborador em cada linha.' }); return; }
+    const ls = linhas.filter(l => l.setor && num(l.horas) > 0).map(l => ({ setor: Number(l.setor), setor_nome: setores.find(s => s.setor === Number(l.setor))?.nome,
+      colaborador_cod: Number(l.colab), colaborador_nome: colabs.find(c => String(c.cod_usuario) === String(l.colab))?.nome || null, horas: num(l.horas),
       custo_hora: Number((taxa(Number(l.setor)) || 0).toFixed(2)), hora_extra_pct: Number(l.extra), adicional_hora: Number(((moSetor(Number(l.setor)) || 0) * Number(l.extra) / 100).toFixed(2)), valor: Number(valorLinha(l).toFixed(2)) }));
     if (!ls.length) { setMsg({ erro: true, t: 'Informe pelo menos um setor com horas.' }); return; }
     setSalvando(true);
@@ -2407,12 +2415,21 @@ function CustoHoraSetor({ currentUser }) {
         <div style={{ fontSize: 12, color: T.inkFaint, marginTop: 10 }}>Custo pela mão de obra do setor. Em hora extra, o adicional (65% ou 100%) incide sobre a hora.</div>
         <div style={{ overflowX: 'auto', marginTop: 12 }}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead><tr><th style={{ ...th, textAlign: 'left' }}>Setor</th><th style={th}>Horas a mais</th><th style={th}>Hora extra?</th><th style={th}>Custo da hora</th><th style={th}>Valor</th><th style={th} /></tr></thead>
+            <thead><tr><th style={{ ...th, textAlign: 'left' }}>Colaborador</th><th style={{ ...th, textAlign: 'left' }}>Setor</th><th style={th}>Horas a mais</th><th style={th}>Hora extra?</th><th style={th}>Custo da hora</th><th style={th}>Valor</th><th style={th} /></tr></thead>
             <tbody>{linhas.map((l, i) => { const t = l.setor ? (taxa(Number(l.setor)) || 0) + (moSetor(Number(l.setor)) || 0) * Number(l.extra) / 100 : null;
               const set = (k, v) => setLinhas(linhas.map((x, j) => (j === i ? { ...x, [k]: v } : x)));
+              // quem apontou neste BR aparece primeiro; depois o resto, do setor escolhido (ou todos)
+              const noBr = new Set(); (infoBr?.pessoas || []).forEach(x => noBr.add(String(x)));
+              const lista = colabs.filter(c => !l.setor || (c.setores || []).some(x => String(x.setor) === String(l.setor)));
               return (
                 <tr key={i}>
-                  <td style={{ ...td, textAlign: 'left' }}><select value={l.setor} onChange={e => set('setor', e.target.value)} style={{ ...inp, minWidth: 180 }}><option value="">escolha o setor</option>{setores.map(s => <option key={s.setor} value={s.setor}>{s.nome}</option>)}</select></td>
+                  <td style={{ ...td, textAlign: 'left' }}><select value={l.colab} onChange={e => { const c = colabs.find(x => String(x.cod_usuario) === e.target.value);
+                      setLinhas(linhas.map((x, j) => (j === i ? { ...x, colab: e.target.value, setor: x.setor || (c ? String(c.setor_principal) : '') } : x))); }} style={{ ...inp, minWidth: 190 }}>
+                    <option value="">escolha o colaborador</option>
+                    {lista.filter(c => noBr.has(String(c.cod_usuario))).length > 0 && <optgroup label="Apontaram neste BR">{lista.filter(c => noBr.has(String(c.cod_usuario))).map(c => <option key={c.cod_usuario} value={c.cod_usuario}>{c.nome} · {c.setor_principal_nome}</option>)}</optgroup>}
+                    <optgroup label={l.setor ? 'Do setor' : 'Todos'}>{lista.filter(c => !noBr.has(String(c.cod_usuario))).map(c => <option key={c.cod_usuario} value={c.cod_usuario}>{c.nome} · {c.setor_principal_nome}</option>)}</optgroup>
+                  </select></td>
+                  <td style={{ ...td, textAlign: 'left' }}><select value={l.setor} onChange={e => set('setor', e.target.value)} style={{ ...inp, minWidth: 160 }}><option value="">escolha o setor</option>{setores.map(s => <option key={s.setor} value={s.setor}>{s.nome}</option>)}</select></td>
                   <td style={td}><input value={l.horas} onChange={e => set('horas', e.target.value)} inputMode="decimal" placeholder="0" style={{ ...inp, width: 90, textAlign: 'right' }} /></td>
                   <td style={td}><select value={l.extra} onChange={e => set('extra', e.target.value)} style={inp}><option value={0}>normal</option><option value={65}>+65% (dia útil/sábado)</option><option value={100}>+100% (domingo/feriado)</option></select></td>
                   <td style={{ ...td, color: T.inkDim }}>{t == null ? '—' : moeda(t)}</td>
@@ -2420,7 +2437,9 @@ function CustoHoraSetor({ currentUser }) {
                   <td style={td}>{linhas.length > 1 && <button onClick={() => setLinhas(linhas.filter((_, j) => j !== i))} style={{ border: 'none', background: 'none', color: T.rustText, cursor: 'pointer', fontSize: 12.5 }}>tirar</button>}</td>
                 </tr>); })}
               <tr>
-                <td style={{ ...td, textAlign: 'left' }}><button onClick={() => setLinhas([...linhas, { setor: '', horas: '', extra: 0 }])} style={{ border: 'none', background: 'none', color: T.blueText, cursor: 'pointer', fontSize: 13, fontWeight: 600, padding: 0 }}>+ outro setor</button></td>
+                <td style={{ ...td, textAlign: 'left' }}><button onClick={() => setLinhas([...linhas, { setor: linhas[linhas.length - 1]?.setor || '', colab: '', horas: linhas[linhas.length - 1]?.horas || '', extra: linhas[linhas.length - 1]?.extra || 0 }])} style={{ border: 'none', background: 'none', color: T.blueText, cursor: 'pointer', fontSize: 13, fontWeight: 600, padding: 0 }}>+ outro colaborador</button>
+                  <div style={{ fontSize: 11.5, color: T.inkDim, fontFamily: FONT_BODY, fontWeight: 600, marginTop: 4 }}>{(() => { const n = new Set(linhas.filter(l => l.colab).map(l => l.colab)).size; return `${n} colaborador${n !== 1 ? 'es' : ''}`; })()}</div></td>
+                <td style={td} />
                 <td style={{ ...td, fontWeight: 700 }}>{horasTot.toLocaleString('pt-BR', { maximumFractionDigits: 2 })} h</td><td style={td} /><td style={td} />
                 <td style={{ ...td, fontWeight: 800, fontSize: 16 }}>{moeda(total)}</td><td style={td} />
               </tr>
@@ -2458,7 +2477,8 @@ function CustoHoraSetor({ currentUser }) {
                       <button onClick={() => { setResultado(h); window.scrollTo({ top: 0, behavior: 'smooth' }); }} style={{ fontSize: 11, padding: '2px 7px', borderRadius: 5, border: `1px solid ${T.line}`, background: T.panel, cursor: 'pointer', fontWeight: 500 }}>texto</button>
                       <button onClick={() => excelCustoExtra(h)} style={{ fontSize: 11, padding: '2px 7px', borderRadius: 5, border: `1px solid ${T.line}`, background: T.panel, cursor: 'pointer', fontWeight: 500 }}>Excel</button>
                     </div></td>
-                  <td style={{ ...td, textAlign: 'left', fontFamily: FONT_BODY, fontSize: 12, whiteSpace: 'normal' }}>{(h.linhas || []).map(l => `${l.setor_nome} ${String(l.horas).replace('.', ',')} h${l.hora_extra_pct ? ` (+${l.hora_extra_pct}%)` : ''}`).join(' · ')}<div style={{ fontSize: 11, color: T.inkFaint }}>{CUSTO_BASES.find(b => b.k === h.base_custo)?.r}</div></td>
+                  <td style={{ ...td, textAlign: 'left', fontFamily: FONT_BODY, fontSize: 12, whiteSpace: 'normal' }}>{(() => { const cs = [...new Set((h.linhas || []).map(l => l.colaborador_nome).filter(Boolean))]; return cs.length ? <div style={{ fontWeight: 700 }}>{cs.length} colaborador{cs.length !== 1 ? 'es' : ''}: {cs.join(', ')}</div> : null; })()}
+                    {(h.linhas || []).map(l => `${l.setor_nome} ${String(l.horas).replace('.', ',')} h${l.hora_extra_pct ? ` (+${l.hora_extra_pct}%)` : ''}`).join(' · ')}<div style={{ fontSize: 11, color: T.inkFaint }}>{CUSTO_BASES.find(b => b.k === h.base_custo)?.r}</div></td>
                   <td style={td}>{Number(h.horas_total).toLocaleString('pt-BR', { maximumFractionDigits: 2 })}</td>
                   <td style={{ ...td, fontWeight: 700 }}>{moeda(h.valor_total)}</td>
                   <td style={{ ...td, textAlign: 'left', fontFamily: FONT_BODY, fontSize: 12, whiteSpace: 'normal', maxWidth: 280 }}>{h.motivo || '—'}{h.descricao ? <div style={{ color: T.inkFaint }}>{h.descricao}</div> : null}</td>
