@@ -2383,7 +2383,8 @@ function CustoHoraSetor({ currentUser }) {
               return (
                 <tr key={s.setor}>
                   <td style={{ ...td, textAlign: 'left', fontFamily: FONT_BODY, fontWeight: 700 }}>{s.nome}</td>
-                  <td style={{ ...td, color: T.inkDim }}>{r0.pessoas}</td>
+                  <td style={{ ...td, color: T.inkDim }}>{(() => { const rh = colabs.filter(c => String(c.setor_principal) === String(s.setor)).length;
+                    return rh && rh !== Number(r0.pessoas) ? <span title={`O custeio usa ${r0.pessoas} pessoas na folha deste setor; o cadastro do RH tem ${rh}. A folha do custeio precisa ser atualizada.`} style={{ color: T.amberText, cursor: 'help' }}>{r0.pessoas} <span style={{ fontSize: 11 }}>(RH: {rh})</span></span> : r0.pessoas; })()}</td>
                   <td style={{ ...td, color: T.inkDim }}>{moeda(r0.folha_setor)}</td>
                   <td style={{ ...td, fontWeight: 800, fontSize: 15 }}>{moeda(r0.mo_hora)}</td>
                 </tr>); })}</tbody>
@@ -2418,7 +2419,9 @@ function CustoHoraSetor({ currentUser }) {
             <tbody>{linhas.map((l, i) => { const t = l.setor ? (taxa(Number(l.setor)) || 0) + (moSetor(Number(l.setor)) || 0) * Number(l.extra) / 100 : null;
               const set = (k, v) => setLinhas(linhas.map((x, j) => (j === i ? { ...x, [k]: v } : x)));
               // quem apontou neste BR aparece primeiro; depois o resto, do setor escolhido (ou todos)
-              const noBr = new Set(); (infoBr?.pessoas || []).forEach(x => noBr.add(String(x)));
+              // quem apontou neste BR: usuários do Sankhya ligados ao cadastro do RH
+              const pessoasBr = new Set((infoBr?.pessoas || []).map(String));
+              const noBr = new Set(colabs.filter(c => (c.usuarios_sankhya || []).some(u => pessoasBr.has(String(u)))).map(c => String(c.cod_usuario)));
               const lista = colabs.filter(c => !l.setor || (c.setores || []).some(x => String(x.setor) === String(l.setor)));
               return (
                 <tr key={i}>
