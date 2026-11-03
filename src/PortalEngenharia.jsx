@@ -2232,6 +2232,61 @@ const CUSTO_BASES = [
   { k: 'hora_cheia', r: 'Hora cheia (mão de obra + estrutura)', campo: 'hora_cheia', d: 'soma a estrutura da produção (pessoal indireto, custos indiretos da fábrica e rateios) por hora trabalhada. É como o custeio apropria a hora nas OPs.' },
   { k: 'com_insumos', r: 'Hora cheia + insumos', campo: 'hora_com_insumos', d: 'soma também os insumos de produção consumidos por hora (abrasivos, colas, EPIs etc.).' },
 ];
+
+// texto e Excel do custo extra (para o e-mail à engenharia)
+const custoExtraMoeda = (v) => Number(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+function textoCustoExtra(r) {
+  const ls = r.linhas || [];
+  return [
+    `Custo extra de produção — ${r.br}${r.op ? ` · OP ${r.op}` : ''}`,
+    r.cliente ? `Cliente: ${r.cliente}` : null,
+    r.motivo ? `Motivo: ${r.motivo}` : null,
+    '',
+    ...ls.map(l => `${l.setor_nome}: ${String(l.horas).replace('.', ',')} h × ${custoExtraMoeda(Number(l.custo_hora) + Number(l.adicional_hora || 0))}${l.hora_extra_pct ? ` (hora extra +${l.hora_extra_pct}%)` : ''} = ${custoExtraMoeda(l.valor)}`),
+    '',
+    `Total: ${custoExtraMoeda(r.valor_total)} (${String(r.horas_total).replace('.', ',')} h, custo de mão de obra do setor)`,
+    r.descricao ? `\n${r.descricao}` : null,
+    '',
+    `Registrado por ${r.criado_por || '—'} em ${new Date(r.criado_em || Date.now()).toLocaleDateString('pt-BR')}. Planilha em anexo.`,
+  ].filter(x => x !== null).join('\n');
+}
+async function excelCustoExtra(r) {
+  const { default: ExcelJS } = await import('exceljs');
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet('Custo extra', { views: [{ showGridLines: false }] });
+  const F = { name: 'Arial', size: 10 };
+  ws.columns = [{ width: 26 }, { width: 12 }, { width: 24 }, { width: 16 }, { width: 18 }];
+  ws.mergeCells('A1:E1'); ws.getCell('A1').value = 'Custo extra de produção'; ws.getCell('A1').font = { ...F, size: 14, bold: true, color: { argb: 'FF1F4E79' } };
+  const info = [['BR', r.br], ['Cliente', r.cliente || '—'], ['OP', r.op || '—'], ['Motivo', r.motivo || '—'], ['Data', new Date(r.criado_em || Date.now())], ['Responsável', r.criado_por || '—']];
+  info.forEach(([k, v], i) => { const row = ws.getRow(3 + i); row.getCell(1).value = k; row.getCell(1).font = { ...F, bold: true }; ws.mergeCells(3 + i, 2, 3 + i, 5); row.getCell(2).value = v; row.getCell(2).font = F; if (v instanceof Date) row.getCell(2).numFmt = 'dd/mm/yyyy'; row.getCell(2).alignment = { horizontal: 'left' }; });
+  const h0 = 3 + info.length + 1;
+  const cab = ws.getRow(h0); ['Setor', 'Horas', 'Tipo de hora', 'Custo da hora', 'Valor'].forEach((t, i) => { const c = cab.getCell(i + 1); c.value = t; c.font = { ...F, bold: true, color: { argb: 'FFFFFFFF' } }; c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F4E79' } }; c.alignment = { horizontal: i ? 'right' : 'left' }; });
+  const ls = r.linhas || [];
+  ls.forEach((l, i) => {
+    const row = ws.getRow(h0 + 1 + i);
+    row.getCell(1).value = l.setor_nome; row.getCell(2).value = Number(l.horas);
+    row.getCell(3).value = l.hora_extra_pct ? `hora extra +${l.hora_extra_pct}%` : 'normal';
+    row.getCell(4).value = Number((Number(l.custo_hora) + Number(l.adicional_hora || 0)).toFixed(2));
+    row.getCell(5).value = { formula: `B${h0 + 1 + i}*D${h0 + 1 + i}`, result: Number(l.valor) };
+    [1, 2, 3, 4, 5].forEach(k => { row.getCell(k).font = F; row.getCell(k).border = { bottom: { style: 'thin', color: { argb: 'FFD0D5DD' } } }; });
+    row.getCell(2).numFmt = '#,##0.00'; row.getCell(4).numFmt = '"R$" #,##0.00'; row.getCell(5).numFmt = '"R$" #,##0.00'; row.getCell(3).alignment = { horizontal: 'right' };
+  });
+  const tr = ws.getRow(h0 + 1 + ls.length);
+  tr.getCell(1).value = 'Total'; tr.getCell(2).value = { formula: `SUM(B${h0 + 1}:B${h0 + ls.length})`, result: Number(r.horas_total) };
+  tr.getCell(5).value = { formula: `SUM(E${h0 + 1}:E${h0 + ls.length})`, result: Number(r.valor_total) };
+  [1, 2, 5].forEach(k => { tr.getCell(k).font = { ...F, bold: true }; }); tr.getCell(2).numFmt = '#,##0.00'; tr.getCell(5).numFmt = '"R$" #,##0.00';
+  let n = h0 + ls.length + 3;
+  if (r.descricao) { ws.mergeCells(n, 1, n, 5); ws.getCell(n, 1).value = r.descricao; ws.getCell(n, 1).font = F; ws.getCell(n, 1).alignment = { wrapText: true, vertical: 'top' }; ws.getRow(n).height = 45; n += 2; }
+  ws.mergeCells(n, 1, n, 5);
+  ws.getCell(n, 1).value = 'Custo da hora = mão de obra do setor: folha do centro de custo no custeio (salário + encargos) ÷ (pessoas × 220 h pagas por mês). Hora extra: adicional de 65% ou 100% sobre a hora.';
+  ws.getCell(n, 1).font = { ...F, size: 9, italic: true, color: { argb: 'FF667085' } }; ws.getCell(n, 1).alignment = { wrapText: true }; ws.getRow(n).height = 30;
+  const buf = await wb.xlsx.writeBuffer();
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+  a.download = `Custo extra - ${String(r.br).replace('/', '-')}${r.op ? ` - OP ${r.op}` : ''}.xlsx`;
+  document.body.appendChild(a); a.click(); a.remove();
+}
+
 function CustoHoraSetor({ currentUser }) {
   const [rows, setRows] = useState(null);
   const [periodo, setPeriodo] = useState('ano');        // 'ano' | 'ult3' | competência 'YYYY-MM'
@@ -2244,6 +2299,23 @@ function CustoHoraSetor({ currentUser }) {
   const [historico, setHistorico] = useState([]);
   const [msg, setMsg] = useState(null);
   const [salvando, setSalvando] = useState(false);
+  const [infoBr, setInfoBr] = useState(null);       // { br, cliente, vendedor, pedidos, ops: [] } | { nao: true }
+  const [resultado, setResultado] = useState(null); // registro salvo (para texto + Excel)
+  useEffect(() => {
+    const num = (String(br).match(/(\d{4,6})/) || [])[1];
+    if (!num) { setInfoBr(null); return; }
+    const t = setTimeout(async () => {
+      const [c, p, o] = await Promise.all([
+        supabase.from('v_br_cliente').select('*').eq('br_num', num).maybeSingle(),
+        supabase.from('sankhya_pedido_venda').select('numnota,dtneg,codtipoper').eq('br_num', num).neq('codtipoper', 3109).order('dtneg'),
+        supabase.from('v_br_ops_horas').select('*').eq('br_num', num).order('op'),
+      ]);
+      if (!c.data && !(p.data || []).length) { setInfoBr({ nao: true, num }); return; }
+      const ops = {}; (o.data || []).forEach(x => { const k = String(x.op); (ops[k] = ops[k] || { op: k, produto: x.produto, setores: [] }).setores.push(`${x.setor_nome} ${String(x.horas).replace('.', ',')} h`); });
+      setInfoBr({ br: c.data?.br || `BR${num}`, cliente: c.data?.cliente || null, vendedor: c.data?.vendedor || null, pedidos: p.data || [], ops: Object.values(ops) });
+    }, 350);
+    return () => clearTimeout(t);
+  }, [br]);
   const carregarHist = () => supabase.from('producao_custo_extra').select('*').order('criado_em', { ascending: false }).limit(200).then(({ data }) => setHistorico(data || []));
   useEffect(() => {
     supabase.from('v_custo_hora_setor_mes').select('*').order('competencia').then(({ data }) => setRows(data || []));
@@ -2272,16 +2344,16 @@ function CustoHoraSetor({ currentUser }) {
       custo_hora: Number((taxa(Number(l.setor)) || 0).toFixed(2)), hora_extra_pct: Number(l.extra), adicional_hora: Number(((moSetor(Number(l.setor)) || 0) * Number(l.extra) / 100).toFixed(2)), valor: Number(valorLinha(l).toFixed(2)) }));
     if (!ls.length) { setMsg({ erro: true, t: 'Informe pelo menos um setor com horas.' }); return; }
     setSalvando(true);
-    const { error } = await supabase.from('producao_custo_extra').insert({ br: br.trim().toUpperCase(), op: op.trim() || null, motivo: motivo.trim() || null, descricao: descricao.trim() || null,
+    const { data: reg, error } = await supabase.from('producao_custo_extra').insert({ br: infoBr?.br || br.trim().toUpperCase(), cliente: infoBr?.cliente || null, op: op.trim() || null, motivo: motivo.trim() || null, descricao: descricao.trim() || null,
       base_custo: base, periodo_ref: 'folha vigente do custeio', linhas: ls, horas_total: ls.reduce((t, l) => t + l.horas, 0), valor_total: Number(ls.reduce((t, l) => t + l.valor, 0).toFixed(2)),
-      enviado_engenharia_em: enviar ? new Date().toISOString() : null, criado_por: currentUser?.nome || null });
+      enviado_engenharia_em: enviar ? new Date().toISOString() : null, criado_por: currentUser?.nome || null }).select().single();
     setSalvando(false);
     if (error) { setMsg({ erro: true, t: error.message }); return; }
+    setResultado(reg);
     if (enviar) {
-      const texto = `Custo extra de produção — ${br.trim().toUpperCase()}${op.trim() ? ` · OP ${op.trim()}` : ''}\n${motivo.trim() ? `Motivo: ${motivo.trim()}\n` : ''}${ls.map(l => `${l.setor_nome}: ${String(l.horas).replace('.', ',')} h × ${moeda(l.custo_hora + l.adicional_hora)}${l.hora_extra_pct ? ` (hora extra +${l.hora_extra_pct}%)` : ''} = ${moeda(l.valor)}`).join('\n')}\nTotal: ${moeda(ls.reduce((t, l) => t + l.valor, 0))} (custo de mão de obra do setor)${descricao.trim() ? `\n${descricao.trim()}` : ''}`;
-      try { await navigator.clipboard.writeText(texto); } catch { /* sem área de transferência */ }
-      setMsg({ t: 'Registrado e marcado como enviado à engenharia. O resumo foi copiado: é só colar no e-mail ou no Teams.' });
-    } else setMsg({ t: 'Cálculo registrado.' });
+      try { await navigator.clipboard.writeText(textoCustoExtra(reg)); } catch { /* sem área de transferência */ }
+      setMsg({ t: 'Registrado e marcado como sinalizado à engenharia. O texto já foi copiado; baixe o Excel para anexar no e-mail.' });
+    } else setMsg({ t: 'Cálculo registrado. Texto e Excel abaixo.' });
     carregarHist();
   };
   const caixa = { background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, padding: 18 };
@@ -2318,10 +2390,20 @@ function CustoHoraSetor({ currentUser }) {
       <div style={caixa}>
         <strong style={{ fontSize: 15 }}>Calcular custo extra de um projeto</strong>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10, marginTop: 12 }}>
-          <label style={{ display: 'grid', gap: 4, fontSize: 12, color: T.inkDim }}>BR do projeto *<input value={br} onChange={e => setBr(e.target.value)} placeholder="BR14444/26" style={inp} /></label>
+          <label style={{ display: 'grid', gap: 4, fontSize: 12, color: T.inkDim }}>BR do projeto *<input value={br} onChange={e => { setBr(e.target.value); setResultado(null); }} placeholder="digite o número, ex.: 14444" style={inp} /></label>
           <label style={{ display: 'grid', gap: 4, fontSize: 12, color: T.inkDim }}>OP (opcional)<input value={op} onChange={e => setOp(e.target.value)} style={inp} /></label>
           <label style={{ display: 'grid', gap: 4, fontSize: 12, color: T.inkDim, gridColumn: 'span 2' }}>Motivo<input value={motivo} onChange={e => setMotivo(e.target.value)} placeholder="retrabalho, medida errada no desenho, troca de material…" style={inp} /></label>
         </div>
+        {infoBr && (infoBr.nao
+          ? <div style={{ marginTop: 10, fontSize: 12.5, color: T.rustText }}>Não achei o BR{infoBr.num} no Sankhya (sem cliente, pedido ou nota). Confira o número.</div>
+          : <div style={{ marginTop: 10, padding: '10px 12px', borderRadius: 8, background: T.panelAlt, border: `1px solid ${T.line}`, fontSize: 12.5 }}>
+              <div><strong style={{ fontSize: 14 }}>{infoBr.br}</strong> · <strong>{infoBr.cliente || 'cliente não encontrado'}</strong>{infoBr.vendedor ? <span style={{ color: T.inkDim }}> · vendedor {infoBr.vendedor}</span> : null}</div>
+              <div style={{ color: T.inkDim, marginTop: 3 }}>Pedido{infoBr.pedidos.length > 1 ? 's' : ''}: {infoBr.pedidos.length ? infoBr.pedidos.map(p => `${p.numnota} (${new Date(`${p.dtneg}T12:00:00`).toLocaleDateString('pt-BR')})`).join(', ') : 'nenhum no Sankhya'}</div>
+              {infoBr.ops.length > 0 && <div style={{ marginTop: 6 }}><span style={{ color: T.inkDim }}>OPs com horas apontadas (clique para usar):</span>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>{infoBr.ops.map(o => (
+                  <button key={o.op} onClick={() => setOp(o.op)} title={o.produto || ''} style={{ fontSize: 12, padding: '4px 9px', borderRadius: 14, cursor: 'pointer', border: `1px solid ${op === o.op ? T.ink : T.line}`, background: op === o.op ? T.ink : T.panel, color: op === o.op ? '#fff' : T.ink }}>
+                    OP {o.op} <span style={{ opacity: 0.75 }}>· {o.setores.join(' · ')}</span></button>))}</div></div>}
+            </div>)}
         <div style={{ fontSize: 12, color: T.inkFaint, marginTop: 10 }}>Custo pela mão de obra do setor. Em hora extra, o adicional (65% ou 100%) incide sobre a hora.</div>
         <div style={{ overflowX: 'auto', marginTop: 12 }}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
@@ -2351,6 +2433,15 @@ function CustoHoraSetor({ currentUser }) {
           <button onClick={() => salvar(false)} disabled={salvando} style={{ padding: '9px 16px', fontSize: 13, borderRadius: 8, border: `1px solid ${T.line}`, background: T.panel, cursor: 'pointer' }}>Só registrar</button>
           {msg && <span style={{ fontSize: 12.5, color: msg.erro ? T.rustText : T.oliveText }}>{msg.t}</span>}
         </div>
+        {resultado && (
+          <div style={{ marginTop: 14, padding: 14, borderRadius: 10, border: `1px solid ${T.olive}55`, background: T.oliveSoft }}>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8 }}>
+              <strong style={{ fontSize: 14 }}>Para o e-mail da engenharia</strong><span style={{ flex: 1 }} />
+              <button onClick={async () => { try { await navigator.clipboard.writeText(textoCustoExtra(resultado)); setMsg({ t: 'Texto copiado.' }); } catch { setMsg({ erro: true, t: 'Não consegui copiar: selecione o texto e copie.' }); } }} style={{ padding: '7px 12px', fontSize: 12.5, borderRadius: 6, border: `1px solid ${T.line}`, background: T.panel, cursor: 'pointer' }}>Copiar texto</button>
+              <button onClick={() => excelCustoExtra(resultado)} style={{ padding: '7px 12px', fontSize: 12.5, fontWeight: 700, borderRadius: 6, border: 'none', background: T.olive, color: '#fff', cursor: 'pointer' }}>Baixar Excel</button>
+            </div>
+            <textarea readOnly value={textoCustoExtra(resultado)} rows={Math.min(14, textoCustoExtra(resultado).split('\n').length + 1)} style={{ ...inp, width: '100%', background: T.panel, fontFamily: 'inherit', resize: 'vertical' }} />
+          </div>)}
       </div>
 
       <div style={caixa}>
@@ -2362,7 +2453,11 @@ function CustoHoraSetor({ currentUser }) {
               <tbody>{historico.map(h => (
                 <tr key={h.id}>
                   <td style={{ ...td, textAlign: 'left', fontFamily: FONT_BODY, color: T.inkDim }}>{new Date(h.criado_em).toLocaleDateString('pt-BR')}<div style={{ fontSize: 11 }}>{h.criado_por}</div></td>
-                  <td style={{ ...td, textAlign: 'left', fontWeight: 700 }}>{h.br}{h.op ? <div style={{ fontSize: 11, fontWeight: 400, color: T.inkFaint }}>OP {h.op}</div> : null}</td>
+                  <td style={{ ...td, textAlign: 'left', fontWeight: 700 }}>{h.br}<div style={{ fontSize: 11, fontWeight: 400, color: T.inkDim, fontFamily: FONT_BODY, whiteSpace: 'normal', maxWidth: 220 }}>{h.cliente || ''}{h.op ? ` · OP ${h.op}` : ''}</div>
+                    <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+                      <button onClick={() => { setResultado(h); window.scrollTo({ top: 0, behavior: 'smooth' }); }} style={{ fontSize: 11, padding: '2px 7px', borderRadius: 5, border: `1px solid ${T.line}`, background: T.panel, cursor: 'pointer', fontWeight: 500 }}>texto</button>
+                      <button onClick={() => excelCustoExtra(h)} style={{ fontSize: 11, padding: '2px 7px', borderRadius: 5, border: `1px solid ${T.line}`, background: T.panel, cursor: 'pointer', fontWeight: 500 }}>Excel</button>
+                    </div></td>
                   <td style={{ ...td, textAlign: 'left', fontFamily: FONT_BODY, fontSize: 12, whiteSpace: 'normal' }}>{(h.linhas || []).map(l => `${l.setor_nome} ${String(l.horas).replace('.', ',')} h${l.hora_extra_pct ? ` (+${l.hora_extra_pct}%)` : ''}`).join(' · ')}<div style={{ fontSize: 11, color: T.inkFaint }}>{CUSTO_BASES.find(b => b.k === h.base_custo)?.r}</div></td>
                   <td style={td}>{Number(h.horas_total).toLocaleString('pt-BR', { maximumFractionDigits: 2 })}</td>
                   <td style={{ ...td, fontWeight: 700 }}>{moeda(h.valor_total)}</td>
