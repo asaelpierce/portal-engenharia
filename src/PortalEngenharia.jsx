@@ -2235,7 +2235,7 @@ const CUSTO_BASES = [
 function CustoHoraSetor({ currentUser }) {
   const [rows, setRows] = useState(null);
   const [periodo, setPeriodo] = useState('ano');        // 'ano' | 'ult3' | competência 'YYYY-MM'
-  const [base, setBase] = useState('hora_cheia');
+  const base = 'mao_obra';   // decisão do Asael (03/11/2026): custo extra é só mão de obra
   const [br, setBr] = useState('');
   const [op, setOp] = useState('');
   const [motivo, setMotivo] = useState('');
@@ -2273,12 +2273,12 @@ function CustoHoraSetor({ currentUser }) {
     if (!ls.length) { setMsg({ erro: true, t: 'Informe pelo menos um setor com horas.' }); return; }
     setSalvando(true);
     const { error } = await supabase.from('producao_custo_extra').insert({ br: br.trim().toUpperCase(), op: op.trim() || null, motivo: motivo.trim() || null, descricao: descricao.trim() || null,
-      base_custo: base, periodo_ref: periodoTxt, linhas: ls, horas_total: ls.reduce((t, l) => t + l.horas, 0), valor_total: Number(ls.reduce((t, l) => t + l.valor, 0).toFixed(2)),
+      base_custo: base, periodo_ref: 'folha vigente do custeio', linhas: ls, horas_total: ls.reduce((t, l) => t + l.horas, 0), valor_total: Number(ls.reduce((t, l) => t + l.valor, 0).toFixed(2)),
       enviado_engenharia_em: enviar ? new Date().toISOString() : null, criado_por: currentUser?.nome || null });
     setSalvando(false);
     if (error) { setMsg({ erro: true, t: error.message }); return; }
     if (enviar) {
-      const texto = `Custo extra de produção — ${br.trim().toUpperCase()}${op.trim() ? ` · OP ${op.trim()}` : ''}\n${motivo.trim() ? `Motivo: ${motivo.trim()}\n` : ''}${ls.map(l => `${l.setor_nome}: ${String(l.horas).replace('.', ',')} h × ${moeda(l.custo_hora + l.adicional_hora)}${l.hora_extra_pct ? ` (hora extra +${l.hora_extra_pct}%)` : ''} = ${moeda(l.valor)}`).join('\n')}\nTotal: ${moeda(ls.reduce((t, l) => t + l.valor, 0))} (${baseObj.r.toLowerCase()}, ${periodoTxt})${descricao.trim() ? `\n${descricao.trim()}` : ''}`;
+      const texto = `Custo extra de produção — ${br.trim().toUpperCase()}${op.trim() ? ` · OP ${op.trim()}` : ''}\n${motivo.trim() ? `Motivo: ${motivo.trim()}\n` : ''}${ls.map(l => `${l.setor_nome}: ${String(l.horas).replace('.', ',')} h × ${moeda(l.custo_hora + l.adicional_hora)}${l.hora_extra_pct ? ` (hora extra +${l.hora_extra_pct}%)` : ''} = ${moeda(l.valor)}`).join('\n')}\nTotal: ${moeda(ls.reduce((t, l) => t + l.valor, 0))} (custo de mão de obra do setor)${descricao.trim() ? `\n${descricao.trim()}` : ''}`;
       try { await navigator.clipboard.writeText(texto); } catch { /* sem área de transferência */ }
       setMsg({ t: 'Registrado e marcado como enviado à engenharia. O resumo foi copiado: é só colar no e-mail ou no Teams.' });
     } else setMsg({ t: 'Cálculo registrado.' });
@@ -2291,39 +2291,27 @@ function CustoHoraSetor({ currentUser }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 18, fontFamily: FONT_BODY, color: T.ink }}>
       <div style={{ fontSize: 13.5, color: T.inkDim, maxWidth: 900 }}>
-        Custo médio da hora de cada setor da produção, tirado do custeio. Use para calcular o custo a mais de um projeto (horas trabalhadas além do previsto × custo da hora) e sinalizar à engenharia.
+        Custo da hora de mão de obra de cada setor da produção, tirado da folha do custeio. Use para calcular o custo a mais de um projeto (horas trabalhadas além do previsto × custo da hora) e sinalizar à engenharia.
       </div>
 
       <div style={caixa}>
-        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', marginBottom: 12 }}>
-          <strong style={{ fontSize: 15 }}>Custo da hora por setor</strong>
-          <span style={{ flex: 1 }} />
-          <span style={{ fontSize: 12.5, color: T.inkDim }}>Período:</span>
-          <select value={periodo} onChange={e => setPeriodo(e.target.value)} style={inp}>
-            <option value="ano">Média do ano ({comps.length} meses)</option>
-            <option value="ult3">Últimos 3 meses</option>
-            {[...comps].reverse().map(c => <option key={c} value={c}>{rotMes(c)}</option>)}
-          </select>
-        </div>
-        <div style={{ overflowX: 'auto' }}>
+        <strong style={{ fontSize: 15 }}>Custo da hora por setor (mão de obra)</strong>
+        <div style={{ overflowX: 'auto', marginTop: 12 }}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead><tr><th style={{ ...th, textAlign: 'left' }}>Setor</th><th style={th}>Pessoas</th><th style={th}>Só mão de obra</th><th style={th}>+ estrutura</th><th style={{ ...th, color: T.ink }}>Hora cheia</th><th style={th}>+ insumos</th><th style={th}>Hora com insumos</th><th style={th}>Horas apontadas/mês</th></tr></thead>
-            <tbody>{setores.map(s => { const pessoas = rows.find(r => r.setor === s.setor)?.pessoas; const hs = validos.filter(r => r.setor === s.setor && usados.includes(r.competencia)).map(r => Number(r.horas_setor || 0));
+            <thead><tr><th style={{ ...th, textAlign: 'left' }}>Setor</th><th style={th}>Pessoas</th><th style={th}>Folha do setor (salário + encargos, por mês)</th><th style={{ ...th, color: T.ink }}>Custo da hora</th><th style={th}>Horas apontadas/mês (média)</th></tr></thead>
+            <tbody>{setores.map(s => { const r0 = rows.find(r => r.setor === s.setor) || {}; const hs = validos.filter(r => r.setor === s.setor).map(r => Number(r.horas_setor || 0));
               return (
                 <tr key={s.setor}>
                   <td style={{ ...td, textAlign: 'left', fontFamily: FONT_BODY, fontWeight: 700 }}>{s.nome}</td>
-                  <td style={{ ...td, color: T.inkDim }}>{pessoas}</td>
-                  <td style={td}>{moeda(media(s.setor, 'mo_hora'))}</td>
-                  <td style={{ ...td, color: T.inkDim }}>{moeda(media(s.setor, 'estrutura_hora'))}</td>
-                  <td style={{ ...td, fontWeight: 700 }}>{moeda(media(s.setor, 'hora_cheia'))}</td>
-                  <td style={{ ...td, color: T.inkDim }}>{moeda(media(s.setor, 'insumo_hora'))}</td>
-                  <td style={td}>{moeda(media(s.setor, 'hora_com_insumos'))}</td>
+                  <td style={{ ...td, color: T.inkDim }}>{r0.pessoas}</td>
+                  <td style={{ ...td, color: T.inkDim }}>{moeda(r0.folha_setor)}</td>
+                  <td style={{ ...td, fontWeight: 800, fontSize: 15 }}>{moeda(r0.mo_hora)}</td>
                   <td style={{ ...td, color: T.inkDim }}>{hs.length ? Math.round(hs.reduce((a, b) => a + b, 0) / hs.length).toLocaleString('pt-BR') : '—'}</td>
                 </tr>); })}</tbody>
           </table>
         </div>
         <div style={{ fontSize: 11.5, color: T.inkFaint, marginTop: 10, lineHeight: 1.5 }}>
-          <strong>Só mão de obra</strong>: salário + encargos do centro de custo do setor ÷ (pessoas × 220 h pagas por mês). <strong>Estrutura</strong>: pessoal indireto da produção, custos indiretos da fábrica e rateios/benefícios, divididos pelas horas apontadas no mês (é igual para todos os setores). <strong>Insumos</strong>: insumos de produção ÷ horas apontadas. Só entram meses com o apontamento completo ({periodoTxt}).
+          Custo da hora = folha do centro de custo do setor no custeio (salário + encargos: FGTS, INSS, 13º, férias, RAT e terceiros) ÷ (pessoas × 220 horas pagas por mês). Atualiza sozinho quando a folha do custeio muda.
         </div>
       </div>
 
@@ -2334,11 +2322,7 @@ function CustoHoraSetor({ currentUser }) {
           <label style={{ display: 'grid', gap: 4, fontSize: 12, color: T.inkDim }}>OP (opcional)<input value={op} onChange={e => setOp(e.target.value)} style={inp} /></label>
           <label style={{ display: 'grid', gap: 4, fontSize: 12, color: T.inkDim, gridColumn: 'span 2' }}>Motivo<input value={motivo} onChange={e => setMotivo(e.target.value)} placeholder="retrabalho, medida errada no desenho, troca de material…" style={inp} /></label>
         </div>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
-          {CUSTO_BASES.map(b => (
-            <button key={b.k} onClick={() => setBase(b.k)} title={b.d} style={{ padding: '7px 12px', fontSize: 12.5, borderRadius: 16, cursor: 'pointer', border: `1px solid ${base === b.k ? T.ink : T.line}`, background: base === b.k ? T.ink : T.panel, color: base === b.k ? '#fff' : T.inkDim, fontWeight: base === b.k ? 700 : 500 }}>{b.r}</button>))}
-        </div>
-        <div style={{ fontSize: 12, color: T.inkFaint, marginTop: 6 }}>{baseObj.d}</div>
+        <div style={{ fontSize: 12, color: T.inkFaint, marginTop: 10 }}>Custo pela mão de obra do setor. Em hora extra, o adicional (65% ou 100%) incide sobre a hora.</div>
         <div style={{ overflowX: 'auto', marginTop: 12 }}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead><tr><th style={{ ...th, textAlign: 'left' }}>Setor</th><th style={th}>Horas a mais</th><th style={th}>Hora extra?</th><th style={th}>Custo da hora</th><th style={th}>Valor</th><th style={th} /></tr></thead>
@@ -2379,7 +2363,7 @@ function CustoHoraSetor({ currentUser }) {
                 <tr key={h.id}>
                   <td style={{ ...td, textAlign: 'left', fontFamily: FONT_BODY, color: T.inkDim }}>{new Date(h.criado_em).toLocaleDateString('pt-BR')}<div style={{ fontSize: 11 }}>{h.criado_por}</div></td>
                   <td style={{ ...td, textAlign: 'left', fontWeight: 700 }}>{h.br}{h.op ? <div style={{ fontSize: 11, fontWeight: 400, color: T.inkFaint }}>OP {h.op}</div> : null}</td>
-                  <td style={{ ...td, textAlign: 'left', fontFamily: FONT_BODY, fontSize: 12, whiteSpace: 'normal' }}>{(h.linhas || []).map(l => `${l.setor_nome} ${String(l.horas).replace('.', ',')} h${l.hora_extra_pct ? ` (+${l.hora_extra_pct}%)` : ''}`).join(' · ')}<div style={{ fontSize: 11, color: T.inkFaint }}>{CUSTO_BASES.find(b => b.k === h.base_custo)?.r} · {h.periodo_ref}</div></td>
+                  <td style={{ ...td, textAlign: 'left', fontFamily: FONT_BODY, fontSize: 12, whiteSpace: 'normal' }}>{(h.linhas || []).map(l => `${l.setor_nome} ${String(l.horas).replace('.', ',')} h${l.hora_extra_pct ? ` (+${l.hora_extra_pct}%)` : ''}`).join(' · ')}<div style={{ fontSize: 11, color: T.inkFaint }}>{CUSTO_BASES.find(b => b.k === h.base_custo)?.r}</div></td>
                   <td style={td}>{Number(h.horas_total).toLocaleString('pt-BR', { maximumFractionDigits: 2 })}</td>
                   <td style={{ ...td, fontWeight: 700 }}>{moeda(h.valor_total)}</td>
                   <td style={{ ...td, textAlign: 'left', fontFamily: FONT_BODY, fontSize: 12, whiteSpace: 'normal', maxWidth: 280 }}>{h.motivo || '—'}{h.descricao ? <div style={{ color: T.inkFaint }}>{h.descricao}</div> : null}</td>
