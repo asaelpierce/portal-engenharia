@@ -10038,7 +10038,7 @@ function PainelComercial({ currentUser }) {
   }, [filtrados]);
 
   return (
-    <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 18, maxWidth: 1300 }}>
+    <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 18, width: '100%' }}>
 
       {/* Sub-abas do Painel Comercial */}
       <div style={{ display: 'flex', gap: 2, borderBottom: `1px solid ${T.line}` }}>
@@ -10095,35 +10095,45 @@ function PainelComercial({ currentUser }) {
         </button>
       </div>
 
-      {/* KPIs */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(140px,1fr))', gap: 12 }}>
-        {[
-          { label: 'Total faturado',      value: fmtMoedaCompacta(kpis.total),                color: T.terracotta, big: true },
-          { label: 'Net Value (pedidos)', value: fmtMoedaCompacta(kpis.totalNet),             color: T.blueText },
-          { label: 'NFs emitidas',         value: kpis.nfs,                                    color: T.ink },
-          { label: '% no prazo ou antes', value: `${kpis.pctNoPrazoOuAntes}%`,
-            color: kpis.pctNoPrazoOuAntes >= 70 ? T.oliveText : kpis.pctNoPrazoOuAntes >= 40 ? T.amberText : T.rustText },
-          { label: '% atrasado',          value: `${kpis.pctAtraso}%`,
-            color: kpis.pctAtraso > 50 ? T.rustText : kpis.pctAtraso > 20 ? T.amberText : T.oliveText },
-          { label: '% antecipado',        value: `${kpis.pctAntes}%`,  color: T.blueText },
-          { label: '% no prazo exato',    value: `${kpis.pctPrazo}%`,  color: T.oliveText },
-          { label: '⏳ Pendente de faturar (líquido)',  value: `${kpis.pendentesQtd} (${fmtMoedaCompacta(kpis.pendentesValor)})`, color: T.amberText },
-          { label: '⚠ Pendente e atrasado (líquido)', value: `${kpis.pendentesAtrasadosQtd} (${fmtMoedaCompacta(kpis.pendentesAtrasadosValor)})`,
-            color: kpis.pendentesAtrasadosQtd > 0 ? T.rustText : T.oliveText },
-          { label: '🔄 Vendido e faturado no mês (líquido)', value: `${kpis.vendidoFaturadoMes.qtd} (${fmtMoedaCompacta(kpis.vendidoFaturadoMes.valor)})`,
-            color: T.blueText,
-            tooltip: 'Projetos cujo pedido foi criado e a nota emitida no mesmo mês. Mede a agilidade entre venda e entrega.' },
-          { label: 'Atraso médio (dias)', value: kpis.mediaAtraso !== null ? `${kpis.mediaAtraso}d` : '—',
-            color: kpis.mediaAtraso > 14 ? T.rustText : kpis.mediaAtraso > 7 ? T.amberText : T.oliveText },
-        ].map(k => (
-          <div key={k.label} style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 10, padding: '14px 16px', boxShadow: SHADOW_SM }}>
-            <div style={{ fontSize: 11, color: T.inkFaint, fontWeight: 600 }}>{k.label}</div>
-            <div style={{ fontFamily: FONT_DISPLAY, fontSize: k.big ? 24 : 22, fontWeight: 700, color: k.color, marginTop: 6 }}>
-              {loading ? '…' : k.value}
+      {/* KPIs em três blocos (Asael, 04/11/2026): faturamento, pontualidade e carteira — usa a largura toda */}
+      {(() => {
+        const v = (x) => (loading ? '…' : x);
+        const corPrazo = kpis.pctNoPrazoOuAntes >= 70 ? T.oliveText : kpis.pctNoPrazoOuAntes >= 40 ? T.amberText : T.rustText;
+        const bloco = (titulo, sub, itens, destaque) => (
+          <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, boxShadow: SHADOW_SM, padding: '14px 18px', display: 'flex', flexDirection: 'column', gap: 10, borderTop: `3px solid ${destaque}` }}>
+            <div>
+              <div style={{ fontSize: 12.5, fontWeight: 700, color: T.ink, letterSpacing: 0.2 }}>{titulo}</div>
+              <div style={{ fontSize: 11, color: T.inkFaint }}>{sub}</div>
             </div>
-          </div>
-        ))}
-      </div>
+            <div style={{ display: 'grid', gridTemplateColumns: `repeat(${itens.length}, minmax(0, 1fr))`, gap: 10 }}>
+              {itens.map(k => (
+                <div key={k.label} title={k.tooltip || ''} style={{ minWidth: 0, paddingLeft: 10, borderLeft: `1px solid ${T.lineSoft}` }}>
+                  <div style={{ fontSize: 11, color: T.inkDim, fontWeight: 600, lineHeight: 1.25 }}>{k.label}</div>
+                  <div style={{ fontFamily: FONT_DISPLAY, fontSize: k.big ? 26 : 21, fontWeight: 700, color: k.color, marginTop: 4, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>{v(k.value)}</div>
+                  {k.sub && <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 1 }}>{k.sub}</div>}
+                </div>))}
+            </div>
+          </div>);
+        return (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: 14 }}>
+            {bloco('Faturamento no período', 'notas fiscais de venda emitidas', [
+              { label: 'Total faturado', value: fmtMoedaCompacta(kpis.total), color: T.terracotta, big: true, sub: 'bruto (com impostos)' },
+              { label: 'Líquido (Net Value)', value: fmtMoedaCompacta(kpis.totalNet), color: T.blueText, big: true, sub: 'sem impostos' },
+              { label: 'NFs emitidas', value: kpis.nfs, color: T.ink, sub: 'notas de venda' },
+            ], T.terracotta)}
+            {bloco('Pontualidade das entregas', 'data da NF × data prevista no pedido', [
+              { label: 'No prazo ou antes', value: `${kpis.pctNoPrazoOuAntes}%`, color: corPrazo, big: true, sub: `${kpis.pctAntes}% antecipado · ${kpis.pctPrazo}% no dia` },
+              { label: 'Atrasado', value: `${kpis.pctAtraso}%`, color: kpis.pctAtraso > 50 ? T.rustText : kpis.pctAtraso > 20 ? T.amberText : T.oliveText, big: true, sub: 'NF depois da data prevista' },
+              { label: 'Atraso médio', value: kpis.mediaAtraso !== null ? `${kpis.mediaAtraso} dias` : '—', color: kpis.mediaAtraso > 14 ? T.rustText : kpis.mediaAtraso > 7 ? T.amberText : T.oliveText, sub: 'das NFs atrasadas' },
+            ], T.oliveText)}
+            {bloco('Carteira de pedidos', 'pedidos confirmados no Sankhya, valor líquido do saldo', [
+              { label: 'Pendente de faturar', value: fmtMoedaCompacta(kpis.pendentesValor), color: T.amberText, big: true, sub: `${kpis.pendentesQtd} pedido(s) com previsão no período` },
+              { label: 'Pendente e atrasado', value: fmtMoedaCompacta(kpis.pendentesAtrasadosValor), color: kpis.pendentesAtrasadosQtd > 0 ? T.rustText : T.oliveText, big: true, sub: `${kpis.pendentesAtrasadosQtd} pedido(s) com a data vencida` },
+              { label: 'Vendido e faturado no mês', value: fmtMoedaCompacta(kpis.vendidoFaturadoMes.valor), color: T.blueText, sub: `${kpis.vendidoFaturadoMes.qtd} projeto(s)`,
+                tooltip: 'Projetos cujo pedido foi criado e a nota emitida no mesmo mês. Mede a agilidade entre venda e entrega.' },
+            ], T.amberText)}
+          </div>);
+      })()}
 
       {/* Distribuição visual com barra de percentual */}
       {!loading && filtrados.length > 0 && (
