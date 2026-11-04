@@ -2957,8 +2957,7 @@ function CicloComercial() {
         }}>Ano todo</button>
       </div>
 
-      {/* Análise inteligente: um BR por linha, tudo clicável */}
-      <CicloAnalise mesIni={mesIni} mesFim={mesFim} onDrill={setDrill} />
+      {/* a "Análise inteligente" (CicloAnalise) saiu da tela a pedido do Asael em 04/11/2026; o componente continua no código */}
 
       {/* Faturamento por mês (real, pela data da Nota Fiscal) — bruto vs líquido */}
       <Panel title="Faturamento por mês" subtitle="Agrupado pelo mês em que a NOTA FISCAL saiu (não pelo mês da proposta) — bruto (Vlr Nota) vs líquido (Net Offer Value)">
