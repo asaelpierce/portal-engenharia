@@ -32716,7 +32716,7 @@ function CRMFichaNegocio({ negocio: n, etapas, empresa, vendedores, autor, onFec
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
               <div style={{ fontSize: 12.5, fontWeight: 700 }}>Linha do tempo</div>
               <div role="tablist" style={{ display: 'inline-flex', background: CRMC.lineSoft, borderRadius: 8, padding: 2, gap: 2 }}>
-                {[['todos', 'Tudo'], ['etapa', 'Etapas'], ['anotacao', 'Anotações'], ['atividade', 'Tarefas'], ['sistema', 'Sistema']].map(([k, r]) => (
+                {[['todos', 'Tudo'], ['etapa', 'Etapas'], ['followup', 'Follow Up'], ['anotacao', 'Anotações'], ['atividade', 'Tarefas'], ['sistema', 'Sistema']].map(([k, r]) => (
                   <button key={k} role="tab" aria-selected={filtroHist === k} onClick={() => setFiltroHist(k)}
                     style={{ fontFamily: 'inherit', fontSize: 11.5, padding: '4px 9px', borderRadius: 6, border: 'none', cursor: 'pointer',
                       background: filtroHist === k ? CRMC.surface : 'transparent', color: filtroHist === k ? CRMC.ink : CRMC.ink2, fontWeight: filtroHist === k ? 600 : 500 }}>{r}</button>
@@ -32724,8 +32724,8 @@ function CRMFichaNegocio({ negocio: n, etapas, empresa, vendedores, autor, onFec
               </div>
             </div>
             {(() => {
-              const COR_H = { etapa: CRMC.primary, anotacao: CRMC.win, atividade: CRMC.warn, contato: '#6B5BD2', sistema: CRMC.ink3 };
-              const ROT_H = { etapa: 'Mudança de etapa', anotacao: 'Anotação', atividade: 'Tarefa', contato: 'Contato', sistema: 'Sistema' };
+              const COR_H = { etapa: CRMC.primary, anotacao: CRMC.win, atividade: CRMC.warn, contato: '#6B5BD2', sistema: CRMC.ink3, followup: '#0D9488' };
+              const ROT_H = { etapa: 'Mudança de etapa', anotacao: 'Anotação', atividade: 'Tarefa', contato: 'Contato', sistema: 'Sistema', followup: 'Follow Up' };
               const lista = hist.filter(h => filtroHist === 'todos' || h.tipo === filtroHist);
               if (!lista.length) return <div style={{ fontSize: 12, color: CRMC.ink3 }}>Nada registrado{filtroHist !== 'todos' ? ' neste filtro' : ''}.</div>;
               return (
