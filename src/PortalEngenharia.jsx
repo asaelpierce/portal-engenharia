@@ -38114,19 +38114,22 @@ function CeramicaRastreio({ row, descPlaca = {}, onFechar }) {
   const regra = [1, 2, 3, 4].map(k => ({ cod: row[`ceramica_${k}_codigo`], pp: Number(row[`qtd_ceramica_${k}`]) || 0, desc: row[`ceramica_${k}_descricao`] })).filter(x => x.cod && x.pp > 0);
   const fonteRegra = !regra.length ? 'sem regra' : row.regra_observada ? (row.cod_vale ? `observada nos apontamentos (código Vale ${row.cod_vale})` : `observada nos apontamentos do produto ${cod}`) : `cadastrada para o código Vale ${row.cod_vale}`;
   const realPor = {};
-  aps.forEach(a => (a.mps || []).filter(m => m.placa).forEach(m => { const k = String(m.mp); realPor[k] = realPor[k] || { qtd: 0, desc: m.descricao }; realPor[k].qtd += Number(m.qtd) || 0; }));
+  const ehRevest = (desc) => /^SM-(PLACA|PASTILHA|MANTA|CILINDRO)|KALIMPACT TEOR/i.test(String(desc || ''));
+  aps.forEach(a => (a.mps || []).filter(m => m.placa || ehRevest(m.descricao)).forEach(m => { const k = String(m.mp); realPor[k] = realPor[k] || { qtd: 0, desc: m.descricao, fora: !m.placa, un: m.un }; realPor[k].qtd += Number(m.qtd) || 0; }));
   const placas = [...new Set([...regra.map(r => String(r.cod)), ...Object.keys(realPor)])].map(k => {
     const rg = regra.find(r => String(r.cod) === k); const real = realPor[k]?.qtd || 0;
     const prev = rg ? rg.pp * pecasPed : 0; const ppReal = pecasAp ? real / pecasAp : null; const dif = real - (rg ? rg.pp * pecasAp : 0);
     let motivo;
-    if (!rg && real > 0) motivo = `Placa usada que não está na regra (${fmt(ppReal, 2)} por peça). Pode ser troca de placa na produção ou regra incompleta.`;
+    if (!rg && real > 0 && realPor[k]?.fora) motivo = `Revestimento fora da lista de placas acompanhadas (${fmt(ppReal, 3)} ${String(realPor[k].un || '').toLowerCase()} por peça). Para entrar na conta de cerâmica, inclua o código ${k} na lista de placas.`;
+    else if (!rg && real > 0) motivo = `Placa usada que não está na regra (${fmt(ppReal, 2)} por peça). Pode ser troca de placa na produção ou regra incompleta.`;
     else if (rg && !real && pecasAp > 0) motivo = `A regra prevê ${fmt(rg.pp, 2)} por peça, mas nenhuma foi apontada nas OPs. Provável troca por outra placa ou apontamento sem esse material.`;
     else if (rg && !pecasAp) motivo = 'Ainda sem apontamento de produção: não dá para comparar.';
     else if (rg && Math.abs(ppReal - rg.pp) <= Math.max(0.05, rg.pp * 0.03)) motivo = `Consumo igual à regra (${fmt(ppReal, 2)} por peça).`;
     else if (rg) motivo = `Apontou ${fmt(ppReal, 2)} por peça; a regra diz ${fmt(rg.pp, 2)}. ${ppReal > rg.pp ? 'Gastou' : 'Economizou'} ${fmt(Math.abs(ppReal - rg.pp), 2)} por peça × ${fmt(pecasAp)} peças apontadas = ${fmt(Math.abs(dif))} placa(s) ${ppReal > rg.pp ? 'a mais' : 'a menos'}.`;
     return { k, desc: realPor[k]?.desc || rg?.desc, pp: rg?.pp, prev, real, ppReal, dif, motivo };
   }).sort((a, b) => (b.prev + b.real) - (a.prev + a.real));
-  const totPrev = placas.reduce((t, p) => t + p.prev, 0), totReal = placas.reduce((t, p) => t + p.real, 0);
+  // totais só com as placas acompanhadas (as de fora da lista podem estar em m² e não somam com peças)
+  const totPrev = placas.reduce((t, p) => t + p.prev, 0), totReal = placas.filter(p => !realPor[p.k]?.fora).reduce((t, p) => t + p.real, 0);
   const semCeramica = !regra.length && !Object.keys(realPor).length;
   const totDif = totReal - totPrev;
   const kpi = (r, v, sub, cor) => (
@@ -38236,7 +38239,7 @@ function CeramicaDetalhe({ det, regras, obsPorCod = {}, descPlaca, onFechar, onF
   const aps = [...(det.aponts || [])].sort((a, b) => String(b.data_ref).localeCompare(String(a.data_ref)));
   const totPecas = peds.reduce((t, r) => t + (Number(r.qtd_pecas) || 0), 0), totPrev = peds.reduce((t, r) => t + r.prev, 0), totAps = aps.reduce((t, a) => t + (Number(a.qtd_mp) || 0), 0);
   // cerâmica real por item: apontado nas OPs do BR para aquele produto (filtrando a placa do painel, quando houver)
-  const realItem = (r) => { if (!r.real) return null; const pl = (r.real.placas || []).filter(x => !det.placa || String(x.placa) === String(det.placa)); return { pecas: Number(r.real.pecas_apontadas) || 0, ops: r.real.lista_ops, placas: pl, total: pl.reduce((t, x) => t + (Number(x.qtd) || 0), 0) }; };
+  const realItem = (r) => { if (!r.real) return null; const pl = (r.real.placas || []).filter(x => !det.placa || String(x.placa) === String(det.placa)); return { pecas: Number(r.real.pecas_apontadas) || 0, ops: r.real.lista_ops, placas: pl, outras: det.placa ? [] : (r.real.outras_placas || []), total: pl.reduce((t, x) => t + (Number(x.qtd) || 0), 0) }; };
   const vistos = new Set(); const totReal = peds.reduce((t, r) => { const k = `${r.br}|${r.cod_sankhya}`; if (vistos.has(k)) return t; vistos.add(k); return t + (realItem(r)?.total || 0); }, 0);
   const cont = (k) => peds.filter(r => r.sit.k === k).length;
   const codsVale = [...new Set(peds.map(r => r.cod_vale))];
@@ -38297,13 +38300,20 @@ function CeramicaDetalhe({ det, regras, obsPorCod = {}, descPlaca, onFechar, onF
                     <td style={{ padding: '8px 10px', whiteSpace: 'nowrap' }}><strong>{r.cod_vale || '—'}</strong>{!r.cod_vale && <div style={{ fontSize: 10.5, color: C.warn }}>sem código Vale · produto {r.cod_sankhya}</div>}<div style={{ fontSize: 11, color: C.ink3 }}>{r.layout_placa_mm || ''}{r.espessura_ceramica_mm ? ` · ${r.espessura_ceramica_mm} mm` : ''}</div></td>
                     <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{fmt(r.qtd_pecas)}</td>
                     {(() => { const re = realItem(r); return (<>
-                      <td style={{ padding: '8px 10px', textAlign: 'right', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>{re ? <><strong>{fmt(re.pecas)}</strong> pç<div style={{ fontSize: 11, color: C.ink3 }}>OP {re.ops}</div></> : <span style={{ color: C.warn, fontSize: 11.5 }}>sem apontamento no BR</span>}</td>
+                      <td style={{ padding: '8px 10px', textAlign: 'right', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>{re ? <><strong>{fmt(re.pecas)}</strong> pç<div style={{ fontSize: 11, color: C.ink3 }}>OP {re.ops}</div></>
+                        : (r.ops_br || []).length ? (() => { const ab = r.ops_br.filter(o => !o.concluida && !/final/i.test(o.status || '')); const o0 = ab[0] || r.ops_br[0];
+                            return <span style={{ display: 'inline-block', textAlign: 'right' }}><span style={{ fontSize: 11.5, fontWeight: 700, color: '#2563EB', background: '#E8F0FD', borderRadius: 6, padding: '2px 7px' }}>{ab.length ? 'em produção' : 'OP finalizada'}</span>
+                              <div style={{ fontSize: 11, color: C.ink3, marginTop: 2 }}>OP {r.ops_br.map(o => o.op).join(', ')}{o0?.aberta_em ? ` · aberta ${dt(o0.aberta_em)}` : ''}</div>{!ab.length && <div style={{ fontSize: 10.5, color: C.warn }}>sem apontamento registrado</div>}</span>; })()
+                        : <span style={{ fontSize: 11.5, fontWeight: 700, color: C.loss, background: '#FBE9E7', borderRadius: 6, padding: '2px 7px' }}>sem OP</span>}</td>
                       <td style={{ padding: '8px 10px', textAlign: 'right', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }} title={re ? re.placas.map(x => `${x.placa} ${cerDim(x.descricao) || ''}: ${x.qtd} (${String(x.por_peca).replace('.', ',')} por peça)`).join('\n') : ''}>
                         {re && re.total ? (() => { const dif = re.total - r.prev; const ok = r.prev && Math.abs(dif) <= Math.max(1, 0.05 * r.prev); const cor = !r.prev ? C.ink2 : ok ? C.win : dif > 0 ? C.loss : C.warn;
                           return <><strong style={{ fontSize: 14 }}>{fmt(re.total)}</strong>
                             {r.prev ? <div style={{ marginTop: 3 }}><span style={{ fontSize: 11.5, fontWeight: 800, color: cor, background: `${cor}18`, borderRadius: 6, padding: '2px 7px' }}>{ok ? '✓ dentro do previsto' : `${dif > 0 ? '▲ +' : '▼ '}${fmt(dif)} (${dif > 0 ? '+' : ''}${Math.round(100 * dif / r.prev)}%)`}</span></div> : <div style={{ fontSize: 11, color: C.warn }}>sem previsto para comparar</div>}
                             <div style={{ fontSize: 10.5, color: C.primary, marginTop: 2 }}>ver o porquê →</div></>; })()
-                          : (!r.regra && re && !re.total) ? <span style={{ fontSize: 11, fontWeight: 700, color: '#475569', background: '#F1F5F9', borderRadius: 6, padding: '2px 7px' }}>não leva cerâmica</span> : <span style={{ color: C.ink3 }}>—</span>}</td>
+                          : (re && !re.total && (re.outras || []).length) ? <span style={{ display: 'inline-block', textAlign: 'right' }}><span style={{ fontSize: 11, fontWeight: 700, color: C.warn, background: '#FDF3E1', borderRadius: 6, padding: '2px 7px' }}>placa fora da lista</span>
+                              <div style={{ fontSize: 10.5, color: C.ink2, marginTop: 2 }}>{re.outras.slice(0, 2).map(x => `${x.mp}: ${String(x.qtd).replace('.', ',')} ${String(x.un || '').toLowerCase()}`).join(' · ')}</div></span>
+                          : (!r.regra && re && !re.total) ? <span style={{ fontSize: 11, fontWeight: 700, color: '#475569', background: '#F1F5F9', borderRadius: 6, padding: '2px 7px' }}>não leva cerâmica</span>
+                          : (!re && (r.ops_br || []).length) ? <span style={{ fontSize: 11, color: C.ink3 }}>aguarda apontamento</span> : <span style={{ color: C.ink3 }}>—</span>}</td>
                     </>); })()}
                     <td style={{ padding: '8px 10px', color: r.regra ? C.ink2 : C.warn, fontSize: 12, minWidth: 220 }}>{r.regra || 'sem regra cadastrada — não entra no previsto'}</td>
                     <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{r.prev ? fmt(r.prev) : '—'}</td>
@@ -38418,7 +38428,7 @@ function CeramicasDashboard() {
     let vivo = true; setDados(null);
     (async () => {
       const ler = async (q) => { const out = []; for (let de = 0; de < 100000; de += 1000) { const { data, error } = await q().range(de, de + 999); if (error) break; out.push(...(data || [])); if (!data || data.length < 1000) break; } return out; };
-      const [lista, regras, obs, vale, aps, real] = await Promise.all([
+      const [lista, regras, obs, vale, aps, real, opsBr] = await Promise.all([
         supabase.from('mp_placas_kalocer').select('codigo_mp,descricao,unidade').then(r => r.data || []),
         supabase.from('regras_ceramica_vale').select('*').then(r => r.data || []),
         supabase.from('v_ceramica_regra_observada').select('*').limit(1000).then(r => r.data || []),
@@ -38426,10 +38436,11 @@ function CeramicasDashboard() {
         ler(() => supabase.from('producao_mp_apontamentos').select('cod_materia_prima,qtd_mp,data_ref,cliente_nome,nro_ordem_producao,br,desc_prod_acabado').gte('data_ref', ini).lte('data_ref', fim).order('data_ref')),
         // cerâmica REAL por BR e produto (apontamento TOP 1600 → OP → BR, o mesmo caminho do Extrato da Gerência de Produtos)
         ler(() => supabase.from('v_ceramica_real_br').select('*').order('br_num')),
+        ler(() => supabase.from('v_br_op_resumo').select('*').order('br_num')),
       ]);
       if (!vivo) return;
       const cods = new Set(lista.map(l => String(l.codigo_mp)));
-      setDados({ lista, regras, obs, vale, aps: aps.filter(a => cods.has(String(a.cod_materia_prima))), real });
+      setDados({ lista, regras, obs, vale, aps: aps.filter(a => cods.has(String(a.cod_materia_prima))), real, opsBr });
     })();
     return () => { vivo = false; };
   }, [ini, fim]);
@@ -38441,9 +38452,11 @@ function CeramicasDashboard() {
   const usaPlaca = (r, cod) => [1, 2, 3, 4].some(k => String(r[`ceramica_${k}_codigo`]) === String(cod) && Number(r[`qtd_ceramica_${k}`]) > 0);
   const obsPorCod = dados.obs.reduce((acc, o) => { (acc[o.cod_vale] = acc[o.cod_vale] || []).push(o); return acc; }, {});
   const realPor = Object.fromEntries((dados.real || []).map(x => [`${x.br_num}|${x.cod_pa}`, x]));
+  const opsPor = Object.fromEntries((dados.opsBr || []).map(x => [String(x.br_num), x.ops || []]));
   const brNum = (br) => (String(br || '').match(/(\d{4,6})/) || [])[1];
   const valeAj = dados.vale.map(r0 => {
-    const r = { ...r0, real: realPor[`${brNum(r0.br)}|${r0.cod_sankhya}`] || null };
+    const opsDoBr = opsPor[brNum(r0.br)] || [];
+    const r = { ...r0, real: realPor[`${brNum(r0.br)}|${r0.cod_sankhya}`] || null, ops_br: opsDoBr.filter(o => !o.cod_pa || String(o.cod_pa) === String(r0.cod_sankhya)) };
     const chave = r.chave_regra || r.cod_vale;
     if (r.ceramica_1_codigo || !usarObs || !obsPorCod[chave]) return r;
     const ob = [...obsPorCod[chave]].filter(o => Number(o.placas_por_peca) >= 0.05).sort((a, b) => b.placas_por_peca - a.placas_por_peca).slice(0, 4);
