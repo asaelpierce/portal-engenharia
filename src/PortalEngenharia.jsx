@@ -2406,7 +2406,7 @@ function CustoHoraSetor({ currentUser }) {
           ? <div style={{ marginTop: 10, fontSize: 12.5, color: T.rustText }}>Não achei o BR{infoBr.num} no Sankhya (sem cliente, pedido ou nota). Confira o número.</div>
           : <div style={{ marginTop: 10, padding: '10px 12px', borderRadius: 8, background: T.panelAlt, border: `1px solid ${T.line}`, fontSize: 12.5 }}>
               <div><strong style={{ fontSize: 14 }}>{infoBr.br}</strong> · <strong>{infoBr.cliente || 'cliente não encontrado'}</strong>{infoBr.vendedor ? <span style={{ color: T.inkDim }}> · vendedor {infoBr.vendedor}</span> : null}</div>
-              <div style={{ color: T.inkDim, marginTop: 3 }}>Pedido de venda no Sankhya: {infoBr.pedidos.length ? infoBr.pedidos.map(p => `nº ${p.numnota} (nº único ${p.nunota}) de ${new Date(`${p.dtneg}T12:00:00`).toLocaleDateString('pt-BR')}${p.pendente === 'N' ? ' · sem pendência' : ' · pendente'}`).join(' | ') : 'nenhum'}</div>
+              <div style={{ color: T.inkDim, marginTop: 3 }}>Pedido de venda no Sankhya: {infoBr.pedidos.length ? infoBr.pedidos.map(p => `Nro. Nota ${p.numnota} (nº único ${p.nunota}) de ${new Date(`${p.dtneg}T12:00:00`).toLocaleDateString('pt-BR')}${p.pendente === 'N' ? ' · sem pendência' : ' · pendente'}`).join(' | ') : 'nenhum'}</div>
               {infoBr.ops.length > 0 && <div style={{ marginTop: 6 }}><span style={{ color: T.inkDim }}>OPs com horas apontadas (clique para usar):</span>
                 <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>{infoBr.ops.map(o => (
                   <button key={o.op} onClick={() => setOp(o.op)} title={o.produto || ''} style={{ fontSize: 12, padding: '4px 9px', borderRadius: 14, cursor: 'pointer', border: `1px solid ${op === o.op ? T.ink : T.line}`, background: op === o.op ? T.ink : T.panel, color: op === o.op ? '#fff' : T.ink }}>
@@ -2551,7 +2551,7 @@ function CicloDrill({ drill, onFechar }) {
                 <td style={{ ...td, fontWeight: 700, fontFamily: FONT_DISPLAY, whiteSpace: 'nowrap' }}>{l.br}<div style={{ fontSize: 10.5, color: T.inkFaint, fontWeight: 400 }}>{l.segmento}</div></td>
                 <td style={{ ...td, maxWidth: 260 }}>{l.cliente}<div style={{ fontSize: 11, color: T.inkFaint }}>{l.vendedor || '—'}</div></td>
                 <td style={{ ...td, whiteSpace: 'nowrap' }}>{fmtMoeda(l.valor_proposta)}<div style={{ fontSize: 11, color: T.inkFaint }} title={l.data_corrigida ? `data de emissão digitada: ${l.data_digitada}` : ''}>{fmtData(l.data_proposta)}{l.data_corrigida ? ' *' : ''}{Number(l.revisoes) > 1 ? ` · ${l.revisoes} revisões` : ''}</div></td>
-                <td style={{ ...td, whiteSpace: 'nowrap' }}>{l.valor_pedido != null ? <>{fmtMoeda(l.valor_pedido)}<div style={{ fontSize: 11, color: T.inkFaint }}>{fmtData(l.data_pedido)} · nº {l.nums_pedido}{l.dif_pedido_proposta_pct != null ? ` · ${l.dif_pedido_proposta_pct > 0 ? '+' : ''}${String(l.dif_pedido_proposta_pct).replace('.', ',')}% vs proposta` : ''}</div></> : '—'}</td>
+                <td style={{ ...td, whiteSpace: 'nowrap' }}>{l.valor_pedido != null ? <>{fmtMoeda(l.valor_pedido)}<div style={{ fontSize: 11, color: T.inkFaint }}>{fmtData(l.data_pedido)} · Nro. Nota {l.nums_pedido}{l.dif_pedido_proposta_pct != null ? ` · ${l.dif_pedido_proposta_pct > 0 ? '+' : ''}${String(l.dif_pedido_proposta_pct).replace('.', ',')}% vs proposta` : ''}</div></> : '—'}</td>
                 <td style={{ ...td, whiteSpace: 'nowrap', color: T.oliveText }}>{drill.extraRotulo ? fmtMoeda(l._extra) : l.faturado != null ? <>{fmtMoeda(l.faturado)}<div style={{ fontSize: 11, color: T.inkFaint }}>{l.notas} nota{l.notas > 1 ? 's' : ''} · 1ª {fmtData(l.data_1a_nf)}</div></> : '—'}</td>
                 <td style={td}><span style={{ fontSize: 11, fontWeight: 700, color: s.c, background: s.bg, borderRadius: 4, padding: '3px 8px', whiteSpace: 'nowrap' }}>{s.r || l.situacao}</span>
                   {l.situacao === 'perdido' && <div style={{ fontSize: 11, color: T.inkFaint, marginTop: 3 }}>{l.motivo_perda || 'sem motivo no CRM'}</div>}
@@ -7068,7 +7068,7 @@ IMPORTANTE: Responda SOMENTE com base nos dados acima. Se a pergunta pede algo q
     const wb = new ExcelJS.Workbook();
     const ws = wb.addWorksheet('Pedidos pendentes', { views: [{ state: 'frozen', xSplit: 3, ySplit: 1 }] });
     ws.columns = [
-      ['BR', 'br', 12], ['Nº nota', 'numnota', 9], ['Cliente', 'cliente', 32], ['Vendedor', 'vendedor', 16], ['Usuário inclusão', 'usuario_inclusao', 14],
+      ['BR', 'br', 12], ['Nro. Nota', 'numnota', 9], ['Cliente', 'cliente', 32], ['Vendedor', 'vendedor', 16], ['Usuário inclusão', 'usuario_inclusao', 14],
       ['TOP', 'codtipoper', 7], ['Tipo de operação', 'descr_top', 30], ['Status', 'status', 12], ['Ano', 'ano', 7],
       ['Dt. do movimento', 'dtmov', 12], ['Dt. negociação', 'dtneg', 12], ['Faturamento previsto', 'dt_faturamento_prevista', 12], ['Entrega prevista', 'dt_entrega_prevista', 12],
       ['Dias pendente', 'dias', 9], ['Vlr. nota', 'vlr_nota', 13], ['Vlr. itens', 'vlr_itens', 13], ['ICMS', 'vlr_icms', 11], ['IPI', 'vlr_ipi', 11],
@@ -23706,7 +23706,7 @@ function PlanDetalheProjeto({ brNum, servico, onFechar }) {
               return (
                 <section key={p.nunota} style={{ ...caixa, overflow: 'hidden' }}>
                   <div style={{ padding: '10px 14px', borderBottom: `1px solid ${C.line}`, display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'baseline' }}>
-                    <strong style={{ fontSize: 14 }}>Pedido {p.numnota}</strong>
+                    <strong style={{ fontSize: 14 }}>Pedido · Nro. Nota {p.numnota}</strong>
                     {pcli && <span style={{ fontSize: 12.5 }}>pedido do cliente <strong>{pcli}</strong></span>}
                     <span style={{ fontSize: 12, color: C.ink3 }}>{dt(p.dtneg)} · TOP {p.codtipoper}{p.servico ? ' · serviço' : ''} · nº único {p.nunota}</span>
                     <span style={{ flex: 1 }} />
@@ -24039,7 +24039,7 @@ function PlanMes({ onProgramar }) {
                     <td style={{ ...td, textAlign: 'left' }} onClick={e => e.stopPropagation()}>{(() => { const ps = pedsDe(x);
                       if (!ps.length) return <span style={{ fontSize: 11.5, color: C.ink3 }}>{Number(x.faturado_mes) > 0 ? 'faturado' : 'sem pedido em aberto'}</span>;
                       return <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>{ps.map(p => (
-                        <div key={p.nunota}>{ps.length > 1 && <div style={{ fontSize: 10.5, color: C.ink3 }}>pedido {p.numnota}</div>}
+                        <div key={p.nunota}>{ps.length > 1 && <div style={{ fontSize: 10.5, color: C.ink3 }}>Nro. Nota {p.numnota}</div>}
                           <BotaoSolicitacaoNF nunota={p.nunota} numnota={p.numnota} ultima={ultSol[p.nunota] || null} compacto /></div>))}</div>; })()}</td>
                   </tr>); })}</tbody>
             </table>
@@ -24110,7 +24110,7 @@ function PlanConferenciaMes({ linhas, todas, setTodas, onConferir, onAbrir }) {
                 <td style={{ ...td, fontWeight: 700 }}>{moeda(l.valor_sankhya)}{Number(l.fat_mes) > 0 && <div style={{ fontSize: 10.5, color: C.win, fontWeight: 600 }}>faturado no mês {moeda(l.fat_mes)}</div>}</td>
                 <td style={{ ...td, textAlign: 'left', whiteSpace: 'normal', minWidth: 220, color: l.valor_confere ? C.ink2 : C.ink }}>{l.conferencia}
                   {l.alerta && <div style={{ fontSize: 11.5, color: C.loss, fontWeight: 700 }}>{l.alerta}</div>}
-                  {l.nunotas && <div style={{ fontSize: 11, color: C.win }}>pedido(s) confirmado(s): {(l.pedidos || []).map(p => p.numnota).join(', ')}{l.obs_conferencia ? ` · ${l.obs_conferencia}` : ''}</div>}</td>
+                  {l.nunotas && <div style={{ fontSize: 11, color: C.win }}>pedido(s) confirmado(s) · Nro. Nota {(l.pedidos || []).map(p => p.numnota).join(', ')}{l.obs_conferencia ? ` · ${l.obs_conferencia}` : ''}</div>}</td>
                 <td style={{ ...td, textAlign: 'left' }}>{l.n_ped > 1 && <button onClick={() => onConferir(l)} style={{ fontFamily: 'inherit', fontSize: 12, fontWeight: 600, padding: '5px 10px', borderRadius: 7, border: `1px solid ${l.alerta ? C.loss : C.line}`, background: C.surface, color: l.alerta ? C.loss : C.ink2, cursor: 'pointer' }}>{l.nunotas ? 'Trocar pedido' : 'Escolher pedido'}</button>}</td>
               </tr>))}</tbody>
           </table>
@@ -24147,7 +24147,7 @@ function PlanEscolherPedidos({ linha: l, onFechar, onPronto }) {
             <label key={p.nunota} style={{ display: 'flex', gap: 10, alignItems: 'flex-start', padding: '9px 11px', border: `1px solid ${sel.has(p.nunota) ? C.primary : C.line}`, borderRadius: 9, cursor: 'pointer', background: sel.has(p.nunota) ? C.primarySoft : C.surface }}>
               <input type="checkbox" checked={sel.has(p.nunota)} onChange={() => { const n = new Set(sel); n.has(p.nunota) ? n.delete(p.nunota) : n.add(p.nunota); setSel(n); }} style={{ marginTop: 3 }} />
               <span style={{ fontSize: 12.5 }}>
-                <strong>Pedido {p.numnota}</strong> de {new Date(`${p.dtneg}T12:00:00`).toLocaleDateString('pt-BR')} · TOP {p.codtipoper}<br />
+                <strong>Pedido · Nro. Nota {p.numnota}</strong> de {new Date(`${p.dtneg}T12:00:00`).toLocaleDateString('pt-BR')} · TOP {p.codtipoper}<br />
                 líquido {moeda(p.liquido)} · faturado {moeda(p.fat)} · saldo {moeda(p.saldo_real)}{p.nfs ? ` · NF ${p.nfs}` : ''}<br />
                 <span style={{ color: C.ink3 }}>{Number(p.qtd_entregue).toLocaleString('pt-BR')} de {Number(p.qtd).toLocaleString('pt-BR')} {String(p.unidade || '').toLowerCase()} entregues</span>
               </span>
@@ -24284,7 +24284,7 @@ function PlanBrItens({ mes, brNum, plano, onSalvo }) {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
       <div style={{ overflowX: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-          <thead><tr><th style={th}>Pedido</th><th style={th}>Item</th><th style={{ ...th, textAlign: 'right' }}>Falta entregar</th><th style={{ ...th, textAlign: 'right' }}>Valor unit. (líquido)</th><th style={{ ...th, textAlign: 'right' }}>Entregar no mês</th><th style={{ ...th, textAlign: 'right' }}>Valor</th></tr></thead>
+          <thead><tr><th style={th}>Nro. Nota</th><th style={th}>Item</th><th style={{ ...th, textAlign: 'right' }}>Falta entregar</th><th style={{ ...th, textAlign: 'right' }}>Valor unit. (líquido)</th><th style={{ ...th, textAlign: 'right' }}>Entregar no mês</th><th style={{ ...th, textAlign: 'right' }}>Valor</th></tr></thead>
           <tbody>{mat.map(i => { const k = `${i.nunota}-${i.sequencia}`; const q = Math.min(num(qtd[k]), Number(i.qtd_falta));
             return (
               <tr key={k}>
@@ -24672,7 +24672,7 @@ function PlanProgramar() {
                       <React.Fragment key={c.nunota}>
                         <tr style={{ background: aberto ? C.primarySoft : c.jaNoMes ? '#F7F8FA' : 'transparent' }}>
                           <td style={{ ...td, textAlign: 'left' }}><strong style={{ color: C.ink }}>{c.br}</strong>{c.servico && <span style={{ marginLeft: 6, fontSize: 10.5, fontWeight: 700, color: '#0D9488', background: '#E6F6F4', borderRadius: 4, padding: '1px 5px' }}>SERVIÇO</span>}
-                            <div style={{ fontSize: 11, color: C.ink3, whiteSpace: 'normal', maxWidth: 220 }}>{c.cliente} · pedido {c.numnota}</div></td>
+                            <div style={{ fontSize: 11, color: C.ink3, whiteSpace: 'normal', maxWidth: 220 }}>{c.cliente} · Nro. Nota {c.numnota}</div></td>
                           <td style={{ ...td, textAlign: 'left', color: C.ink2 }}>{c.setor || '—'}</td>
                           <td style={{ ...td, textAlign: 'left', whiteSpace: 'normal', minWidth: 240, maxWidth: 440, fontSize: 12 }}>{String(c.itens_pendentes || '').slice(0, 200)}{String(c.itens_pendentes || '').length > 200 ? '…' : ''}</td>
                           <td style={td}>{umProd ? `${qf(c.qtd_pendente)} de ${qf(c.qtd)} ${String(c.unidade || '').toLowerCase()}` : `${c.n_prod} itens`}{Number(c.faturado) > 0 && <div style={{ fontSize: 10.5, color: C.ink3 }}>já faturado {moeda(c.faturado)}</div>}</td>
@@ -31093,7 +31093,7 @@ function CRMCarteiraAlteracoes({ resp }) {
   const td = { padding: '8px 10px', textAlign: 'right', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap', borderBottom: `1px solid ${C.lineSoft}`, fontSize: 12.5, verticalAlign: 'top' };
   const inp = { fontFamily: 'inherit', fontSize: 12.5, padding: '6px 8px', borderRadius: 8, border: `1px solid ${C.line}`, boxSizing: 'border-box' };
   const exportar = () => {
-    const l2 = ['Quando;BR;Cliente;Vendedor;Pedido;O que mudou;Detalhe;Antes;Depois;Impacto na carteira;Usuário (Sankhya);Notas;Origem',
+    const l2 = ['Quando;BR;Cliente;Vendedor;Nro. Nota;O que mudou;Detalhe;Antes;Depois;Impacto na carteira;Usuário (Sankhya);Notas;Origem',
       ...vis.map(x => [dh(quando(x)), x.br || '', `"${x.cliente || ''}"`, x.vendedor || '', x.numnota || '', nomeT(x.tipo), `"${x.descricao || ''}"`,
         String(x.falta_antes ?? '').replace('.', ','), String(x.falta_depois ?? '').replace('.', ','), String(x.impacto ?? '').replace('.', ','), x.usuario_sankhya || '', x.nfs || '', x.origem].join(';'))];
     const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob(['\ufeff' + l2.join('\n')], { type: 'text/csv;charset=utf-8' })); a.download = 'alteracoes_carteira.csv'; a.click();
@@ -31127,7 +31127,7 @@ function CRMCarteiraAlteracoes({ resp }) {
       <section style={{ ...caixa, overflow: 'hidden' }}>
         <div style={{ overflow: 'auto', maxHeight: 640 }}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead><tr><th style={th('left')}>Quando</th><th style={th('left')}>BR</th><th style={th('left')}>Cliente</th><th style={th()}>Pedido</th><th style={th('left')}>O que mudou</th><th style={th()}>Antes</th><th style={th()}>Depois</th><th style={th()}>Impacto na carteira</th><th style={th('left')}>Quem alterou (Sankhya)</th></tr></thead>
+            <thead><tr><th style={th('left')}>Quando</th><th style={th('left')}>BR</th><th style={th('left')}>Cliente</th><th style={th()}>Nro. Nota</th><th style={th('left')}>O que mudou</th><th style={th()}>Antes</th><th style={th()}>Depois</th><th style={th()}>Impacto na carteira</th><th style={th('left')}>Quem alterou (Sankhya)</th></tr></thead>
             <tbody>
               {!vis.length && <tr><td colSpan={9} style={{ padding: 18, textAlign: 'center', color: C.ink3, fontSize: 12.5 }}>Nenhuma alteração registrada nesta seleção ainda.</td></tr>}
               {vis.map(x => { const [nome, cor] = CRM_EVENTO[x.tipo] || [x.tipo, C.ink2];
@@ -31180,7 +31180,7 @@ function CRMCarteiraFoto({ resp }) {
   const th = (al = 'right') => ({ padding: '8px 10px', fontSize: 11.5, fontWeight: 600, color: C.ink2, textAlign: al, whiteSpace: 'nowrap', background: '#F1F4F8', borderBottom: `1px solid ${C.line}`, position: 'sticky', top: 0, zIndex: 1 });
   const td = { padding: '8px 10px', textAlign: 'right', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap', borderBottom: `1px solid ${C.lineSoft}`, fontSize: 12.5 };
   const exportar = () => {
-    const l2 = ['BR;Cliente;Vendedor;Pedido;Tipo;Valor líquido do pedido;Carteira na data (líquido)',
+    const l2 = ['BR;Cliente;Vendedor;Nro. Nota;Tipo;Valor líquido do pedido;Carteira na data (líquido)',
       ...L.map(x => [x.br || '', `"${x.cliente || ''}"`, x.vendedor || '', x.numnota, x.servico ? 'Serviço' : 'Material', String(x.liquido_pedido ?? '').replace('.', ','), String(x.falta_liquido ?? '').replace('.', ',')].join(';'))];
     const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob(['\ufeff' + l2.join('\n')], { type: 'text/csv;charset=utf-8' })); a.download = `carteira_${dia}.csv`; a.click();
   };
@@ -31211,7 +31211,7 @@ function CRMCarteiraFoto({ resp }) {
         <section style={{ ...caixa, overflow: 'hidden' }}>
           <div style={{ overflow: 'auto', maxHeight: 620 }}>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-              <thead><tr><th style={th('left')}>BR</th><th style={th('left')}>Cliente</th><th style={th('left')}>Vendedor</th><th style={th()}>Pedido</th><th style={th('left')}>Tipo</th><th style={th()}>Valor líquido do pedido</th><th style={th()}>Carteira na data</th></tr></thead>
+              <thead><tr><th style={th('left')}>BR</th><th style={th('left')}>Cliente</th><th style={th('left')}>Vendedor</th><th style={th()}>Nro. Nota</th><th style={th('left')}>Tipo</th><th style={th()}>Valor líquido do pedido</th><th style={th()}>Carteira na data</th></tr></thead>
               <tbody>{L.map(x => (
                 <tr key={x.id}>
                   <td style={{ ...td, textAlign: 'left', fontWeight: 700 }}>{x.br}</td>
@@ -31309,7 +31309,7 @@ function CRMCarteiraHoje({ resp, onAbrirNegocio }) {
   const td = { padding: '8px 10px', textAlign: 'right', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap', borderBottom: `1px solid ${C.lineSoft}` };
   const linhaClic = (ativo) => ({ cursor: 'pointer', background: ativo ? C.primarySoft : 'transparent' });
   const exportar = () => {
-    const l2 = ['BR;Cliente;Vendedor;Pedido do cliente;Pedido Sankhya;Tipo de operação;Data do pedido;Previsão de faturamento;Dias de atraso;Valor líquido do pedido;% pendente;Falta faturar (líquido);Situação;Risco;Motivos do risco',
+    const l2 = ['BR;Cliente;Vendedor;Pedido do cliente;Nro. Nota;Tipo de operação;Data do pedido;Previsão de faturamento;Dias de atraso;Valor líquido do pedido;% pendente;Falta faturar (líquido);Situação;Risco;Motivos do risco',
       ...vis.map(l => [l.br || '', `"${l.cliente || ''}"`, l.vendedor || '', l.pedido_cliente || '', l.numnota, `"${topDe(l)}"`, dt(l.data_pedido), dt(l.prevista), l.dias_atraso || 0,
         String(l.liquido_pedido ?? '').replace('.', ','), l.pct_pendente != null ? String((Number(l.pct_pendente) * 100).toFixed(1)).replace('.', ',') : '', String(l.falta_liquido ?? '').replace('.', ','),
         situacao(l), l.risco_nivel || '', `"${(l.risco_motivos || []).join(' | ')}"`].join(';'))];
@@ -31359,7 +31359,7 @@ function CRMCarteiraHoje({ resp, onAbrirNegocio }) {
               <strong>Tirados da conta ({ocultosLista.length}, {moeda(soma(ocultosLista))}):</strong>
               {ocultosLista.map(l => (
                 <span key={l.nunota} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: '#F2F4F7', border: `1px solid ${C.line}`, borderRadius: 14, padding: '2px 4px 2px 9px' }}>
-                  {l.br} · {l.pedido_cliente || l.numnota}
+                  {l.br} · {l.pedido_cliente ? `pedido do cliente ${l.pedido_cliente}` : `Nro. Nota ${l.numnota}`}
                   <button onClick={() => setOcultos(o => { const n = new Set(o); n.delete(l.nunota); return n; })} title="voltar para a conta" style={{ border: 'none', background: '#E4E7EC', borderRadius: 10, width: 18, height: 18, cursor: 'pointer', fontSize: 11 }}>↺</button>
                 </span>))}
               <button onClick={() => setOcultos(new Set())} style={{ ...btnA, border: 'none', color: C.primary, padding: '2px 4px' }}>voltar todos</button>
@@ -31429,7 +31429,7 @@ function CRMCarteiraHoje({ resp, onAbrirNegocio }) {
                   <td style={{ ...td, textAlign: 'left', fontWeight: 700, color: C.primary }}>{l.br || '—'}</td>
                   <td style={{ ...td, textAlign: 'left', whiteSpace: 'normal', maxWidth: 220 }}>{l.cliente}</td>
                   <td style={{ ...td, textAlign: 'left', color: C.ink2 }}>{l.vendedor}</td>
-                  <td style={{ ...td, textAlign: 'left' }}><strong>{l.pedido_cliente || '—'}</strong><div style={{ fontSize: 10.5, color: C.ink3 }}>Sankhya nº {l.numnota} · {dt(l.data_pedido)}</div></td>
+                  <td style={{ ...td, textAlign: 'left' }}><strong>{l.pedido_cliente || '—'}</strong><div style={{ fontSize: 10.5, color: C.ink3 }}>Nro. Nota {l.numnota} · {dt(l.data_pedido)}</div></td>
                   <td style={{ ...td, textAlign: 'left', whiteSpace: 'normal', maxWidth: 190, fontSize: 11.5, color: C.ink2 }}>{l.descr_top}<div style={{ fontSize: 10.5, color: C.ink3 }}>TOP {l.codtipoper}</div></td>
                   <td style={{ ...td, color: l.dias_atraso > 0 ? C.loss : C.ink, fontWeight: l.dias_atraso > 0 ? 700 : 400 }}>{dt(l.prevista)}{l.dias_atraso > 0 && <div style={{ fontSize: 10.5 }}>{l.dias_atraso} dia(s) de atraso</div>}</td>
                   <td style={{ ...td, color: C.ink2 }}>{moeda(l.liquido_pedido)}</td>
@@ -31503,7 +31503,7 @@ function CRMServicos({ resp, negocios, onAbrirNegocio }) {
                     <td style={{ padding: '10px 12px', fontWeight: 700, color: C.primary, whiteSpace: 'nowrap' }}>{x.br}</td>
                     <td style={{ padding: '10px 12px' }}>{x.cliente}</td>
                     <td style={{ padding: '10px 12px', color: C.ink2, whiteSpace: 'nowrap' }}>{x.vendedor || '—'}</td>
-                    <td style={{ padding: '10px 12px', color: C.ink2, whiteSpace: 'nowrap' }}>nº {x.numnota} · de {dt(x.pedido_em)}</td>
+                    <td style={{ padding: '10px 12px', color: C.ink2, whiteSpace: 'nowrap' }}>Nro. Nota {x.numnota} · de {dt(x.pedido_em)}</td>
                     <td style={{ padding: '10px 12px', textAlign: 'right', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{fmtMoedaCompacta(x.valor)}</td>
                     <td style={{ padding: '10px 12px', whiteSpace: 'nowrap' }}>
                       <span style={{ fontSize: 11.5, fontWeight: 700, padding: '3px 9px', borderRadius: 10, color: lb ? '#0D9488' : C.primary, background: lb ? '#E6F6F4' : C.primarySoft }}>{lb ? 'Liberado para faturar' : 'Aguarda material'}</span>
@@ -31567,7 +31567,7 @@ function CRMCalendario({ resp, negocios, atividades, abertos, onAbrirNegocio }) 
   const ev = {};
   const add = (d, e) => { if (d) (ev[d] = ev[d] || []).push(e); };
   if (camadas.ped) ped.forEach(p => add(p.dt_faturamento_prevista, { tipo: 'ped', br: p.br, cli: p.cliente, quem: p.vendedor,
-    doc: `pedido ${p.numnota || p.nunota}${p.reprog ? ` · ↻ reprogramado (${p.reprog})` : ''}`, v: p.net_offer_value, atras: p.dt_faturamento_prevista < hojeIso }));
+    doc: `Nro. Nota ${p.numnota || p.nunota}${p.reprog ? ` · ↻ reprogramado (${p.reprog})` : ''}`, v: p.net_offer_value, atras: p.dt_faturamento_prevista < hojeIso }));
   if (camadas.opo) opo.forEach(n => add(n.previsao_faturamento, { tipo: 'opo', br: n.br || n.titulo, cli: null, neg: n, quem: n.responsavel, doc: 'previsão do CRM', v: n.valor, atras: n.previsao_faturamento < hojeIso }));
   if (camadas.fat) nts.forEach(n => add(n.data_faturamento, { tipo: 'fat', br: n.br, cli: n.cliente_nome, quem: n.vendedor_nome, doc: `NF ${n.numero_nota || n.nunota}`, v: n.net_offer_value }));
   if (camadas.tar) tars.forEach(a => add(iso(a.vencimento), { tipo: 'tar', br: null, a, quem: a.responsavel, doc: crmRotuloTipo(a.tipo) }));
@@ -31704,7 +31704,7 @@ function CRMCalendario({ resp, negocios, atividades, abertos, onAbrirNegocio }) 
           <div style={{ overflowX: 'auto', maxHeight: 420, overflowY: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
               <thead><tr>
-                {['BR', 'Cliente', 'Vendedor', 'Pedido', 'Data prevista', 'Atraso'].map((h, i2) => (
+                {['BR', 'Cliente', 'Vendedor', 'Nro. Nota', 'Data prevista', 'Atraso'].map((h, i2) => (
                   <th key={h} style={{ padding: '8px 10px', fontSize: 11.5, fontWeight: 600, color: CRMC.ink3, textAlign: i2 === 5 ? 'right' : 'left', position: 'sticky', top: 0, background: CRMC.surface, borderBottom: `1px solid ${CRMC.line}` }}>{h}</th>
                 ))}
               </tr></thead>
@@ -31903,7 +31903,7 @@ function CRMPontualidade({ resp, negocios = [], onAbrirNegocio }) {
           </div>
           <div style={{ maxHeight: 340, overflow: 'auto', border: `1px solid ${CRMC.lineSoft}`, borderRadius: 8 }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
-              <thead><tr>{['BR', 'Cliente', 'Vendedor', 'Pedido', 'NF', 'Prevista', 'Faturada', 'Diferença', 'Valor'].map((h, k) => (
+              <thead><tr>{['BR', 'Cliente', 'Vendedor', 'Nro. Nota', 'NF', 'Prevista', 'Faturada', 'Diferença', 'Valor'].map((h, k) => (
                 <th key={h} style={{ padding: '7px 9px', fontSize: 11, fontWeight: 600, color: CRMC.ink3, textAlign: k >= 7 ? 'right' : 'left', position: 'sticky', top: 0, background: CRMC.surface, borderBottom: `1px solid ${CRMC.line}`, whiteSpace: 'nowrap' }}>{h}</th>))}</tr></thead>
               <tbody>{notasFoco.slice(0, 300).map((x, k) => { const ng = x.br ? negPorBr[x.br] : null;
                 return (
@@ -32283,7 +32283,7 @@ function CRMFaturamentoBR({ negocio: n, autor, onMudou }) {
     const { error } = await supabase.from('crm_faturamento_ajuste').insert({ br: n.br, nunota_pedido: f.nunota, nova_data: f.data, motivo: f.motivo, observacao: f.obs || null, autor });
     if (error) { alert(error.message); return; }
     await supabase.from('crm_historico').insert({ negocio_id: n.id, empresa_id: n.empresa_id, tipo: 'anotacao', autor,
-      texto: `Faturamento do pedido ${f.numnota} reprogramado para ${fmtD(f.data)} — ${f.motivo}${f.obs ? `: ${f.obs}` : ''}` });
+      texto: `Faturamento do pedido (Nro. Nota ${f.numnota}) reprogramado para ${fmtD(f.data)} — ${f.motivo}${f.obs ? `: ${f.obs}` : ''}` });
     setForm(null); carregar(); onMudou && onMudou();
   };
   const caixa = { border: `1px solid ${CRMC.line}`, borderRadius: 10, padding: '11px 13px', background: CRMC.surface };
@@ -32350,7 +32350,7 @@ function CRMFaturamentoBR({ negocio: n, autor, onMudou }) {
           return (
             <div key={p.nunota} style={{ ...caixa, borderLeft: `3px solid ${st[1]}` }}>
               <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                <strong style={{ fontSize: 13 }}>Pedido {p.numnota || p.nunota}</strong>
+                <strong style={{ fontSize: 13 }}>Pedido · Nro. Nota {p.numnota || p.nunota}</strong>
                 {p.top === 3103 && <span title="o serviço só é faturado depois que o material chega ao cliente" style={{ fontSize: 11, fontWeight: 700, color: '#0D9488', background: '#E6F6F4', padding: '1px 8px', borderRadius: 10 }}>SERVIÇO</span>}
                 <span style={{ fontSize: 11, fontWeight: 700, color: st[1], background: st[2], padding: '1px 8px', borderRadius: 10 }}>{st[0]}</span>
                 <span style={{ fontSize: 11.5, color: CRMC.ink3 }}>de {fmtD(p.dtneg)}{p.top_descr ? ` · ${p.top_descr}` : ''}</span>
