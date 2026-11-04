@@ -9844,50 +9844,38 @@ function PainelComercial({ currentUser }) {
       };
     });
 
-    // Previstos pra faturar dentro do período visualizado, mas que AINDA não
-    // têm nenhuma NF emitida -- mesma regra de atraso, só que comparando com
-    // HOJE em vez da data real de emissão (que ainda não existe).
-    const { data: previstos } = await supabase
-      .from('pedidos_itens')
-      .select('br,numero_pedido,cliente_nome,vendedor_nome,valor_liquido,uf,data_faturamento,data_neg,produto_kaleng,codtipoper')
-      .gte('data_faturamento', inicio)
-      .lte('data_faturamento', fim)
-      .not('data_faturamento', 'is', null);
-
-    const pedidosJaFaturados = new Set((nfs||[]).map(n => `${n.br}||${n.numero_pedido}`));
-    const vistosNaoFaturados = new Set();
-    const registrosNaoFaturados = (previstos||[])
-      .filter(p => !pedidosJaFaturados.has(`${p.br}||${p.numero_pedido}`))
-      .filter(p => {
-        // Um pedido pode ter vários itens -- soma tudo numa linha só por
-        // br+numero_pedido, igual as NFs já vêm uma por nota.
-        const chave = `${p.br}||${p.numero_pedido}`;
-        if (vistosNaoFaturados.has(chave)) return false;
-        vistosNaoFaturados.add(chave);
-        return true;
-      })
-      .map(p => {
-        const chave = `${p.br}||${p.numero_pedido}`;
-        const valorTotal = (previstos||[])
-          .filter(x => `${x.br}||${x.numero_pedido}` === chave)
-          .reduce((s, x) => s + (Number(x.valor_liquido) || 0), 0);
-        return {
-          br: p.br,
-          nf: null,
-          numero_pedido: p.numero_pedido,
-          top: p.codtipoper,
-          cliente: p.cliente_nome || '—',
-          nf_emitida: null,
-          fat_previsto: p.data_faturamento,
-          pedido_criado: p.data_neg,
-          valor: valorTotal,
-          netValue: valorTotal,
-          vendedor: p.vendedor_nome || '—',
-          kaleng: p.produto_kaleng || '—',
-          uf: p.uf || '—',
-          faturado: false,
-        };
-      });
+    // Pendentes de faturar (Asael, 04/11/2026): só pedidos que o Sankhya marca como PENDENTE (comercial_pedido_pendente),
+    // com previsão de faturamento no período, pelo SALDO que falta faturar em valor LÍQUIDO (Net Offer Value do pedido ×
+    // itens pendentes ÷ itens totais — o mesmo critério da "Minha carteira"). Antes somava o bruto do pedido inteiro,
+    // mesmo de pedidos já encerrados ou parcialmente faturados.
+    const [{ data: pend }, { data: saldo }] = await Promise.all([
+      supabase.from('comercial_pedido_pendente').select('nunota,numnota,codtipoper,br,cliente,vendedor,dtneg,dt_faturamento_prevista,vlr_nota,net_offer_value')
+        .gte('dt_faturamento_prevista', inicio).lte('dt_faturamento_prevista', fim),
+      supabase.from('comercial_pedido_saldo').select('nunota,itens_total,itens_pendente'),
+    ]);
+    const saldoPor = Object.fromEntries((saldo || []).map(x => [x.nunota, x]));
+    const TOPS_SERVICO = [3103];
+    const registrosNaoFaturados = (pend || []).map(p => {
+      const sd = saldoPor[p.nunota];
+      const frac = sd && Number(sd.itens_total) > 0 ? Number(sd.itens_pendente) / Number(sd.itens_total) : 1;
+      return {
+        br: p.br,
+        nf: null,
+        numero_pedido: p.numnota,
+        top: p.codtipoper,
+        cliente: p.cliente || '—',
+        nf_emitida: null,
+        fat_previsto: p.dt_faturamento_prevista,
+        pedido_criado: p.dtneg,
+        valor: (Number(p.vlr_nota) || 0) * frac,          // bruto do saldo (só para a coluna de valor da nota)
+        netValue: (Number(p.net_offer_value) || 0) * frac, // líquido do saldo — é o que os cartões somam
+        vendedor: p.vendedor || '—',
+        kaleng: '—',
+        uf: '—',
+        servico: TOPS_SERVICO.includes(Number(p.codtipoper)),
+        faturado: false,
+      };
+    }).filter(r => r.netValue > 0.5);
 
     setRegistros([...registrosFaturados, ...registrosNaoFaturados]);
     setLoading(false);
@@ -9963,7 +9951,8 @@ function PainelComercial({ currentUser }) {
     const nPrazo   = comData.filter(r => diasAtraso(r) === 0).length;
     const nAtraso  = comData.filter(r => diasAtraso(r) > 0).length;
     const atrasados = comData.filter(r => diasAtraso(r) > 0).map(r => diasAtraso(r));
-    const pendentesAtrasados = pendentes.filter(r => (diasAtraso(r) ?? -1) > 0);
+    // serviço só é faturado depois do material: nunca conta como atraso (regra da casa)
+    const pendentesAtrasados = pendentes.filter(r => !r.servico && (diasAtraso(r) ?? -1) > 0);
     return {
       total,
       totalNet,
@@ -9974,16 +9963,16 @@ function PainelComercial({ currentUser }) {
       pctAtraso:       Math.round(nAtraso / n * 100),
       mediaAtraso: atrasados.length ? Math.round(atrasados.reduce((s,d)=>s+d,0)/atrasados.length) : null,
       pendentesQtd: pendentes.length,
-      pendentesValor: pendentes.reduce((s,r) => s + r.valor, 0),
+      pendentesValor: pendentes.reduce((s,r) => s + (r.netValue || 0), 0),
       pendentesAtrasadosQtd: pendentesAtrasados.length,
-      pendentesAtrasadosValor: pendentesAtrasados.reduce((s,r) => s + r.valor, 0),
+      pendentesAtrasadosValor: pendentesAtrasados.reduce((s,r) => s + (r.netValue || 0), 0),
       // Vendido e faturado no mesmo mês: pedido_criado e nf_emitida no mesmo YYYY-MM
       vendidoFaturadoMes: (() => {
         const mesmos = faturados.filter(r => {
           if (!r.pedido_criado || !r.nf_emitida) return false;
           return r.pedido_criado.slice(0,7) === r.nf_emitida.slice(0,7);
         });
-        return { qtd: mesmos.length, valor: mesmos.reduce((s,r) => s + r.valor, 0) };
+        return { qtd: mesmos.length, valor: mesmos.reduce((s,r) => s + (r.netValue || 0), 0) };   // líquido (Net Offer Value)
       })(),
     };
   }, [filtrados]);
@@ -10108,10 +10097,10 @@ function PainelComercial({ currentUser }) {
             color: kpis.pctAtraso > 50 ? T.rustText : kpis.pctAtraso > 20 ? T.amberText : T.oliveText },
           { label: '% antecipado',        value: `${kpis.pctAntes}%`,  color: T.blueText },
           { label: '% no prazo exato',    value: `${kpis.pctPrazo}%`,  color: T.oliveText },
-          { label: '⏳ Pendente de faturar',  value: `${kpis.pendentesQtd} (${fmtMoedaCompacta(kpis.pendentesValor)})`, color: T.amberText },
-          { label: '⚠ Pendente e atrasado', value: `${kpis.pendentesAtrasadosQtd} (${fmtMoedaCompacta(kpis.pendentesAtrasadosValor)})`,
+          { label: '⏳ Pendente de faturar (líquido)',  value: `${kpis.pendentesQtd} (${fmtMoedaCompacta(kpis.pendentesValor)})`, color: T.amberText },
+          { label: '⚠ Pendente e atrasado (líquido)', value: `${kpis.pendentesAtrasadosQtd} (${fmtMoedaCompacta(kpis.pendentesAtrasadosValor)})`,
             color: kpis.pendentesAtrasadosQtd > 0 ? T.rustText : T.oliveText },
-          { label: '🔄 Vendido e faturado no mês', value: `${kpis.vendidoFaturadoMes.qtd} (${fmtMoedaCompacta(kpis.vendidoFaturadoMes.valor)})`,
+          { label: '🔄 Vendido e faturado no mês (líquido)', value: `${kpis.vendidoFaturadoMes.qtd} (${fmtMoedaCompacta(kpis.vendidoFaturadoMes.valor)})`,
             color: T.blueText,
             tooltip: 'Projetos cujo pedido foi criado e a nota emitida no mesmo mês. Mede a agilidade entre venda e entrega.' },
           { label: 'Atraso médio (dias)', value: kpis.mediaAtraso !== null ? `${kpis.mediaAtraso}d` : '—',
