@@ -29943,6 +29943,9 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
       && ['carteira', 'parcial'].includes(sitDe(n)) && (!resp || n.responsavel === resp) && casaBusca(n));
   const pedFechados = pedFechadosBase.filter(n => { if (filtroRisco !== 'p50' && filtroRisco !== 'patr') return true; const pg = progPed(n); return pg && (filtroRisco === 'p50' ? pg.n50 : pg.atrasado); })
     .sort((a, b) => (progPed(b)?.pct ?? -1) - (progPed(a)?.pct ?? -1));
+  // Pós-venda com o cartão "Passaram de 50% do prazo" ou "Faturamento atrasado" marcado: esses cartões são sobre os
+  // PEDIDOS fechados a faturar, então a lista (e o quadro) mostram só esses pedidos, não os negócios de pós-venda.
+  const doPipeVis = pipeline === 'posvendas' && (filtroRisco === 'p50' || filtroRisco === 'patr') ? pedFechados : doPipe;
   const probDe = (n) => n.probabilidade ?? etapaPorId[n.etapa_id]?.probabilidade ?? null;
   const valorDe = (n) => Number(n.pipeline_id === 'leads' ? n.potencial : n.valor) || 0;
   const botao = (ativo) => ({ fontFamily: 'inherit', fontSize: 12.5, fontWeight: ativo ? 600 : 500, padding: '7px 13px', borderRadius: 8, cursor: 'pointer',
@@ -30191,7 +30194,7 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
                   <Zap size={14} aria-hidden="true" color={CRMC.primary} />
                   <strong style={{ color: CRMC.primary }}>{ANALISES.find(x => x.k === analise)?.r || (analise === 'custom' ? 'Filtro personalizado' : `★ ${visoesSalvas[Number(analise.split(':')[1])]?.nome || 'Visão salva'}`)}</strong>
                   <span>{ANALISES.find(x => x.k === analise)?.d || 'critérios do filtro personalizado'}</span>
-                  <span>· <strong>{doPipe.length}</strong> na tela</span>
+                  <span>· <strong>{doPipeVis.length}</strong> na tela</span>
                   <span style={{ flex: 1 }} />
                   <button onClick={() => setAnalise(null)} style={{ fontFamily: 'inherit', fontSize: 12.5, border: `1px solid ${CRMC.line}`, borderRadius: 7, padding: '4px 10px', background: CRMC.surface, color: CRMC.ink2, cursor: 'pointer' }}>Limpar</button>
                 </div>
@@ -30296,7 +30299,7 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
                         return ng ? { ...ng, _fat: f } : { id: `fat:${f.br}`, br: f.br, titulo: `${f.br} · ${f.cliente || ''}`, responsavel: f.vendedor || null, pipeline_id: 'vendas', etapa_id: et.id, _fat: f, _semNegocio: true };
                       }).filter(n => (!resp || (n.responsavel || '').toUpperCase().trim() === String(resp).toUpperCase().trim()) && casaBusca(n))
                         .sort((a, b) => Number(b._fat.faturado) - Number(a._fat.faturado))
-                    : doPipe.filter(n => n.etapa_id === et.id && (!et.filtroCol || et.filtroCol(n))).sort((a, b) => valorDe(b) - valorDe(a));
+                    : doPipeVis.filter(n => n.etapa_id === et.id && (!et.filtroCol || et.filtroCol(n))).sort((a, b) => valorDe(b) - valorDe(a));
                   const totEt = subK === 'faturado' ? cards.reduce((x, n) => x + (Number(n._fat?.faturado) || 0), 0) : cards.reduce((x, n) => x + valorDe(n), 0);
                   const sobre = dragSobre === et.chave && arrastando && arrastando.etapa_id !== et.id;
                   const corEt = et.corCol || CRM_COR_ETAPA[et.codigo] || et.cor || CRMC.ink3;
@@ -30469,7 +30472,7 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
               ...(pipeline === 'vendas' ? [{ c: 'sit', t: 'Situação do ganho' }, { c: 'fat', t: 'Faturamento' }] : []),
               { c: 'responsavel', t: 'Responsável' }, { c: 'concorrente', t: 'Concorrente' }, { c: 'proxima', t: 'Próxima tarefa' }, { c: 'dias', t: 'Dias na etapa', r: true },
             ];
-            const linhasL = doPipe.filter(n => etapasPipe.some(e => e.id === n.etapa_id)).map(n => {
+            const linhasL = (doPipeVis === doPipe ? doPipe.filter(n => etapasPipe.some(e => e.id === n.etapa_id)) : doPipeVis).map(n => {
               const prox = (pendPorNeg[n.id] || [])[0];
               const prob = n.pipeline_id === 'leads' ? n.score : probDe(n);
               return { n, titulo: n.br || n.titulo, empresa: empPorId[n.empresa_id]?.nome || '', etapa: etapaPorId[n.etapa_id]?.ordem ?? 0,
