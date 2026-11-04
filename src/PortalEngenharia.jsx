@@ -8399,6 +8399,10 @@ function FollowUpComercial({ currentUser }) {
   // Filtros por coluna, como no Excel. Texto para BR e Cliente, lista para
   // Vendedor e os dois estagios.
   const [filtros, setFiltros] = useState({ br: '', cliente: '', vendedor: [], estC: [], estV: [] });
+  // faturamento do ano inteiro (todas as notas, mesma base da tela Faturamento) — para o cartão "Faturado em AAAA"
+  const [fatAnoTotal, setFatAnoTotal] = useState(null);
+  useEffect(() => { supabase.from('v_crm_faturado_ano').select('faturado').limit(5000)
+    .then(({ data }) => setFatAnoTotal((data || []).reduce((t, x) => t + (Number(x.faturado) || 0), 0))); }, []);
   // vendedor/estC/estV aceitam várias opções (array); um valor solto (ex.: vindo do gráfico) vira [valor]
   const setFiltro = (k, v) => setFiltros(f => ({ ...f, [k]: ['vendedor', 'estC', 'estV'].includes(k) && !Array.isArray(v) ? (v ? [v] : []) : v }));
   const limparFiltros = () => setFiltros({ br: '', cliente: '', vendedor: [], estC: [], estV: [] });
@@ -8859,8 +8863,12 @@ function FollowUpComercial({ currentUser }) {
             // mesma regra da Diretoria: sem valor de proposta, vale o valor do pedido
             v: moeda(confirmados.reduce((s, l) => s + (Number(l.valor_venda_kdb ?? l.valor_proposta ?? l.valor_pedido) || 0), 0)), c: T.oliveText,
             dica: 'Tem pedido de venda e ainda não tem nota fiscal. Valor do pedido no Painel KdB (net value); sem lançamento no KdB, o da proposta.', abrir: () => abrirGrafico('fechados', 'carteira') },
-          { t: `Já faturado · ${faturados.length} BRs`, v: moeda(soma(faturados, 'receita_faturada')), c: T.blueText,
-            dica: 'Já tem nota fiscal de venda. Valor faturado líquido (o que saiu em nota), não o da proposta.', abrir: () => abrirGrafico('fechados', 'faturado') },
+          { t: `Faturado em ${new Date().getFullYear()} · todas as notas`, v: fatAnoTotal == null ? '…' : moeda(fatAnoTotal), c: T.ink,
+            sub: 'o mesmo valor da tela Faturamento',
+            dica: 'Tudo o que saiu em nota de venda este ano (valor líquido), de qualquer BR — inclusive pedidos de propostas de anos anteriores. É o mesmo número da tela Faturamento (Sankhya).' },
+          { t: `Já faturado das propostas de ${new Date().getFullYear()} · ${faturados.length} BRs`, v: moeda(soma(faturados, 'receita_faturada')), c: T.blueText,
+            sub: fatAnoTotal == null ? '' : `parte do faturado do ano; os outros ${moeda(Math.max(fatAnoTotal - soma(faturados, 'receita_faturada'), 0))} são de propostas de anos anteriores`,
+            dica: 'Das propostas feitas este ano (as que esta tela acompanha), quanto já virou nota fiscal — valor líquido. Não inclui pedidos de propostas de anos anteriores faturados este ano; por isso é menor que o "Faturado no ano".', abrir: () => abrirGrafico('fechados', 'faturado') },
           { t: `Perdido · ${perdidos.length} BRs`, v: moeda(soma(perdidos, 'valor_proposta')), c: T.rustText,
             dica: 'Marcado como Perdido pelo vendedor. Valor da proposta.', abrir: () => abrirGrafico('situacao', 'perdido') },
           { t: 'Em aberto', v: String(emAberto.length), c: T.ink, abrir: () => abrirGrafico('estagio', null, 'qtd') },
@@ -8873,6 +8881,7 @@ function FollowUpComercial({ currentUser }) {
               padding: '9px 12px', cursor: 'pointer' }}>
             <div style={{ fontSize: 10.5, color: k.ajuda ? T.amberText : T.inkFaint }}>{k.t}</div>
             <div style={{ fontSize: 18, fontWeight: 700, color: k.c, fontVariantNumeric: 'tabular-nums' }}>{k.v}</div>
+            {k.sub && <div style={{ fontSize: 10.5, color: T.inkFaint, marginTop: 2, lineHeight: 1.35 }}>{k.sub}</div>}
           </div>
         ))}
       </div>
