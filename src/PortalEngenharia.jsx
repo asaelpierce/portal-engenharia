@@ -10003,12 +10003,13 @@ function PainelComercial({ currentUser }) {
   const meses = useMemo(() => {
     const arr = [];
     const inicio = new Date(2025, 7, 1); // ago/2025 — início real dos dados de faturamento no banco
-    const fim = new Date(hoje.getFullYear(), hoje.getMonth(), 1);
+    // meses futuros (até 18 à frente): só têm pedidos pendentes pela previsão de faturamento (Asael, 04/11/2026)
+    const fim = new Date(hoje.getFullYear(), hoje.getMonth() + 18, 1);
     let cur = new Date(inicio);
     while (cur <= fim) {
       const val = `${cur.getFullYear()}-${String(cur.getMonth()+1).padStart(2,'0')}`;
       const label = cur.toLocaleString('pt-BR', { month: 'short', year: 'numeric' });
-      arr.push({ val, label: label.charAt(0).toUpperCase() + label.slice(1) });
+      arr.push({ val, label: label.charAt(0).toUpperCase() + label.slice(1) + (val > mesAtual ? ' (previsão)' : '') });
       cur.setMonth(cur.getMonth() + 1);
     }
     return arr.reverse();
