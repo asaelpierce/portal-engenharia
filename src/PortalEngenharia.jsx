@@ -38072,6 +38072,9 @@ function CeramicaDetalhe({ det, regras, obsPorCod = {}, descPlaca, onFechar, onF
   peds.sort((a, b) => { const x = sortKey[ordem.c](a), y = sortKey[ordem.c](b); return (x > y ? 1 : x < y ? -1 : 0) * (ordem.desc ? -1 : 1); });
   const aps = [...(det.aponts || [])].sort((a, b) => String(b.data_ref).localeCompare(String(a.data_ref)));
   const totPecas = peds.reduce((t, r) => t + (Number(r.qtd_pecas) || 0), 0), totPrev = peds.reduce((t, r) => t + r.prev, 0), totAps = aps.reduce((t, a) => t + (Number(a.qtd_mp) || 0), 0);
+  // cerâmica real por item: apontado nas OPs do BR para aquele produto (filtrando a placa do painel, quando houver)
+  const realItem = (r) => { if (!r.real) return null; const pl = (r.real.placas || []).filter(x => !det.placa || String(x.placa) === String(det.placa)); return { pecas: Number(r.real.pecas_apontadas) || 0, ops: r.real.lista_ops, placas: pl, total: pl.reduce((t, x) => t + (Number(x.qtd) || 0), 0) }; };
+  const vistos = new Set(); const totReal = peds.reduce((t, r) => { const k = `${r.br}|${r.cod_sankhya}`; if (vistos.has(k)) return t; vistos.add(k); return t + (realItem(r)?.total || 0); }, 0);
   const cont = (k) => peds.filter(r => r.sit.k === k).length;
   const codsVale = [...new Set(peds.map(r => r.cod_vale))];
   const regrasUsadas = codsVale.map(c => ({ cod: c, regra: regras.find(x => x.codigo_vale === c), pecas: peds.filter(r => r.cod_vale === c).reduce((t, r) => t + (Number(r.qtd_pecas) || 0), 0), prev: peds.filter(r => r.cod_vale === c).reduce((t, r) => t + r.prev, 0) }))
@@ -38079,7 +38082,8 @@ function CeramicaDetalhe({ det, regras, obsPorCod = {}, descPlaca, onFechar, onF
   const exportar = () => {
     const linhas = aba === 'ops'
       ? ['Data;OP;BR;Cliente;Produto acabado;Placa;Código placa;Quantidade', ...aps.map(a => [dt(a.data_ref), a.nro_ordem_producao, a.br || '', `"${a.cliente_nome || ''}"`, `"${a.desc_prod_acabado || ''}"`, klcDim(descPlaca[a.cod_materia_prima]), a.cod_materia_prima, String(a.qtd_mp).replace('.', ',')].join(';'))]
-      : ['Data;Pedido Vale;Nº único;BR;Unidade;Código Vale;Produto;Peças;Regra;Cerâmica prevista;Situação;NF;Data da NF;Data prevista', ...peds.map(r => [dt(r.data_neg), r.pedido_cliente || '', r.nunota, r.br || '', `"${r.client}"`, r.cod_vale || '', `"${r.descricao_produto || ''}"`, fmt(r.qtd_pecas), `"${r.regra || 'sem regra'}"`, fmt(r.prev), r.sit.r, r.nf_numeros || '', r.nf_data_ultima ? dt(r.nf_data_ultima) : '', r.data_prevista_entrega ? dt(r.data_prevista_entrega) : ''].join(';'))];
+      : ['Data;Pedido Vale;Nº único;BR;Unidade;Código Vale;Produto;Peças;Peças apontadas (OPs);OPs;Cerâmica real;Placas reais (por peça);Regra;Cerâmica prevista;Situação;NF;Data da NF;Data prevista', ...peds.map(r => [dt(r.data_neg), r.pedido_cliente || '', r.nunota, r.br || '', `"${r.client}"`, r.cod_vale || `prod ${r.cod_sankhya}`, `"${r.descricao_produto || ''}"`, fmt(r.qtd_pecas),
+        realItem(r) ? fmt(realItem(r).pecas) : '', realItem(r)?.ops || '', realItem(r) ? fmt(realItem(r).total) : '', `"${realItem(r) ? realItem(r).placas.map(x => `${x.placa}: ${String(x.por_peca).replace('.', ',')}`).join(' | ') : ''}"`, `"${r.regra || 'sem regra'}"`, fmt(r.prev), r.sit.r, r.nf_numeros || '', r.nf_data_ultima ? dt(r.nf_data_ultima) : '', r.data_prevista_entrega ? dt(r.data_prevista_entrega) : ''].join(';'))];
     const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob(['\ufeff' + linhas.join('\n')], { type: 'text/csv;charset=utf-8' })); a.download = `ceramicas_${det.titulo.replace(/\W+/g, '_').toLowerCase()}.csv`; a.click();
   };
   const th = (r, c, al = 'left') => (
@@ -38102,7 +38106,7 @@ function CeramicaDetalhe({ det, regras, obsPorCod = {}, descPlaca, onFechar, onF
           <button onClick={onFechar} style={{ fontFamily: 'inherit', fontSize: 12.5, fontWeight: 600, padding: '8px 12px', borderRadius: 8, border: 'none', background: '#fff', color: '#0F2340', cursor: 'pointer' }}>Fechar <span style={{ fontSize: 10.5, color: C.ink3 }}>Esc</span></button>
         </div>
         <div style={{ display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', padding: '14px 22px', background: C.surface, borderBottom: `1px solid ${C.line}` }}>
-          {[['Itens de pedido', String(peds.length)], ['Peças', fmt(totPecas)], ['Cerâmica prevista', fmt(totPrev)], ['Apontado nas OPs', fmt(totAps)],
+          {[['Itens de pedido', String(peds.length)], ['Peças', fmt(totPecas)], ['Cerâmica prevista', fmt(totPrev)], ['Cerâmica real (OPs dos pedidos)', fmt(totReal)], ['Apontado nas OPs do período', fmt(totAps)],
             ['Faturados', String(cont('faturado'))], ['Parciais', String(cont('parcial'))], ['Em carteira', String(cont('pendente'))]].map(([r, v]) => (
             <div key={r}><div style={{ fontSize: 11.5, color: C.ink3 }}>{r}</div><div style={{ fontSize: 18, fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{v}</div></div>
           ))}
@@ -38118,7 +38122,7 @@ function CeramicaDetalhe({ det, regras, obsPorCod = {}, descPlaca, onFechar, onF
         <div style={{ flex: 1, minHeight: 0, overflow: 'auto', overscrollBehavior: 'contain', background: C.surface }}>
           {aba === 'pedidos' && (
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
-              <thead><tr>{th('Data', 'data')}{th('Pedido Vale', 'pedido')}{th('BR', 'br')}{th('Unidade', 'unidade')}{th('Código Vale', 'cod')}{th('Peças', 'pecas', 'right')}{th('Regra (placas por peça)')}{th(det.placa ? `Previsto ${klcDim(descPlaca[det.placa])}` : 'Cerâmica prevista', 'prev', 'right')}{th('Faturamento', 'sit')}</tr></thead>
+              <thead><tr>{th('Data', 'data')}{th('Pedido Vale', 'pedido')}{th('BR', 'br')}{th('Unidade', 'unidade')}{th('Código Vale', 'cod')}{th('Peças', 'pecas', 'right')}{th('Apontado (OPs)', null, 'right')}{th('Cerâmica real', null, 'right')}{th('Regra (placas por peça)')}{th(det.placa ? `Previsto ${klcDim(descPlaca[det.placa])}` : 'Cerâmica prevista', 'prev', 'right')}{th('Faturamento', 'sit')}</tr></thead>
               <tbody>
                 {peds.map((r, k) => (
                   <tr key={r.pedido_item_id || k} style={{ background: k % 2 ? C.surface2 : C.surface }} title={r.descricao_produto}>
@@ -38126,8 +38130,14 @@ function CeramicaDetalhe({ det, regras, obsPorCod = {}, descPlaca, onFechar, onF
                     <td style={{ padding: '8px 10px', whiteSpace: 'nowrap' }}><strong>{r.pedido_cliente || '—'}</strong><div style={{ fontSize: 11, color: C.ink3 }}>nº único {r.nunota}</div></td>
                     <td style={{ padding: '8px 10px', whiteSpace: 'nowrap', fontWeight: 600, color: C.primary }}>{r.br || '—'}</td>
                     <td style={{ padding: '8px 10px', whiteSpace: 'nowrap' }}>{r.client}</td>
-                    <td style={{ padding: '8px 10px', whiteSpace: 'nowrap' }}><strong>{r.cod_vale || '—'}</strong><div style={{ fontSize: 11, color: C.ink3 }}>{r.layout_placa_mm || ''}{r.espessura_ceramica_mm ? ` · ${r.espessura_ceramica_mm} mm` : ''}</div></td>
+                    <td style={{ padding: '8px 10px', whiteSpace: 'nowrap' }}><strong>{r.cod_vale || '—'}</strong>{!r.cod_vale && <div style={{ fontSize: 10.5, color: C.warn }}>sem código Vale · produto {r.cod_sankhya}</div>}<div style={{ fontSize: 11, color: C.ink3 }}>{r.layout_placa_mm || ''}{r.espessura_ceramica_mm ? ` · ${r.espessura_ceramica_mm} mm` : ''}</div></td>
                     <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{fmt(r.qtd_pecas)}</td>
+                    {(() => { const re = realItem(r); return (<>
+                      <td style={{ padding: '8px 10px', textAlign: 'right', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>{re ? <><strong>{fmt(re.pecas)}</strong> pç<div style={{ fontSize: 11, color: C.ink3 }}>OP {re.ops}</div></> : <span style={{ color: C.ink3 }}>sem apontamento</span>}</td>
+                      <td style={{ padding: '8px 10px', textAlign: 'right', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }} title={re ? re.placas.map(x => `${x.placa} ${cerDim(x.descricao) || ''}: ${x.qtd} (${String(x.por_peca).replace('.', ',')} por peça)`).join('\n') : ''}>
+                        {re && re.total ? <><strong>{fmt(re.total)}</strong>{r.prev ? <div style={{ fontSize: 11, fontWeight: 700, color: Math.abs(re.total - r.prev) <= Math.max(1, 0.05 * r.prev) ? C.win : re.total > r.prev ? C.loss : C.warn }}>{re.total === r.prev ? 'igual ao previsto' : `${re.total > r.prev ? '+' : ''}${fmt(re.total - r.prev)} vs previsto`}</div> : null}
+                          <div style={{ fontSize: 10.5, color: C.ink3 }}>{re.placas.slice(0, 3).map(x => `${x.placa}: ${String(x.por_peca).replace('.', ',')}/pç`).join(' · ')}</div></> : <span style={{ color: C.ink3 }}>—</span>}</td>
+                    </>); })()}
                     <td style={{ padding: '8px 10px', color: r.regra ? C.ink2 : C.warn, fontSize: 12, minWidth: 220 }}>{r.regra || 'sem regra cadastrada — não entra no previsto'}</td>
                     <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{r.prev ? fmt(r.prev) : '—'}</td>
                     <td style={{ padding: '8px 10px', whiteSpace: 'nowrap' }}>
@@ -38140,8 +38150,8 @@ function CeramicaDetalhe({ det, regras, obsPorCod = {}, descPlaca, onFechar, onF
                     </td>
                   </tr>
                 ))}
-                {!peds.length && <tr><td colSpan={9} style={{ padding: 30, textAlign: 'center', color: C.ink3 }}>Nenhum item de pedido neste recorte.</td></tr>}
-                {!!peds.length && <tr style={{ borderTop: `2px solid ${C.line}`, fontWeight: 700 }}><td colSpan={5} style={{ padding: '10px' }}>Total</td><td style={{ padding: '10px', textAlign: 'right' }}>{fmt(totPecas)}</td><td /><td style={{ padding: '10px', textAlign: 'right' }}>{fmt(totPrev)}</td><td /></tr>}
+                {!peds.length && <tr><td colSpan={11} style={{ padding: 30, textAlign: 'center', color: C.ink3 }}>Nenhum item de pedido neste recorte.</td></tr>}
+                {!!peds.length && <tr style={{ borderTop: `2px solid ${C.line}`, fontWeight: 700 }}><td colSpan={5} style={{ padding: '10px' }}>Total</td><td style={{ padding: '10px', textAlign: 'right' }}>{fmt(totPecas)}</td><td /><td style={{ padding: '10px', textAlign: 'right' }}>{fmt(totReal)}</td><td /><td style={{ padding: '10px', textAlign: 'right' }}>{fmt(totPrev)}</td><td /></tr>}
               </tbody>
             </table>
           )}
@@ -38241,16 +38251,18 @@ function CeramicasDashboard() {
     let vivo = true; setDados(null);
     (async () => {
       const ler = async (q) => { const out = []; for (let de = 0; de < 100000; de += 1000) { const { data, error } = await q().range(de, de + 999); if (error) break; out.push(...(data || [])); if (!data || data.length < 1000) break; } return out; };
-      const [lista, regras, obs, vale, aps] = await Promise.all([
+      const [lista, regras, obs, vale, aps, real] = await Promise.all([
         supabase.from('mp_placas_kalocer').select('codigo_mp,descricao,unidade').then(r => r.data || []),
         supabase.from('regras_ceramica_vale').select('*').then(r => r.data || []),
         supabase.from('v_ceramica_regra_observada').select('*').limit(1000).then(r => r.data || []),
         ler(() => supabase.from('v_pedidos_vale').select('*').gte('data_neg', ini).lte('data_neg', fim).order('data_neg')),
         ler(() => supabase.from('producao_mp_apontamentos').select('cod_materia_prima,qtd_mp,data_ref,cliente_nome,nro_ordem_producao,br,desc_prod_acabado').gte('data_ref', ini).lte('data_ref', fim).order('data_ref')),
+        // cerâmica REAL por BR e produto (apontamento TOP 1600 → OP → BR, o mesmo caminho do Extrato da Gerência de Produtos)
+        ler(() => supabase.from('v_ceramica_real_br').select('*').order('br_num')),
       ]);
       if (!vivo) return;
       const cods = new Set(lista.map(l => String(l.codigo_mp)));
-      setDados({ lista, regras, obs, vale, aps: aps.filter(a => cods.has(String(a.cod_materia_prima))) });
+      setDados({ lista, regras, obs, vale, aps: aps.filter(a => cods.has(String(a.cod_materia_prima))), real });
     })();
     return () => { vivo = false; };
   }, [ini, fim]);
@@ -38261,9 +38273,13 @@ function CeramicasDashboard() {
   const mesDe = (d) => String(d || '').slice(0, 7);
   const usaPlaca = (r, cod) => [1, 2, 3, 4].some(k => String(r[`ceramica_${k}_codigo`]) === String(cod) && Number(r[`qtd_ceramica_${k}`]) > 0);
   const obsPorCod = dados.obs.reduce((acc, o) => { (acc[o.cod_vale] = acc[o.cod_vale] || []).push(o); return acc; }, {});
-  const valeAj = dados.vale.map(r => {
-    if (r.ceramica_1_codigo || !usarObs || !obsPorCod[r.cod_vale]) return r;
-    const ob = [...obsPorCod[r.cod_vale]].filter(o => Number(o.placas_por_peca) >= 0.05).sort((a, b) => b.placas_por_peca - a.placas_por_peca).slice(0, 4);
+  const realPor = Object.fromEntries((dados.real || []).map(x => [`${x.br_num}|${x.cod_pa}`, x]));
+  const brNum = (br) => (String(br || '').match(/(\d{4,6})/) || [])[1];
+  const valeAj = dados.vale.map(r0 => {
+    const r = { ...r0, real: realPor[`${brNum(r0.br)}|${r0.cod_sankhya}`] || null };
+    const chave = r.chave_regra || r.cod_vale;
+    if (r.ceramica_1_codigo || !usarObs || !obsPorCod[chave]) return r;
+    const ob = [...obsPorCod[chave]].filter(o => Number(o.placas_por_peca) >= 0.05).sort((a, b) => b.placas_por_peca - a.placas_por_peca).slice(0, 4);
     const x = { ...r, regra_observada: true };
     ob.forEach((o, k) => { const n = k + 1; x[`ceramica_${n}_codigo`] = o.placa_codigo; x[`ceramica_${n}_descricao`] = `${cerDim(o.placa_descricao) || o.placa_codigo} (observada)`;
       x[`qtd_ceramica_${n}`] = Math.round(Number(o.placas_por_peca) * 100) / 100; x[`qtd_total_ceramica_${n}`] = (Number(r.qtd_pecas) || 0) * Number(o.placas_por_peca); });
