@@ -38060,11 +38060,174 @@ const cerObsTxt = (obs) => (obs || []).filter(o => Number(o.placas_por_peca) >= 
   .map(o => `${Number(o.placas_por_peca).toLocaleString('pt-BR', { maximumFractionDigits: 1 })}× ${cerDim(o.placa_descricao) || o.placa_codigo} (${o.placa_codigo})`).join(' + ');
 
 // Painel de detalhe do dashboard de cerâmicas: pedidos, OPs/apontamentos, regras usadas e como o número é calculado.
+/* ============================================================================
+   RASTREIO DO PEDIDO (Cerâmicas · Placas e Vale) — ao clicar num pedido: pedido → OP → apontamento (tudo o que foi
+   consumido) → nota fiscal (com o lote), e o previsto × real placa a placa com o MOTIVO da diferença.
+   Base: fn_ceramica_rastreio (Sankhya ao vivo + apontamentos de produção). Mesmo caminho do Extrato da Gerência de Produtos.
+============================================================================ */
+function CeramicaRastreio({ row, descPlaca = {}, onFechar }) {
+  const C = CRMC;
+  const [d, setD] = useState(null);
+  const [erro, setErro] = useState(null);
+  const [apAberto, setApAberto] = useState(null);
+  useEffect(() => {
+    supabase.rpc('fn_ceramica_rastreio', { p_nunota: Number(row.nunota) }).then(({ data, error }) => {
+      if (error || data?.ok === false) setErro(error?.message || data?.erro); else setD(data);
+    });
+    const t = e => { if (e.key === 'Escape') onFechar(); }; window.addEventListener('keydown', t); return () => window.removeEventListener('keydown', t);
+  }, [row.nunota]);
+  const fmt = (v, c = 0) => (v == null ? '—' : Number(v).toLocaleString('pt-BR', { maximumFractionDigits: c, minimumFractionDigits: c }));
+  const dt = (x) => (x ? new Date(`${String(x).slice(0, 10)}T12:00:00`).toLocaleDateString('pt-BR') : '—');
+  const dias = (a, b) => (a && b ? Math.round((new Date(`${String(b).slice(0, 10)}T12:00:00`) - new Date(`${String(a).slice(0, 10)}T12:00:00`)) / 86400000) : null);
+  const moeda = (v) => Number(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+  const nomePlaca = (cod, desc) => `${cod} · ${cerDim(desc || descPlaca[String(cod)]) || desc || descPlaca[String(cod)] || ''}`;
+  const card = { background: C.surface, border: `1px solid ${C.line}`, borderRadius: 12, padding: '14px 16px' };
+  const h3 = { fontSize: 13.5, fontWeight: 700, color: C.ink, margin: '0 0 10px' };
+  const th = { padding: '7px 9px', textAlign: 'left', fontSize: 10.5, fontWeight: 600, color: C.ink3, textTransform: 'uppercase', whiteSpace: 'nowrap', borderBottom: `1px solid ${C.line}` };
+  const td = { padding: '8px 9px', fontSize: 12.5, borderBottom: `1px solid ${C.lineSoft}`, verticalAlign: 'top' };
+  const shell = (conteudo) => ReactDOM.createPortal(
+    <div data-rastreio onClick={onFechar} style={{ position: 'fixed', inset: 0, zIndex: 95, background: 'rgba(15,35,64,.45)', overflowY: 'auto' }}>
+      <div onClick={e => e.stopPropagation()} style={{ maxWidth: 1180, margin: '24px auto', background: C.bg, borderRadius: 16, boxShadow: '0 20px 60px rgba(16,24,40,.35)', fontFamily: FONT_BODY, color: C.ink, overflow: 'hidden' }}>
+        <div style={{ background: 'linear-gradient(135deg, #0F2340 0%, #1E3A63 100%)', color: '#fff', padding: '18px 24px', display: 'flex', gap: 14, alignItems: 'flex-start' }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 11.5, letterSpacing: 1, textTransform: 'uppercase', opacity: 0.7 }}>Rastreio do pedido</div>
+            <div style={{ fontSize: 20, fontWeight: 800, marginTop: 2 }}>{row.br || '—'} · {row.client}</div>
+            <div style={{ fontSize: 13, opacity: 0.85, marginTop: 4 }}>{row.descricao_produto}</div>
+          </div>
+          <button onClick={onFechar} style={{ fontFamily: 'inherit', fontSize: 13, fontWeight: 700, padding: '8px 14px', borderRadius: 8, border: 'none', background: '#fff', color: '#0F2340', cursor: 'pointer' }}>Fechar</button>
+        </div>
+        <div style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 16 }}>{conteudo}</div>
+      </div>
+    </div>, document.body);
+  if (erro) return shell(<div style={{ ...card, color: C.loss }}>Não consegui montar o rastreio: {erro}</div>);
+  if (!d) return shell(<div style={{ ...card, textAlign: 'center', color: C.ink3, padding: 40 }}>Buscando pedido, OPs, apontamentos e notas no Sankhya…</div>);
+
+  const cod = String(row.cod_sankhya);
+  const item = (d.itens || []).find(i => String(i.cod) === cod) || (d.itens || [])[0] || {};
+  const aps = (d.apontamentos || []).filter(a => String(a.cod_pa) === cod);
+  const nfs = (d.notas || []).filter(n => String(n.cod) === cod);
+  const ops = (d.ops || []).filter(o => !o.cod_pa || String(o.cod_pa) === cod);
+  const pecasPed = Number(item.qtd ?? row.qtd_pecas) || 0;
+  const pecasAp = aps.reduce((t, a) => t + (Number(a.pecas) || 0), 0);
+  const pecasFat = nfs.reduce((t, n) => t + (Number(n.qtd) || 0), 0);
+  // previsto por placa (regra da linha: cadastrada ou observada) × peças do pedido
+  const regra = [1, 2, 3, 4].map(k => ({ cod: row[`ceramica_${k}_codigo`], pp: Number(row[`qtd_ceramica_${k}`]) || 0, desc: row[`ceramica_${k}_descricao`] })).filter(x => x.cod && x.pp > 0);
+  const fonteRegra = !regra.length ? 'sem regra' : row.regra_observada ? (row.cod_vale ? `observada nos apontamentos (código Vale ${row.cod_vale})` : `observada nos apontamentos do produto ${cod}`) : `cadastrada para o código Vale ${row.cod_vale}`;
+  const realPor = {};
+  aps.forEach(a => (a.mps || []).filter(m => m.placa).forEach(m => { const k = String(m.mp); realPor[k] = realPor[k] || { qtd: 0, desc: m.descricao }; realPor[k].qtd += Number(m.qtd) || 0; }));
+  const placas = [...new Set([...regra.map(r => String(r.cod)), ...Object.keys(realPor)])].map(k => {
+    const rg = regra.find(r => String(r.cod) === k); const real = realPor[k]?.qtd || 0;
+    const prev = rg ? rg.pp * pecasPed : 0; const ppReal = pecasAp ? real / pecasAp : null; const dif = real - (rg ? rg.pp * pecasAp : 0);
+    let motivo;
+    if (!rg && real > 0) motivo = `Placa usada que não está na regra (${fmt(ppReal, 2)} por peça). Pode ser troca de placa na produção ou regra incompleta.`;
+    else if (rg && !real && pecasAp > 0) motivo = `A regra prevê ${fmt(rg.pp, 2)} por peça, mas nenhuma foi apontada nas OPs. Provável troca por outra placa ou apontamento sem esse material.`;
+    else if (rg && !pecasAp) motivo = 'Ainda sem apontamento de produção: não dá para comparar.';
+    else if (rg && Math.abs(ppReal - rg.pp) <= Math.max(0.05, rg.pp * 0.03)) motivo = `Consumo igual à regra (${fmt(ppReal, 2)} por peça).`;
+    else if (rg) motivo = `Apontou ${fmt(ppReal, 2)} por peça; a regra diz ${fmt(rg.pp, 2)}. ${ppReal > rg.pp ? 'Gastou' : 'Economizou'} ${fmt(Math.abs(ppReal - rg.pp), 2)} por peça × ${fmt(pecasAp)} peças apontadas = ${fmt(Math.abs(dif))} placa(s) ${ppReal > rg.pp ? 'a mais' : 'a menos'}.`;
+    return { k, desc: realPor[k]?.desc || rg?.desc, pp: rg?.pp, prev, real, ppReal, dif, motivo };
+  }).sort((a, b) => (b.prev + b.real) - (a.prev + a.real));
+  const totPrev = placas.reduce((t, p) => t + p.prev, 0), totReal = placas.reduce((t, p) => t + p.real, 0);
+  const semCeramica = !regra.length && !Object.keys(realPor).length;
+  const totDif = totReal - totPrev;
+  const kpi = (r, v, sub, cor) => (
+    <div style={{ ...card, padding: '12px 14px', borderTop: `3px solid ${cor || C.line}` }}>
+      <div style={{ fontSize: 11.5, color: C.ink3, fontWeight: 600 }}>{r}</div>
+      <div style={{ fontSize: 22, fontWeight: 800, fontVariantNumeric: 'tabular-nums', color: cor || C.ink }}>{v}</div>
+      {sub && <div style={{ fontSize: 11.5, color: C.ink3 }}>{sub}</div>}
+    </div>);
+  // linha do tempo
+  const eventos = [
+    { d: d.pedido.data, t: `Pedido ${d.pedido.numnota ? `Nro. Nota ${d.pedido.numnota}` : ''}`, s: `${row.pedido_cliente ? `pedido Vale ${row.pedido_cliente} · ` : ''}nº único ${d.pedido.nunota} · ${fmt(pecasPed)} ${String(item.un || 'pç').toLowerCase()} · previsão ${dt(d.pedido.previsao)}`, cor: '#2563EB' },
+    ...ops.map(o => ({ d: o.aberta_em, t: `OP ${o.op} aberta`, s: `${fmt(o.qtd_produzir)} a produzir${o.lote ? ` · lote ${o.lote}` : ''} · ${o.concluida ? 'concluída' : o.status === 'F' ? 'finalizada' : `status ${o.status || '—'}`}`, cor: '#7C3AED' })),
+    ...aps.map(a => ({ d: a.data, t: `Apontamento de produção (OP ${a.op || '—'})`, s: `${fmt(a.pecas)} peça(s)${a.lote ? ` · lote ${a.lote}` : ''}${a.br && row.br && br_numero_js(a.br) !== br_numero_js(row.br) ? ` · apontado para ${a.br}` : ''}`, cor: '#0D9488', ap: a })),
+    ...nfs.map(n => ({ d: n.data, t: `Faturado · NF ${n.numnota}`, s: `${fmt(n.qtd)} peça(s)${n.lote ? ` · lote ${n.lote}` : ''} · ${moeda(n.valor)}`, cor: '#16A34A' })),
+  ].sort((a, b) => String(a.d || '9999').localeCompare(String(b.d || '9999')));
+  return shell(<>
+    {semCeramica && <div style={{ ...card, background: '#F1F5F9', borderColor: '#CBD5E1' }}><strong>Este produto não leva cerâmica.</strong> Nem a regra nem os apontamentos têm placa (ex.: chapas UHMW, peças de borracha). Ele aparece aqui por ser pedido da Vale, mas fica fora da conta de cerâmica.</div>}
+    <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))' }}>
+      {kpi('Peças do pedido', fmt(pecasPed), `${item.pendente === 'N' ? 'pedido encerrado' : 'pedido pendente'} · entregue ${fmt(item.entregue)}`)}
+      {kpi('Peças apontadas', fmt(pecasAp), `${aps.length} apontamento(s) · ${ops.length} OP(s)`, pecasAp >= pecasPed ? C.win : C.warn)}
+      {kpi('Peças faturadas', fmt(pecasFat), nfs.length ? `${nfs.length} NF(s) · última ${dt(nfs[nfs.length - 1].data)}` : 'sem nota ainda', pecasFat >= pecasPed ? C.win : C.warn)}
+      {!semCeramica && kpi('Cerâmica prevista', fmt(totPrev), `regra ${fonteRegra}`)}
+      {!semCeramica && kpi('Cerâmica real', fmt(totReal), pecasAp ? `${fmt(totReal / pecasAp, 2)} placa(s) por peça` : 'sem apontamento', totReal && totPrev ? (Math.abs(totDif) <= Math.max(1, totPrev * 0.03) ? C.win : totDif > 0 ? C.loss : C.warn) : null)}
+      {!semCeramica && kpi('Diferença', totPrev || totReal ? `${totDif > 0 ? '+' : ''}${fmt(totDif)}` : '—', totPrev ? `${totDif > 0 ? '+' : ''}${fmt(100 * totDif / totPrev, 1)}% vs previsto` : '', Math.abs(totDif) <= Math.max(1, totPrev * 0.03) ? C.win : totDif > 0 ? C.loss : C.warn)}
+    </div>
+
+    {!semCeramica && <div style={card}>
+      <h3 style={h3}>Previsto × real, placa a placa</h3>
+      <div style={{ overflowX: 'auto' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead><tr><th style={th}>Placa</th><th style={{ ...th, textAlign: 'right' }}>Regra (por peça)</th><th style={{ ...th, textAlign: 'right' }}>Previsto</th><th style={{ ...th, textAlign: 'right' }}>Real (apontado)</th><th style={{ ...th, textAlign: 'right' }}>Real por peça</th><th style={{ ...th, textAlign: 'right' }}>Diferença</th><th style={th}>Por quê</th></tr></thead>
+          <tbody>{placas.map(p => { const cor = !p.pp ? C.warn : !p.real ? C.loss : Math.abs(p.ppReal - p.pp) <= Math.max(0.05, p.pp * 0.03) ? C.win : p.ppReal > p.pp ? C.loss : C.warn;
+            return (
+              <tr key={p.k}>
+                <td style={{ ...td, fontWeight: 600, maxWidth: 300 }}>{nomePlaca(p.k, p.desc)}</td>
+                <td style={{ ...td, textAlign: 'right' }}>{p.pp ? fmt(p.pp, 2) : <span style={{ color: C.warn }}>fora da regra</span>}</td>
+                <td style={{ ...td, textAlign: 'right' }}>{fmt(p.prev)}</td>
+                <td style={{ ...td, textAlign: 'right', fontWeight: 700 }}>{fmt(p.real)}</td>
+                <td style={{ ...td, textAlign: 'right' }}>{p.ppReal == null ? '—' : fmt(p.ppReal, 2)}</td>
+                <td style={{ ...td, textAlign: 'right' }}><span style={{ fontWeight: 800, color: cor, background: `${cor}15`, borderRadius: 6, padding: '2px 8px' }}>{p.dif > 0 ? '+' : ''}{fmt(p.dif)}</span></td>
+                <td style={{ ...td, color: C.ink2, minWidth: 280 }}>{p.motivo}</td>
+              </tr>); })}
+            {!placas.length && <tr><td colSpan={7} style={{ ...td, textAlign: 'center', color: C.ink3 }}>Sem regra e sem apontamento de placa.</td></tr>}</tbody>
+        </table>
+      </div>
+      <div style={{ fontSize: 11.5, color: C.ink3, marginTop: 8 }}>Previsto = regra × peças do pedido. A diferença compara o real com a regra × peças APONTADAS, para não confundir falta de produção com consumo.</div>
+    </div>}
+
+    <div style={card}>
+      <h3 style={h3}>Linha do tempo</h3>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
+        {eventos.map((e, i) => { const prox = eventos[i + 1]; const dd = prox ? dias(e.d, prox.d) : null;
+          return (
+            <div key={i} style={{ display: 'grid', gridTemplateColumns: '92px 22px 1fr', gap: 10, alignItems: 'stretch' }}>
+              <div style={{ fontSize: 12.5, color: C.ink2, fontVariantNumeric: 'tabular-nums', paddingTop: 2 }}>{dt(e.d)}</div>
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                <span style={{ width: 14, height: 14, borderRadius: 7, background: e.cor, marginTop: 3, boxShadow: `0 0 0 3px ${e.cor}25` }} />
+                {prox && <span style={{ flex: 1, width: 2, background: C.line, margin: '3px 0' }} />}
+              </div>
+              <div style={{ paddingBottom: 14 }}>
+                <div style={{ fontWeight: 700, fontSize: 13.5 }}>{e.t}
+                  {e.ap && <button onClick={() => setApAberto(apAberto === e.ap.nuapo ? null : e.ap.nuapo)} style={{ marginLeft: 8, fontFamily: 'inherit', fontSize: 11.5, border: `1px solid ${C.line}`, background: C.surface, borderRadius: 6, padding: '2px 8px', cursor: 'pointer', color: C.primary }}>{apAberto === e.ap.nuapo ? 'esconder' : 'ver tudo o que foi consumido'}</button>}</div>
+                <div style={{ fontSize: 12.5, color: C.ink2 }}>{e.s}</div>
+                {dd != null && <div style={{ fontSize: 11, color: C.ink3, marginTop: 2 }}>{dd} dia(s) até a próxima etapa</div>}
+                {e.ap && apAberto === e.ap.nuapo && (
+                  <table style={{ marginTop: 8, width: '100%', borderCollapse: 'collapse', background: C.surface2, borderRadius: 8 }}>
+                    <thead><tr><th style={th}>Material consumido</th><th style={{ ...th, textAlign: 'right' }}>Quantidade</th><th style={{ ...th, textAlign: 'right' }}>Por peça</th><th style={{ ...th, textAlign: 'right' }}>Custo</th></tr></thead>
+                    <tbody>{(e.ap.mps || []).map((m, j) => (
+                      <tr key={j}><td style={{ ...td, fontWeight: m.placa ? 700 : 400 }}>{m.mp} · {m.descricao}{m.placa && <span style={{ marginLeft: 6, fontSize: 10.5, fontWeight: 700, color: '#0D9488', background: '#E6F6F4', borderRadius: 4, padding: '1px 5px' }}>PLACA</span>}</td>
+                        <td style={{ ...td, textAlign: 'right' }}>{fmt(m.qtd, 2)} {String(m.un || '').toLowerCase()}</td><td style={{ ...td, textAlign: 'right' }}>{fmt(m.por_peca, 2)}</td><td style={{ ...td, textAlign: 'right' }}>{m.custo ? moeda(m.custo) : '—'}</td></tr>))}</tbody>
+                  </table>)}
+              </div>
+            </div>); })}
+        {!aps.length && <div style={{ fontSize: 12.5, color: C.warn, marginTop: 4 }}>Nenhum apontamento de produção encontrado para este produto no BR (nem pelo lote da nota). Se a peça saiu do estoque, o apontamento pode ter sido feito para outro BR antes.</div>}
+      </div>
+    </div>
+
+    <div style={{ display: 'grid', gap: 16, gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))' }}>
+      <div style={card}>
+        <h3 style={h3}>OPs</h3>
+        {!ops.length ? <div style={{ fontSize: 12.5, color: C.ink3 }}>Nenhuma OP ligada.</div> : (
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}><thead><tr><th style={th}>OP</th><th style={th}>Aberta</th><th style={{ ...th, textAlign: 'right' }}>A produzir</th><th style={th}>Lote</th><th style={th}>Situação</th></tr></thead>
+            <tbody>{ops.map(o => (<tr key={o.op}><td style={{ ...td, fontWeight: 700 }}>{o.op}</td><td style={td}>{dt(o.aberta_em)}</td><td style={{ ...td, textAlign: 'right' }}>{fmt(o.qtd_produzir)}</td><td style={td}>{o.lote || '—'}</td><td style={td}>{o.concluida ? 'concluída' : o.status === 'F' ? 'finalizada' : o.status || '—'}</td></tr>))}</tbody></table>)}
+      </div>
+      <div style={card}>
+        <h3 style={h3}>Notas fiscais</h3>
+        {!nfs.length ? <div style={{ fontSize: 12.5, color: C.ink3 }}>Ainda não faturado.</div> : (
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}><thead><tr><th style={th}>NF</th><th style={th}>Data</th><th style={{ ...th, textAlign: 'right' }}>Peças</th><th style={th}>Lote</th><th style={{ ...th, textAlign: 'right' }}>Valor</th></tr></thead>
+            <tbody>{nfs.map((n, i) => (<tr key={i}><td style={{ ...td, fontWeight: 700 }}>{n.numnota}</td><td style={td}>{dt(n.data)}</td><td style={{ ...td, textAlign: 'right' }}>{fmt(n.qtd)}</td><td style={td}>{n.lote || '—'}</td><td style={{ ...td, textAlign: 'right' }}>{moeda(n.valor)}</td></tr>))}</tbody></table>)}
+      </div>
+    </div>
+  </>);
+}
+const br_numero_js = (br) => (String(br || '').match(/(\d{4,6})/) || [])[1];
+
 function CeramicaDetalhe({ det, regras, obsPorCod = {}, descPlaca, onFechar, onFiltrar }) {
   const C = CRMC;
   const [aba, setAba] = useState(det.aba || (det.pedidos?.length ? 'pedidos' : 'ops'));
   const [ordem, setOrdem] = useState({ c: 'data', desc: true });
-  useEffect(() => { const t = e => { if (e.key === 'Escape') onFechar(); }; window.addEventListener('keydown', t); return () => window.removeEventListener('keydown', t); }, [onFechar]);
+  const [rastreio, setRastreio] = useState(null);   // pedido aberto no rastreio completo
+  useEffect(() => { const t = e => { if (e.key === 'Escape' && !document.querySelector('[data-rastreio]')) onFechar(); }; window.addEventListener('keydown', t); return () => window.removeEventListener('keydown', t); }, [onFechar]);
   const fmt = (v) => Math.round(Number(v) || 0).toLocaleString('pt-BR');
   const dt = (d) => (d ? new Date(`${String(d).slice(0, 10)}T12:00:00`).toLocaleDateString('pt-BR') : '—');
   const peds = (det.pedidos || []).map(r => ({ ...r, prev: cerPrevItem(r, det.placa), sit: cerSituacao(r), regra: cerRegraTxt(r) }));
@@ -38091,8 +38254,9 @@ function CeramicaDetalhe({ det, regras, obsPorCod = {}, descPlaca, onFechar, onF
       style={{ padding: '9px 10px', fontSize: 11.5, fontWeight: 600, color: C.ink3, textAlign: al, whiteSpace: 'nowrap', position: 'sticky', top: 0, background: C.surface2, borderBottom: `1px solid ${C.line}`, cursor: c ? 'pointer' : 'default', zIndex: 1 }}>
       {r}{c && ordem.c === c ? (ordem.desc ? ' ▼' : ' ▲') : ''}</th>
   );
+  const painelRastreio = rastreio ? <CeramicaRastreio row={rastreio} descPlaca={descPlaca} onFechar={() => setRastreio(null)} /> : null;
   const abas = [['pedidos', `Pedidos · ${peds.length}`], ['ops', `OPs / apontamentos · ${aps.length}`], ['regras', `Regras usadas · ${regrasUsadas.length}`], ['conta', 'Como este número é calculado']];
-  return ReactDOM.createPortal(
+  return <>{ReactDOM.createPortal(
     <div onClick={onFechar} style={{ position: 'fixed', inset: 0, zIndex: 85, background: 'rgba(15,35,64,.35)', display: 'flex', justifyContent: 'flex-end' }}>
       <aside role="dialog" aria-label={det.titulo} onClick={e => e.stopPropagation()}
         style={{ width: 'min(1180px, 100%)', height: '100%', background: C.bg, display: 'flex', flexDirection: 'column', fontFamily: FONT_BODY, color: C.ink, boxShadow: '-10px 0 40px rgba(16,24,40,.25)' }}>
@@ -38125,7 +38289,7 @@ function CeramicaDetalhe({ det, regras, obsPorCod = {}, descPlaca, onFechar, onF
               <thead><tr>{th('Data', 'data')}{th('Pedido Vale', 'pedido')}{th('BR', 'br')}{th('Unidade', 'unidade')}{th('Código Vale', 'cod')}{th('Peças', 'pecas', 'right')}{th('Apontado (OPs)', null, 'right')}{th('Cerâmica real', null, 'right')}{th('Regra (placas por peça)')}{th(det.placa ? `Previsto ${klcDim(descPlaca[det.placa])}` : 'Cerâmica prevista', 'prev', 'right')}{th('Faturamento', 'sit')}</tr></thead>
               <tbody>
                 {peds.map((r, k) => (
-                  <tr key={r.pedido_item_id || k} style={{ background: k % 2 ? C.surface2 : C.surface }} title={r.descricao_produto}>
+                  <tr key={r.pedido_item_id || k} onClick={() => setRastreio(r)} className="linha-clicavel" style={{ background: k % 2 ? C.surface2 : C.surface, cursor: 'pointer' }} title="Clique para ver o rastreio completo: OP, apontamentos, consumo e notas">
                     <td style={{ padding: '8px 10px', whiteSpace: 'nowrap', color: C.ink2 }}>{dt(r.data_neg)}</td>
                     <td style={{ padding: '8px 10px', whiteSpace: 'nowrap' }}><strong>{r.pedido_cliente || '—'}</strong><div style={{ fontSize: 11, color: C.ink3 }}>nº único {r.nunota}</div></td>
                     <td style={{ padding: '8px 10px', whiteSpace: 'nowrap', fontWeight: 600, color: C.primary }}>{r.br || '—'}</td>
@@ -38133,10 +38297,13 @@ function CeramicaDetalhe({ det, regras, obsPorCod = {}, descPlaca, onFechar, onF
                     <td style={{ padding: '8px 10px', whiteSpace: 'nowrap' }}><strong>{r.cod_vale || '—'}</strong>{!r.cod_vale && <div style={{ fontSize: 10.5, color: C.warn }}>sem código Vale · produto {r.cod_sankhya}</div>}<div style={{ fontSize: 11, color: C.ink3 }}>{r.layout_placa_mm || ''}{r.espessura_ceramica_mm ? ` · ${r.espessura_ceramica_mm} mm` : ''}</div></td>
                     <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{fmt(r.qtd_pecas)}</td>
                     {(() => { const re = realItem(r); return (<>
-                      <td style={{ padding: '8px 10px', textAlign: 'right', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>{re ? <><strong>{fmt(re.pecas)}</strong> pç<div style={{ fontSize: 11, color: C.ink3 }}>OP {re.ops}</div></> : <span style={{ color: C.ink3 }}>sem apontamento</span>}</td>
+                      <td style={{ padding: '8px 10px', textAlign: 'right', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>{re ? <><strong>{fmt(re.pecas)}</strong> pç<div style={{ fontSize: 11, color: C.ink3 }}>OP {re.ops}</div></> : <span style={{ color: C.warn, fontSize: 11.5 }}>sem apontamento no BR</span>}</td>
                       <td style={{ padding: '8px 10px', textAlign: 'right', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }} title={re ? re.placas.map(x => `${x.placa} ${cerDim(x.descricao) || ''}: ${x.qtd} (${String(x.por_peca).replace('.', ',')} por peça)`).join('\n') : ''}>
-                        {re && re.total ? <><strong>{fmt(re.total)}</strong>{r.prev ? <div style={{ fontSize: 11, fontWeight: 700, color: Math.abs(re.total - r.prev) <= Math.max(1, 0.05 * r.prev) ? C.win : re.total > r.prev ? C.loss : C.warn }}>{re.total === r.prev ? 'igual ao previsto' : `${re.total > r.prev ? '+' : ''}${fmt(re.total - r.prev)} vs previsto`}</div> : null}
-                          <div style={{ fontSize: 10.5, color: C.ink3 }}>{re.placas.slice(0, 3).map(x => `${x.placa}: ${String(x.por_peca).replace('.', ',')}/pç`).join(' · ')}</div></> : <span style={{ color: C.ink3 }}>—</span>}</td>
+                        {re && re.total ? (() => { const dif = re.total - r.prev; const ok = r.prev && Math.abs(dif) <= Math.max(1, 0.05 * r.prev); const cor = !r.prev ? C.ink2 : ok ? C.win : dif > 0 ? C.loss : C.warn;
+                          return <><strong style={{ fontSize: 14 }}>{fmt(re.total)}</strong>
+                            {r.prev ? <div style={{ marginTop: 3 }}><span style={{ fontSize: 11.5, fontWeight: 800, color: cor, background: `${cor}18`, borderRadius: 6, padding: '2px 7px' }}>{ok ? '✓ dentro do previsto' : `${dif > 0 ? '▲ +' : '▼ '}${fmt(dif)} (${dif > 0 ? '+' : ''}${Math.round(100 * dif / r.prev)}%)`}</span></div> : <div style={{ fontSize: 11, color: C.warn }}>sem previsto para comparar</div>}
+                            <div style={{ fontSize: 10.5, color: C.primary, marginTop: 2 }}>ver o porquê →</div></>; })()
+                          : (!r.regra && re && !re.total) ? <span style={{ fontSize: 11, fontWeight: 700, color: '#475569', background: '#F1F5F9', borderRadius: 6, padding: '2px 7px' }}>não leva cerâmica</span> : <span style={{ color: C.ink3 }}>—</span>}</td>
                     </>); })()}
                     <td style={{ padding: '8px 10px', color: r.regra ? C.ink2 : C.warn, fontSize: 12, minWidth: 220 }}>{r.regra || 'sem regra cadastrada — não entra no previsto'}</td>
                     <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{r.prev ? fmt(r.prev) : '—'}</td>
@@ -38233,7 +38400,7 @@ function CeramicaDetalhe({ det, regras, obsPorCod = {}, descPlaca, onFechar, onF
           )}
         </div>
       </aside>
-    </div>, document.body);
+    </div>, document.body)}{painelRastreio}</>;
 }
 
 function CeramicasDashboard() {
