@@ -2939,15 +2939,8 @@ function CicloComercial() {
   return (
     <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 22, maxWidth: 1400 }}>
 
-      {/* Sync do faturamento (bruto + Net Offer Value) */}
+      {/* período da análise (o botão de sincronizar saiu a pedido do Asael em 03/11/2026: o faturamento já sincroniza sozinho) */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        <button onClick={sincronizarFaturamento} disabled={syncing} style={{
-          display: 'flex', alignItems: 'center', gap: 6, padding: '7px 14px', fontSize: 12.5, fontWeight: 600,
-          borderRadius: 6, border: `1px solid ${T.line}`, background: T.panel, color: T.ink, cursor: syncing ? 'default' : 'pointer',
-        }}>
-          <RefreshCw size={13} className={syncing ? 'spin' : ''} /> {syncing ? 'Sincronizando…' : 'Sincronizar faturamento (bruto + Net Offer Value)'}
-        </button>
-        {syncMsg && <span style={{ fontSize: 12, color: syncMsg.startsWith('✓') ? T.oliveText : T.rustText }}>{syncMsg}</span>}
         <span style={{ flex: 1 }} />
         {/* período dos KPIs (antes ficava na tabela "Detalhe por BR", removida a pedido do Asael em 30/10/2026) */}
         <span style={{ fontSize: 12.5, color: T.inkDim }}>Período:</span>
