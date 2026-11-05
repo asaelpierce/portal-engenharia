@@ -38611,7 +38611,7 @@ function ConfPlacaPainel({ onFechar, descPlaca = {} }) {
   const [d, setD] = useState(null);
   const [tipo, setTipo] = useState('todos');
   const [sev, setSev] = useState('alta+media');
-  const [ini, setIni] = useState(`${new Date().getFullYear()}-01-01`);
+  const ini = '2026-01-01';   // foco em 2026 (Asael, 05/11/2026): a visão já traz só OPs iniciadas em 2026
   const [aberto, setAberto] = useState(null);   // { op, placa }
   const [opDet, setOpDet] = useState(null);
   useEffect(() => { supabase.from('v_conf_placa_alerta').select('*').gte('data', ini).order('data', { ascending: false }).limit(3000).then(({ data }) => setD(data || [])); }, [ini]);
@@ -38638,10 +38638,10 @@ function ConfPlacaPainel({ onFechar, descPlaca = {} }) {
         <div style={{ background: 'linear-gradient(135deg, #0F2340 0%, #1E3A63 100%)', color: '#fff', padding: '18px 28px', display: 'flex', gap: 20, alignItems: 'center', flexWrap: 'wrap' }}>
           <div style={{ flex: 1, minWidth: 280 }}>
             <div style={{ fontSize: 11, letterSpacing: 1.2, textTransform: 'uppercase', opacity: 0.65 }}>Conferência diária · placas</div>
-            <div style={{ fontSize: 24, fontWeight: 800 }}>Apontamento de placas × entrega × estrutura da OP</div>
+            <div style={{ fontSize: 24, fontWeight: 800 }}>Apontamento de placas × entrega × estrutura da OP · 2026</div>
             <div style={{ fontSize: 12, opacity: 0.75 }}>Sankhya conferido todo dia às 6h40 · requisitado, entregue ao processamento, devolvido e apontado, por OP e placa</div>
           </div>
-          <label style={{ fontSize: 12, opacity: 0.85 }}>desde <input type="date" value={ini} onChange={e => setIni(e.target.value)} style={{ fontFamily: 'inherit', fontSize: 12.5, padding: '5px 8px', borderRadius: 6, border: 'none', marginLeft: 6 }} /></label>
+          <span style={{ fontSize: 12.5, fontWeight: 700, background: 'rgba(255,255,255,.15)', borderRadius: 8, padding: '6px 12px' }}>OPs iniciadas em 2026</span>
           <button onClick={onFechar} style={{ fontFamily: 'inherit', fontSize: 13, fontWeight: 700, padding: '9px 16px', borderRadius: 8, border: 'none', background: '#fff', color: '#0F2340', cursor: 'pointer' }}>Fechar <span style={{ fontSize: 10.5, color: C.ink3 }}>Esc</span></button>
         </div>
         <div style={{ flex: 1, overflow: 'auto', padding: '20px 28px', display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -38832,7 +38832,7 @@ function CeramicasDashboard() {
         <strong>Parte dos dados não carregou</strong> — os números abaixo podem estar incompletos. {dados.falhas.join(' · ')}. Recarregue a página; se continuar, avise o Asael.</div>}
       {confResumo && <button onClick={() => setConfAberta(true)} style={{ display: 'flex', alignItems: 'center', gap: 14, textAlign: 'left', fontFamily: 'inherit', cursor: 'pointer', background: confResumo.altas ? '#FEF3F2' : '#F0FDF4', border: `1px solid ${confResumo.altas ? '#FECDCA' : '#BBF7D0'}`, borderRadius: 12, padding: '12px 16px' }}>
         <span style={{ fontSize: 26, fontWeight: 800, color: confResumo.altas ? '#B42318' : '#15803D' }}>{confResumo.total}</span>
-        <span style={{ flex: 1 }}><strong style={{ fontSize: 14 }}>Conferência de apontamento de placas</strong><div style={{ fontSize: 12, color: C.ink2 }}>{confResumo.altas} alerta(s) de gravidade alta{confResumo.comp ? ` · ${confResumo.comp} possível(is) compensação(ões) entre OPs` : ''} · apontado × entregue × estrutura da OP, conferido todo dia às 6h40</div></span>
+        <span style={{ flex: 1 }}><strong style={{ fontSize: 14 }}>Conferência de apontamento de placas</strong><div style={{ fontSize: 12, color: C.ink2 }}>OPs de 2026 · {confResumo.altas} alerta(s) de gravidade alta{confResumo.comp ? ` · ${confResumo.comp} possível(is) compensação(ões) entre OPs` : ''} · apontado × entregue × estrutura da OP, conferido todo dia às 6h40</div></span>
         <span style={{ fontSize: 12.5, fontWeight: 700, color: C.primary }}>abrir →</span>
       </button>}
       {confAberta && <ConfPlacaPainel onFechar={() => setConfAberta(false)} descPlaca={descPlaca} />}
