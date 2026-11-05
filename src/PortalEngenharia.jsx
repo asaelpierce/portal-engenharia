@@ -38142,10 +38142,13 @@ function CeramicaRastreio({ row, descPlaca = {}, onFechar }) {
   const eventos = [
     { d: d.pedido.data, t: `Pedido ${d.pedido.numnota ? `Nro. Nota ${d.pedido.numnota}` : ''}`, s: `${row.pedido_cliente ? `pedido Vale ${row.pedido_cliente} · ` : ''}nº único ${d.pedido.nunota} · ${fmt(pecasPed)} ${String(item.un || 'pç').toLowerCase()} · previsão ${dt(d.pedido.previsao)}`, cor: '#2563EB' },
     ...ops.map(o => ({ d: o.aberta_em, t: `OP ${o.op} aberta`, s: `${fmt(o.qtd_produzir)} a produzir${o.lote ? ` · lote ${o.lote}` : ''} · ${o.concluida ? 'concluída' : o.status === 'F' ? 'finalizada' : `status ${o.status || '—'}`}`, cor: '#7C3AED' })),
-    ...aps.map(a => ({ d: a.data, t: `Apontamento de produção (OP ${a.op || '—'})`, s: `${fmt(a.pecas)} peça(s)${a.lote ? ` · lote ${a.lote}` : ''}${a.br && row.br && br_numero_js(a.br) !== br_numero_js(row.br) ? ` · apontado para ${a.br}` : ''}`, cor: '#0D9488', ap: a })),
+    ...aps.map(a => ({ d: a.data, t: a.outra_op ? `Apontamento em OP de OUTRO projeto (OP ${a.op || '—'} · ${a.br || 'sem BR'})` : `Apontamento de produção (OP ${a.op || '—'})`,
+      s: `${fmt(a.pecas)} peça(s)${a.lote ? ` · lote ${a.lote}` : ''}${a.outra_op ? ' · mesmo produto e mesma quantidade da nota, dias antes do faturamento' : ''}`, cor: a.outra_op ? '#C2410C' : '#0D9488', ap: a })),
     ...nfs.map(n => ({ d: n.data, t: `Faturado · NF ${n.numnota}`, s: `${fmt(n.qtd)} peça(s)${n.lote ? ` · lote ${n.lote}` : ''} · ${moeda(n.valor)}`, cor: '#16A34A' })),
   ].sort((a, b) => String(a.d || '9999').localeCompare(String(b.d || '9999')));
   return shell(<>
+    {aps.some(a => a.outra_op) && (() => { const ao = aps.filter(a => a.outra_op); const opsBr = ops.filter(o => !ao.some(a => String(a.op) === String(o.op)));
+      return <div style={{ ...card, background: '#FFF7ED', borderColor: '#FED7AA' }}><strong style={{ color: '#9A3412' }}>Apontado em OP de outro projeto.</strong> As peças deste pedido foram apontadas na{ao.length > 1 ? 's' : ''} OP {[...new Set(ao.map(a => a.op))].join(', ')} ({[...new Set(ao.map(a => a.br || 'sem BR'))].join(', ')}) e saíram na nota{nfs.length > 1 ? 's' : ''} logo depois{opsBr.length ? <> — a OP do próprio BR ({opsBr.map(o => `${o.op} · ${o.concluida ? 'concluída' : o.status === 'F' ? 'finalizada' : 'aberta'}`).join(', ')}) ficou sem apontamento</> : null}. O consumo de placas abaixo é o dessa OP.</div>; })()}
     {semCeramica && <div style={{ ...card, background: '#F1F5F9', borderColor: '#CBD5E1' }}><strong>Este produto não leva cerâmica.</strong> Nem a regra nem os apontamentos têm placa (ex.: chapas UHMW, peças de borracha). Ele aparece aqui por ser pedido da Vale, mas fica fora da conta de cerâmica.</div>}
     <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))' }}>
       {kpi('Peças do pedido', fmt(pecasPed), `${item.pendente === 'N' ? 'pedido encerrado' : 'pedido pendente'} · entregue ${fmt(item.entregue)}`)}
@@ -38302,6 +38305,8 @@ function CeramicaDetalhe({ det, regras, obsPorCod = {}, descPlaca, onFechar, onF
                     <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{fmt(r.qtd_pecas)}</td>
                     {(() => { const re = realItem(r); return (<>
                       <td style={{ padding: '8px 10px', textAlign: 'right', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>{re ? <><strong>{fmt(re.pecas)}</strong> pç<div style={{ fontSize: 11, color: C.ink3 }}>OP {re.ops}</div></>
+                        : r.outra_op ? <span style={{ display: 'inline-block', textAlign: 'right' }}><span style={{ fontSize: 11.5, fontWeight: 700, color: '#C2410C', background: '#FFF7ED', borderRadius: 6, padding: '2px 7px' }}>apontado em outra OP</span>
+                            <div style={{ fontSize: 11, color: C.ink3, marginTop: 2 }}>OP {r.outra_op.map(x => x.op_apontada).join(', ')} · {r.outra_op[0].br_apontado || 'sem BR'} · {fmt(r.outra_op.reduce((t, x) => t + Number(x.pecas_apontadas || 0), 0))} pç</div></span>
                         : (r.ops_br || []).length ? (() => { const ab = r.ops_br.filter(o => !o.concluida && !/final/i.test(o.status || '')); const o0 = ab[0] || r.ops_br[0];
                             return <span style={{ display: 'inline-block', textAlign: 'right' }}><span style={{ fontSize: 11.5, fontWeight: 700, color: '#2563EB', background: '#E8F0FD', borderRadius: 6, padding: '2px 7px' }}>{ab.length ? 'em produção' : 'OP finalizada'}</span>
                               <div style={{ fontSize: 11, color: C.ink3, marginTop: 2 }}>OP {r.ops_br.map(o => o.op).join(', ')}{o0?.aberta_em ? ` · aberta ${dt(o0.aberta_em)}` : ''}</div>{!ab.length && <div style={{ fontSize: 10.5, color: C.warn }}>sem apontamento registrado</div>}</span>; })()
@@ -38605,6 +38610,7 @@ const CONF_TIPOS = {
   apontou_sem_entrega: { r: 'Apontou sem entrega', cor: '#B42318', d: 'A OP apontou mais placa do que recebeu: o material saiu de outro lugar.' },
   sobra_nao_devolvida: { r: 'Sobra não devolvida (OP finalizada)', cor: '#A16207', d: 'OP encerrada que recebeu mais do que apontou e não devolveu a diferença para a matéria-prima.' },
   sobra_em_op_aberta: { r: 'Sobra em OP aberta', cor: '#2563EB', d: 'OP em andamento com mais placa no processamento do que precisa para o que falta produzir.' },
+  apontado_em_outra_op: { r: 'Faturado com apontamento de outra OP', cor: '#7C3AED', d: 'A nota saiu de peças apontadas na OP de outro projeto (ex.: estoque) e a OP do próprio BR ficou sem apontamento.' },
 };
 function ConfPlacaPainel({ onFechar, descPlaca = {} }) {
   const C = CRMC;
@@ -38738,7 +38744,7 @@ function CeramicasDashboard() {
     (async () => {
       const falhas = [];   // consulta que falhar (ex.: tempo esgotado) é avisada na tela, em vez de aparecer tudo vazio
       const ler = async (q, nome) => { const out = []; for (let de = 0; de < 100000; de += 1000) { const { data, error } = await q().range(de, de + 999); if (error) { falhas.push(`${nome || 'consulta'}: ${error.message}`); break; } out.push(...(data || [])); if (!data || data.length < 1000) break; } return out; };
-      const [lista, regras, obs, vale, aps, real, opsBr] = await Promise.all([
+      const [lista, regras, obs, vale, aps, real, opsBr, outraOp] = await Promise.all([
         supabase.from('mp_placas_kalocer').select('codigo_mp,descricao,unidade').then(r => r.data || []),
         supabase.from('regras_ceramica_vale').select('*').then(r => r.data || []),
         supabase.from('v_ceramica_regra_observada').select('*').limit(1000).then(r => r.data || []),
@@ -38747,10 +38753,11 @@ function CeramicasDashboard() {
         // cerâmica REAL por BR e produto (apontamento TOP 1600 → OP → BR, o mesmo caminho do Extrato da Gerência de Produtos)
         ler(() => supabase.from('v_ceramica_real_br').select('*').order('br_num'), 'cerâmica real (apontamentos)'),
         ler(() => supabase.from('v_br_op_resumo').select('*').order('br_num'), 'OPs por BR'),
+        ler(() => supabase.from('v_conf_apont_outra_op').select('br,codprod,op_apontada,br_apontado,data_apontamento,pecas_apontadas,nf').order('nunota'), 'apontamento em outra OP'),
       ]);
       if (!vivo) return;
       const cods = new Set(lista.map(l => String(l.codigo_mp)));
-      setDados({ lista, regras, obs, vale, aps: aps.filter(a => cods.has(String(a.cod_materia_prima))), real, opsBr, falhas });
+      setDados({ lista, regras, obs, vale, aps: aps.filter(a => cods.has(String(a.cod_materia_prima))), real, opsBr, outraOp, falhas });
     })();
     return () => { vivo = false; };
   }, [ini, fim]);
@@ -38763,10 +38770,11 @@ function CeramicasDashboard() {
   const obsPorCod = dados.obs.reduce((acc, o) => { (acc[o.cod_vale] = acc[o.cod_vale] || []).push(o); return acc; }, {});
   const realPor = Object.fromEntries((dados.real || []).map(x => [`${x.br_num}|${x.cod_pa}`, x]));
   const opsPor = Object.fromEntries((dados.opsBr || []).map(x => [String(x.br_num), x.ops || []]));
+  const outraOpPor = {}; (dados.outraOp || []).forEach(x => { const k = `${(String(x.br || '').match(/(\d{4,6})/) || [])[1]}|${x.codprod}`; (outraOpPor[k] = outraOpPor[k] || []).push(x); });
   const brNum = (br) => (String(br || '').match(/(\d{4,6})/) || [])[1];
   const valeAj = dados.vale.map(r0 => {
     const opsDoBr = opsPor[brNum(r0.br)] || [];
-    const r = { ...r0, real: realPor[`${brNum(r0.br)}|${r0.cod_sankhya}`] || null, ops_br: opsDoBr.filter(o => !o.cod_pa || String(o.cod_pa) === String(r0.cod_sankhya)) };
+    const r = { ...r0, real: realPor[`${brNum(r0.br)}|${r0.cod_sankhya}`] || null, ops_br: opsDoBr.filter(o => !o.cod_pa || String(o.cod_pa) === String(r0.cod_sankhya)), outra_op: outraOpPor[`${brNum(r0.br)}|${r0.cod_sankhya}`] || null };
     const chave = r.chave_regra || r.cod_vale;
     if (r.ceramica_1_codigo || !usarObs || !obsPorCod[chave]) return r;
     const ob = [...obsPorCod[chave]].filter(o => Number(o.placas_por_peca) >= 0.05).sort((a, b) => b.placas_por_peca - a.placas_por_peca).slice(0, 4);
