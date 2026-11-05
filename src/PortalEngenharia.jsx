@@ -38425,6 +38425,7 @@ function CeramicasDashboard() {
   const [modoPlaca, setModoPlaca] = useState('codigo');   // gráfico de placas: 'codigo' (cada código em destaque) | 'medida'
   const [placaAberta, setPlacaAberta] = useState(null);   // linha do gráfico com a memória de cálculo aberta
   const [verTodasPlacas, setVerTodasPlacas] = useState(false);
+  useEffect(() => { if (!placaAberta) return undefined; const t = e => { if (e.key === 'Escape') setPlacaAberta(null); }; window.addEventListener('keydown', t); return () => window.removeEventListener('keydown', t); }, [placaAberta]);
   const focar = (k, v) => setFoco(f => ({ ...f, [k]: f[k] === v ? null : v }));
   const ini = periodo === '12m' ? new Date(hoje.getFullYear() - 1, hoje.getMonth() + 1, 1).toISOString().slice(0, 10) : `${periodo}-01-01`;
   const fim = periodo === '12m' ? hoje.toISOString().slice(0, 10) : `${periodo}-12-31`;
@@ -38653,38 +38654,57 @@ function CeramicasDashboard() {
                       </div>
                       <button onClick={() => setPlacaAberta(aberta ? null : x.chave)} style={{ fontFamily: 'inherit', fontSize: 12, fontWeight: 600, padding: '6px 10px', borderRadius: 8, border: `1px solid ${aberta ? C.primary : C.line}`, background: aberta ? C.primarySoft : C.surface, color: C.primary, cursor: 'pointer', whiteSpace: 'nowrap' }}>{aberta ? 'fechar' : 'ver os números'}</button>
                     </div>
-                    {aberta && (
-                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(440px, 1fr))', gap: 14, padding: '4px 4px 14px' }}>
+                    {aberta && ReactDOM.createPortal(
+                      <div onClick={() => setPlacaAberta(null)} style={{ position: 'fixed', inset: 0, zIndex: 90, background: 'rgba(15,35,64,.45)', display: 'flex' }}>
+                      <div onClick={e => e.stopPropagation()} style={{ width: '100%', height: '100%', background: C.bg, display: 'flex', flexDirection: 'column', fontFamily: FONT_BODY, color: C.ink }}>
+                        <div style={{ background: '#0F2340', color: '#fff', padding: '16px 24px', display: 'flex', gap: 22, alignItems: 'center', flexWrap: 'wrap' }}>
+                          <div style={{ flex: 1, minWidth: 260 }}>
+                            <div style={{ fontSize: 11.5, letterSpacing: 1, textTransform: 'uppercase', opacity: 0.7 }}>Memória de cálculo · previsto × usado na Vale{sufixo}</div>
+                            <div style={{ fontSize: 22, fontWeight: 800, marginTop: 2 }}>{modoPlaca === 'codigo' ? `${cods[0]} · ${x.d ? x.d.replace(/×/g, ' × ') : ''}` : `${x.chave.replace(/×/g, ' × ')} · cód. ${cods.join(', ')}`}</div>
+                            <div style={{ fontSize: 12.5, opacity: 0.8 }}>{modoPlaca === 'codigo' ? (descPlaca[cods[0]] || prev[cods[0]]?.desc || '') : ''}</div>
+                          </div>
+                          {[['Previsto', fmt(x.prev), `${pedsUnicos} item(ns) de pedido`, '#C4B5FD'], ['Usado', fmt(x.real), `${x.aps.length} apontamento(s) · ${new Set(x.aps.map(a => a.nro_ordem_producao)).size} OP(s)`, '#FCA5A5'],
+                            ['Diferença', dif == null ? '—' : `${dif > 0 ? '+' : ''}${dif.toFixed(0)}%`, dif == null ? '' : `${fmt(x.real - x.prev)} placas`, '#fff']].map(([r, v, sub, cor]) => (
+                            <div key={r} style={{ textAlign: 'right' }}>
+                              <div style={{ fontSize: 11.5, opacity: 0.75 }}>{r}</div>
+                              <div style={{ fontSize: 24, fontWeight: 800, color: cor, fontVariantNumeric: 'tabular-nums' }}>{v}</div>
+                              <div style={{ fontSize: 11, opacity: 0.7 }}>{sub}</div>
+                            </div>))}
+                          <button onClick={() => setPlacaAberta(null)} style={{ fontFamily: 'inherit', fontSize: 13, fontWeight: 700, padding: '8px 14px', borderRadius: 8, border: 'none', background: '#fff', color: '#0F2340', cursor: 'pointer' }}>Fechar <span style={{ fontSize: 10.5, color: C.ink3 }}>Esc</span></button>
+                        </div>
+                        <div style={{ flex: 1, overflow: 'auto', padding: 20 }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(620px, 1fr))', gap: 16 }}>
                         <div style={{ border: `1px solid #DDD6FE`, borderRadius: 10, overflow: 'hidden' }}>
                           <div style={{ background: '#F5F3FF', padding: '8px 10px', fontSize: 12.5, fontWeight: 700, color: '#5B21B6' }}>Previsto = peças do pedido × placas por peça da regra · {fmt(x.prev)} placas</div>
-                          <div style={{ maxHeight: 340, overflow: 'auto' }}>
+                          <div style={{ overflowX: 'auto' }}>
                             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                              <thead><tr><th style={thm}>Data</th><th style={thm}>BR</th><th style={thm}>Pedido Vale</th><th style={thm}>Unidade</th>{modoPlaca === 'medida' && <th style={thm}>Placa</th>}<th style={{ ...thm, textAlign: 'right' }}>Peças</th><th style={{ ...thm, textAlign: 'right' }}>× por peça</th><th style={{ ...thm, textAlign: 'right' }}>= Previsto</th></tr></thead>
+                              <thead><tr><th style={thm}>Data</th><th style={thm}>BR</th><th style={thm}>Pedido Vale</th><th style={thm}>Unidade</th>{modoPlaca === 'medida' && <th style={thm}>Placa</th>}<th style={thm}>Código Vale · produto</th><th style={{ ...thm, textAlign: 'right' }}>Peças</th><th style={{ ...thm, textAlign: 'right' }}>× por peça</th><th style={{ ...thm, textAlign: 'right' }}>= Previsto</th></tr></thead>
                               <tbody>{[...x.itens].sort((a, b) => String(b.r.data_neg).localeCompare(String(a.r.data_neg))).map((i, k) => (
                                 <tr key={k}>
                                   <td style={tdm}>{dtx(i.r.data_neg)}</td><td style={{ ...tdm, fontWeight: 600 }}>{i.r.br || '—'}</td><td style={tdm}>{i.r.pedido_cliente || '—'}</td>
-                                  <td style={{ ...tdm, maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis' }}>{i.r.client}</td>
+                                  <td style={tdm}>{i.r.client}</td>
                                   {modoPlaca === 'medida' && <td style={tdm}>{i.cod}</td>}
+                                  <td style={{ ...tdm, whiteSpace: 'normal', minWidth: 220, fontSize: 11.5 }}>{i.r.cod_vale ? `${i.r.cod_vale} · ` : ''}{i.r.descricao_produto}</td>
                                   <td style={{ ...tdm, textAlign: 'right' }}>{fmt(i.r.qtd_pecas)}</td>
                                   <td style={{ ...tdm, textAlign: 'right' }} title={i.r.regra_observada ? 'regra observada nos apontamentos' : 'regra cadastrada'}>{String(i.pp).replace('.', ',')}{i.r.regra_observada ? <span style={{ fontSize: 10, color: C.warn }}> obs.</span> : ''}</td>
                                   <td style={{ ...tdm, textAlign: 'right', fontWeight: 700 }}>{fmt(i.q)}</td>
                                 </tr>))}
-                                {!x.itens.length && <tr><td colSpan={8} style={{ ...tdm, textAlign: 'center', color: C.ink3 }}>Nenhum pedido no recorte usa esta placa pela regra.</td></tr>}
-                                {x.itens.length > 0 && <tr><td colSpan={modoPlaca === 'medida' ? 5 : 4} style={{ ...tdm, fontWeight: 700 }}>Total · {x.itens.length} item(ns)</td><td style={{ ...tdm, textAlign: 'right', fontWeight: 700 }}>{fmt(x.itens.reduce((t, i) => t + (Number(i.r.qtd_pecas) || 0), 0))}</td><td style={tdm} /><td style={{ ...tdm, textAlign: 'right', fontWeight: 800 }}>{fmt(x.prev)}</td></tr>}</tbody>
+                                {!x.itens.length && <tr><td colSpan={9} style={{ ...tdm, textAlign: 'center', color: C.ink3 }}>Nenhum pedido no recorte usa esta placa pela regra.</td></tr>}
+                                {x.itens.length > 0 && <tr><td colSpan={modoPlaca === 'medida' ? 6 : 5} style={{ ...tdm, fontWeight: 700 }}>Total · {x.itens.length} item(ns)</td><td style={{ ...tdm, textAlign: 'right', fontWeight: 700 }}>{fmt(x.itens.reduce((t, i) => t + (Number(i.r.qtd_pecas) || 0), 0))}</td><td style={tdm} /><td style={{ ...tdm, textAlign: 'right', fontWeight: 800 }}>{fmt(x.prev)}</td></tr>}</tbody>
                             </table>
                           </div>
                         </div>
                         <div style={{ border: `1px solid #FECACA`, borderRadius: 10, overflow: 'hidden' }}>
                           <div style={{ background: '#FEF2F2', padding: '8px 10px', fontSize: 12.5, fontWeight: 700, color: '#991B1B' }}>Usado = placas lançadas no apontamento das OPs Vale · {fmt(x.real)} placas</div>
-                          <div style={{ maxHeight: 340, overflow: 'auto' }}>
+                          <div style={{ overflowX: 'auto' }}>
                             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                               <thead><tr><th style={thm}>Data</th><th style={thm}>OP</th><th style={thm}>BR</th><th style={thm}>Unidade</th>{modoPlaca === 'medida' && <th style={thm}>Placa</th>}<th style={thm}>Produto acabado</th><th style={{ ...thm, textAlign: 'right' }}>Placas</th></tr></thead>
                               <tbody>{[...x.aps].sort((a, b) => String(b.data_ref).localeCompare(String(a.data_ref))).map((a, k) => (
                                 <tr key={k}>
                                   <td style={tdm}>{dtx(a.data_ref)}</td><td style={{ ...tdm, fontWeight: 600 }}>{a.nro_ordem_producao || '—'}</td><td style={tdm}>{a.br || '—'}</td>
-                                  <td style={{ ...tdm, maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.cliente_nome}</td>
+                                  <td style={tdm}>{a.cliente_nome}</td>
                                   {modoPlaca === 'medida' && <td style={tdm}>{a.cod_materia_prima}</td>}
-                                  <td style={{ ...tdm, maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis' }} title={a.desc_prod_acabado}>{a.desc_prod_acabado}</td>
+                                  <td style={{ ...tdm, whiteSpace: 'normal', minWidth: 260, fontSize: 11.5 }}>{a.desc_prod_acabado}</td>
                                   <td style={{ ...tdm, textAlign: 'right', fontWeight: 700 }}>{fmt(a.qtd_mp)}</td>
                                 </tr>))}
                                 {!x.aps.length && <tr><td colSpan={7} style={{ ...tdm, textAlign: 'center', color: C.ink3 }}>Nenhum apontamento desta placa nas OPs Vale do recorte.</td></tr>}
@@ -38692,8 +38712,11 @@ function CeramicasDashboard() {
                             </table>
                           </div>
                         </div>
-                        <div style={{ gridColumn: '1 / -1', fontSize: 11.5, color: C.ink3 }}>O previsto conta os pedidos pela data do pedido; o usado conta os apontamentos pela data da produção — um pedido do fim do período pode ainda não ter sido produzido, e um apontamento do começo pode ser de pedido do período anterior.</div>
-                      </div>)}
+                        <div style={{ gridColumn: '1 / -1', fontSize: 12, color: C.ink3 }}>O previsto conta os pedidos pela data do pedido; o usado conta os apontamentos pela data da produção — um pedido do fim do período pode ainda não ter sido produzido, e um apontamento do começo pode ser de pedido do período anterior.</div>
+                      </div>
+                        </div>
+                      </div>
+                      </div>, document.body)}
                   </div>
                 ); })}
               {todas.length > 12 && <button onClick={() => setVerTodasPlacas(!verTodasPlacas)} style={{ marginTop: 8, fontFamily: 'inherit', fontSize: 12.5, border: 'none', background: 'none', color: C.primary, cursor: 'pointer', fontWeight: 600 }}>{verTodasPlacas ? 'mostrar só as 12 maiores' : `ver todas as ${todas.length} placas`}</button>}
