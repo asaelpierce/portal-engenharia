@@ -38422,6 +38422,9 @@ function CeramicasDashboard() {
   const [foco, setFoco] = useState({ mes: null, unidade: null, esp: null, placa: null });
   const [det, setDet] = useState(null);
   const [usarObs, setUsarObs] = useState(true);   // códigos sem regra usam a regra observada nas OPs
+  const [modoPlaca, setModoPlaca] = useState('codigo');   // gráfico de placas: 'codigo' (cada código em destaque) | 'medida'
+  const [placaAberta, setPlacaAberta] = useState(null);   // linha do gráfico com a memória de cálculo aberta
+  const [verTodasPlacas, setVerTodasPlacas] = useState(false);
   const focar = (k, v) => setFoco(f => ({ ...f, [k]: f[k] === v ? null : v }));
   const ini = periodo === '12m' ? new Date(hoje.getFullYear() - 1, hoje.getMonth() + 1, 1).toISOString().slice(0, 10) : `${periodo}-01-01`;
   const fim = periodo === '12m' ? hoje.toISOString().slice(0, 10) : `${periodo}-12-31`;
@@ -38590,43 +38593,111 @@ function CeramicasDashboard() {
 
       <div style={{ display: 'grid', gap: 16, gridTemplateColumns: 'minmax(0, 2fr) minmax(300px, 1fr)' }}>
         <section style={caixa}>
-          {titulo('Placas por medida: previsto × usado na Vale', 'previsto = pedidos de venda Vale × placas por peça da regra (pela data do pedido) · usado = placas consumidas na produção, apontadas nas OPs Vale (pela data do apontamento) · faturamento não entra · placas de mesma medida (ex.: 2150 e 12320) somadas · clique na linha para ver pedidos e OPs')}
+          {titulo(`Placas ${modoPlaca === 'codigo' ? 'por código' : 'por medida'}: previsto × usado na Vale`, 'previsto = pedidos de venda Vale × placas por peça da regra (pela data do pedido) · usado = placas consumidas na produção, apontadas nas OPs Vale (pela data do apontamento) · faturamento não entra · clique em "ver os números" para a memória de cálculo')}
           {(() => {
-            const dimDe = (cod, desc) => cerDim(desc) || cerDim(descPlaca[cod]) || `cód. ${cod}`;
-            const porDim = {};
-            Object.values(prev).forEach(o => { const d = dimDe(o.cod, o.desc); const x = porDim[d] || (porDim[d] = { d, prev: 0, real: 0, cods: new Set() }); x.prev += o.qtd; x.cods.add(o.cod); });
-            Object.entries(real).forEach(([c, v]) => { const d = dimDe(c, descPlaca[c]); const x = porDim[d] || (porDim[d] = { d, prev: 0, real: 0, cods: new Set() }); x.real += v; x.cods.add(c); });
-            const linhas = Object.values(porDim).sort((a2, b2) => Math.max(b2.prev, b2.real) - Math.max(a2.prev, a2.real)).slice(0, 12);
+            const dimDe = (cod, desc) => cerDim(desc) || cerDim(descPlaca[cod]) || '';
+            // contribuição de cada pedido (previsto) e de cada apontamento (usado) por código de placa
+            const contribPrev = {}; V.forEach(r => [1, 2, 3, 4].forEach(k => { const c = r[`ceramica_${k}_codigo`]; const q = Number(r[`qtd_total_ceramica_${k}`]) || 0; if (!c || !q) return;
+              (contribPrev[String(c)] = contribPrev[String(c)] || []).push({ r, pp: Number(r[`qtd_ceramica_${k}`]) || 0, q }); }));
+            const contribReal = {}; AV.forEach(a => { const c = String(a.cod_materia_prima); (contribReal[c] = contribReal[c] || []).push(a); });
+            const grupos = {};
+            [...new Set([...Object.keys(prev), ...Object.keys(real)])].forEach(c => {
+              const d = dimDe(c, prev[c]?.desc);
+              const chave = modoPlaca === 'codigo' ? c : (d || `cód. ${c}`);
+              const g = grupos[chave] || (grupos[chave] = { chave, d, cods: new Set(), prev: 0, real: 0, itens: [], aps: [] });
+              g.cods.add(c); g.prev += prev[c]?.qtd || 0; g.real += real[c] || 0;
+              (contribPrev[c] || []).forEach(x => g.itens.push({ ...x, cod: c })); (contribReal[c] || []).forEach(a => g.aps.push(a));
+            });
+            const todas = Object.values(grupos).sort((a2, b2) => Math.max(b2.prev, b2.real) - Math.max(a2.prev, a2.real));
+            const linhas = verTodasPlacas ? todas : todas.slice(0, 12);
             const mx = Math.max(1, ...linhas.map(x => Math.max(x.prev, x.real)));
             if (!linhas.length) return <div style={{ fontSize: 12.5, color: C.ink3 }}>Sem regra nem apontamento de placas no recorte.</div>;
+            const dtx = (x) => (x ? new Date(`${String(x).slice(0, 10)}T12:00:00`).toLocaleDateString('pt-BR') : '—');
+            const thm = { padding: '6px 8px', textAlign: 'left', fontSize: 10.5, fontWeight: 600, color: C.ink3, textTransform: 'uppercase', whiteSpace: 'nowrap', borderBottom: `1px solid ${C.line}`, position: 'sticky', top: 0, background: C.surface };
+            const tdm = { padding: '6px 8px', fontSize: 12, borderBottom: `1px solid ${C.lineSoft}`, whiteSpace: 'nowrap' };
             return (<>
-              <div style={{ display: 'flex', gap: 16, fontSize: 12, color: C.ink2, marginBottom: 8 }}>
+              <div style={{ display: 'flex', gap: 16, fontSize: 12, color: C.ink2, marginBottom: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                 <span><span style={{ display: 'inline-block', width: 12, height: 8, borderRadius: 2, background: '#7C3AED', marginRight: 6 }} />previsto · pedidos de venda × regra</span>
                 <span><span style={{ display: 'inline-block', width: 12, height: 8, borderRadius: 2, background: KLC_CATS.consumo.cor, marginRight: 6 }} />usado · consumido na produção (OPs Vale)</span>
+                <span style={{ flex: 1 }} />
+                <span style={{ display: 'inline-flex', border: `1px solid ${C.line}`, borderRadius: 8, overflow: 'hidden' }}>
+                  {[['codigo', 'Por código'], ['medida', 'Por medida']].map(([k, r]) => (
+                    <button key={k} onClick={() => { setModoPlaca(k); setPlacaAberta(null); }} style={{ fontFamily: 'inherit', fontSize: 12, fontWeight: modoPlaca === k ? 700 : 500, padding: '5px 12px', border: 'none', cursor: 'pointer', background: modoPlaca === k ? C.primary : C.surface, color: modoPlaca === k ? '#fff' : C.ink2 }}>{r}</button>))}
+                </span>
               </div>
-              {linhas.map(x => { const dif = x.prev && x.real ? (x.real / x.prev - 1) * 100 : null; const cods = [...x.cods];
+              {linhas.map(x => { const dif = x.prev && x.real ? (x.real / x.prev - 1) * 100 : null; const cods = [...x.cods]; const aberta = placaAberta === x.chave;
+                const corDif = dif == null ? C.ink3 : Math.abs(dif) <= 10 ? C.win : dif > 0 ? C.loss : C.primary;
+                const pedsUnicos = new Set(x.itens.map(i => i.r.pedido_item_id || `${i.r.nunota}-${i.r.cod_sankhya}`)).size;
                 return (
-                  <div key={x.d} onClick={() => { const l = V.filter(r => cods.some(c => usaPlaca(r, c))); abrir(`Placa ${x.d}${sufixo}`, `códigos ${cods.join(', ')} · previsto pela regra e usado nas OPs Vale`, l, AV.filter(a => cods.includes(String(a.cod_materia_prima))), { aba: 'ops', conta: `previsto ${fmt(x.prev)} · usado ${fmt(x.real)}${dif != null ? ` · diferença ${dif > 0 ? '+' : ''}${dif.toFixed(0)}%` : ''}` }); }}
-                    style={{ display: 'grid', gridTemplateColumns: 'minmax(120px, 170px) 1fr minmax(150px, auto)', gap: 12, alignItems: 'center', padding: '7px 4px', borderTop: `1px solid ${C.lineSoft}`, cursor: 'pointer' }}
-                    onMouseEnter={e => { e.currentTarget.style.background = C.surface2; }} onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}>
-                    <div style={{ minWidth: 0 }}>
-                      <div style={{ fontWeight: 700, fontSize: 13 }}>{x.d}</div>
-                      <div style={{ fontSize: 11, color: C.ink3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={cods.map(c => `${c} · ${descPlaca[c] || ''}`).join('\n')}>cód. {cods.join(', ')}</div>
-                    </div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                      <div style={{ height: 9, borderRadius: 4, background: C.lineSoft, overflow: 'hidden' }}><div style={{ width: `${100 * x.prev / mx}%`, height: '100%', background: '#7C3AED' }} /></div>
-                      <div style={{ height: 9, borderRadius: 4, background: C.lineSoft, overflow: 'hidden' }}><div style={{ width: `${100 * x.real / mx}%`, height: '100%', background: KLC_CATS.consumo.cor }} /></div>
-                    </div>
-                    <div style={{ fontSize: 12, lineHeight: 1.45, textAlign: 'right', whiteSpace: 'nowrap' }}>
-                      <div><span style={{ color: '#7C3AED' }}>previsto</span> <strong>{x.prev ? fmt(x.prev) : '—'}</strong></div>
-                      <div><span style={{ color: KLC_CATS.consumo.cor }}>usado</span> <strong>{x.real ? fmt(x.real) : '—'}</strong>
-                        {dif != null && <span style={{ marginLeft: 6, fontWeight: 700, color: Math.abs(dif) <= 10 ? C.win : dif > 0 ? C.loss : C.primary }}>{dif > 0 ? '+' : ''}{dif.toFixed(0)}%</span>}
-                        {!x.prev && x.real > 0 && <span style={{ marginLeft: 6, fontSize: 11, color: C.ink3 }}>sem previsto</span>}
+                  <div key={x.chave} style={{ borderTop: `1px solid ${C.lineSoft}` }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(190px, 240px) 1fr minmax(170px, auto) auto', gap: 14, alignItems: 'center', padding: '9px 4px' }}>
+                      <div style={{ minWidth: 0, cursor: 'pointer' }} title="abrir pedidos e OPs desta placa"
+                        onClick={() => { const l = V.filter(r => cods.some(c => usaPlaca(r, c))); abrir(`Placa ${modoPlaca === 'codigo' ? `${cods[0]} · ${x.d || ''}` : x.chave}${sufixo}`, `códigos ${cods.join(', ')} · previsto pela regra e usado nas OPs Vale`, l, AV.filter(a => cods.includes(String(a.cod_materia_prima))), { placa: modoPlaca === 'codigo' ? cods[0] : undefined }); }}>
+                        {modoPlaca === 'codigo'
+                          ? <><div style={{ fontSize: 15, fontWeight: 800, color: C.ink, letterSpacing: 0.2 }}>{cods[0]}<span style={{ fontWeight: 600, color: C.ink2, fontSize: 13.5 }}> · {x.d ? x.d.replace(/×/g, ' × ') : 'sem medida'}</span></div>
+                              <div style={{ fontSize: 11, color: C.ink3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={descPlaca[cods[0]] || ''}>{descPlaca[cods[0]] || prev[cods[0]]?.desc || ''}</div></>
+                          : <><div style={{ fontSize: 15, fontWeight: 800 }}>{x.chave.replace(/×/g, ' × ')}</div>
+                              <div style={{ fontSize: 11, color: C.ink3 }}>cód. {cods.join(', ')}</div></>}
                       </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                        <div style={{ height: 10, borderRadius: 4, background: C.lineSoft, overflow: 'hidden' }}><div style={{ width: `${100 * x.prev / mx}%`, height: '100%', background: '#7C3AED' }} /></div>
+                        <div style={{ height: 10, borderRadius: 4, background: C.lineSoft, overflow: 'hidden' }}><div style={{ width: `${100 * x.real / mx}%`, height: '100%', background: KLC_CATS.consumo.cor }} /></div>
+                      </div>
+                      <div style={{ fontSize: 12.5, lineHeight: 1.5, textAlign: 'right', whiteSpace: 'nowrap' }}>
+                        <div><span style={{ color: '#7C3AED' }}>previsto</span> <strong>{x.prev ? fmt(x.prev) : '—'}</strong> <span style={{ fontSize: 11, color: C.ink3 }}>{x.itens.length ? `${pedsUnicos} item(ns)` : ''}</span></div>
+                        <div><span style={{ color: KLC_CATS.consumo.cor }}>usado</span> <strong>{x.real ? fmt(x.real) : '—'}</strong> <span style={{ fontSize: 11, color: C.ink3 }}>{x.aps.length ? `${new Set(x.aps.map(a => a.nro_ordem_producao)).size} OP(s)` : ''}</span>
+                          {dif != null && <span style={{ marginLeft: 6, fontWeight: 800, color: corDif, background: `${corDif}15`, borderRadius: 5, padding: '1px 6px' }}>{dif > 0 ? '+' : ''}{dif.toFixed(0)}%</span>}
+                          {!x.prev && x.real > 0 && <span style={{ marginLeft: 6, fontSize: 11, color: C.warn }}>sem previsto</span>}
+                          {x.prev > 0 && !x.real && <span style={{ marginLeft: 6, fontSize: 11, color: C.warn }}>nada apontado</span>}
+                        </div>
+                      </div>
+                      <button onClick={() => setPlacaAberta(aberta ? null : x.chave)} style={{ fontFamily: 'inherit', fontSize: 12, fontWeight: 600, padding: '6px 10px', borderRadius: 8, border: `1px solid ${aberta ? C.primary : C.line}`, background: aberta ? C.primarySoft : C.surface, color: C.primary, cursor: 'pointer', whiteSpace: 'nowrap' }}>{aberta ? 'fechar' : 'ver os números'}</button>
                     </div>
+                    {aberta && (
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(440px, 1fr))', gap: 14, padding: '4px 4px 14px' }}>
+                        <div style={{ border: `1px solid #DDD6FE`, borderRadius: 10, overflow: 'hidden' }}>
+                          <div style={{ background: '#F5F3FF', padding: '8px 10px', fontSize: 12.5, fontWeight: 700, color: '#5B21B6' }}>Previsto = peças do pedido × placas por peça da regra · {fmt(x.prev)} placas</div>
+                          <div style={{ maxHeight: 340, overflow: 'auto' }}>
+                            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                              <thead><tr><th style={thm}>Data</th><th style={thm}>BR</th><th style={thm}>Pedido Vale</th><th style={thm}>Unidade</th>{modoPlaca === 'medida' && <th style={thm}>Placa</th>}<th style={{ ...thm, textAlign: 'right' }}>Peças</th><th style={{ ...thm, textAlign: 'right' }}>× por peça</th><th style={{ ...thm, textAlign: 'right' }}>= Previsto</th></tr></thead>
+                              <tbody>{[...x.itens].sort((a, b) => String(b.r.data_neg).localeCompare(String(a.r.data_neg))).map((i, k) => (
+                                <tr key={k}>
+                                  <td style={tdm}>{dtx(i.r.data_neg)}</td><td style={{ ...tdm, fontWeight: 600 }}>{i.r.br || '—'}</td><td style={tdm}>{i.r.pedido_cliente || '—'}</td>
+                                  <td style={{ ...tdm, maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis' }}>{i.r.client}</td>
+                                  {modoPlaca === 'medida' && <td style={tdm}>{i.cod}</td>}
+                                  <td style={{ ...tdm, textAlign: 'right' }}>{fmt(i.r.qtd_pecas)}</td>
+                                  <td style={{ ...tdm, textAlign: 'right' }} title={i.r.regra_observada ? 'regra observada nos apontamentos' : 'regra cadastrada'}>{String(i.pp).replace('.', ',')}{i.r.regra_observada ? <span style={{ fontSize: 10, color: C.warn }}> obs.</span> : ''}</td>
+                                  <td style={{ ...tdm, textAlign: 'right', fontWeight: 700 }}>{fmt(i.q)}</td>
+                                </tr>))}
+                                {!x.itens.length && <tr><td colSpan={8} style={{ ...tdm, textAlign: 'center', color: C.ink3 }}>Nenhum pedido no recorte usa esta placa pela regra.</td></tr>}
+                                {x.itens.length > 0 && <tr><td colSpan={modoPlaca === 'medida' ? 5 : 4} style={{ ...tdm, fontWeight: 700 }}>Total · {x.itens.length} item(ns)</td><td style={{ ...tdm, textAlign: 'right', fontWeight: 700 }}>{fmt(x.itens.reduce((t, i) => t + (Number(i.r.qtd_pecas) || 0), 0))}</td><td style={tdm} /><td style={{ ...tdm, textAlign: 'right', fontWeight: 800 }}>{fmt(x.prev)}</td></tr>}</tbody>
+                            </table>
+                          </div>
+                        </div>
+                        <div style={{ border: `1px solid #FECACA`, borderRadius: 10, overflow: 'hidden' }}>
+                          <div style={{ background: '#FEF2F2', padding: '8px 10px', fontSize: 12.5, fontWeight: 700, color: '#991B1B' }}>Usado = placas lançadas no apontamento das OPs Vale · {fmt(x.real)} placas</div>
+                          <div style={{ maxHeight: 340, overflow: 'auto' }}>
+                            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                              <thead><tr><th style={thm}>Data</th><th style={thm}>OP</th><th style={thm}>BR</th><th style={thm}>Unidade</th>{modoPlaca === 'medida' && <th style={thm}>Placa</th>}<th style={thm}>Produto acabado</th><th style={{ ...thm, textAlign: 'right' }}>Placas</th></tr></thead>
+                              <tbody>{[...x.aps].sort((a, b) => String(b.data_ref).localeCompare(String(a.data_ref))).map((a, k) => (
+                                <tr key={k}>
+                                  <td style={tdm}>{dtx(a.data_ref)}</td><td style={{ ...tdm, fontWeight: 600 }}>{a.nro_ordem_producao || '—'}</td><td style={tdm}>{a.br || '—'}</td>
+                                  <td style={{ ...tdm, maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.cliente_nome}</td>
+                                  {modoPlaca === 'medida' && <td style={tdm}>{a.cod_materia_prima}</td>}
+                                  <td style={{ ...tdm, maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis' }} title={a.desc_prod_acabado}>{a.desc_prod_acabado}</td>
+                                  <td style={{ ...tdm, textAlign: 'right', fontWeight: 700 }}>{fmt(a.qtd_mp)}</td>
+                                </tr>))}
+                                {!x.aps.length && <tr><td colSpan={7} style={{ ...tdm, textAlign: 'center', color: C.ink3 }}>Nenhum apontamento desta placa nas OPs Vale do recorte.</td></tr>}
+                                {x.aps.length > 0 && <tr><td colSpan={modoPlaca === 'medida' ? 6 : 5} style={{ ...tdm, fontWeight: 700 }}>Total · {x.aps.length} apontamento(s) · {new Set(x.aps.map(a => a.nro_ordem_producao)).size} OP(s)</td><td style={{ ...tdm, textAlign: 'right', fontWeight: 800 }}>{fmt(x.real)}</td></tr>}</tbody>
+                            </table>
+                          </div>
+                        </div>
+                        <div style={{ gridColumn: '1 / -1', fontSize: 11.5, color: C.ink3 }}>O previsto conta os pedidos pela data do pedido; o usado conta os apontamentos pela data da produção — um pedido do fim do período pode ainda não ter sido produzido, e um apontamento do começo pode ser de pedido do período anterior.</div>
+                      </div>)}
                   </div>
                 ); })}
-              <div style={{ fontSize: 11.5, color: C.ink3, marginTop: 6 }}>% = usado em relação ao previsto (verde: até 10% de diferença · vermelho: usou mais · azul: usou menos). O previsto entra no mês do pedido e o usado no mês em que foi produzido, então num período curto o previsto tende a ser maior (o que foi vendido e ainda não foi produzido).</div>
+              {todas.length > 12 && <button onClick={() => setVerTodasPlacas(!verTodasPlacas)} style={{ marginTop: 8, fontFamily: 'inherit', fontSize: 12.5, border: 'none', background: 'none', color: C.primary, cursor: 'pointer', fontWeight: 600 }}>{verTodasPlacas ? 'mostrar só as 12 maiores' : `ver todas as ${todas.length} placas`}</button>}
+              <div style={{ fontSize: 11.5, color: C.ink3, marginTop: 6 }}>% = usado em relação ao previsto (verde: até 10% de diferença · vermelho: usou mais · azul: usou menos).</div>
             </>);
           })()}
         </section>
