@@ -38414,6 +38414,185 @@ function CeramicaDetalhe({ det, regras, obsPorCod = {}, descPlaca, onFechar, onF
     </div>, document.body)}{painelRastreio}</>;
 }
 
+/* ============================================================================
+   MEMÓRIA DE CÁLCULO DA PLACA (Cerâmicas · Placas e Vale) — conciliação do previsto (pedidos × regra) com o usado
+   (apontamentos das OPs): ponte de explicação + uma linha por BR + lançamentos recolhidos.
+============================================================================ */
+const cerProdCurto = (desc, codVale) => {
+  const d = String(desc || '').toUpperCase();
+  const tipo = (d.match(/(CHAPA|BANDEJA|PLACA|CONJUNTO|CALHA|TUBO|CURVA|REVESTIMENTO|CAIXA|PAINEL|BLOCO)/) || [])[1];
+  const c = (d.match(/COMPRIMENTO\D{0,3}(\d+)/) || [])[1], l = (d.match(/LARGURA\D{0,3}(\d+)/) || [])[1], e = (d.match(/ESPESSURA\D{0,3}(\d+)/) || [])[1];
+  const comp = (d.match(/COMP(?:RIMENTO)?\D{0,3}(\d+)/) || [])[1], larg = (d.match(/LARG(?:URA)?\D{0,3}(\d+)/) || [])[1];
+  const dims = [c || comp, l || larg, e].filter(Boolean).join('×');
+  const nome = [tipo ? tipo.charAt(0) + tipo.slice(1).toLowerCase() : null, /KALIMPACT/.test(d) ? 'Kalimpact' : null, dims || null].filter(Boolean).join(' ');
+  return `${nome || String(desc || '').slice(0, 40)}${codVale ? ` · ${codVale}` : ''}`;
+};
+
+function PlacaMemoria({ x, cods, modoPlaca, descPlaca, sufixo, fmt, onFechar }) {
+  const C = CRMC;
+  const [verLanc, setVerLanc] = useState(false);
+  const [ord, setOrd] = useState('dif');
+  const num = (v) => Number(v) || 0;
+  const dt = (v) => (v ? new Date(`${String(v).slice(0, 10)}T12:00:00`).toLocaleDateString('pt-BR') : '—');
+  const brN = (br) => (String(br || '').match(/(\d{4,6})/) || [])[1] || '—';
+  // por BR: pedido (previsto) × produção (usado)
+  const porBr = {};
+  x.itens.forEach(i => { const k = brN(i.r.br); const g = porBr[k] || (porBr[k] = { k, br: i.r.br, unidade: i.r.client, prods: new Set(), pecasPed: 0, prev: 0, ppPond: 0, datasPed: [], aps: [], pecasAp: 0, usado: 0, ops: new Set(), apKeys: new Set() });
+    g.prods.add(cerProdCurto(i.r.descricao_produto, i.r.cod_vale)); g.pecasPed += num(i.r.qtd_pecas); g.prev += num(i.q); g.ppPond += num(i.pp) * num(i.r.qtd_pecas); g.datasPed.push(i.r.data_neg); g.obs = g.obs || i.r.regra_observada; });
+  x.aps.forEach(a => { const k = brN(a.br); const g = porBr[k] || (porBr[k] = { k, br: a.br, unidade: a.cliente_nome, prods: new Set(), pecasPed: 0, prev: 0, ppPond: 0, datasPed: [], aps: [], pecasAp: 0, usado: 0, ops: new Set(), apKeys: new Set() });
+    g.aps.push(a); g.usado += num(a.qtd_mp); if (a.nro_ordem_producao) g.ops.add(a.nro_ordem_producao); if (!g.prods.size) g.prods.add(cerProdCurto(a.desc_prod_acabado));
+    const ak = `${a.nuapo}-${a.seq_pa}`; if (a.nuapo && !g.apKeys.has(ak)) { g.apKeys.add(ak); g.pecasAp += num(a.qtd_lote_pa); } });
+  const linhas = Object.values(porBr).map(g => {
+    const pp = g.pecasPed ? g.ppPond / g.pecasPed : null;               // placas por peça da regra (média ponderada)
+    const ppReal = g.pecasAp ? g.usado / g.pecasAp : null;
+    const esperadoProd = pp != null && g.pecasAp ? pp * g.pecasAp : null; // o que a regra pede para as peças que foram produzidas
+    let leitura, cor;
+    if (g.prev && !g.usado) { leitura = 'pedido ainda sem apontamento desta placa (em produção ou usou outra placa)'; cor = C.primary; }
+    else if (!g.prev && g.usado) { leitura = 'produção de pedido de fora do período (ou de produto sem regra)'; cor = C.ink3; }
+    else if (esperadoProd != null) { const d = (g.usado / esperadoProd - 1) * 100; leitura = Math.abs(d) <= 5 ? 'consumo dentro da regra' : `consumo ${Math.abs(d).toFixed(0)}% ${d > 0 ? 'acima' : 'abaixo'} da regra (${String(+ppReal.toFixed(2)).replace('.', ',')} por peça × regra ${String(+pp.toFixed(2)).replace('.', ',')})`; cor = Math.abs(d) <= 5 ? C.win : d > 0 ? C.loss : C.warn; }
+    else { leitura = '—'; cor = C.ink3; }
+    if (g.prev && g.usado && g.pecasAp && g.pecasAp < g.pecasPed) leitura += ` · produzidas ${fmt(g.pecasAp)} de ${fmt(g.pecasPed)} peças`;
+    return { ...g, pp, ppReal, esperadoProd, dif: g.usado - g.prev, leitura, cor };
+  });
+  const ordenadas = [...linhas].sort((a, b) => ord === 'dif' ? Math.abs(b.dif) - Math.abs(a.dif) : ord === 'prev' ? b.prev - a.prev : ord === 'usado' ? b.usado - a.usado : String(a.k).localeCompare(String(b.k)));
+  // ponte previsto → usado
+  const semProducao = linhas.filter(g => g.prev && !g.usado).reduce((t, g) => t + g.prev, 0);
+  const foraPeriodo = linhas.filter(g => !g.prev && g.usado).reduce((t, g) => t + g.usado, 0);
+  const ambos = linhas.filter(g => g.prev && g.usado);
+  const difPecas = ambos.reduce((t, g) => t + ((g.esperadoProd ?? g.prev) - g.prev), 0);
+  const difConsumo = ambos.reduce((t, g) => t + (g.usado - (g.esperadoProd ?? g.prev)), 0);
+  const ponte = [
+    { r: 'Previsto (pedidos × regra)', v: x.prev, tipo: 'base' },
+    { r: 'Pedidos ainda sem apontamento desta placa', v: -semProducao, n: linhas.filter(g => g.prev && !g.usado).length },
+    { r: 'Produção de pedidos de fora do período', v: foraPeriodo, n: linhas.filter(g => !g.prev && g.usado).length },
+    { r: 'Peças produzidas ≠ peças pedidas (mesmo BR)', v: difPecas, n: ambos.filter(g => g.pecasAp !== g.pecasPed).length },
+    { r: 'Consumo por peça diferente da regra', v: difConsumo, n: ambos.filter(g => g.esperadoProd != null && Math.abs(g.usado - g.esperadoProd) > 0.5).length },
+    { r: 'Usado (apontado nas OPs)', v: x.real, tipo: 'base' },
+  ];
+  const corV = (v) => (v > 0 ? C.loss : v < 0 ? C.primary : C.ink3);
+  const sinal = (v) => `${v > 0 ? '+' : v < 0 ? '−' : ''}${fmt(Math.abs(v))}`;
+  const dif = x.prev ? (x.real / x.prev - 1) * 100 : null;
+  const card = { background: C.surface, border: `1px solid ${C.line}`, borderRadius: 12 };
+  const th = (al = 'right') => ({ padding: '9px 10px', textAlign: al, fontSize: 10.5, fontWeight: 700, color: C.ink3, textTransform: 'uppercase', letterSpacing: 0.3, whiteSpace: 'nowrap', borderBottom: `1px solid ${C.line}`, background: '#F8FAFC', position: 'sticky', top: 0, zIndex: 1 });
+  const td = (al = 'right') => ({ padding: '9px 10px', textAlign: al, fontSize: 12.5, borderBottom: `1px solid ${C.lineSoft}`, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums', verticalAlign: 'top' });
+  const umaLinha = { maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' };
+  return ReactDOM.createPortal(
+    <div onClick={onFechar} style={{ position: 'fixed', inset: 0, zIndex: 90, background: 'rgba(15,35,64,.45)', display: 'flex' }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: '100%', height: '100%', background: '#F4F6F9', display: 'flex', flexDirection: 'column', fontFamily: FONT_BODY, color: C.ink }}>
+        <div style={{ background: 'linear-gradient(135deg, #0F2340 0%, #1E3A63 100%)', color: '#fff', padding: '18px 28px', display: 'flex', gap: 28, alignItems: 'center', flexWrap: 'wrap' }}>
+          <div style={{ flex: 1, minWidth: 280 }}>
+            <div style={{ fontSize: 11, letterSpacing: 1.2, textTransform: 'uppercase', opacity: 0.65 }}>Placa · previsto × usado na Vale{sufixo}</div>
+            <div style={{ fontSize: 26, fontWeight: 800, marginTop: 2, letterSpacing: 0.3 }}>{modoPlaca === 'codigo' ? <>{cods[0]} <span style={{ fontWeight: 500, opacity: 0.85 }}>· {x.d ? x.d.replace(/×/g, ' × ') : ''}</span></> : <>{x.chave.replace(/×/g, ' × ')} <span style={{ fontWeight: 500, fontSize: 16, opacity: 0.8 }}>· cód. {cods.join(', ')}</span></>}</div>
+            {modoPlaca === 'codigo' && <div style={{ fontSize: 12, opacity: 0.7, marginTop: 2 }}>{descPlaca[cods[0]] || ''}</div>}
+          </div>
+          {[['Previsto', fmt(x.prev), `${new Set(x.itens.map(i => brN(i.r.br))).size} BR(s) · ${x.itens.length} item(ns)`, '#C4B5FD'], ['Usado', fmt(x.real), `${new Set(x.aps.map(a => a.nro_ordem_producao)).size} OP(s) · ${x.aps.length} lançamento(s)`, '#FCA5A5'],
+            ['Diferença', dif == null ? '—' : `${dif > 0 ? '+' : ''}${dif.toFixed(0)}%`, `${sinal(x.real - x.prev)} placas`, '#fff']].map(([r, v, sub, cor]) => (
+            <div key={r} style={{ textAlign: 'right', minWidth: 120 }}>
+              <div style={{ fontSize: 11, opacity: 0.7, textTransform: 'uppercase', letterSpacing: 0.8 }}>{r}</div>
+              <div style={{ fontSize: 30, fontWeight: 800, color: cor, fontVariantNumeric: 'tabular-nums', lineHeight: 1.1 }}>{v}</div>
+              <div style={{ fontSize: 11, opacity: 0.7 }}>{sub}</div>
+            </div>))}
+          <button onClick={onFechar} style={{ fontFamily: 'inherit', fontSize: 13, fontWeight: 700, padding: '9px 16px', borderRadius: 8, border: 'none', background: '#fff', color: '#0F2340', cursor: 'pointer' }}>Fechar <span style={{ fontSize: 10.5, color: C.ink3 }}>Esc</span></button>
+        </div>
+        <div style={{ flex: 1, overflow: 'auto', padding: '22px 28px', display: 'flex', flexDirection: 'column', gap: 18 }}>
+          {/* ponte */}
+          <div style={{ ...card, padding: '16px 18px' }}>
+            <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 12 }}>De onde vem a diferença</div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 10 }}>
+              {ponte.map((p, k) => (
+                <div key={k} style={{ position: 'relative', borderRadius: 10, padding: '12px 14px', background: p.tipo === 'base' ? (k === 0 ? '#F5F3FF' : '#FEF2F2') : '#F8FAFC', border: `1px solid ${p.tipo === 'base' ? (k === 0 ? '#DDD6FE' : '#FECACA') : C.line}` }}>
+                  <div style={{ fontSize: 11.5, color: C.ink2, fontWeight: 600, minHeight: 30 }}>{p.r}</div>
+                  <div style={{ fontSize: 22, fontWeight: 800, fontVariantNumeric: 'tabular-nums', color: p.tipo === 'base' ? (k === 0 ? '#6D28D9' : '#B91C1C') : corV(p.v) }}>{p.tipo === 'base' ? fmt(p.v) : sinal(p.v)}</div>
+                  {p.n != null && <div style={{ fontSize: 11, color: C.ink3 }}>{p.n} BR(s)</div>}
+                  {k < ponte.length - 1 && <span style={{ position: 'absolute', right: -9, top: '50%', transform: 'translateY(-50%)', color: C.ink3, fontSize: 14, zIndex: 1 }}>›</span>}
+                </div>))}
+            </div>
+            <div style={{ fontSize: 11.5, color: C.ink3, marginTop: 10 }}>Previsto − pedidos sem produção + produção de fora do período ± diferença de peças ± diferença de consumo = usado. O previsto entra pela data do pedido; o usado, pela data do apontamento.</div>
+          </div>
+
+          {/* por BR */}
+          <div style={{ ...card, overflow: 'hidden' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '14px 18px', borderBottom: `1px solid ${C.line}`, flexWrap: 'wrap' }}>
+              <div style={{ fontSize: 14, fontWeight: 800 }}>Por BR: pedido × produção</div>
+              <span style={{ fontSize: 12, color: C.ink3 }}>{linhas.length} BR(s)</span>
+              <span style={{ flex: 1 }} />
+              <span style={{ fontSize: 12, color: C.ink3 }}>ordenar por</span>
+              {[['dif', 'maior diferença'], ['prev', 'previsto'], ['usado', 'usado'], ['br', 'BR']].map(([k, r]) => (
+                <button key={k} onClick={() => setOrd(k)} style={{ fontFamily: 'inherit', fontSize: 12, padding: '4px 10px', borderRadius: 14, cursor: 'pointer', border: `1px solid ${ord === k ? C.primary : C.line}`, background: ord === k ? C.primarySoft : C.surface, color: ord === k ? C.primary : C.ink2, fontWeight: ord === k ? 700 : 500 }}>{r}</button>))}
+            </div>
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr>
+                    <th style={th('left')} rowSpan={2}>BR</th><th style={th('left')} rowSpan={2}>Unidade · produto</th>
+                    <th style={{ ...th('center'), background: '#F5F3FF', color: '#6D28D9' }} colSpan={3}>Pedido (previsto)</th>
+                    <th style={{ ...th('center'), background: '#FEF2F2', color: '#B91C1C' }} colSpan={4}>Produção (usado)</th>
+                    <th style={th()} rowSpan={2}>Diferença</th><th style={th('left')} rowSpan={2}>Leitura</th>
+                  </tr>
+                  <tr>
+                    <th style={{ ...th(), top: 34 }}>Peças</th><th style={{ ...th(), top: 34 }}>Regra/pç</th><th style={{ ...th(), top: 34 }}>Previsto</th>
+                    <th style={{ ...th('left'), top: 34 }}>OP(s)</th><th style={{ ...th(), top: 34 }}>Peças</th><th style={{ ...th(), top: 34 }}>Usado</th><th style={{ ...th(), top: 34 }}>Usado/pç</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {ordenadas.map((g, k) => (
+                    <tr key={g.k} style={{ background: k % 2 ? '#FAFBFC' : C.surface }}>
+                      <td style={{ ...td('left'), fontWeight: 700 }}>{g.br || `BR${g.k}`}<div style={{ fontSize: 10.5, color: C.ink3, fontWeight: 400 }}>{g.datasPed.length ? `pedido ${dt(g.datasPed.sort()[0])}` : 'sem pedido no período'}</div></td>
+                      <td style={td('left')}><div style={umaLinha} title={g.unidade}>{g.unidade}</div><div style={{ ...umaLinha, fontSize: 11, color: C.ink3 }} title={[...g.prods].join('\n')}>{[...g.prods].join(' · ')}</div></td>
+                      <td style={{ ...td(), background: '#FBFAFF' }}>{g.pecasPed ? fmt(g.pecasPed) : '—'}</td>
+                      <td style={{ ...td(), background: '#FBFAFF' }}>{g.pp != null ? String(+g.pp.toFixed(2)).replace('.', ',') : '—'}{g.obs ? <span style={{ fontSize: 10, color: C.warn }}> obs.</span> : ''}</td>
+                      <td style={{ ...td(), background: '#FBFAFF', fontWeight: 700, color: '#6D28D9' }}>{g.prev ? fmt(g.prev) : '—'}</td>
+                      <td style={{ ...td('left'), background: '#FFFBFB' }}>{g.ops.size ? [...g.ops].join(', ') : '—'}</td>
+                      <td style={{ ...td(), background: '#FFFBFB' }}>{g.pecasAp ? fmt(g.pecasAp) : '—'}</td>
+                      <td style={{ ...td(), background: '#FFFBFB', fontWeight: 700, color: '#B91C1C' }}>{g.usado ? fmt(g.usado) : '—'}</td>
+                      <td style={{ ...td(), background: '#FFFBFB' }}>{g.ppReal != null ? String(+g.ppReal.toFixed(2)).replace('.', ',') : '—'}</td>
+                      <td style={td()}><span style={{ fontWeight: 800, color: corV(g.dif), background: g.dif ? `${corV(g.dif)}14` : 'transparent', borderRadius: 6, padding: '2px 8px' }}>{g.dif ? sinal(g.dif) : '0'}</span></td>
+                      <td style={{ ...td('left'), whiteSpace: 'normal', minWidth: 240, color: g.cor, fontSize: 12 }}>{g.leitura}</td>
+                    </tr>))}
+                  <tr style={{ background: '#EEF2F7', fontWeight: 800 }}>
+                    <td style={{ ...td('left'), fontWeight: 800 }} colSpan={2}>Total</td>
+                    <td style={td()}>{fmt(linhas.reduce((t, g) => t + g.pecasPed, 0))}</td><td style={td()} />
+                    <td style={{ ...td(), color: '#6D28D9' }}>{fmt(x.prev)}</td><td style={td()} />
+                    <td style={td()}>{fmt(linhas.reduce((t, g) => t + g.pecasAp, 0))}</td>
+                    <td style={{ ...td(), color: '#B91C1C' }}>{fmt(x.real)}</td><td style={td()} />
+                    <td style={{ ...td(), color: corV(x.real - x.prev) }}>{sinal(x.real - x.prev)}</td><td style={td()} />
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* lançamentos */}
+          <div style={{ ...card, overflow: 'hidden' }}>
+            <button onClick={() => setVerLanc(!verLanc)} style={{ width: '100%', textAlign: 'left', fontFamily: 'inherit', fontSize: 13.5, fontWeight: 700, padding: '14px 18px', border: 'none', background: C.surface, cursor: 'pointer', color: C.ink }}>
+              {verLanc ? '▾' : '▸'} Lançamentos linha a linha <span style={{ fontWeight: 400, color: C.ink3, fontSize: 12 }}>· {x.itens.length} item(ns) de pedido e {x.aps.length} apontamento(s)</span></button>
+            {verLanc && (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(560px, 1fr))', gap: 0, borderTop: `1px solid ${C.line}` }}>
+                <div style={{ overflowX: 'auto', borderRight: `1px solid ${C.line}` }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                    <thead><tr><th style={th('left')}>Data</th><th style={th('left')}>BR</th><th style={th('left')}>Pedido Vale</th><th style={th('left')}>Produto</th><th style={th()}>Peças</th><th style={th()}>× por peça</th><th style={th()}>Previsto</th></tr></thead>
+                    <tbody>{[...x.itens].sort((a, b) => String(b.r.data_neg).localeCompare(String(a.r.data_neg))).map((i, k) => (
+                      <tr key={k}><td style={td('left')}>{dt(i.r.data_neg)}</td><td style={{ ...td('left'), fontWeight: 600 }}>{i.r.br}</td><td style={td('left')}>{i.r.pedido_cliente || '—'}</td>
+                        <td style={td('left')}><div style={umaLinha} title={i.r.descricao_produto}>{cerProdCurto(i.r.descricao_produto, i.r.cod_vale)}</div></td>
+                        <td style={td()}>{fmt(i.r.qtd_pecas)}</td><td style={td()}>{String(i.pp).replace('.', ',')}</td><td style={{ ...td(), fontWeight: 700, color: '#6D28D9' }}>{fmt(i.q)}</td></tr>))}</tbody>
+                  </table>
+                </div>
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                    <thead><tr><th style={th('left')}>Data</th><th style={th('left')}>OP</th><th style={th('left')}>BR</th><th style={th('left')}>Produto acabado</th><th style={th()}>Peças</th><th style={th()}>Placas</th></tr></thead>
+                    <tbody>{[...x.aps].sort((a, b) => String(b.data_ref).localeCompare(String(a.data_ref))).map((a, k) => (
+                      <tr key={k}><td style={td('left')}>{dt(a.data_ref)}</td><td style={{ ...td('left'), fontWeight: 600 }}>{a.nro_ordem_producao || '—'}</td><td style={td('left')}>{a.br || '—'}</td>
+                        <td style={td('left')}><div style={umaLinha} title={a.desc_prod_acabado}>{cerProdCurto(a.desc_prod_acabado)}</div></td>
+                        <td style={td()}>{a.qtd_lote_pa ? fmt(a.qtd_lote_pa) : '—'}</td><td style={{ ...td(), fontWeight: 700, color: '#B91C1C' }}>{fmt(a.qtd_mp)}</td></tr>))}</tbody>
+                  </table>
+                </div>
+              </div>)}
+          </div>
+        </div>
+      </div>
+    </div>, document.body);
+}
+
 function CeramicasDashboard() {
   const C = CRMC;
   const hoje = new Date();
@@ -38439,7 +38618,7 @@ function CeramicasDashboard() {
         supabase.from('regras_ceramica_vale').select('*').then(r => r.data || []),
         supabase.from('v_ceramica_regra_observada').select('*').limit(1000).then(r => r.data || []),
         ler(() => supabase.from('v_pedidos_vale').select('*').gte('data_neg', ini).lte('data_neg', fim).order('data_neg')),
-        ler(() => supabase.from('producao_mp_apontamentos').select('cod_materia_prima,qtd_mp,data_ref,cliente_nome,nro_ordem_producao,br,desc_prod_acabado').gte('data_ref', ini).lte('data_ref', fim).order('data_ref')),
+        ler(() => supabase.from('producao_mp_apontamentos').select('cod_materia_prima,qtd_mp,data_ref,cliente_nome,nro_ordem_producao,br,desc_prod_acabado,qtd_lote_pa,nuapo,seq_pa,cod_prod_acabado').gte('data_ref', ini).lte('data_ref', fim).order('data_ref')),
         // cerâmica REAL por BR e produto (apontamento TOP 1600 → OP → BR, o mesmo caminho do Extrato da Gerência de Produtos)
         ler(() => supabase.from('v_ceramica_real_br').select('*').order('br_num'), 'cerâmica real (apontamentos)'),
         ler(() => supabase.from('v_br_op_resumo').select('*').order('br_num'), 'OPs por BR'),
@@ -38654,69 +38833,7 @@ function CeramicasDashboard() {
                       </div>
                       <button onClick={() => setPlacaAberta(aberta ? null : x.chave)} style={{ fontFamily: 'inherit', fontSize: 12, fontWeight: 600, padding: '6px 10px', borderRadius: 8, border: `1px solid ${aberta ? C.primary : C.line}`, background: aberta ? C.primarySoft : C.surface, color: C.primary, cursor: 'pointer', whiteSpace: 'nowrap' }}>{aberta ? 'fechar' : 'ver os números'}</button>
                     </div>
-                    {aberta && ReactDOM.createPortal(
-                      <div onClick={() => setPlacaAberta(null)} style={{ position: 'fixed', inset: 0, zIndex: 90, background: 'rgba(15,35,64,.45)', display: 'flex' }}>
-                      <div onClick={e => e.stopPropagation()} style={{ width: '100%', height: '100%', background: C.bg, display: 'flex', flexDirection: 'column', fontFamily: FONT_BODY, color: C.ink }}>
-                        <div style={{ background: '#0F2340', color: '#fff', padding: '16px 24px', display: 'flex', gap: 22, alignItems: 'center', flexWrap: 'wrap' }}>
-                          <div style={{ flex: 1, minWidth: 260 }}>
-                            <div style={{ fontSize: 11.5, letterSpacing: 1, textTransform: 'uppercase', opacity: 0.7 }}>Memória de cálculo · previsto × usado na Vale{sufixo}</div>
-                            <div style={{ fontSize: 22, fontWeight: 800, marginTop: 2 }}>{modoPlaca === 'codigo' ? `${cods[0]} · ${x.d ? x.d.replace(/×/g, ' × ') : ''}` : `${x.chave.replace(/×/g, ' × ')} · cód. ${cods.join(', ')}`}</div>
-                            <div style={{ fontSize: 12.5, opacity: 0.8 }}>{modoPlaca === 'codigo' ? (descPlaca[cods[0]] || prev[cods[0]]?.desc || '') : ''}</div>
-                          </div>
-                          {[['Previsto', fmt(x.prev), `${pedsUnicos} item(ns) de pedido`, '#C4B5FD'], ['Usado', fmt(x.real), `${x.aps.length} apontamento(s) · ${new Set(x.aps.map(a => a.nro_ordem_producao)).size} OP(s)`, '#FCA5A5'],
-                            ['Diferença', dif == null ? '—' : `${dif > 0 ? '+' : ''}${dif.toFixed(0)}%`, dif == null ? '' : `${fmt(x.real - x.prev)} placas`, '#fff']].map(([r, v, sub, cor]) => (
-                            <div key={r} style={{ textAlign: 'right' }}>
-                              <div style={{ fontSize: 11.5, opacity: 0.75 }}>{r}</div>
-                              <div style={{ fontSize: 24, fontWeight: 800, color: cor, fontVariantNumeric: 'tabular-nums' }}>{v}</div>
-                              <div style={{ fontSize: 11, opacity: 0.7 }}>{sub}</div>
-                            </div>))}
-                          <button onClick={() => setPlacaAberta(null)} style={{ fontFamily: 'inherit', fontSize: 13, fontWeight: 700, padding: '8px 14px', borderRadius: 8, border: 'none', background: '#fff', color: '#0F2340', cursor: 'pointer' }}>Fechar <span style={{ fontSize: 10.5, color: C.ink3 }}>Esc</span></button>
-                        </div>
-                        <div style={{ flex: 1, overflow: 'auto', padding: 20 }}>
-                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(620px, 1fr))', gap: 16 }}>
-                        <div style={{ border: `1px solid #DDD6FE`, borderRadius: 10, overflow: 'hidden' }}>
-                          <div style={{ background: '#F5F3FF', padding: '8px 10px', fontSize: 12.5, fontWeight: 700, color: '#5B21B6' }}>Previsto = peças do pedido × placas por peça da regra · {fmt(x.prev)} placas</div>
-                          <div style={{ overflowX: 'auto' }}>
-                            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                              <thead><tr><th style={thm}>Data</th><th style={thm}>BR</th><th style={thm}>Pedido Vale</th><th style={thm}>Unidade</th>{modoPlaca === 'medida' && <th style={thm}>Placa</th>}<th style={thm}>Código Vale · produto</th><th style={{ ...thm, textAlign: 'right' }}>Peças</th><th style={{ ...thm, textAlign: 'right' }}>× por peça</th><th style={{ ...thm, textAlign: 'right' }}>= Previsto</th></tr></thead>
-                              <tbody>{[...x.itens].sort((a, b) => String(b.r.data_neg).localeCompare(String(a.r.data_neg))).map((i, k) => (
-                                <tr key={k}>
-                                  <td style={tdm}>{dtx(i.r.data_neg)}</td><td style={{ ...tdm, fontWeight: 600 }}>{i.r.br || '—'}</td><td style={tdm}>{i.r.pedido_cliente || '—'}</td>
-                                  <td style={tdm}>{i.r.client}</td>
-                                  {modoPlaca === 'medida' && <td style={tdm}>{i.cod}</td>}
-                                  <td style={{ ...tdm, whiteSpace: 'normal', minWidth: 220, fontSize: 11.5 }}>{i.r.cod_vale ? `${i.r.cod_vale} · ` : ''}{i.r.descricao_produto}</td>
-                                  <td style={{ ...tdm, textAlign: 'right' }}>{fmt(i.r.qtd_pecas)}</td>
-                                  <td style={{ ...tdm, textAlign: 'right' }} title={i.r.regra_observada ? 'regra observada nos apontamentos' : 'regra cadastrada'}>{String(i.pp).replace('.', ',')}{i.r.regra_observada ? <span style={{ fontSize: 10, color: C.warn }}> obs.</span> : ''}</td>
-                                  <td style={{ ...tdm, textAlign: 'right', fontWeight: 700 }}>{fmt(i.q)}</td>
-                                </tr>))}
-                                {!x.itens.length && <tr><td colSpan={9} style={{ ...tdm, textAlign: 'center', color: C.ink3 }}>Nenhum pedido no recorte usa esta placa pela regra.</td></tr>}
-                                {x.itens.length > 0 && <tr><td colSpan={modoPlaca === 'medida' ? 6 : 5} style={{ ...tdm, fontWeight: 700 }}>Total · {x.itens.length} item(ns)</td><td style={{ ...tdm, textAlign: 'right', fontWeight: 700 }}>{fmt(x.itens.reduce((t, i) => t + (Number(i.r.qtd_pecas) || 0), 0))}</td><td style={tdm} /><td style={{ ...tdm, textAlign: 'right', fontWeight: 800 }}>{fmt(x.prev)}</td></tr>}</tbody>
-                            </table>
-                          </div>
-                        </div>
-                        <div style={{ border: `1px solid #FECACA`, borderRadius: 10, overflow: 'hidden' }}>
-                          <div style={{ background: '#FEF2F2', padding: '8px 10px', fontSize: 12.5, fontWeight: 700, color: '#991B1B' }}>Usado = placas lançadas no apontamento das OPs Vale · {fmt(x.real)} placas</div>
-                          <div style={{ overflowX: 'auto' }}>
-                            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                              <thead><tr><th style={thm}>Data</th><th style={thm}>OP</th><th style={thm}>BR</th><th style={thm}>Unidade</th>{modoPlaca === 'medida' && <th style={thm}>Placa</th>}<th style={thm}>Produto acabado</th><th style={{ ...thm, textAlign: 'right' }}>Placas</th></tr></thead>
-                              <tbody>{[...x.aps].sort((a, b) => String(b.data_ref).localeCompare(String(a.data_ref))).map((a, k) => (
-                                <tr key={k}>
-                                  <td style={tdm}>{dtx(a.data_ref)}</td><td style={{ ...tdm, fontWeight: 600 }}>{a.nro_ordem_producao || '—'}</td><td style={tdm}>{a.br || '—'}</td>
-                                  <td style={tdm}>{a.cliente_nome}</td>
-                                  {modoPlaca === 'medida' && <td style={tdm}>{a.cod_materia_prima}</td>}
-                                  <td style={{ ...tdm, whiteSpace: 'normal', minWidth: 260, fontSize: 11.5 }}>{a.desc_prod_acabado}</td>
-                                  <td style={{ ...tdm, textAlign: 'right', fontWeight: 700 }}>{fmt(a.qtd_mp)}</td>
-                                </tr>))}
-                                {!x.aps.length && <tr><td colSpan={7} style={{ ...tdm, textAlign: 'center', color: C.ink3 }}>Nenhum apontamento desta placa nas OPs Vale do recorte.</td></tr>}
-                                {x.aps.length > 0 && <tr><td colSpan={modoPlaca === 'medida' ? 6 : 5} style={{ ...tdm, fontWeight: 700 }}>Total · {x.aps.length} apontamento(s) · {new Set(x.aps.map(a => a.nro_ordem_producao)).size} OP(s)</td><td style={{ ...tdm, textAlign: 'right', fontWeight: 800 }}>{fmt(x.real)}</td></tr>}</tbody>
-                            </table>
-                          </div>
-                        </div>
-                        <div style={{ gridColumn: '1 / -1', fontSize: 12, color: C.ink3 }}>O previsto conta os pedidos pela data do pedido; o usado conta os apontamentos pela data da produção — um pedido do fim do período pode ainda não ter sido produzido, e um apontamento do começo pode ser de pedido do período anterior.</div>
-                      </div>
-                        </div>
-                      </div>
-                      </div>, document.body)}
+                    {aberta && <PlacaMemoria x={x} cods={cods} modoPlaca={modoPlaca} descPlaca={descPlaca} sufixo={sufixo} fmt={fmt} onFechar={() => setPlacaAberta(null)} />}
                   </div>
                 ); })}
               {todas.length > 12 && <button onClick={() => setVerTodasPlacas(!verTodasPlacas)} style={{ marginTop: 8, fontFamily: 'inherit', fontSize: 12.5, border: 'none', background: 'none', color: C.primary, cursor: 'pointer', fontWeight: 600 }}>{verTodasPlacas ? 'mostrar só as 12 maiores' : `ver todas as ${todas.length} placas`}</button>}
