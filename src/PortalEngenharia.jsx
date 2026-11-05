@@ -38593,6 +38593,127 @@ function PlacaMemoria({ x, cods, modoPlaca, descPlaca, sufixo, fmt, onFechar }) 
     </div>, document.body);
 }
 
+/* ============================================================================
+   CONFERÊNCIA DIÁRIA DE APONTAMENTO DE PLACAS (Asael, 05/11/2026) — para cada OP e placa: requisitado (estrutura),
+   entregue ao processamento, devolvido, apontado; alertas de apontamento fora da estrutura, sobra não devolvida,
+   apontou sem entrega, sobra em OP aberta e possível compensação entre OPs. Base: v_conf_placa_alerta / v_conf_placa_op
+   (fn_sync_conf_placa, todo dia 06:40).
+============================================================================ */
+const CONF_TIPOS = {
+  possivel_compensacao: { r: 'Possível compensação entre OPs', cor: '#B42318', d: 'Uma OP lançou placa a menos e, depois, outra OP lançou a mais da mesma placa.' },
+  apontamento_fora_da_estrutura: { r: 'Apontamento fora da estrutura', cor: '#C2410C', d: 'Placas por peça do apontamento diferentes das placas por peça da requisição da OP.' },
+  apontou_sem_entrega: { r: 'Apontou sem entrega', cor: '#B42318', d: 'A OP apontou mais placa do que recebeu: o material saiu de outro lugar.' },
+  sobra_nao_devolvida: { r: 'Sobra não devolvida (OP finalizada)', cor: '#A16207', d: 'OP encerrada que recebeu mais do que apontou e não devolveu a diferença para a matéria-prima.' },
+  sobra_em_op_aberta: { r: 'Sobra em OP aberta', cor: '#2563EB', d: 'OP em andamento com mais placa no processamento do que precisa para o que falta produzir.' },
+};
+function ConfPlacaPainel({ onFechar, descPlaca = {} }) {
+  const C = CRMC;
+  const [d, setD] = useState(null);
+  const [tipo, setTipo] = useState('todos');
+  const [sev, setSev] = useState('alta+media');
+  const [ini, setIni] = useState(`${new Date().getFullYear()}-01-01`);
+  const [aberto, setAberto] = useState(null);   // { op, placa }
+  const [opDet, setOpDet] = useState(null);
+  useEffect(() => { supabase.from('v_conf_placa_alerta').select('*').gte('data', ini).order('data', { ascending: false }).limit(3000).then(({ data }) => setD(data || [])); }, [ini]);
+  useEffect(() => { const t = e => { if (e.key === 'Escape') (aberto ? setAberto(null) : onFechar()); }; window.addEventListener('keydown', t); return () => window.removeEventListener('keydown', t); }, [aberto]);
+  useEffect(() => {
+    if (!aberto) { setOpDet(null); return; }
+    Promise.all([
+      supabase.from('v_conf_placa_op').select('*').eq('idiproc', aberto.op),
+      supabase.from('producao_mp_apontamentos').select('nuapo,seq_pa,data_ref,qtd_lote_pa,cod_materia_prima,qtd_mp,controle_lote_pa').eq('nro_ordem_producao', aberto.op).order('data_ref'),
+    ]).then(([a, b]) => setOpDet({ placas: a.data || [], aps: b.data || [] }));
+  }, [aberto]);
+  const fmt = (v) => (v == null ? '—' : Number(v).toLocaleString('pt-BR', { maximumFractionDigits: 2 }));
+  const dt = (x) => (x ? new Date(`${String(x).slice(0, 10)}T12:00:00`).toLocaleDateString('pt-BR') : '—');
+  const corSev = { alta: '#B42318', media: '#C2410C', baixa: '#64748B' };
+  const lista = (d || []).filter(a => (tipo === 'todos' || a.tipo === tipo) && (sev === 'todas' || (sev === 'alta+media' ? a.severidade !== 'baixa' : a.severidade === sev)))
+    .sort((a, b) => ({ alta: 0, media: 1, baixa: 2 }[a.severidade] - { alta: 0, media: 1, baixa: 2 }[b.severidade]) || Math.abs(b.quantidade) - Math.abs(a.quantidade));
+  const cont = (t) => (d || []).filter(a => a.tipo === t && (sev === 'todas' || (sev === 'alta+media' ? a.severidade !== 'baixa' : a.severidade === sev))).length;
+  const th = (al = 'left') => ({ padding: '9px 10px', textAlign: al, fontSize: 10.5, fontWeight: 700, color: C.ink3, textTransform: 'uppercase', whiteSpace: 'nowrap', borderBottom: `1px solid ${C.line}`, background: '#F8FAFC', position: 'sticky', top: 0 });
+  const td = (al = 'left') => ({ padding: '9px 10px', textAlign: al, fontSize: 12.5, borderBottom: `1px solid ${C.lineSoft}`, verticalAlign: 'top', fontVariantNumeric: 'tabular-nums' });
+  const chip = (on) => ({ fontFamily: 'inherit', fontSize: 12, padding: '6px 11px', borderRadius: 16, cursor: 'pointer', border: `1px solid ${on ? C.primary : C.line}`, background: on ? C.primarySoft : C.surface, color: on ? C.primary : C.ink2, fontWeight: on ? 700 : 500 });
+  return ReactDOM.createPortal(
+    <div onClick={onFechar} style={{ position: 'fixed', inset: 0, zIndex: 92, background: 'rgba(15,35,64,.45)', display: 'flex' }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: '100%', height: '100%', background: '#F4F6F9', display: 'flex', flexDirection: 'column', fontFamily: FONT_BODY, color: C.ink }}>
+        <div style={{ background: 'linear-gradient(135deg, #0F2340 0%, #1E3A63 100%)', color: '#fff', padding: '18px 28px', display: 'flex', gap: 20, alignItems: 'center', flexWrap: 'wrap' }}>
+          <div style={{ flex: 1, minWidth: 280 }}>
+            <div style={{ fontSize: 11, letterSpacing: 1.2, textTransform: 'uppercase', opacity: 0.65 }}>Conferência diária · placas</div>
+            <div style={{ fontSize: 24, fontWeight: 800 }}>Apontamento de placas × entrega × estrutura da OP</div>
+            <div style={{ fontSize: 12, opacity: 0.75 }}>Sankhya conferido todo dia às 6h40 · requisitado, entregue ao processamento, devolvido e apontado, por OP e placa</div>
+          </div>
+          <label style={{ fontSize: 12, opacity: 0.85 }}>desde <input type="date" value={ini} onChange={e => setIni(e.target.value)} style={{ fontFamily: 'inherit', fontSize: 12.5, padding: '5px 8px', borderRadius: 6, border: 'none', marginLeft: 6 }} /></label>
+          <button onClick={onFechar} style={{ fontFamily: 'inherit', fontSize: 13, fontWeight: 700, padding: '9px 16px', borderRadius: 8, border: 'none', background: '#fff', color: '#0F2340', cursor: 'pointer' }}>Fechar <span style={{ fontSize: 10.5, color: C.ink3 }}>Esc</span></button>
+        </div>
+        <div style={{ flex: 1, overflow: 'auto', padding: '20px 28px', display: 'flex', flexDirection: 'column', gap: 16 }}>
+          {!d ? <div style={{ padding: 40, textAlign: 'center', color: C.ink3 }}>Carregando a conferência…</div> : <>
+            <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))' }}>
+              {Object.entries(CONF_TIPOS).map(([k, t]) => (
+                <button key={k} onClick={() => setTipo(tipo === k ? 'todos' : k)} title={t.d} style={{ textAlign: 'left', fontFamily: 'inherit', cursor: 'pointer', background: C.surface, borderRadius: 12, padding: '12px 14px', border: `1px solid ${tipo === k ? t.cor : C.line}`, borderTop: `4px solid ${t.cor}`, boxShadow: tipo === k ? `0 0 0 2px ${t.cor}33` : 'none' }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: C.ink2 }}>{t.r}</div>
+                  <div style={{ fontSize: 28, fontWeight: 800, color: t.cor }}>{cont(k)}</div>
+                  <div style={{ fontSize: 11, color: C.ink3, lineHeight: 1.3 }}>{t.d}</div>
+                </button>))}
+            </div>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 12, color: C.ink3 }}>gravidade</span>
+              {[['alta+media', 'alta e média'], ['alta', 'só alta'], ['todas', 'todas']].map(([k, r]) => <button key={k} onClick={() => setSev(k)} style={chip(sev === k)}>{r}</button>)}
+              <span style={{ flex: 1 }} />
+              <span style={{ fontSize: 12, color: C.ink3 }}>{lista.length} alerta(s) · clique para ver a OP</span>
+            </div>
+            <div style={{ background: C.surface, border: `1px solid ${C.line}`, borderRadius: 12, overflow: 'hidden' }}>
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead><tr><th style={th()}>Gravidade</th><th style={th()}>Tipo</th><th style={th()}>Data</th><th style={th()}>OP</th><th style={th()}>BR · cliente</th><th style={th()}>Placa</th><th style={th('right')}>Placas</th><th style={th()}>O que aconteceu</th></tr></thead>
+                  <tbody>{lista.map((a, k) => (
+                    <tr key={k} onClick={() => setAberto({ op: a.op, placa: a.placa })} style={{ cursor: 'pointer', background: k % 2 ? '#FAFBFC' : C.surface }}>
+                      <td style={td()}><span style={{ fontSize: 11, fontWeight: 800, color: corSev[a.severidade], background: `${corSev[a.severidade]}15`, borderRadius: 6, padding: '2px 8px', textTransform: 'uppercase' }}>{a.severidade}</span></td>
+                      <td style={{ ...td(), color: CONF_TIPOS[a.tipo]?.cor, fontWeight: 700, whiteSpace: 'nowrap' }}>{CONF_TIPOS[a.tipo]?.r || a.tipo}</td>
+                      <td style={{ ...td(), whiteSpace: 'nowrap' }}>{dt(a.data)}</td>
+                      <td style={{ ...td(), fontWeight: 800 }}>{a.op}</td>
+                      <td style={td()}><div style={{ fontWeight: 600 }}>{a.br || 'sem BR'}</div><div style={{ fontSize: 11, color: C.ink3, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.cliente || ''}</div></td>
+                      <td style={{ ...td(), whiteSpace: 'nowrap' }}><strong>{a.placa}</strong><div style={{ fontSize: 11, color: C.ink3 }}>{cerDim(a.placa_descricao || descPlaca[String(a.placa)]) || ''}</div></td>
+                      <td style={{ ...td('right'), fontWeight: 800, color: a.quantidade > 0 ? '#B42318' : '#2563EB', whiteSpace: 'nowrap' }}>{a.quantidade > 0 ? '+' : ''}{fmt(a.quantidade)}</td>
+                      <td style={{ ...td(), color: C.ink2, minWidth: 360 }}>{a.descricao}</td>
+                    </tr>))}
+                    {!lista.length && <tr><td colSpan={8} style={{ ...td(), textAlign: 'center', color: C.win, padding: 30 }}>Nenhum alerta neste filtro.</td></tr>}</tbody>
+                </table>
+              </div>
+            </div>
+          </>}
+        </div>
+        {aberto && (
+          <div onClick={() => setAberto(null)} style={{ position: 'fixed', inset: 0, zIndex: 93, background: 'rgba(15,35,64,.35)', display: 'flex', justifyContent: 'center', alignItems: 'flex-start', overflowY: 'auto' }}>
+            <div onClick={e => e.stopPropagation()} style={{ width: 'min(1100px, 94vw)', margin: '40px auto', background: C.surface, borderRadius: 14, boxShadow: '0 20px 60px rgba(16,24,40,.35)', overflow: 'hidden' }}>
+              <div style={{ background: '#0F2340', color: '#fff', padding: '14px 20px', display: 'flex', alignItems: 'center', gap: 12 }}>
+                <div style={{ flex: 1 }}><div style={{ fontSize: 18, fontWeight: 800 }}>OP {aberto.op}</div><div style={{ fontSize: 12, opacity: 0.75 }}>{opDet?.placas?.[0]?.produto || ''}{opDet?.placas?.[0]?.br ? ` · ${opDet.placas[0].br}` : ''}{opDet?.placas?.[0] ? ` · ${fmt(opDet.placas[0].qtd_produzir)} a produzir · ${opDet.placas[0].op_finalizada ? 'finalizada' : 'em aberto'}` : ''}</div></div>
+                <button onClick={() => setAberto(null)} style={{ fontFamily: 'inherit', fontSize: 12.5, fontWeight: 700, padding: '7px 12px', borderRadius: 8, border: 'none', background: '#fff', color: '#0F2340', cursor: 'pointer' }}>Voltar</button>
+              </div>
+              {!opDet ? <div style={{ padding: 30, textAlign: 'center', color: C.ink3 }}>Carregando a OP…</div> : (
+                <div style={{ padding: 18, display: 'flex', flexDirection: 'column', gap: 14 }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                    <thead><tr><th style={th()}>Placa</th><th style={th('right')}>Estrutura/pç</th><th style={th('right')}>Requisitado</th><th style={th('right')}>Entregue</th><th style={th('right')}>Devolvido</th><th style={th('right')}>Apontado</th><th style={th('right')}>Peças apontadas</th><th style={th('right')}>Ficou no processamento</th></tr></thead>
+                    <tbody>{opDet.placas.map(p => (
+                      <tr key={p.codprod} style={{ background: String(p.codprod) === String(aberto.placa) ? '#FFF7ED' : 'transparent' }}>
+                        <td style={{ ...td(), fontWeight: 700 }}>{p.codprod} <span style={{ fontWeight: 400, color: C.ink3 }}>{cerDim(p.placa_descricao) || ''}</span></td>
+                        <td style={td('right')}>{fmt(p.pp_estrutura)}</td><td style={td('right')}>{fmt(p.requisitado)}</td><td style={td('right')}>{fmt(p.entregue)}</td><td style={td('right')}>{fmt(p.devolvido)}</td>
+                        <td style={{ ...td('right'), fontWeight: 700 }}>{fmt(p.apontado)}</td><td style={td('right')}>{fmt(p.pecas_apontadas)}</td>
+                        <td style={{ ...td('right'), fontWeight: 800, color: Math.abs(p.saldo_processamento) >= 10 ? '#B42318' : C.win }}>{fmt(p.saldo_processamento)}</td>
+                      </tr>))}</tbody>
+                  </table>
+                  <div style={{ fontSize: 13, fontWeight: 700 }}>Apontamentos da OP</div>
+                  <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                    <thead><tr><th style={th()}>Data</th><th style={th()}>Apontamento</th><th style={th('right')}>Peças</th><th style={th()}>Placa</th><th style={th('right')}>Placas</th><th style={th('right')}>Por peça</th><th style={th('right')}>Estrutura/pç</th></tr></thead>
+                    <tbody>{opDet.aps.filter(a => opDet.placas.some(p => String(p.codprod) === String(a.cod_materia_prima))).map((a, k) => { const pl = opDet.placas.find(p => String(p.codprod) === String(a.cod_materia_prima)); const pp = Number(a.qtd_mp) / Number(a.qtd_lote_pa || 1); const fora = pl?.pp_estrutura && Math.abs(pp - pl.pp_estrutura) > Math.max(0.05, pl.pp_estrutura * 0.03);
+                      return (<tr key={k}><td style={td()}>{dt(a.data_ref)}</td><td style={td()}>{a.nuapo}</td><td style={td('right')}>{fmt(a.qtd_lote_pa)}</td><td style={td()}>{a.cod_materia_prima}</td><td style={{ ...td('right'), fontWeight: 700 }}>{fmt(a.qtd_mp)}</td>
+                        <td style={{ ...td('right'), fontWeight: 800, color: fora ? '#B42318' : C.win }}>{fmt(pp)}</td><td style={td('right')}>{fmt(pl?.pp_estrutura)}</td></tr>); })}</tbody>
+                  </table>
+                </div>)}
+            </div>
+          </div>)}
+      </div>
+    </div>, document.body);
+}
+
 function CeramicasDashboard() {
   const C = CRMC;
   const hoje = new Date();
@@ -38604,6 +38725,10 @@ function CeramicasDashboard() {
   const [modoPlaca, setModoPlaca] = useState('codigo');   // gráfico de placas: 'codigo' (cada código em destaque) | 'medida'
   const [placaAberta, setPlacaAberta] = useState(null);   // linha do gráfico com a memória de cálculo aberta
   const [verTodasPlacas, setVerTodasPlacas] = useState(false);
+  const [confAberta, setConfAberta] = useState(false);
+  const [confResumo, setConfResumo] = useState(null);   // alertas da conferência diária de apontamento
+  useEffect(() => { supabase.from('v_conf_placa_alerta').select('tipo,severidade').gte('data', `${new Date().getFullYear()}-01-01`).neq('severidade', 'baixa').limit(3000)
+    .then(({ data }) => setConfResumo({ total: (data || []).length, altas: (data || []).filter(a => a.severidade === 'alta').length, comp: (data || []).filter(a => a.tipo === 'possivel_compensacao').length })); }, []);
   useEffect(() => { if (!placaAberta) return undefined; const t = e => { if (e.key === 'Escape') setPlacaAberta(null); }; window.addEventListener('keydown', t); return () => window.removeEventListener('keydown', t); }, [placaAberta]);
   const focar = (k, v) => setFoco(f => ({ ...f, [k]: f[k] === v ? null : v }));
   const ini = periodo === '12m' ? new Date(hoje.getFullYear() - 1, hoje.getMonth() + 1, 1).toISOString().slice(0, 10) : `${periodo}-01-01`;
@@ -38705,6 +38830,12 @@ function CeramicasDashboard() {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16, fontFamily: FONT_BODY, color: C.ink }}>
       {(dados.falhas || []).length > 0 && <div style={{ background: '#FBE9E7', border: '1px solid #F5C2BC', color: '#B42318', borderRadius: 10, padding: '10px 14px', fontSize: 12.5 }}>
         <strong>Parte dos dados não carregou</strong> — os números abaixo podem estar incompletos. {dados.falhas.join(' · ')}. Recarregue a página; se continuar, avise o Asael.</div>}
+      {confResumo && <button onClick={() => setConfAberta(true)} style={{ display: 'flex', alignItems: 'center', gap: 14, textAlign: 'left', fontFamily: 'inherit', cursor: 'pointer', background: confResumo.altas ? '#FEF3F2' : '#F0FDF4', border: `1px solid ${confResumo.altas ? '#FECDCA' : '#BBF7D0'}`, borderRadius: 12, padding: '12px 16px' }}>
+        <span style={{ fontSize: 26, fontWeight: 800, color: confResumo.altas ? '#B42318' : '#15803D' }}>{confResumo.total}</span>
+        <span style={{ flex: 1 }}><strong style={{ fontSize: 14 }}>Conferência de apontamento de placas</strong><div style={{ fontSize: 12, color: C.ink2 }}>{confResumo.altas} alerta(s) de gravidade alta{confResumo.comp ? ` · ${confResumo.comp} possível(is) compensação(ões) entre OPs` : ''} · apontado × entregue × estrutura da OP, conferido todo dia às 6h40</div></span>
+        <span style={{ fontSize: 12.5, fontWeight: 700, color: C.primary }}>abrir →</span>
+      </button>}
+      {confAberta && <ConfPlacaPainel onFechar={() => setConfAberta(false)} descPlaca={descPlaca} />}
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
         <div role="tablist" style={{ display: 'inline-flex', background: '#E7EBF1', borderRadius: 9, padding: 3, gap: 2 }}>
           {[[String(hoje.getFullYear()), String(hoje.getFullYear())], [String(hoje.getFullYear() - 1), String(hoje.getFullYear() - 1)], ['12m', 'Últimos 12 meses']].map(([k, r]) => (
