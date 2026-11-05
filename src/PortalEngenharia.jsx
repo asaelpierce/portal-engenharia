@@ -38427,7 +38427,8 @@ function CeramicasDashboard() {
   useEffect(() => {
     let vivo = true; setDados(null);
     (async () => {
-      const ler = async (q) => { const out = []; for (let de = 0; de < 100000; de += 1000) { const { data, error } = await q().range(de, de + 999); if (error) break; out.push(...(data || [])); if (!data || data.length < 1000) break; } return out; };
+      const falhas = [];   // consulta que falhar (ex.: tempo esgotado) é avisada na tela, em vez de aparecer tudo vazio
+      const ler = async (q, nome) => { const out = []; for (let de = 0; de < 100000; de += 1000) { const { data, error } = await q().range(de, de + 999); if (error) { falhas.push(`${nome || 'consulta'}: ${error.message}`); break; } out.push(...(data || [])); if (!data || data.length < 1000) break; } return out; };
       const [lista, regras, obs, vale, aps, real, opsBr] = await Promise.all([
         supabase.from('mp_placas_kalocer').select('codigo_mp,descricao,unidade').then(r => r.data || []),
         supabase.from('regras_ceramica_vale').select('*').then(r => r.data || []),
@@ -38435,12 +38436,12 @@ function CeramicasDashboard() {
         ler(() => supabase.from('v_pedidos_vale').select('*').gte('data_neg', ini).lte('data_neg', fim).order('data_neg')),
         ler(() => supabase.from('producao_mp_apontamentos').select('cod_materia_prima,qtd_mp,data_ref,cliente_nome,nro_ordem_producao,br,desc_prod_acabado').gte('data_ref', ini).lte('data_ref', fim).order('data_ref')),
         // cerâmica REAL por BR e produto (apontamento TOP 1600 → OP → BR, o mesmo caminho do Extrato da Gerência de Produtos)
-        ler(() => supabase.from('v_ceramica_real_br').select('*').order('br_num')),
-        ler(() => supabase.from('v_br_op_resumo').select('*').order('br_num')),
+        ler(() => supabase.from('v_ceramica_real_br').select('*').order('br_num'), 'cerâmica real (apontamentos)'),
+        ler(() => supabase.from('v_br_op_resumo').select('*').order('br_num'), 'OPs por BR'),
       ]);
       if (!vivo) return;
       const cods = new Set(lista.map(l => String(l.codigo_mp)));
-      setDados({ lista, regras, obs, vale, aps: aps.filter(a => cods.has(String(a.cod_materia_prima))), real, opsBr });
+      setDados({ lista, regras, obs, vale, aps: aps.filter(a => cods.has(String(a.cod_materia_prima))), real, opsBr, falhas });
     })();
     return () => { vivo = false; };
   }, [ini, fim]);
@@ -38518,6 +38519,8 @@ function CeramicasDashboard() {
   );
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16, fontFamily: FONT_BODY, color: C.ink }}>
+      {(dados.falhas || []).length > 0 && <div style={{ background: '#FBE9E7', border: '1px solid #F5C2BC', color: '#B42318', borderRadius: 10, padding: '10px 14px', fontSize: 12.5 }}>
+        <strong>Parte dos dados não carregou</strong> — os números abaixo podem estar incompletos. {dados.falhas.join(' · ')}. Recarregue a página; se continuar, avise o Asael.</div>}
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
         <div role="tablist" style={{ display: 'inline-flex', background: '#E7EBF1', borderRadius: 9, padding: 3, gap: 2 }}>
           {[[String(hoje.getFullYear()), String(hoje.getFullYear())], [String(hoje.getFullYear() - 1), String(hoje.getFullYear() - 1)], ['12m', 'Últimos 12 meses']].map(([k, r]) => (
