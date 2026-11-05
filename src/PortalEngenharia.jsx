@@ -38087,7 +38087,7 @@ function CeramicaRastreio({ row, descPlaca = {}, onFechar }) {
   const td = { padding: '8px 9px', fontSize: 12.5, borderBottom: `1px solid ${C.lineSoft}`, verticalAlign: 'top' };
   const shell = (conteudo) => ReactDOM.createPortal(
     <div data-rastreio onClick={onFechar} style={{ position: 'fixed', inset: 0, zIndex: 95, background: 'rgba(15,35,64,.45)', overflowY: 'auto' }}>
-      <div onClick={e => e.stopPropagation()} style={{ maxWidth: 1180, margin: '24px auto', background: C.bg, borderRadius: 16, boxShadow: '0 20px 60px rgba(16,24,40,.35)', fontFamily: FONT_BODY, color: C.ink, overflow: 'hidden' }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: 'min(1500px, 96vw)', margin: '20px auto', background: C.bg, borderRadius: 16, boxShadow: '0 20px 60px rgba(16,24,40,.35)', fontFamily: FONT_BODY, color: C.ink, overflow: 'hidden' }}>
         <div style={{ background: 'linear-gradient(135deg, #0F2340 0%, #1E3A63 100%)', color: '#fff', padding: '18px 24px', display: 'flex', gap: 14, alignItems: 'flex-start' }}>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontSize: 11.5, letterSpacing: 1, textTransform: 'uppercase', opacity: 0.7 }}>Rastreio do pedido</div>
@@ -38260,9 +38260,10 @@ function CeramicaDetalhe({ det, regras, obsPorCod = {}, descPlaca, onFechar, onF
   const painelRastreio = rastreio ? <CeramicaRastreio row={rastreio} descPlaca={descPlaca} onFechar={() => setRastreio(null)} /> : null;
   const abas = [['pedidos', `Pedidos · ${peds.length}`], ['ops', `OPs / apontamentos · ${aps.length}`], ['regras', `Regras usadas · ${regrasUsadas.length}`], ['conta', 'Como este número é calculado']];
   return <>{ReactDOM.createPortal(
-    <div onClick={onFechar} style={{ position: 'fixed', inset: 0, zIndex: 85, background: 'rgba(15,35,64,.35)', display: 'flex', justifyContent: 'flex-end' }}>
+    <div onClick={onFechar} style={{ position: 'fixed', inset: 0, zIndex: 85, background: 'rgba(15,35,64,.45)', display: 'flex' }}>
+      {/* tela cheia (Asael, 05/11/2026): antes era uma gaveta no canto direito */}
       <aside role="dialog" aria-label={det.titulo} onClick={e => e.stopPropagation()}
-        style={{ width: 'min(1180px, 100%)', height: '100%', background: C.bg, display: 'flex', flexDirection: 'column', fontFamily: FONT_BODY, color: C.ink, boxShadow: '-10px 0 40px rgba(16,24,40,.25)' }}>
+        style={{ width: '100%', height: '100%', background: C.bg, display: 'flex', flexDirection: 'column', fontFamily: FONT_BODY, color: C.ink }}>
         <div style={{ background: '#0F2340', color: '#fff', padding: '16px 22px', display: 'flex', gap: 12, alignItems: 'flex-start' }}>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontSize: 17, fontWeight: 700 }}>{det.titulo}</div>
