@@ -32656,6 +32656,33 @@ function CRMFaturamentoBR({ negocio: n, autor, onMudou }) {
   );
 }
 
+// Botão "Ver proposta": gera o PDF da proposta (relatório 27 do orçamento e precificação do Sankhya) na hora e abre numa aba
+function CRMVerPropostaBtn({ nureg, br }) {
+  const [st, setSt] = useState(null);   // null | 'gerando' | mensagem de erro
+  if (!nureg) return null;
+  const abrir = async () => {
+    const aba = window.open('', '_blank');
+    if (aba) aba.document.write('<p style="font-family:sans-serif;padding:24px;color:#475467">Gerando a proposta no Sankhya…</p>');
+    setSt('gerando');
+    const { data, error } = await supabase.functions.invoke('sankhya-proposta-pdf', { body: { nureg } });
+    if (error || !(data instanceof Blob)) {
+      let msg = error?.message || 'O Sankhya não devolveu o PDF.';
+      try { const ctx = await error?.context?.json?.(); if (ctx?.erro) msg = ctx.erro; } catch { /* sem detalhe */ }
+      setSt(msg); if (aba) aba.close(); return;
+    }
+    const url = URL.createObjectURL(new Blob([data], { type: 'application/pdf' }));
+    if (aba) aba.location.href = url; else window.open(url, '_blank');
+    setSt(null);
+  };
+  return (
+    <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-end' }}>
+      <button onClick={abrir} disabled={st === 'gerando'} title={`Proposta nº ${nureg} do ${br || 'BR'} (tela de orçamento e precificação do Sankhya)`}
+        style={{ fontFamily: 'inherit', fontSize: 12.5, fontWeight: 600, height: 30, padding: '0 12px', borderRadius: 8, border: `1px solid ${CRMC.primary}`, background: CRMC.primarySoft, color: CRMC.primary, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+        {st === 'gerando' ? 'Gerando…' : `📄 Ver proposta`}</button>
+      {st && st !== 'gerando' && <span style={{ fontSize: 11, color: CRMC.loss, maxWidth: 260, textAlign: 'right', marginTop: 3 }}>{st}</span>}
+    </span>);
+}
+
 function CRMFichaNegocio({ negocio: n, etapas, empresa, vendedores, autor, onFechar, onMover, onMudou, fatPrevPedido = null, situacaoGanho = null, sitInfo = null }) {
   const [pausa, setPausa] = useState(null);   // texto do motivo ao marcar como pausado
   const [ativs, setAtivs] = useState([]);
@@ -32714,12 +32741,15 @@ function CRMFichaNegocio({ negocio: n, etapas, empresa, vendedores, autor, onFec
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10 }}>
             <div>
               <div style={{ fontSize: 11, color: CRMC.ink3 }}>
-                {{ leads: 'Leads', vendas: 'Vendas', posvendas: 'Pós-vendas' }[n.pipeline_id]} · {{ br: 'do BR', faturamento: 'da nota faturada', reposicao: 'reposição', lead: 'veio de lead', agendor: 'importado do Agendor', manual: 'oportunidade' }[n.origem] || n.origem}
+                {{ leads: 'Leads', vendas: 'Vendas', posvendas: 'Pós-vendas' }[n.pipeline_id]} · {{ br: 'do BR', faturamento: 'da nota faturada', reposicao: 'reposição', lead: 'veio de lead', agendor: 'importado do Agendor', manual: 'oportunidade', importado: 'trazido do Sankhya' }[n.origem] || n.origem}
               </div>
               <div style={{ fontSize: 16, fontWeight: 700 }}>{n.br || n.titulo}</div>
               <div style={{ fontSize: 12.5, color: CRMC.ink2 }}>{empresa?.nome || '—'}{empresa?.cidade ? ` · ${empresa.cidade}/${empresa.uf || ''}` : ''}{empresa?.segmento ? ` · ${empresa.segmento}` : ''}</div>
             </div>
-            <button onClick={onFechar} style={{ ...botao(false), height: 30 }}>Fechar</button>
+            <span style={{ display: 'inline-flex', gap: 8, alignItems: 'flex-start' }}>
+              <CRMVerPropostaBtn nureg={n.proposta_nureg} br={n.br} />
+              <button onClick={onFechar} style={{ ...botao(false), height: 30 }}>Fechar</button>
+            </span>
           </div>
           <div style={{ display: 'flex', gap: 5, marginTop: 10, flexWrap: 'wrap' }}>
             {etapasPipe.map(e => (
