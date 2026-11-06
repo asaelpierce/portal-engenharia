@@ -29759,8 +29759,12 @@ const CRM_GATILHOS = {
   tarefa_vence_hoje: { r: 'Tarefa vence hoje', p: null },
   tarefa_atrasada: { r: 'Tarefa atrasada há mais de X dias (até 15)', p: 'dias de atraso', pad: 0 },
   sem_proxima_acao: { r: 'Negócio aberto sem tarefa há X dias', p: 'dias parado na etapa', pad: 7 },
+  evento_comentario: { r: 'Na hora: alguém comentou no negócio', p: null },
+  evento_etapa: { r: 'Na hora: o negócio mudou de etapa (ex.: virou pedido)', p: null },
+  evento_reprogramacao: { r: 'Na hora: faturamento reprogramado', p: null },
+  evento_followup: { r: 'Na hora: Follow Up atualizado por outra pessoa', p: null },
 };
-const CRM_CAMPOS_MSG = ['{vendedor}', '{br}', '{cliente}', '{pedido}', '{previsao}', '{dias}', '{pct}', '{valor}', '{tarefa}', '{vencimento}'];
+const CRM_CAMPOS_MSG = ['{vendedor}', '{br}', '{cliente}', '{pedido}', '{previsao}', '{dias}', '{pct}', '{valor}', '{tarefa}', '{vencimento}', '{autor}', '{texto}'];
 function CRMLembretes({ onFechar, currentUser }) {
   const C = CRMC;
   const [aba, setAba] = useState('regras');
@@ -29809,7 +29813,7 @@ function CRMLembretes({ onFechar, currentUser }) {
           <div style={{ flex: 1 }}>
             <div style={{ fontSize: 11, letterSpacing: 1.2, textTransform: 'uppercase', opacity: 0.65 }}>CRM</div>
             <div style={{ fontSize: 22, fontWeight: 800 }}>Lembretes e automações</div>
-            <div style={{ fontSize: 12, opacity: 0.75 }}>gerados às 8h e 14h nos dias úteis · enviados a cada 10 min pelo Power Automate (Teams / e-mail)</div>
+            <div style={{ fontSize: 12, opacity: 0.75 }}>lembretes gerados às 8h e 14h nos dias úteis · avisos "na hora" (comentário, etapa, reprogramação) assim que acontecem · envio a cada 5 min, 7h–19h, pelo Power Automate · quem fez a ação não recebe o aviso</div>
           </div>
           <button onClick={() => rodar('fn_crm_gerar_lembretes')} style={{ ...btn(false), background: 'rgba(255,255,255,.12)', color: '#fff', border: '1px solid rgba(255,255,255,.25)' }}>Gerar lembretes agora</button>
           <button onClick={() => rodar('fn_crm_enviar_notificacoes', { p_limite: 100 })} style={{ ...btn(false), background: 'rgba(255,255,255,.12)', color: '#fff', border: '1px solid rgba(255,255,255,.25)' }}>Enviar fila agora</button>
