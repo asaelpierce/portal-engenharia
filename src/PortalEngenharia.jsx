@@ -29745,6 +29745,183 @@ async function crmAgendarSugestao(n, sug, autor) {
 
 // CRM em página própria (…/?pagina=crm): para deixar aberto numa aba separada do navegador.
 // Mesma regra de acesso do Painel Comercial (colaborador_telas).
+/* ============================================================================
+   CRM · LEMBRETES E AUTOMAÇÕES (Asael, 06/11/2026) — regras de lembrete (gatilho, parâmetro, repetição, canal,
+   destinatário, mensagem com {campos}), fila/histórico de envio e canais (URL do Power Automate para Teams e e-mail;
+   chave de IA opcional, em aberto). Motor: fn_crm_gerar_lembretes (8h e 14h, dias úteis) + fn_crm_enviar_notificacoes
+   (a cada 10 min, 7h–19h). O Power Automate recebe um POST JSON e posta no Teams / manda o e-mail.
+============================================================================ */
+const CRM_GATILHOS = {
+  prazo_pedido_pct: { r: 'Pedido passou de X% do prazo', p: '% do prazo (entre o pedido e a previsão de faturamento)', pad: 50 },
+  faturamento_proximo: { r: 'Faturamento nos próximos X dias', p: 'dias antes da previsão', pad: 3 },
+  nao_faturou_no_dia: { r: 'Não faturou no dia previsto', p: null },
+  faturamento_atrasado: { r: 'Faturamento atrasado há mais de X dias', p: 'dias de atraso', pad: 0 },
+  tarefa_vence_hoje: { r: 'Tarefa vence hoje', p: null },
+  tarefa_atrasada: { r: 'Tarefa atrasada há mais de X dias (até 15)', p: 'dias de atraso', pad: 0 },
+  sem_proxima_acao: { r: 'Negócio aberto sem tarefa há X dias', p: 'dias parado na etapa', pad: 7 },
+};
+const CRM_CAMPOS_MSG = ['{vendedor}', '{br}', '{cliente}', '{pedido}', '{previsao}', '{dias}', '{pct}', '{valor}', '{tarefa}', '{vencimento}'];
+function CRMLembretes({ onFechar, currentUser }) {
+  const C = CRMC;
+  const [aba, setAba] = useState('regras');
+  const [regras, setRegras] = useState(null);
+  const [fila, setFila] = useState(null);
+  const [canais, setCanais] = useState(null);
+  const [edit, setEdit] = useState(null);
+  const [filtroSt, setFiltroSt] = useState('todos');
+  const [msg, setMsg] = useState(null);
+  const [testePara, setTestePara] = useState(currentUser?.email || '');
+  const carregar = async () => {
+    const [a, b, c] = await Promise.all([
+      supabase.from('crm_lembrete_regra').select('*').order('id'),
+      supabase.from('crm_notificacao').select('*').order('criado_em', { ascending: false }).limit(400),
+      supabase.from('crm_integracao_canal').select('*').order('canal'),
+    ]);
+    setRegras(a.data || []); setFila(b.data || []); setCanais(c.data || []);
+  };
+  useEffect(() => { carregar(); const t = e => { if (e.key === 'Escape') onFechar(); }; window.addEventListener('keydown', t); return () => window.removeEventListener('keydown', t); }, []);
+  const quem = currentUser?.nome || currentUser?.email || 'portal';
+  const salvarRegra = async () => {
+    const r = { ...edit, parametro: edit.parametro === '' || edit.parametro == null ? null : Number(String(edit.parametro).replace(',', '.')), repetir_dias: Number(edit.repetir_dias) || 0, atualizado_em: new Date().toISOString() };
+    if (!r.nome || !r.mensagem) { setMsg({ erro: true, t: 'Preencha o nome e a mensagem.' }); return; }
+    const { error } = r.id ? await supabase.from('crm_lembrete_regra').update(r).eq('id', r.id) : await supabase.from('crm_lembrete_regra').insert({ ...r, criado_por: quem });
+    if (error) { setMsg({ erro: true, t: error.message }); return; }
+    setMsg({ t: 'Regra salva.' }); setEdit(null); carregar();
+  };
+  const alternar = async (r) => { await supabase.from('crm_lembrete_regra').update({ ativo: !r.ativo, atualizado_em: new Date().toISOString() }).eq('id', r.id); carregar(); };
+  const rodar = async (fn, args) => { setMsg({ t: 'Processando…' }); const { data, error } = await supabase.rpc(fn, args || {}); setMsg(error ? { erro: true, t: error.message } : { t: JSON.stringify(data) }); carregar(); };
+  const salvarCanal = async (c) => { const { error } = await supabase.from('crm_integracao_canal').update({ url: c.url, api_key: c.api_key, ativo: c.ativo, atualizado_por: quem, atualizado_em: new Date().toISOString() }).eq('canal', c.canal); setMsg(error ? { erro: true, t: error.message } : { t: `Canal ${c.canal} salvo.` }); carregar(); };
+  const testar = async (canal) => { setMsg({ t: 'Enviando teste…' }); const { data, error } = await supabase.rpc('fn_crm_testar_canal', { p_canal: canal, p_para: testePara }); setMsg(error || !data?.ok ? { erro: true, t: error?.message || data?.erro || `HTTP ${data?.status_http}: ${data?.resposta || ''}` } : { t: `Teste enviado (HTTP ${data.status_http}). Confira o ${canal === 'teams' ? 'Teams' : 'e-mail'} de ${testePara}.` }); carregar(); };
+  const acaoFila = async (n, st) => { await supabase.from('crm_notificacao').update(st === 'pendente' ? { status: 'pendente', tentativas: 0, erro: null } : { status: st }).eq('id', n.id); carregar(); };
+  const dt = (x) => (x ? new Date(x).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—');
+  const stCor = { pendente: '#2563EB', enviado: C.win, erro: C.loss, sem_canal: C.warn, sem_destinatario: '#9333EA', cancelado: C.ink3 };
+  const stRot = { pendente: 'pendente', enviado: 'enviado', erro: 'erro', sem_canal: 'aguardando URL do canal', sem_destinatario: 'sem e-mail do destinatário', cancelado: 'cancelado' };
+  const th = { padding: '8px 10px', textAlign: 'left', fontSize: 10.5, fontWeight: 700, color: C.ink3, textTransform: 'uppercase', whiteSpace: 'nowrap', borderBottom: `1px solid ${C.line}`, background: '#F8FAFC', position: 'sticky', top: 0 };
+  const td = { padding: '8px 10px', fontSize: 12.5, borderBottom: `1px solid ${C.lineSoft}`, verticalAlign: 'top' };
+  const inp = { fontFamily: 'inherit', fontSize: 13, padding: '7px 9px', borderRadius: 7, border: `1px solid ${C.line}`, boxSizing: 'border-box', width: '100%' };
+  const btn = (prim) => ({ fontFamily: 'inherit', fontSize: 12.5, fontWeight: 700, padding: '7px 13px', borderRadius: 8, border: prim ? 'none' : `1px solid ${C.line}`, background: prim ? C.primary : C.surface, color: prim ? '#fff' : C.ink2, cursor: 'pointer' });
+  const filaVis = (fila || []).filter(n => filtroSt === 'todos' || n.status === filtroSt);
+  const cont = (st) => (fila || []).filter(n => n.status === st).length;
+  return ReactDOM.createPortal(
+    <div onClick={onFechar} style={{ position: 'fixed', inset: 0, zIndex: 95, background: 'rgba(15,35,64,.45)', display: 'flex' }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: '100%', height: '100%', background: '#F4F6F9', display: 'flex', flexDirection: 'column', fontFamily: FONT_BODY, color: C.ink }}>
+        <div style={{ background: 'linear-gradient(135deg, #0F2340 0%, #1E3A63 100%)', color: '#fff', padding: '16px 26px', display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 11, letterSpacing: 1.2, textTransform: 'uppercase', opacity: 0.65 }}>CRM</div>
+            <div style={{ fontSize: 22, fontWeight: 800 }}>Lembretes e automações</div>
+            <div style={{ fontSize: 12, opacity: 0.75 }}>gerados às 8h e 14h nos dias úteis · enviados a cada 10 min pelo Power Automate (Teams / e-mail)</div>
+          </div>
+          <button onClick={() => rodar('fn_crm_gerar_lembretes')} style={{ ...btn(false), background: 'rgba(255,255,255,.12)', color: '#fff', border: '1px solid rgba(255,255,255,.25)' }}>Gerar lembretes agora</button>
+          <button onClick={() => rodar('fn_crm_enviar_notificacoes', { p_limite: 100 })} style={{ ...btn(false), background: 'rgba(255,255,255,.12)', color: '#fff', border: '1px solid rgba(255,255,255,.25)' }}>Enviar fila agora</button>
+          <button onClick={onFechar} style={{ ...btn(false), border: 'none' }}>Fechar <span style={{ fontSize: 10.5, color: C.ink3 }}>Esc</span></button>
+        </div>
+        <div style={{ display: 'flex', gap: 6, padding: '12px 26px 0', borderBottom: `1px solid ${C.line}`, background: '#fff' }}>
+          {[['regras', `Regras · ${(regras || []).filter(r => r.ativo).length} ativas`], ['fila', `Fila e histórico · ${(fila || []).length}`], ['canais', 'Canais (Power Automate)'], ['como', 'Como montar o fluxo']].map(([k, r]) => (
+            <button key={k} onClick={() => setAba(k)} style={{ fontFamily: 'inherit', fontSize: 13, fontWeight: aba === k ? 700 : 500, padding: '9px 14px', border: 'none', borderBottom: `3px solid ${aba === k ? C.primary : 'transparent'}`, background: 'none', color: aba === k ? C.primary : C.ink2, cursor: 'pointer' }}>{r}</button>))}
+          <span style={{ flex: 1 }} />
+          {msg && <span style={{ alignSelf: 'center', fontSize: 12.5, color: msg.erro ? C.loss : C.win, maxWidth: 520, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={msg.t}>{msg.t}</span>}
+        </div>
+        <div style={{ flex: 1, overflow: 'auto', padding: '18px 26px' }}>
+          {!regras ? <div style={{ padding: 40, textAlign: 'center', color: C.ink3 }}>Carregando…</div> : aba === 'regras' ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+              <div><button onClick={() => setEdit({ nome: '', gatilho: 'prazo_pedido_pct', parametro: 50, repetir_dias: 0, canal: 'teams', destino: 'responsavel', destino_email: '', assunto: '', mensagem: '', ativo: true })} style={btn(true)}>+ Nova regra</button></div>
+              {edit && (
+                <div style={{ background: '#fff', border: `1px solid ${C.primary}55`, borderRadius: 12, padding: 16, display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
+                  <label style={{ fontSize: 12, color: C.ink2 }}>Nome<input value={edit.nome} onChange={e => setEdit({ ...edit, nome: e.target.value })} style={inp} /></label>
+                  <label style={{ fontSize: 12, color: C.ink2 }}>Quando avisar<select value={edit.gatilho} onChange={e => setEdit({ ...edit, gatilho: e.target.value, parametro: CRM_GATILHOS[e.target.value].pad ?? null })} style={inp}>{Object.entries(CRM_GATILHOS).map(([k, g]) => <option key={k} value={k}>{g.r}</option>)}</select></label>
+                  {CRM_GATILHOS[edit.gatilho].p && <label style={{ fontSize: 12, color: C.ink2 }}>X = {CRM_GATILHOS[edit.gatilho].p}<input value={edit.parametro ?? ''} onChange={e => setEdit({ ...edit, parametro: e.target.value })} inputMode="decimal" style={inp} /></label>}
+                  <label style={{ fontSize: 12, color: C.ink2 }}>Repetir a cada (dias · 0 = avisa uma vez)<input value={edit.repetir_dias} onChange={e => setEdit({ ...edit, repetir_dias: e.target.value })} inputMode="numeric" style={inp} /></label>
+                  <label style={{ fontSize: 12, color: C.ink2 }}>Canal<select value={edit.canal} onChange={e => setEdit({ ...edit, canal: e.target.value })} style={inp}><option value="teams">Teams</option><option value="email">E-mail</option></select></label>
+                  <label style={{ fontSize: 12, color: C.ink2 }}>Para quem<select value={edit.destino} onChange={e => setEdit({ ...edit, destino: e.target.value })} style={inp}><option value="responsavel">Responsável do negócio / vendedor</option><option value="fixo">E-mail fixo</option><option value="responsavel_e_fixo">Responsável + e-mail fixo (cópia)</option></select></label>
+                  {edit.destino !== 'responsavel' && <label style={{ fontSize: 12, color: C.ink2 }}>E-mail fixo<input value={edit.destino_email || ''} onChange={e => setEdit({ ...edit, destino_email: e.target.value })} placeholder="ex.: comercial@kalenborn.com.br" style={inp} /></label>}
+                  <label style={{ fontSize: 12, color: C.ink2, gridColumn: '1 / -1' }}>Assunto / título<input value={edit.assunto || ''} onChange={e => setEdit({ ...edit, assunto: e.target.value })} style={inp} /></label>
+                  <label style={{ fontSize: 12, color: C.ink2, gridColumn: '1 / -1' }}>Mensagem<textarea value={edit.mensagem} onChange={e => setEdit({ ...edit, mensagem: e.target.value })} rows={4} style={{ ...inp, resize: 'vertical' }} />
+                    <span style={{ fontSize: 11, color: C.ink3 }}>Campos que viram dados: {CRM_CAMPOS_MSG.map(c => <code key={c} onClick={() => setEdit({ ...edit, mensagem: `${edit.mensagem}${c}` })} style={{ cursor: 'pointer', marginRight: 6, background: '#EEF2F7', borderRadius: 4, padding: '0 4px' }}>{c}</code>)}</span></label>
+                  <div style={{ gridColumn: '1 / -1', display: 'flex', gap: 8 }}><button onClick={salvarRegra} style={btn(true)}>Salvar regra</button><button onClick={() => setEdit(null)} style={btn(false)}>Cancelar</button></div>
+                </div>)}
+              <div style={{ background: '#fff', border: `1px solid ${C.line}`, borderRadius: 12, overflow: 'hidden' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead><tr><th style={th}>Ativa</th><th style={th}>Regra</th><th style={th}>Quando</th><th style={th}>Repetir</th><th style={th}>Canal · para</th><th style={th}>Mensagem</th><th style={th} /></tr></thead>
+                  <tbody>{regras.map(r => (
+                    <tr key={r.id} style={{ opacity: r.ativo ? 1 : 0.55 }}>
+                      <td style={td}><button onClick={() => alternar(r)} style={{ ...btn(r.ativo), padding: '3px 10px', fontSize: 11.5 }}>{r.ativo ? 'ligada' : 'desligada'}</button></td>
+                      <td style={{ ...td, fontWeight: 700 }}>{r.nome}</td>
+                      <td style={td}>{(CRM_GATILHOS[r.gatilho]?.r || r.gatilho).replace('X', r.parametro ?? 'X')}</td>
+                      <td style={td}>{r.repetir_dias ? `a cada ${r.repetir_dias} dia(s)` : 'uma vez'}</td>
+                      <td style={td}>{r.canal === 'teams' ? 'Teams' : 'E-mail'} · {r.destino === 'fixo' ? r.destino_email : r.destino === 'responsavel_e_fixo' ? `responsável + ${r.destino_email}` : 'responsável'}</td>
+                      <td style={{ ...td, color: C.ink2, maxWidth: 460 }}>{r.mensagem}</td>
+                      <td style={td}><button onClick={() => setEdit({ ...r })} style={{ ...btn(false), padding: '4px 10px' }}>editar</button></td>
+                    </tr>))}</tbody>
+                </table>
+              </div>
+            </div>
+          ) : aba === 'fila' ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                {['todos', 'pendente', 'enviado', 'erro', 'sem_canal', 'sem_destinatario', 'cancelado'].map(s => (
+                  <button key={s} onClick={() => setFiltroSt(s)} style={{ fontFamily: 'inherit', fontSize: 12, padding: '5px 11px', borderRadius: 14, cursor: 'pointer', border: `1px solid ${filtroSt === s ? C.primary : C.line}`, background: filtroSt === s ? C.primarySoft : '#fff', color: filtroSt === s ? C.primary : C.ink2 }}>
+                    {s === 'todos' ? `todos · ${(fila || []).length}` : `${stRot[s]} · ${cont(s)}`}</button>))}
+              </div>
+              <div style={{ background: '#fff', border: `1px solid ${C.line}`, borderRadius: 12, overflow: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead><tr><th style={th}>Gerado</th><th style={th}>Lembrete</th><th style={th}>BR</th><th style={th}>Para</th><th style={th}>Status</th><th style={th}>Mensagem</th><th style={th} /></tr></thead>
+                  <tbody>{filaVis.map(n => (
+                    <tr key={n.id}>
+                      <td style={{ ...td, whiteSpace: 'nowrap' }}>{dt(n.criado_em)}</td>
+                      <td style={{ ...td, whiteSpace: 'nowrap' }}>{n.gatilho === 'teste' ? 'teste de canal' : (CRM_GATILHOS[n.gatilho]?.r || n.gatilho)}<div style={{ fontSize: 10.5, color: C.ink3 }}>{n.canal === 'teams' ? 'Teams' : 'E-mail'}</div></td>
+                      <td style={{ ...td, fontWeight: 600, whiteSpace: 'nowrap' }}>{n.br || '—'}</td>
+                      <td style={td}>{n.destinatario_email || <span style={{ color: '#9333EA' }}>{n.destinatario_nome || '—'} (sem e-mail)</span>}</td>
+                      <td style={{ ...td, whiteSpace: 'nowrap' }}><span style={{ fontSize: 11, fontWeight: 700, color: stCor[n.status], background: `${stCor[n.status]}15`, borderRadius: 6, padding: '2px 8px' }}>{stRot[n.status] || n.status}</span>
+                        {n.enviado_em && <div style={{ fontSize: 10.5, color: C.ink3 }}>{dt(n.enviado_em)}</div>}{n.erro && <div style={{ fontSize: 10.5, color: C.loss }} title={n.resposta || ''}>{n.erro}</div>}</td>
+                      <td style={{ ...td, color: C.ink2, minWidth: 320 }}><strong style={{ color: C.ink }}>{n.assunto}</strong><div>{n.mensagem}</div></td>
+                      <td style={{ ...td, whiteSpace: 'nowrap' }}>
+                        {n.status !== 'enviado' && n.status !== 'pendente' && <button onClick={() => acaoFila(n, 'pendente')} style={{ ...btn(false), padding: '3px 8px', fontSize: 11.5 }}>reenviar</button>}
+                        {n.status !== 'enviado' && n.status !== 'cancelado' && <button onClick={() => acaoFila(n, 'cancelado')} style={{ ...btn(false), padding: '3px 8px', fontSize: 11.5, marginLeft: 4 }}>cancelar</button>}
+                      </td>
+                    </tr>))}
+                    {!filaVis.length && <tr><td colSpan={7} style={{ ...td, textAlign: 'center', color: C.ink3, padding: 30 }}>Nada aqui.</td></tr>}</tbody>
+                </table>
+              </div>
+            </div>
+          ) : aba === 'canais' ? (
+            <div style={{ display: 'grid', gap: 14, maxWidth: 900 }}>
+              <label style={{ fontSize: 12, color: C.ink2 }}>Enviar os testes para<input value={testePara} onChange={e => setTestePara(e.target.value)} style={{ ...inp, maxWidth: 360, display: 'block' }} /></label>
+              {(canais || []).map(c => (
+                <div key={c.canal} style={{ background: '#fff', border: `1px solid ${C.line}`, borderRadius: 12, padding: 16, display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <strong style={{ fontSize: 15 }}>{c.canal === 'teams' ? 'Teams' : c.canal === 'email' ? 'E-mail' : 'IA (opcional, em aberto)'}</strong>
+                    <span style={{ fontSize: 11.5, fontWeight: 700, color: c.url || c.api_key ? C.win : C.warn }}>{c.url || c.api_key ? 'configurado' : 'falta configurar'}</span>
+                    <span style={{ flex: 1 }} />
+                    <label style={{ fontSize: 12, color: C.ink2 }}><input type="checkbox" checked={c.ativo} onChange={e => setCanais(canais.map(x => x.canal === c.canal ? { ...x, ativo: e.target.checked } : x))} /> ativo</label>
+                  </div>
+                  <div style={{ fontSize: 12, color: C.ink3 }}>{c.observacao}</div>
+                  {c.canal !== 'ia' ? <input value={c.url || ''} onChange={e => setCanais(canais.map(x => x.canal === c.canal ? { ...x, url: e.target.value } : x))} placeholder="https://prod-xx.westus.logic.azure.com:443/workflows/… (URL do gatilho HTTP do Power Automate)" style={inp} />
+                    : <input type="password" value={c.api_key || ''} onChange={e => setCanais(canais.map(x => x.canal === c.canal ? { ...x, api_key: e.target.value } : x))} placeholder="chave de API (opcional)" style={inp} />}
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button onClick={() => salvarCanal(canais.find(x => x.canal === c.canal))} style={btn(true)}>Salvar</button>
+                    {c.canal !== 'ia' && <button onClick={() => testar(c.canal)} style={btn(false)}>Enviar teste para {testePara || '…'}</button>}
+                  </div>
+                  {c.atualizado_por && <div style={{ fontSize: 11, color: C.ink3 }}>atualizado por {c.atualizado_por} em {dt(c.atualizado_em)}</div>}
+                </div>))}
+            </div>
+          ) : (
+            <div style={{ maxWidth: 900, background: '#fff', border: `1px solid ${C.line}`, borderRadius: 12, padding: 20, fontSize: 13.5, lineHeight: 1.6, color: C.ink2 }}>
+              <h3 style={{ margin: '0 0 8px', color: C.ink }}>Fluxo do Power Automate (um para o Teams, outro para o e-mail)</h3>
+              <ol style={{ paddingLeft: 18, margin: 0 }}>
+                <li>Novo fluxo instantâneo com o gatilho <strong>"Quando uma solicitação HTTP é recebida"</strong> (When an HTTP request is received). Cole o esquema JSON abaixo.</li>
+                <li>Teams: ação <strong>"Postar mensagem em um chat ou canal"</strong> → Postar como <em>Flow bot</em> → Postar em <em>Chat com o bot de fluxo</em> → Destinatário = <code>para</code> → Mensagem = <code>assunto</code> + <code>mensagem</code> + <code>link</code>.</li>
+                <li>E-mail: ação <strong>"Enviar um email (V2)"</strong> na caixa do comercial (ou "Enviar de uma caixa compartilhada") → Para = <code>para</code>, Assunto = <code>assunto</code>, Corpo = <code>mensagem</code>.</li>
+                <li>Termine com <strong>"Resposta"</strong> status 200. Salve, copie a URL do gatilho e cole na aba Canais. Use "Enviar teste".</li>
+              </ol>
+              <div style={{ marginTop: 12, fontSize: 12, color: C.ink3 }}>Esquema JSON do corpo que o portal envia:</div>
+              <pre style={{ background: '#0F172A', color: '#E2E8F0', borderRadius: 8, padding: 14, fontSize: 12, overflowX: 'auto' }}>{JSON.stringify({ type: 'object', properties: { id: { type: 'integer' }, canal: { type: 'string' }, para: { type: 'string' }, para_nome: { type: 'string' }, assunto: { type: 'string' }, mensagem: { type: 'string' }, link: { type: 'string' }, br: { type: ['string', 'null'] }, gatilho: { type: 'string' } } }, null, 2)}</pre>
+              <div style={{ fontSize: 12, color: C.ink3 }}>"para" pode ter mais de um e-mail separado por ponto e vírgula (regras com cópia). Enquanto a URL não for cadastrada, os lembretes ficam na fila como "aguardando URL do canal" e são enviados assim que ela existir.</div>
+            </div>)}
+        </div>
+      </div>
+    </div>, document.body);
+}
+
 function CRMPagina({ currentUser }) {
   // sem telas cadastradas = acesso total (regra antiga); o papel 'comercial' legado também inclui o Painel Comercial
   const permitidos = Array.isArray(currentUser.telasPermitidas) ? currentUser.telasPermitidas.filter(t => !String(t).startsWith('__')) : null;
@@ -29796,6 +29973,9 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
   const [mostrarFechados, setMostrarFechados] = useState(false);
   const [ordem, setOrdem] = useState({ c: 'valor', asc: false });
   const [abertoId, setAbertoId] = useState(null);
+  const [lembretesAbertos, setLembretesAbertos] = useState(false);
+  const [importando, setImportando] = useState(null);   // trazer BR do Sankhya: null | 'carregando' | { erro } | { ok }
+  useEffect(() => { setImportando(null); }, [busca]);
   const [empresaAberta, setEmpresaAberta] = useState(null);
   const [perda, setPerda] = useState(null);
   const [novoNeg, setNovoNeg] = useState(null);
@@ -30053,7 +30233,23 @@ function CRM({ currentUser, telaCheia = false, onSair = null }) {
           <Search size={14} aria-hidden="true" style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: CRMC.ink3 }} />
           <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Buscar BR, empresa, título ou concorrente" aria-label="Buscar"
             className="crm-busca" style={{ ...campo, minWidth: 300, paddingLeft: 30, border: 'none', height: 36, boxSizing: 'border-box' }} />
+          {(() => { const num = (busca.match(/(\d{4,6})/) || [])[1]; if (!num || busca.replace(/[^0-9]/g, '').length < 4) return null;
+            const existe = negocios.some(n => ((String(n.br || '').match(/(\d{4,6})/) || [])[1]) === num); if (existe && !(importando && importando.ok)) return null;
+            return (
+              <div style={{ position: 'absolute', top: 40, right: 0, zIndex: 40, width: 340, background: '#fff', color: CRMC.ink, borderRadius: 10, boxShadow: '0 10px 30px rgba(16,24,40,.25)', border: `1px solid ${CRMC.line}`, padding: '12px 14px', fontSize: 12.5 }}>
+                {importando && importando.ok ? <div style={{ color: CRMC.win }}><strong>{importando.br}</strong> trazido para o CRM ({importando.cliente}). <button onClick={() => { setAbertoId(importando.negocio_id); setImportando(null); }} style={{ border: 'none', background: 'none', color: CRMC.primary, cursor: 'pointer', fontWeight: 700, padding: 0 }}>abrir →</button></div>
+                  : <><div><strong>BR{num}</strong> não está no CRM.</div>
+                    <div style={{ color: CRMC.ink3, margin: '3px 0 8px' }}>Pode ser um BR anterior à janela do CRM. O portal procura no Sankhya, nas propostas e no Follow Up e cria o negócio na etapa certa.</div>
+                    <button disabled={importando === 'carregando'} onClick={async () => { setImportando('carregando'); const { data, error } = await supabase.rpc('fn_crm_importar_br', { p_texto: busca });
+                        if (error || !data?.ok) { setImportando({ erro: error?.message || data?.erro }); return; } await carregar(); setImportando(data); if (data.negocio_id) setAbertoId(data.negocio_id); }}
+                      style={{ fontFamily: 'inherit', fontSize: 12.5, fontWeight: 700, padding: '7px 12px', borderRadius: 8, border: 'none', background: CRMC.primary, color: '#fff', cursor: 'pointer' }}>{importando === 'carregando' ? 'Buscando no Sankhya…' : 'Trazer do Sankhya para o CRM'}</button>
+                    {importando && importando.erro && <div style={{ color: CRMC.loss, marginTop: 6 }}>{importando.erro}</div>}</>}
+              </div>); })()}
         </div>
+        {perfil.ve_tudo && <button onClick={() => setLembretesAbertos(true)} title="Lembretes e automações (Teams / e-mail)"
+          style={{ fontFamily: 'inherit', fontSize: 12, padding: '8px 10px', borderRadius: 8, border: '1px solid rgba(255,255,255,.22)', background: 'transparent', color: 'rgba(255,255,255,.85)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          <Bell size={13} aria-hidden="true" />Lembretes</button>}
+        {lembretesAbertos && <CRMLembretes onFechar={() => setLembretesAbertos(false)} currentUser={currentUser} />}
         <button onClick={() => carregar()} title={atualizadoEm ? `Dados de ${atualizadoEm.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })} — clique para atualizar` : 'Atualizar'}
           style={{ fontFamily: 'inherit', fontSize: 12, padding: '8px 10px', borderRadius: 8, border: '1px solid rgba(255,255,255,.22)', background: 'transparent', color: 'rgba(255,255,255,.85)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
           <RefreshCw size={13} aria-hidden="true" />{atualizadoEm ? atualizadoEm.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : ''}
