@@ -8399,6 +8399,8 @@ function FollowUpComercial({ currentUser }) {
   // Filtros por coluna, como no Excel. Texto para BR e Cliente, lista para
   // Vendedor e os dois estagios.
   const [filtros, setFiltros] = useState({ br: '', cliente: '', vendedor: [], estC: [], estV: [] });
+  const [impBr, setImpBr] = useState(null);   // BR fora do Follow Up: null | 'carregando' | { erro } | resultado da importação
+  useEffect(() => { setImpBr(null); }, [filtros.br]);
   // faturamento do ano inteiro (todas as notas, mesma base da tela Faturamento) — para o cartão "Faturado em AAAA"
   const [fatAnoTotal, setFatAnoTotal] = useState(null);
   useEffect(() => { supabase.from('v_crm_faturado_ano').select('faturado').limit(5000)
@@ -9588,7 +9590,27 @@ function FollowUpComercial({ currentUser }) {
             <tbody>
               {lista.length === 0 ? (
                 <tr><td colSpan={11} style={{ padding: 28, textAlign: 'center', color: T.inkFaint }}>
-                  Nenhum BR aqui ainda. Eles aparecem assim que forem criados na tela Criar BR.
+                  {(() => { const num = (String(filtros.br || '').match(/(\d{4,6})/) || [])[1];
+                    if (!num) return 'Nenhum BR aqui ainda. Eles aparecem assim que forem criados na tela Criar BR.';
+                    return (
+                      <div style={{ display: 'inline-flex', flexDirection: 'column', gap: 8, alignItems: 'center', color: T.ink, maxWidth: 560 }}>
+                        <div><strong>BR{num}</strong> não está no Follow Up — provavelmente é de uma proposta anterior a 2026.</div>
+                        {impBr && impBr.ok ? (
+                          <div style={{ background: T.oliveSoft, border: `1px solid ${T.olive}55`, borderRadius: 8, padding: '10px 14px', textAlign: 'left', fontSize: 12.5 }}>
+                            <strong>{impBr.br}</strong> · {impBr.cliente} · vendedor {impBr.vendedor || '—'}<br />
+                            {impBr.pedidos ? `${impBr.pedidos} pedido(s) · ${Number(impBr.valor_pedidos || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} em pedidos · ${Number(impBr.faturado || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} faturado` : 'sem pedido no Sankhya'}
+                            <div style={{ marginTop: 6, color: T.oliveText, fontWeight: 600 }}>{impBr.ja_existia ? 'Este BR já estava no CRM.' : 'Trazido para o CRM.'} Abra o CRM e pesquise {impBr.br} para ver o negócio completo.</div>
+                          </div>
+                        ) : (
+                          <>
+                            <button disabled={impBr === 'carregando'} onClick={async () => { setImpBr('carregando'); const { data, error } = await supabase.rpc('fn_crm_importar_br', { p_texto: filtros.br });
+                                setImpBr(error || !data?.ok ? { erro: error?.message || data?.erro } : data); }}
+                              style={{ fontFamily: 'inherit', fontSize: 12.5, fontWeight: 700, padding: '8px 14px', borderRadius: 8, border: 'none', background: T.ink, color: '#fff', cursor: 'pointer' }}>
+                              {impBr === 'carregando' ? 'Buscando no Sankhya…' : 'Buscar no Sankhya e trazer para o CRM'}</button>
+                            <div style={{ fontSize: 11.5, color: T.inkFaint }}>Procura nas propostas, no Sankhya (pedidos e notas de qualquer ano) e no Follow Up, e cria o negócio no CRM na etapa certa.</div>
+                            {impBr && impBr.erro && <div style={{ color: T.rustText, fontSize: 12.5 }}>{impBr.erro}</div>}
+                          </>)}
+                      </div>); })()}
                 </td></tr>
               ) : lista.filter(l => !ocultarPerdidos || l.situacao !== 'perdido').map((l, iLinha) => {
                 return (
